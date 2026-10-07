@@ -104,6 +104,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   runtimeModel: string;
   systemPromptText: string;
   runAbortSignal?: AbortSignal;
+  appendOnlyRuntimeContext?: boolean;
   applyPromptBuildToolsAllow: (
     toolsAllow: string[] | undefined,
     decisionIsCurrent?: () => boolean,
@@ -297,14 +298,26 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     hookResult?.appendContext,
     authorizedHookResult?.appendContext,
   );
+  // Append-only runtime-context models replay their history byte-identically, so
+  // one-run prompt rewrites break every later cache hit and drop replayed thinking.
+  // Route hook context through the stored runtime-context carrier instead; runs
+  // without a prompt keep the legacy fold so a context-only turn still reaches the model.
+  const routePromptBuildContextThroughRuntimeCarrier =
+    input.appendOnlyRuntimeContext === true && Boolean(effectivePrompt.trim());
 
-  if (promptBuildPrependContext) {
+  if (!routePromptBuildContextThroughRuntimeCarrier && promptBuildPrependContext) {
     effectivePrompt = `${promptBuildPrependContext}\n\n${effectivePrompt}`;
     log.debug(`hooks: prepended context to prompt (${promptBuildPrependContext.length} chars)`);
   }
-  if (promptBuildAppendContext) {
+  if (!routePromptBuildContextThroughRuntimeCarrier && promptBuildAppendContext) {
     effectivePrompt = `${effectivePrompt}\n\n${promptBuildAppendContext}`;
     log.debug(`hooks: appended context to prompt (${promptBuildAppendContext.length} chars)`);
+  }
+  if (routePromptBuildContextThroughRuntimeCarrier && (promptBuildPrependContext || promptBuildAppendContext)) {
+    log.debug(
+      `hooks: routing prompt-build context through the runtime-context carrier ` +
+        `(${(promptBuildPrependContext?.length ?? 0) + (promptBuildAppendContext?.length ?? 0)} chars)`,
+    );
   }
   const legacySystemPrompt = normalizeOptionalString(hookResult?.systemPrompt) ?? "";
   if (legacySystemPrompt) {
@@ -439,6 +452,8 @@ type PromptContextAttempt = Pick<
 type PromptAssemblyContext = {
   effectivePrompt: string;
   effectiveTranscriptPrompt: string;
+  promptBuildPrependContext?: string;
+  promptBuildAppendContext?: string;
   originContext?: ReturnType<typeof buildInterSessionPromptContext>;
   heartbeatSummary?: Pick<HeartbeatSummary, "ackMaxChars" | "prompt">;
 };
@@ -527,7 +542,18 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   }
 
   const escapedProjection = !input.isRawModelRun && usesEscapedRuntimeContext(input.sessionVersion);
+  // Hook prompt context rides the stored carrier on append-only models, so the
+  // next replay includes it byte-identically instead of rewriting earlier history.
+  const promptBuildContext =
+    input.appendOnlyRuntimeContext === true && input.prompt.effectiveTranscriptPrompt.trim()
+      ? [input.prompt.promptBuildPrependContext, input.prompt.promptBuildAppendContext]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .join("\n\n") || undefined
+      : undefined;
   const eventFragments: RuntimeContextFragment[] = [
+    ...(promptBuildContext
+      ? [{ kind: "conversation-data" as const, text: promptBuildContext }]
+      : []),
     ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),
     ...(input.prompt.originContext
