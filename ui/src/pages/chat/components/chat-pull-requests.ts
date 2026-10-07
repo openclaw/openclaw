@@ -33,8 +33,9 @@ export function chatPullRequestId(pullRequest: ControlUiSessionPullRequest): str
 }
 
 // Shares the per-session dismissal store with PR ids; `@` keeps the namespaces apart.
+// GitHub owner/repo names are case-insensitive, but Git branch names are not.
 export function chatBranchId(branch: ControlUiSessionBranch): string {
-  return `${branch.owner}/${branch.repo}@${branch.branch}`.toLowerCase();
+  return `${branch.owner}/${branch.repo}`.toLowerCase() + `@${branch.branch}`;
 }
 
 function readDismissedStore(storage: Storage): Record<string, string[]> {

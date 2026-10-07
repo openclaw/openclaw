@@ -12,6 +12,7 @@ import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../../ap
 import type { ChatCiDetailsElement } from "./chat-ci-details.ts";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
 import {
+  chatBranchId,
   chatPullRequestId,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
@@ -657,6 +658,18 @@ describe("dismissed pull request storage", () => {
     }
     expect(listDismissedChatPullRequests("agent:main:0").size).toBe(0);
     expect(listDismissedChatPullRequests("agent:main:20").size).toBe(1);
+  });
+
+  it("keeps branches that differ only in case distinct", () => {
+    const ids = dismissChatPullRequest(
+      "agent:main:main",
+      chatBranchId(sessionBranch({ owner: "OpenClaw", branch: "Feature" })),
+    );
+
+    expect(ids.has(chatBranchId(sessionBranch({ owner: "openclaw", branch: "Feature" })))).toBe(
+      true,
+    );
+    expect(ids.has(chatBranchId(sessionBranch({ branch: "feature" })))).toBe(false);
   });
 
   it("ignores malformed stored payloads", () => {
