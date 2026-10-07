@@ -1796,6 +1796,16 @@ session still settles before its generation is checked. Cold preparation and
 terminal publication keep their existing writer admission; this changes no
 schema, stored data, retention, or update behavior.
 
+Synchronous session generation checks (delivery, subagent control, cron roots, and
+memory audiences) remain available during a pending entry publication only when the
+committing worker proves, from the committed previous and current rows, that the
+publication keeps that session's ID and lifecycle revision. Created, deleted,
+archived, and membership-invalidated rows carry no such proof, and publication
+paths that do not supply it keep the existing fence. Owners that prepare a
+generation read still join every pending publication for the session, so effect
+ordering is unchanged. Sharing, membership, and incognito reads are unchanged.
+This changes no schema, stored data, or update behavior.
+
 Automatic entry maintenance captures its policy at writer admission. Metadata
 planning and planner statistics updates use the existing agent database executor;
 after cold native admission, row preparation runs outside the writer and archive

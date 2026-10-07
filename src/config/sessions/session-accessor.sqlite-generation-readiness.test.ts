@@ -117,16 +117,23 @@ it.for(["metadata", "replacement"] as const)(
             ),
             signal,
           );
-          expect(generation.assertCurrent).toThrow(
-            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-          );
+          // Synchronous reads stay available for an identity-preserving publication; a
+          // replacement fences them. Prepared reads still join either publication.
+          if (kind === "metadata") {
+            generation.assertCurrent();
+            assertMemoryAudienceCurrent(grant.audience);
+          } else {
+            expect(generation.assertCurrent).toThrow(
+              expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+            );
+            expect(() => assertMemoryAudienceCurrent(grant.audience)).toThrow(
+              "currency is unavailable",
+            );
+          }
           const priorCalls = health.mock.calls.length;
           const providerRead = provider.health().catch((error: unknown) => error);
           readiness.push(providerRead);
           expect(health).toHaveBeenCalledTimes(priorCalls);
-          expect(() => assertMemoryAudienceCurrent(grant.audience)).toThrow(
-            "currency is unavailable",
-          );
           const pending = generation.prepareRead();
           expect(pending).toBeInstanceOf(Promise);
           if (!pending) {
@@ -310,6 +317,9 @@ it.for(["metadata", "reset"] as const)(
           (error: unknown) => error,
         );
         expect(waiting).toBeInstanceOf(Promise);
+        if (kind === "metadata") {
+          assertMemoryAudienceCurrent(grant.audience);
+        }
         const providerRead = provider.health().catch((error: unknown) => error);
         expect(health).not.toHaveBeenCalled();
         release.resolve();
@@ -332,6 +342,90 @@ it.for(["metadata", "reset"] as const)(
         signal.removeEventListener("abort", onAbort);
         grant.release();
         await provider.close();
+      }
+    });
+  },
+);
+
+it.for([{ change: "metadata" }, { change: "reset" }] as const)(
+  "answers a synchronous audience check during a held $change publication",
+  async ({ change }, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const scope = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:synchronous-check",
+      };
+      const original = {
+        sessionId: "d1234567-1234-1234-1234-123456789abc",
+        chatType: "direct" as const,
+        lifecycleRevision: "original-lifecycle",
+        updatedAt: 1,
+      };
+      replaceSessionEntrySync(scope, original);
+      const grant = await resolveMemoryAudienceFromEntry(
+        { ...scope, sessionId: original.sessionId, senderIsOwner: true },
+        original,
+      );
+      if (grant.status !== "granted") {
+        throw new Error(grant.reason);
+      }
+      const committed = createDeferred();
+      const release = createDeferred();
+      const onAbort = () => release.resolve();
+      signal.addEventListener("abort", onAbort, { once: true });
+      delivery.afterResult = async () => {
+        committed.resolve();
+        await release.promise;
+      };
+      // A turn's own bookkeeping writes look like this: same incarnation, new metadata.
+      const pending = applySessionEntryExactReplacements({
+        ...scope,
+        sessionKeys: [scope.sessionKey],
+        requireWriteSuccess: true,
+        update: () => ({
+          result: undefined,
+          replacements: [
+            {
+              sessionKey: scope.sessionKey,
+              entry: {
+                ...original,
+                label: "replaced",
+                lifecycleRevision:
+                  change === "reset" ? "reset-lifecycle" : original.lifecycleRevision,
+                updatedAt: 2,
+              },
+            },
+          ],
+        }),
+      });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(committed.promise, pending, "write did not reach publication"),
+          signal,
+        );
+        // Memory plugins check currency synchronously between their own awaits.
+        if (change === "metadata") {
+          assertMemoryAudienceCurrent(grant.audience);
+        } else {
+          expect(() => assertMemoryAudienceCurrent(grant.audience)).toThrow(
+            "currency is unavailable",
+          );
+        }
+        release.resolve();
+        await withinTest(pending, signal);
+        if (change === "metadata") {
+          assertMemoryAudienceCurrent(grant.audience);
+        } else {
+          expect(() => assertMemoryAudienceCurrent(grant.audience)).toThrow("no longer current");
+        }
+      } finally {
+        release.resolve();
+        delivery.afterResult = undefined;
+        await Promise.allSettled([pending]);
+        signal.removeEventListener("abort", onAbort);
+        grant.release();
       }
     });
   },

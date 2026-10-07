@@ -99,6 +99,16 @@ export function prepareSessionEntryReplacementPublication(
         ? [key]
         : [],
     ),
+    // Committed rows that keep their incarnation; generation readers need not wait for them.
+    generationUnchangedKeys: [...current].flatMap(([key, entry]) => {
+      const previous = result.previous.get(key);
+      return !invalidated.has(key) &&
+        previous !== undefined &&
+        previous.sessionId === entry.sessionId &&
+        previous.lifecycleRevision === entry.lifecycleRevision
+        ? [key]
+        : [];
+    }),
     previous: new Map(
       [...result.previous].map(([key, entry]) => [
         key,

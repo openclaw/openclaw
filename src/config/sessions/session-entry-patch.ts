@@ -315,6 +315,7 @@ export async function runSessionEntryWorkerOperation<
           receipt.changedKeys,
           receipt.membershipInvalidatedKeys,
           receipt.sharingUnchangedKeys,
+          receipt.generationUnchangedKeys,
         );
       }
     },
