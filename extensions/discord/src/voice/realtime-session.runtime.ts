@@ -286,7 +286,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       for (const candidate of discarded) {
         this.candidates.delete(candidate);
       }
-      await Promise.allSettled(discarded.map((candidate) => this.closeSpeaker(candidate)));
+      await Promise.allSettled(
+        discarded.map((candidate) => Promise.resolve(this.closeSpeaker(candidate))),
+      );
     };
     const prepare = async (
       targetVoice: string | undefined,

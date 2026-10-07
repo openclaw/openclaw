@@ -24,13 +24,13 @@ export async function getGuild(rest: RequestClient, guildId: string): Promise<AP
   return (await rest.get(Routes.guild(guildId))) as APIGuild;
 }
 
-function guildUserRead<T extends object>(route: (guildId: string, userId: string) => string) {
+function guildUserRead<T extends object>(route: "guildMember" | "guildVoiceState") {
   return async (rest: RequestClient, guildId: string, userId: string): Promise<T> =>
-    (await rest.get(route(guildId, userId))) as T;
+    (await rest.get(Routes[route](guildId, userId))) as T;
 }
 
-export const getGuildMember = guildUserRead<APIGuildMember>(Routes.guildMember);
-export const getGuildVoiceState = guildUserRead<APIVoiceState>(Routes.guildVoiceState);
+export const getGuildMember = guildUserRead<APIGuildMember>("guildMember");
+export const getGuildVoiceState = guildUserRead<APIVoiceState>("guildVoiceState");
 
 export async function listGuildEmojis(
   rest: RequestClient,

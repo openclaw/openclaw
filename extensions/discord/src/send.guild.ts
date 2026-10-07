@@ -118,8 +118,8 @@ export async function resolveEventCoverImage(
     opts,
     DISCORD_MAX_EVENT_COVER_BYTES,
     DISCORD_IMAGE_UPLOAD_TYPES,
-    (contentType) =>
-      `Discord event cover images must be PNG, JPG, or GIF (got ${contentType ?? "unknown"})`,
+    (actualType) =>
+      `Discord event cover images must be PNG, JPG, or GIF (got ${actualType ?? "unknown"})`,
   );
   return `data:${contentType};base64,${media.buffer.toString("base64")}`;
 }

@@ -459,10 +459,10 @@ export function createDiscordMessagingActionContext(params: {
       const allowedWithoutGuild =
         !targetGuildId &&
         !target.metadataKnown &&
-        Object.values(guilds ?? {}).some((guildInfo) =>
+        Object.values(guilds ?? {}).some((candidateGuildInfo) =>
           isDiscordReadTargetAllowedInGuild({
             groupPolicy,
-            guildInfo: guildInfo ?? null,
+            guildInfo: candidateGuildInfo ?? null,
             target,
           }),
         );

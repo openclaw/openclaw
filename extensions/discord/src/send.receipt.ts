@@ -54,8 +54,10 @@ export function createDiscordSendReceipt(params: {
     const result: MessageReceiptSourceResult & { receipt?: MessageReceipt } = {
       channel: "discord",
       messageId,
-      ...(params.channelId ? { channelId: params.channelId } : {}),
     };
+    if (params.channelId) {
+      result.channelId = params.channelId;
+    }
     if (params.reply?.scope === "first" && index === 0) {
       // A top-level replyToId would be copied onto every receipt part. Nest the
       // first receipt so persisted metadata matches Discord's one message_reference.

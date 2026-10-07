@@ -113,7 +113,7 @@ export async function createDiscordMonitorClient(params: {
     constructorPlugins,
   );
   if (voicePlugin) {
-    void voicePlugin.registerClient?.(client);
+    voicePlugin.registerClient?.(client);
     if (!client.plugins.some((entry) => entry.id === voicePlugin.id)) {
       client.plugins.push(voicePlugin);
     }

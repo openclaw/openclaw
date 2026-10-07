@@ -26,7 +26,7 @@ export function extractModalFields(components: unknown[]): Record<string, string
   return out;
 }
 
-function* flattenModalComponents(components: unknown[]): Generator<unknown> {
+function* flattenModalComponents(components: unknown[]): Generator {
   for (const entry of components) {
     if (!entry || typeof entry !== "object") {
       continue;

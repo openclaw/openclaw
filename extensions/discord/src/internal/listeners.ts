@@ -42,53 +42,65 @@ type DiscordReactionDispatchData = {
   rawMessage?: APIMessage;
 };
 
-abstract class BaseListener<Data = unknown> {
-  abstract readonly type: string;
-  abstract handle(data: Data, client: Client): Promise<void> | void;
+type ListenerDataByEvent = {
+  [GatewayDispatchEvents.Ready]: unknown;
+  [GatewayDispatchEvents.GuildCreate]: GatewayGuildCreateDispatchData | APIUnavailableGuild;
+  [GatewayDispatchEvents.GuildDelete]: GatewayGuildDeleteDispatchData;
+  [GatewayDispatchEvents.MessageCreate]: APIMessage;
+  [GatewayDispatchEvents.InteractionCreate]: APIInteraction;
+  [GatewayDispatchEvents.MessageReactionAdd]: DiscordReactionDispatchData;
+  [GatewayDispatchEvents.MessageReactionRemove]: DiscordReactionDispatchData;
+  [GatewayDispatchEvents.PresenceUpdate]: GatewayPresenceUpdateDispatchData;
+  [GatewayDispatchEvents.VoiceStateUpdate]: APIVoiceState;
+  [GatewayDispatchEvents.ThreadUpdate]: GatewayThreadUpdateDispatchData;
+  [GatewayDispatchEvents.ThreadDelete]: GatewayThreadDeleteDispatchData;
+};
+
+abstract class BaseListener<Event extends keyof ListenerDataByEvent> {
+  abstract readonly type: Event;
+  abstract handle(data: ListenerDataByEvent[Event], client: Client): Promise<void> | void;
 }
 
-export abstract class ReadyListener extends BaseListener {
+export abstract class ReadyListener extends BaseListener<GatewayDispatchEvents.Ready> {
   readonly type = GatewayDispatchEvents.Ready;
 }
 
-export abstract class GuildCreateListener extends BaseListener<
-  GatewayGuildCreateDispatchData | APIUnavailableGuild
-> {
+export abstract class GuildCreateListener extends BaseListener<GatewayDispatchEvents.GuildCreate> {
   readonly type = GatewayDispatchEvents.GuildCreate;
 }
 
-export abstract class GuildDeleteListener extends BaseListener<GatewayGuildDeleteDispatchData> {
+export abstract class GuildDeleteListener extends BaseListener<GatewayDispatchEvents.GuildDelete> {
   readonly type = GatewayDispatchEvents.GuildDelete;
 }
 
-export abstract class MessageCreateListener extends BaseListener<APIMessage> {
+export abstract class MessageCreateListener extends BaseListener<GatewayDispatchEvents.MessageCreate> {
   readonly type = GatewayDispatchEvents.MessageCreate;
 }
 
-export abstract class InteractionCreateListener extends BaseListener<APIInteraction> {
+export abstract class InteractionCreateListener extends BaseListener<GatewayDispatchEvents.InteractionCreate> {
   readonly type = GatewayDispatchEvents.InteractionCreate;
 }
 
-export abstract class MessageReactionAddListener extends BaseListener<DiscordReactionDispatchData> {
+export abstract class MessageReactionAddListener extends BaseListener<GatewayDispatchEvents.MessageReactionAdd> {
   readonly type = GatewayDispatchEvents.MessageReactionAdd;
 }
 
-export abstract class MessageReactionRemoveListener extends BaseListener<DiscordReactionDispatchData> {
+export abstract class MessageReactionRemoveListener extends BaseListener<GatewayDispatchEvents.MessageReactionRemove> {
   readonly type = GatewayDispatchEvents.MessageReactionRemove;
 }
 
-export abstract class PresenceUpdateListener extends BaseListener<GatewayPresenceUpdateDispatchData> {
+export abstract class PresenceUpdateListener extends BaseListener<GatewayDispatchEvents.PresenceUpdate> {
   readonly type = GatewayDispatchEvents.PresenceUpdate;
 }
 
-export abstract class VoiceStateUpdateListener extends BaseListener<APIVoiceState> {
+export abstract class VoiceStateUpdateListener extends BaseListener<GatewayDispatchEvents.VoiceStateUpdate> {
   readonly type = GatewayDispatchEvents.VoiceStateUpdate;
 }
 
-export abstract class ThreadUpdateListener extends BaseListener<GatewayThreadUpdateDispatchData> {
+export abstract class ThreadUpdateListener extends BaseListener<GatewayDispatchEvents.ThreadUpdate> {
   readonly type = GatewayDispatchEvents.ThreadUpdate;
 }
 
-export abstract class ThreadDeleteListener extends BaseListener<GatewayThreadDeleteDispatchData> {
+export abstract class ThreadDeleteListener extends BaseListener<GatewayDispatchEvents.ThreadDelete> {
   readonly type = GatewayDispatchEvents.ThreadDelete;
 }
