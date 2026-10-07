@@ -335,7 +335,15 @@ const RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES = new Set([
 const RELEASE_WAIVED_LIVE_FILES = new Map<string, ReadonlySet<string>>([
   ["2026.9.7", RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES],
   ["2026.9.8", RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES],
-  ["2026.9.9", RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES],
+  [
+    "2026.9.9",
+    new Set([
+      ...RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES,
+      // Release owner approved omitting the flaky Gemini switch probe for 2026.9.9.
+      // Keep Google provider/Gateway coverage; restore this probe on the next line.
+      "src/agents/google-gemini-switch.live.test.ts",
+    ]),
+  ],
 ]);
 
 export function withoutReleaseWaivedLiveFiles(

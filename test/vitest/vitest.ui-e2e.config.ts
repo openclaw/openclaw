@@ -8,7 +8,11 @@ import {
 } from "./vitest.pattern-file.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
-import { controlUiE2eTestGlobs, uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
+import {
+  controlUiE2eTestGlobs,
+  uiE2eOmittedTestFiles,
+  uiE2eRealGatewayTestFiles,
+} from "./vitest.ui-paths.mjs";
 
 const uiE2eIncludePatterns = [
   ...controlUiE2eTestGlobs,
@@ -104,6 +108,7 @@ export function createUiE2eVitestConfig(
   const exclude = [
     ...(baseTest.exclude ?? []).filter((pattern) => pattern !== "**/*.e2e.test.ts"),
     ...realGatewayExclude,
+    ...uiE2eOmittedTestFiles,
   ];
   const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const include =

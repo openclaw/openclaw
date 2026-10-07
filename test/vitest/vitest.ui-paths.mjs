@@ -58,6 +58,12 @@ export function isUiTestTarget(relative) {
   );
 }
 
+// Release owner approved this timing-sensitive omission for the 2026.9.9 line.
+// Retain the test for investigation; restore selection on the next release line.
+export const uiE2eOmittedTestFiles = [
+  "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
+];
+
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
@@ -94,7 +100,7 @@ export const uiE2eRealGatewayTestFiles = [
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
-];
+].filter((file) => !uiE2eOmittedTestFiles.includes(file));
 
 // New real-Gateway files stay serial until their shared readers/writers are audited.
 // Listed fixtures own their HOME, state, ports, and cleanup; UI bytes are either

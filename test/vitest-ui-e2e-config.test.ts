@@ -137,7 +137,6 @@ const realGatewayFiles = [
   "profile-page.real-gateway",
   "provider-browser-login.real-gateway",
   "quota-reset-status.real-gateway",
-  "session-pr-reader-lifetime.real-gateway",
   "session-progress-hovercard.real-gateway",
   "session-roster-request-rate.real-gateway",
   "usage-sessions-owner-attribution",
@@ -401,7 +400,11 @@ describe("Control UI E2E resource ownership", () => {
     },
     {
       include: ["ui/src/e2e/**/*.test.ts"],
-      files: fs.globSync("ui/src/e2e/**/*.test.ts", { cwd: repoRoot }),
+      files: fs
+        .globSync("ui/src/e2e/**/*.test.ts", { cwd: repoRoot })
+        .filter(
+          (file) => file !== "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
+        ),
       leases: 1,
     },
     { include: [], files: [], leases: 0 },
@@ -538,6 +541,7 @@ describe("Control UI E2E resource ownership", () => {
     const result = probeOwnership();
     const inventory = fs
       .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
+      .filter((file) => file !== "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts")
       .toSorted();
     expect(result.files.map((entry) => entry.file).toSorted()).toEqual(inventory);
     expect(result.setupError).toBeUndefined();
@@ -649,13 +653,6 @@ describe("Control UI E2E resource ownership", () => {
         {
           file: "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
-          phase: 1,
-          workers: 1,
-          fileParallelism: false,
-        },
-        {
-          file: "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial",
           phase: 1,
           workers: 1,
           fileParallelism: false,

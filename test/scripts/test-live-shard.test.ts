@@ -53,6 +53,17 @@ describe("scripts/test-live-shard", () => {
     expect(withoutReleaseWaivedLiveFiles(files, undefined)).toEqual(files);
   });
 
+  it("omits only the Gemini switch probe for 2026.9.9, retaining provider coverage", () => {
+    const files = [
+      "src/agents/google-gemini-switch.live.test.ts",
+      "src/gateway/gateway-models.profiles.live.test.ts",
+      "src/agents/minimax.live.test.ts",
+    ];
+    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.9")).toEqual(files.slice(1));
+    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.8")).toEqual(files);
+    expect(withoutReleaseWaivedLiveFiles(files, "2026.10.1")).toEqual(files);
+  });
+
   it("discovers live tests without scanning source roots in-process", () => {
     expectNoReaddirSyncDuring(() => {
       const files = collectAllLiveTestFiles();

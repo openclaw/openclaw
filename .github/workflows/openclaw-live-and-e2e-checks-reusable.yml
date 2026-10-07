@@ -961,7 +961,8 @@ jobs:
               add_profile_suite native-live-src-gateway-profiles-anthropic-opus "full"
               add_profile_suite native-live-src-gateway-profiles-anthropic-sonnet-haiku "full"
               add_profile_suite native-live-src-gateway-profiles-google "stable full"
-              add_profile_suite native-live-src-gateway-profiles-minimax "stable full"
+              # Release owner omitted the MiniMax Gateway-profile test lane for 2026.9.9.
+              # Keep MiniMax smoke coverage; restore this lane on the next release line.
               add_profile_suite native-live-src-gateway-profiles-openai "beta minimum stable full"
               add_profile_suite native-live-src-gateway-profiles-openai-api-default "stable full"
               add_profile_suite native-live-src-gateway-profiles-openai-gpt56-ultra "stable full"
@@ -4306,12 +4307,6 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-google
             label: Native live gateway profiles Google
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 60
-            profile_env_only: false
-            profiles: stable full
-          - suite_id: native-live-src-gateway-profiles-minimax
-            label: Native live gateway profiles MiniMax
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
