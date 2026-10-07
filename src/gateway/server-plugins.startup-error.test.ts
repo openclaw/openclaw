@@ -3,6 +3,7 @@ import { linkSync, unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -14,6 +15,7 @@ import {
   writeInstanceBindingProbePlugin,
 } from "./server-plugins.lifecycle.test-fixtures.js";
 import { installInstanceBindingConfigIo } from "./server-plugins.lifecycle.test-support.js";
+import * as startupPlugins from "./server-startup-plugins.js";
 import {
   connectWebchatClient,
   installGatewayTestHooks,
@@ -120,6 +122,18 @@ it.each(["module-load", "entry-open"] as const)(
     const recovery = vi.fn(() => ({ status: "emitted" as const }));
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const port = portClaim.port;
+    const maintenanceSettled = createDeferred();
+    const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
+    const maintenance = vi
+      .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
+      .mockImplementation(async (params) => {
+        try {
+          await runMaintenance(params);
+        } finally {
+          maintenanceSettled.resolve();
+        }
+      });
+    onTestFinished(() => maintenance.mockRestore());
     const server = await startTestGatewayServer(portClaim, {
       auth: { mode: "none" },
       controlUiEnabled: false,
@@ -129,6 +143,8 @@ it.each(["module-load", "entry-open"] as const)(
     let socket: Awaited<ReturnType<typeof connectWebchatClient>> | undefined;
     try {
       await server.startupSettled;
+      // Post-ready registry repair shares the plugin lease but is outside config settlement.
+      await maintenanceSettled.promise;
       const connected = await connectWebchatClient({ port, scopes: ["operator.admin"] });
       socket = connected;
       const waitForReloadSettlement = async () => {
@@ -175,6 +191,9 @@ it.each(["module-load", "entry-open"] as const)(
       const after = await rpcReq(socket, INSTANCE_BINDING_PROBE_METHOD, {});
       expect(after.ok, after.error?.message).toBe(true);
       expect(after.payload?.registryId).not.toBe(before.payload?.registryId);
+
+      // Successful reloads can also leave config reconciliation queued after the RPC.
+      await waitForReloadSettlement();
 
       // Break only B's code; recovery must register captured A code under a fresh owner.
       await fs.writeFile(
