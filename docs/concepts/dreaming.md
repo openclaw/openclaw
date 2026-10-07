@@ -27,6 +27,10 @@ declaration key in the active cron store.
 - **Rewrite preimages** in SQLite-backed plugin state before an accepted `MEMORY.md` rewrite.
 - **Human-readable output** in `DREAMS.md` (or an existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 
+The built-in SQLite store reads only the selected workspace's state for lookups
+and cleanup. Corrupt JSON in another workspace does not block these operations;
+corrupt JSON in a live record in the selected workspace still reports a storage error.
+
 Long-term promotion still writes only to `MEMORY.md`.
 Deep reports summarize why ranked candidates were not promoted, using counts by
 rejection category without copying rejected snippets or source identifiers.

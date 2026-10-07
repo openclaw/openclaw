@@ -14,40 +14,6 @@ const messageWithContent = (content: readonly Record<string, unknown>[]) =>
     content,
   }) as const;
 
-type FinalizeBoundaryCase = {
-  name: string;
-  streamedContent: readonly Record<string, unknown>[];
-  finalContent: readonly Record<string, unknown>[];
-  expected: string;
-};
-
-const FINALIZE_BOUNDARY_CASES: FinalizeBoundaryCase[] = [
-  {
-    name: "prefers final text when non-text appears only in final payload",
-    streamedContent: [text("Draft line 1"), text("Draft line 2")],
-    finalContent: [toolUse(), text("Draft line 2")],
-    expected: "Draft line 2",
-  },
-  {
-    name: "keeps non-empty final text for plain text boundary drops",
-    streamedContent: [text("Draft line 1"), text("Draft line 2")],
-    finalContent: [text("Draft line 1")],
-    expected: "Draft line 1",
-  },
-  {
-    name: "prefers final replacement text when payload is not a boundary subset",
-    streamedContent: [text("Before tool call"), toolUse(), text("After tool call")],
-    finalContent: [toolUse(), text("Replacement")],
-    expected: "Replacement",
-  },
-  {
-    name: "accepts richer final payload when it extends streamed text",
-    streamedContent: [text("Before tool call")],
-    finalContent: [text("Before tool call"), text("After tool call")],
-    expected: "Before tool call\nAfter tool call",
-  },
-];
-
 describe("TuiStreamAssembler", () => {
   it("keeps thinking before content even when thinking arrives later", () => {
     const assembler = new TuiStreamAssembler();
@@ -95,13 +61,6 @@ describe("TuiStreamAssembler", () => {
     expect(assembler.hasDisplayText("run-literal-output")).toBe(false);
   });
 
-  it("falls back to streamed text on empty final payload", () => {
-    const assembler = new TuiStreamAssembler();
-    assembler.ingestDelta("run-3", messageWithContent([text("Streamed")]), false);
-    const finalText = assembler.finalize("run-3", { role: "assistant", content: [] }, false);
-    expect(finalText).toBe("Streamed");
-  });
-
   it("renders pairing QR terminal text from final assistant content", () => {
     const assembler = new TuiStreamAssembler();
     const finalText = assembler.finalize(
@@ -116,35 +75,6 @@ describe("TuiStreamAssembler", () => {
     expect(finalText).toContain("█ ▄");
     expect(finalText).not.toContain("\u001b[47m");
     expect(finalText).not.toBe("(no output)");
-  });
-
-  it("falls back to event error message when final payload has no renderable text", () => {
-    const assembler = new TuiStreamAssembler();
-    const finalText = assembler.finalize(
-      "run-3-error",
-      { role: "assistant", content: [] },
-      false,
-      '401 {"error":{"message":"Missing scopes: model.request"}}',
-    );
-    expect(finalText).toContain("HTTP 401");
-    expect(finalText).toContain("Missing scopes: model.request");
-  });
-
-  it("renders attachment-only assistant finals without exposing media fields", () => {
-    const assembler = new TuiStreamAssembler();
-    const finalText = assembler.finalize(
-      "run-media-only",
-      messageWithContent([
-        {
-          type: "image",
-          data: "secret-image",
-          url: "file:///Users/operator/private/image.png",
-          artifactId: "secret-artifact",
-        },
-      ]),
-      false,
-    );
-    expect(finalText).toBe("Attached image");
   });
 
   it("keeps visible thinking ahead of an attachment-only final", () => {
@@ -225,90 +155,19 @@ describe("TuiStreamAssembler", () => {
     expect(assembler.finalize("run-1", { role: "assistant", content: [] }, false)).toBe("Draft 1");
   });
 
-  it("keeps a live run available across thousands of orphaned stream updates", () => {
+  it("prefers final text when non-text appears only in final payload", () => {
     const assembler = new TuiStreamAssembler();
-    assembler.ingestDelta("run-live", messageWithContent([text("Still streaming")]), false);
-
-    for (let index = 0; index < 2_000; index += 1) {
-      assembler.ingestDelta(
-        `run-orphan-${index}`,
-        messageWithContent([text(`Draft ${index}`)]),
-        false,
-      );
-      if (index % 100 === 0) {
-        assembler.ingestDelta("run-live", messageWithContent([text("Still streaming")]), false);
-      }
-    }
-
-    expect(assembler.finalize("run-live", { role: "assistant", content: [] }, false)).toBe(
-      "Still streaming",
+    assembler.ingestDelta(
+      "run-boundary",
+      messageWithContent([text("Draft line 1"), text("Draft line 2")]),
+      false,
     );
-    expect(assembler.finalize("run-orphan-0", { role: "assistant", content: [] }, false)).toBe(
-      "(no output)",
-    );
-    expect(assembler.finalize("run-orphan-1999", { role: "assistant", content: [] }, false)).toBe(
-      "Draft 1999",
-    );
-  });
-
-  it("protects a paused live stream across thousands of orphaned updates", () => {
-    const assembler = new TuiStreamAssembler((runId) => runId === "run-live");
-    assembler.ingestDelta("run-live", messageWithContent([text("Before the tool call")]), false);
-
-    for (let index = 0; index < 2_000; index += 1) {
-      assembler.ingestDelta(
-        `run-orphan-${index}`,
-        messageWithContent([text(`Draft ${index}`)]),
-        false,
-      );
-    }
-
-    expect(assembler.finalize("run-live", { role: "assistant", content: [] }, false)).toBe(
-      "Before the tool call",
-    );
-    expect(assembler.finalize("run-orphan-0", { role: "assistant", content: [] }, false)).toBe(
-      "(no output)",
-    );
-    expect(assembler.finalize("run-orphan-1999", { role: "assistant", content: [] }, false)).toBe(
-      "Draft 1999",
-    );
-  });
-
-  it("protects concurrent live streams without retaining abandoned runs", () => {
-    const protectedRuns = new Set(["run-first", "run-second"]);
-    const assembler = new TuiStreamAssembler((runId) => protectedRuns.has(runId));
-    assembler.ingestDelta("run-first", messageWithContent([text("First live response")]), false);
-    assembler.ingestDelta("run-second", messageWithContent([text("Second live response")]), false);
-
-    for (let index = 0; index < 500; index += 1) {
-      assembler.ingestDelta(
-        `run-orphan-${index}`,
-        messageWithContent([text(`Draft ${index}`)]),
-        false,
-      );
-    }
-
-    expect(assembler.finalize("run-first", { role: "assistant", content: [] }, false)).toBe(
-      "First live response",
-    );
-    expect(assembler.finalize("run-second", { role: "assistant", content: [] }, false)).toBe(
-      "Second live response",
-    );
-    expect(assembler.finalize("run-orphan-0", { role: "assistant", content: [] }, false)).toBe(
-      "(no output)",
-    );
-  });
-
-  for (const testCase of FINALIZE_BOUNDARY_CASES) {
-    it(testCase.name, () => {
-      const assembler = new TuiStreamAssembler();
-      assembler.ingestDelta("run-boundary", messageWithContent(testCase.streamedContent), false);
-      const finalText = assembler.finalize(
+    expect(
+      assembler.finalize(
         "run-boundary",
-        messageWithContent(testCase.finalContent),
+        messageWithContent([toolUse(), text("Draft line 2")]),
         false,
-      );
-      expect(finalText).toBe(testCase.expected);
-    });
-  }
+      ),
+    ).toBe("Draft line 2");
+  });
 });

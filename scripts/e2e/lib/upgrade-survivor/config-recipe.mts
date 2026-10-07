@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 // Builds config recipes for upgrade-survivor E2E scenarios.
-import { spawnSync } from "node:child_process";
+import {
+  spawnSync,
+  type SpawnSyncOptionsWithStringEncoding,
+  type SpawnSyncReturns,
+} from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  classifyReleaseTrain,
   compareReleaseVersions,
   parsePinnedReleaseVersion,
-  parseReleaseVersion,
 } from "../../../lib/release-version.mjs";
+import { usesStructuredToolSearchAtBaseline } from "../../../lib/upgrade-survivor-policy.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
@@ -30,26 +33,11 @@ type UpgradeSurvivorCommandParams = {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 };
-type ConfigCommandResult = {
-  error?: Error & { code?: unknown };
-  signal: NodeJS.Signals | null;
-  status: number | null;
-  stderr: string;
-  stdout: string;
-};
 type SpawnSyncCommand = (
   command: string,
   args: string[],
-  options: {
-    encoding: BufferEncoding;
-    env: NodeJS.ProcessEnv;
-    killSignal: NodeJS.Signals;
-    maxBuffer: number;
-    shell: boolean;
-    timeout: number;
-    windowsVerbatimArguments?: boolean;
-  },
-) => ConfigCommandResult;
+  options: SpawnSyncOptionsWithStringEncoding,
+) => Pick<SpawnSyncReturns<string>, "error" | "signal" | "status" | "stderr" | "stdout">;
 type ConfigCommandParams = {
   maxBufferBytes?: number;
   spawnSyncCommand?: SpawnSyncCommand;
@@ -70,8 +58,7 @@ function option<T>(name: string, fallback?: T) {
   return value;
 }
 
-function tail(value: string, max = 2400) {
-  const text = value;
+function tail(text: string, max = 2400) {
   return text.length <= max ? text : text.slice(-max);
 }
 
@@ -91,7 +78,7 @@ function configSetJsonFile(
   id: string,
   intent: string,
   configPath: string,
-  fileName: string,
+  fileName = `${id}.json`,
 ): ConfigStep {
   return {
     id,
@@ -101,62 +88,28 @@ function configSetJsonFile(
 }
 
 const representativeConfigSteps: ConfigStep[] = [
-  configSetJsonFile("models-openai", "models", "models.providers.openai", "models-openai.json"),
-  configSetJsonFile(
-    "models-anthropic",
-    "models-anthropic",
-    "models.providers.anthropic",
-    "models-anthropic.json",
-  ),
-  configSetJsonFile(
-    "models-google",
-    "models-google",
-    "models.providers.google",
-    "models-google.json",
-  ),
+  configSetJsonFile("models-openai", "models", "models.providers.openai"),
+  configSetJsonFile("models-anthropic", "models-anthropic", "models.providers.anthropic"),
+  configSetJsonFile("models-google", "models-google", "models.providers.google"),
   // Keep the migration specimen idle while baseline and candidate services run:
   // a heartbeat refreshes its skills snapshot before inference, even when auth fails.
-  configSetJsonFile("agents", "agents", "agents", "agents.json"),
-  configSetJsonFile("skills", "skills", "skills", "skills.json"),
-  configSetJsonFile("plugins", "plugins", "plugins", "plugins.json"),
-  configSetJsonFile(
-    "channels-discord",
-    "discord-channel",
-    "channels.discord",
-    "channels-discord.json",
-  ),
-  configSetJsonFile(
-    "channels-telegram",
-    "telegram-channel",
-    "channels.telegram",
-    "channels-telegram.json",
-  ),
-  configSetJsonFile(
-    "channels-whatsapp",
-    "whatsapp-channel",
-    "channels.whatsapp",
-    "channels-whatsapp.json",
-  ),
+  configSetJsonFile("agents", "agents", "agents"),
+  configSetJsonFile("skills", "skills", "skills"),
+  configSetJsonFile("plugins", "plugins", "plugins"),
+  configSetJsonFile("channels-discord", "discord-channel", "channels.discord"),
+  configSetJsonFile("channels-telegram", "telegram-channel", "channels.telegram"),
+  configSetJsonFile("channels-whatsapp", "whatsapp-channel", "channels.whatsapp"),
+  configSetJsonFile("tools-tool-search", "tool-search", "tools.toolSearch"),
 ];
 
 const configuredPluginInstallSteps = [
-  configSetJsonFile(
-    "plugins-configured-installs",
-    "configured-plugin-installs",
-    "plugins",
-    "plugins-configured-installs.json",
-  ),
+  configSetJsonFile("plugins-configured-installs", "configured-plugin-installs", "plugins"),
   {
     id: "channels-whatsapp-unset",
     intent: "configured-plugin-installs",
     argv: ["config", "unset", "channels.whatsapp"],
   },
-  configSetJsonFile(
-    "channels-matrix",
-    "configured-plugin-installs",
-    "channels.matrix",
-    "channels-matrix.json",
-  ),
+  configSetJsonFile("channels-matrix", "configured-plugin-installs", "channels.matrix"),
 ];
 
 const scenarioConfigSteps = new Map<string, ConfigStep[]>([
@@ -184,7 +137,6 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
           "plugins-acpx-openclaw-tools-bridge",
           "acpx-openclaw-tools-bridge",
           "plugins",
-          "plugins-acpx-openclaw-tools-bridge.json",
         ),
         // The candidate externalizes this runtime even when the baseline bundles it.
         prepublishPluginPackages: ["@openclaw/acpx"],
@@ -194,13 +146,8 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   [
     "feishu-channel",
     [
-      configSetJsonFile("plugins-feishu", "plugins", "plugins", "plugins-feishu.json"),
-      configSetJsonFile(
-        "channels-feishu",
-        "feishu-channel",
-        "channels.feishu",
-        "channels-feishu.json",
-      ),
+      configSetJsonFile("plugins-feishu", "plugins", "plugins"),
+      configSetJsonFile("channels-feishu", "feishu-channel", "channels.feishu"),
     ],
   ],
   [
@@ -247,14 +194,14 @@ export function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
 }
 
 const sharedRecipe: ConfigStep[] = [
-  configSetJsonFile("gateway", "gateway", "gateway", "gateway.json"),
+  configSetJsonFile("gateway", "gateway", "gateway"),
   ...representativeConfigSteps,
-  {
-    id: "validate",
-    intent: "validate",
-    argv: ["config", "validate"],
-  },
 ];
+const validateStep: ConfigStep = {
+  id: "validate",
+  intent: "validate",
+  argv: ["config", "validate"],
+};
 
 const connectionOnlySharedIntents = new Set(["gateway"]);
 const connectionOnlyScenarios = new Set(["mobile-pairing-reconnect", "watchos-direct-node"]);
@@ -263,14 +210,18 @@ export function resolveUpgradeSurvivorConfigSteps(
   scenario = "base",
   configuredUpdateChannel = process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL,
 ): ConfigStep[] {
-  const validateStep = sharedRecipe.at(-1);
   const updateChannel =
     configuredUpdateChannel || (scenario === "prerelease-plugin-registry" ? "beta" : "stable");
   if (updateChannel !== "stable" && updateChannel !== "beta") {
     throw new Error(`invalid upgrade survivor update channel: ${updateChannel}`);
   }
+  const toolSearchRecipe =
+    process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE ?? "current";
+  if (toolSearchRecipe !== "current" && toolSearchRecipe !== "absent") {
+    throw new Error(`invalid selected Tool Search recipe: ${toolSearchRecipe}`);
+  }
   const sharedSteps = sharedRecipe
-    .slice(0, -1)
+    .filter((step) => step.intent !== "tool-search" || toolSearchRecipe === "current")
     .filter(
       (step) =>
         !connectionOnlyScenarios.has(scenario) || connectionOnlySharedIntents.has(step.intent),
@@ -302,15 +253,17 @@ export function resolveUpgradeSurvivorConfigSteps(
     },
     ...sharedSteps,
     ...resolveScenarioConfigSteps(scenario),
-    ...(validateStep ? [validateStep] : []),
+    validateStep,
   ];
 }
 
-function selectedScenario() {
-  return process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO || "base";
-}
-
 function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null): ConfigStep {
+  if (step.id === "tools-tool-search" && usesStructuredToolSearchAtBaseline(baselineVersion)) {
+    return {
+      ...step,
+      argv: [...step.argv.slice(0, 3), JSON.stringify({ mode: "tools" }), ...step.argv.slice(4)],
+    };
+  }
   if (step.id === "agents") {
     const agentsJson = step.argv[3];
     if (agentsJson === undefined) {
@@ -323,14 +276,7 @@ function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null):
       agents.entries.main.default = true;
       delete agents.ownership;
     }
-    // July's extended-stable line branched before keyed rosters shipped.
-    const baselineRelease = parseReleaseVersion(baselineVersion ?? "");
-    if (
-      (baselineRelease?.year === 2026 &&
-        baselineRelease.month === 7 &&
-        classifyReleaseTrain(baselineRelease) === "extended-stable") ||
-      compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1
-    ) {
+    if (compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1) {
       agents.list = Object.entries<Record<string, unknown>>(agents.entries).map(([id, entry]) =>
         Object.assign(entry, { id }),
       );
@@ -364,6 +310,7 @@ function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null):
 function* adaptRecipeForBaseline(
   steps: ConfigStep[],
   baselineVersion: string | null,
+  scenario: string,
 ): Generator<ConfigStep> {
   // Older and suffixed releases retain their existing command and receipt contract.
   const pinnedVersion = parsePinnedReleaseVersion(baselineVersion ?? "");
@@ -373,6 +320,27 @@ function* adaptRecipeForBaseline(
   for (const [index, step] of steps.entries()) {
     if (index <= batchedThrough) {
       continue;
+    }
+    if (scenario === "base" && pinnedVersion === "2026.9.7" && step.id === "validate") {
+      yield {
+        id: "silent-reply-internal-retirement",
+        intent: "silent-reply-internal-retirement",
+        argv: [
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify([
+            {
+              path: "agents.defaults.silentReply",
+              value: { group: "allow", internal: "allow" },
+            },
+            {
+              path: "surfaces.discord.silentReply",
+              value: { group: "disallow", internal: "disallow" },
+            },
+          ]),
+        ],
+      };
     }
     if (
       batchChannels &&
@@ -413,7 +381,13 @@ export function resolveUpgradeSurvivorConfigStepsForBaseline(
   scenario = "base",
   baselineVersion: string | null = null,
 ): ConfigStep[] {
-  return [...adaptRecipeForBaseline(resolveUpgradeSurvivorConfigSteps(scenario), baselineVersion)];
+  return [
+    ...adaptRecipeForBaseline(
+      resolveUpgradeSurvivorConfigSteps(scenario),
+      baselineVersion,
+      scenario,
+    ),
+  ];
 }
 
 export function resolveUpgradeSurvivorOpenClawCommand(
@@ -476,7 +450,7 @@ export function runUpgradeSurvivorOpenClawStep(step: ConfigStep, params: ConfigC
 function applyRecipe() {
   const summaryPath = option("--summary");
   const baselineVersion = option("--baseline-version", null);
-  const scenario = selectedScenario();
+  const scenario = process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO || "base";
   const recipeSteps = resolveUpgradeSurvivorConfigSteps(scenario);
   const summary: {
     source: string;
@@ -494,7 +468,7 @@ function applyRecipe() {
     steps: [],
   };
 
-  for (const step of adaptRecipeForBaseline(recipeSteps, baselineVersion)) {
+  for (const step of adaptRecipeForBaseline(recipeSteps, baselineVersion, scenario)) {
     const outcome = runUpgradeSurvivorOpenClawStep(step);
     summary.steps.push(outcome);
     if (outcome.ok) {

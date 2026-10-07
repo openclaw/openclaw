@@ -131,81 +131,8 @@ extension OnboardingAISetupModel {
         }
     }
 
-    @MainActor
-    struct PersistedActivationVerification {
-        let expectedModel: String
-        let modelTarget: ModelTarget?
-        let routeIdentity: String
-        let activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner
-        let before: PersistedActivationState?
-
-        func reconcile(
-            gateway: GatewayConnection,
-            defaults: UserDefaults,
-            serverLease: GatewayConnection.ServerLease,
-            deadline: ReconciliationDeadline,
-            isCurrentAttempt: () -> Bool,
-            onVerified: (ActivateResult) -> Bool) async -> Bool
-        {
-            let detectTimeoutMs = deadline.remainingMilliseconds(
-                cappedAt: OnboardingAISetupModel.setupDetectionRequestTimeoutMs)
-            guard detectTimeoutMs > 0,
-                  isCurrentAttempt(),
-                  !Task.isCancelled,
-                  OnboardingSystemAgentResumeStore.isOwned(
-                      by: self.activationOwner,
-                      for: self.routeIdentity,
-                      defaults: defaults),
-                  await gateway.activationOwnershipFingerprint(ifCurrentServerLease: serverLease) ==
-                  self.activationOwner.routeFingerprint
-            else { return false }
-            guard let detectData = try? await gateway.request(
-                method: "openclaw.setup.detect",
-                params: [:],
-                timeoutMs: Double(detectTimeoutMs),
-                ifCurrentServerLease: serverLease),
-                await gateway.isCurrentServerLease(serverLease),
-                isCurrentAttempt(),
-                !Task.isCancelled,
-                let detection = try? JSONDecoder().decode(DetectResult.self, from: detectData),
-                OnboardingAISetupModel.activationTransitionWasPersisted(
-                    expectedModel: self.expectedModel,
-                    modelTarget: self.modelTarget,
-                    before: self.before,
-                    after: detection.persistedActivationState)
-            else { return false }
-            let verifyTimeoutMs = deadline.remainingMilliseconds(
-                cappedAt: OnboardingAISetupModel.setupDetectionRequestTimeoutMs)
-            guard verifyTimeoutMs > 0 else { return false }
-            guard let verifyData = try? await gateway.request(
-                method: "openclaw.setup.verify",
-                params: self.modelTarget == .utility ? ["modelTarget": AnyCodable("utility")] : [:],
-                timeoutMs: Double(verifyTimeoutMs),
-                ifCurrentServerLease: serverLease),
-                await gateway.isCurrentServerLease(serverLease),
-                isCurrentAttempt(),
-                !Task.isCancelled,
-                let result = try? JSONDecoder().decode(ActivateResult.self, from: verifyData),
-                result.verifies(modelRef: self.expectedModel, modelTarget: self.modelTarget)
-            else { return false }
-            return onVerified(result)
-        }
-    }
-
     struct DetectResult: Decodable {
-        struct DetectedCandidate: Decodable {
-            let brandId: String?
-            let icon: String?
-            let website: String?
-            let kind: String
-            let label: String
-            let detail: String
-            let modelRef: String
-            let credentials: Bool?
-            let modelTarget: ModelTarget?
-        }
-
-        let candidates: [DetectedCandidate]
+        let candidates: [Candidate]
         let unavailableCandidates: [UnavailableCandidate]?
         let manualProviders: [ManualProvider]?
         let authOptions: [AuthOption]?
@@ -293,7 +220,10 @@ extension OnboardingAISetupModel {
             : OnboardingAISetupError.activationOutcomeUnavailable)
     }
 
-    struct Candidate: Identifiable, Equatable {
+    struct Candidate: Identifiable, Equatable, Decodable {
+        let brandId: String?
+        let icon: String?
+        let website: String?
         let kind: String
         let label: String
         let detail: String
@@ -304,12 +234,6 @@ extension OnboardingAISetupModel {
         var id: String {
             self.kind
         }
-    }
-
-    struct CandidatePresentation: Equatable {
-        let brandId: String?
-        let icon: String?
-        let website: String?
     }
 
     struct UnavailableCandidate: Identifiable, Equatable, Decodable {
@@ -409,25 +333,24 @@ extension OnboardingAISetupModel {
     }
 
     func activationAuthOption(for request: ActivationRequest) -> AuthOption {
-        let id: String
-        let presentation: CandidatePresentation?
+        let id: String, brandId: String?, icon: String?, website: String?
         switch request {
         case let .candidate(kind, _, _, _):
             id = kind
-            presentation = self.candidatePresentation[kind]
+            let candidate = self.candidates.first { $0.kind == kind }
+            (brandId, icon, website) = (candidate?.brandId, candidate?.icon, candidate?.website)
         case let .manual(_, provider):
             id = provider.id
-            presentation = CandidatePresentation(
-                brandId: provider.brandId, icon: provider.icon, website: provider.website)
+            (brandId, icon, website) = (provider.brandId, provider.icon, provider.website)
         }
         return AuthOption(
             id: id,
-            brandId: presentation?.brandId,
+            brandId: brandId,
             label: request.label,
             hint: nil,
             groupLabel: nil,
-            icon: presentation?.icon,
-            website: presentation?.website,
+            icon: icon,
+            website: website,
             kind: "activation",
             featured: false,
             modelTarget: request.modelTarget)
@@ -506,19 +429,16 @@ extension OnboardingAISetupModel {
         return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
     }
 
-    func startProviderAuth(_ option: AuthOption) {
-        self.startProviderWizard(option, kind: .auth)
-    }
-
-    func continueProviderAuth() {
-        guard let step = authStep, wizardStepExecutor(step) != "gateway" else { return }
+    @discardableResult
+    func continueProviderAuth() -> Task<Void, Never>? {
+        guard let step = authStep, wizardStepExecutor(step) != "gateway" else { return nil }
         let value: AnyCodable? = switch wizardStepType(step) {
         case "text": AnyCodable(self.authText)
         case "select": self.selectedAuthWizardOption?.value
         case "confirm": AnyCodable(self.authConfirmation)
         default: nil
         }
-        self.advanceProviderAuth(stepID: step.id, value: value)
+        return self.advanceProviderAuth(stepID: step.id, value: value)
     }
 
     func startProviderPrepare(_ option: PrepareOption) {
@@ -580,12 +500,11 @@ extension OnboardingAISetupModel {
         ]
         return (advertisedOptions ?? legacyOptions).filter { choice in
             let providerKind = self.providerAutoSetupKind(choiceID: choice.id)
-            guard !candidates.contains(where: {
+            return !candidates.contains(where: {
                 $0.credentials != false &&
                     ($0.kind == providerKind ||
                         $0.modelRef.hasPrefix("\(choice.brandId ?? choice.id)/"))
-            }) else { return false }
-            return true
+            })
         }
     }
 
@@ -735,10 +654,6 @@ extension OnboardingAISetupModel {
             return "\(label) is temporarily rate-limited. Try again in a moment."
         case "timeout":
             return "\(label) didn’t answer in time."
-        case "format", "unavailable":
-            return detail.isEmpty
-                ? "\(label) couldn’t complete the test."
-                : "\(label) couldn’t complete the test. Show details to inspect or copy the error."
         default:
             return detail.isEmpty
                 ? "\(label) couldn’t complete the test."

@@ -79,11 +79,12 @@ function isStaticPlainObjectArgument(node: AnyNode): node is ObjectExpression {
   );
 }
 
-function legacyToolCall(node: AnyNode): CallExpression | undefined {
+function legacyToolCall(
+  node: AnyNode,
+): { call: CallExpression; tool: Identifier; args: ObjectExpression } | undefined {
   if (node.type !== "CallExpression") {
     return undefined;
   }
-  const call = node;
   const callee = node.callee;
   if (
     callee.type !== "MemberExpression" ||
@@ -93,17 +94,17 @@ function legacyToolCall(node: AnyNode): CallExpression | undefined {
     callee.object.name !== "tools" ||
     callee.property.type !== "Identifier" ||
     callee.property.name !== "call" ||
-    call.optional ||
-    call.arguments.length !== 2
+    node.optional ||
+    node.arguments.length !== 2
   ) {
     return undefined;
   }
-  const [toolName, args] = call.arguments;
+  const [toolName, args] = node.arguments;
   return toolName?.type === "Literal" &&
     toolName.value === "exec" &&
     args &&
     isStaticPlainObjectArgument(args)
-    ? call
+    ? { call: node, tool: callee.object, args }
     : undefined;
 }
 
@@ -178,10 +179,11 @@ export function migrateLegacyCronTriggerScript(script: string): TriggerScriptMig
     ) {
       return { kind: "unsupported" };
     }
-    const call = legacyToolCall(node);
-    if (!call) {
+    const legacy = legacyToolCall(node);
+    if (!legacy) {
       continue;
     }
+    const { call, tool, args } = legacy;
     const parent = ancestors.at(-1);
     const awaited = parent?.type === "AwaitExpression";
     const expression = awaited ? parent : node;
@@ -207,14 +209,7 @@ export function migrateLegacyCronTriggerScript(script: string): TriggerScriptMig
     } else if (owner?.type !== "ExpressionStatement" || ancestors.at(awaited ? -3 : -2) !== body) {
       return { kind: "unsupported" };
     }
-    if (call.callee.type !== "MemberExpression") {
-      return { kind: "unsupported" };
-    }
-    recognizedTools.add(call.callee.object);
-    const args = call.arguments[1];
-    if (!args) {
-      return { kind: "unsupported" };
-    }
+    recognizedTools.add(tool);
     const removedPrefix = script.slice(call.start - codeOffset, args.start - codeOffset);
     if (sourceContainsComment(removedPrefix)) {
       return { kind: "unsupported" };

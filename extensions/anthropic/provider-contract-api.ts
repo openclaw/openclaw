@@ -1,7 +1,3 @@
-/**
- * Contract API for Anthropic provider metadata. It builds a provider descriptor
- * without runtime registration side effects.
- */
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 const noopAuth = async () => ({ profiles: [] });
@@ -55,7 +51,6 @@ export function createAnthropicAuthMethods() {
   };
 }
 
-/** Create the static Anthropic provider contract descriptor. */
 export function createAnthropicProvider(): ProviderPlugin {
   return {
     id: "anthropic",

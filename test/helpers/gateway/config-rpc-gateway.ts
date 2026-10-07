@@ -1,16 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import chokidar from "chokidar";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi, type TestContext } from "vitest";
 import { resolveDefaultAgentDir } from "../../../src/agents/agent-scope.js";
 import { prepareHostConfigSnapshot } from "../../../src/config/io.snapshot-preparation.js";
+import * as configFileSource from "../../../src/config/source-file.js";
 import { GatewayClient, GatewayClientRequestError } from "../../../src/gateway/client.js";
 import { invalidateConfigGetResponseCache } from "../../../src/gateway/config-get-response.js";
 import { pruneStaleControlPlaneBuckets } from "../../../src/gateway/control-plane-rate-limit.js";
 import { configRawPayload } from "../../../src/gateway/server.config-patch.test-support.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
 import { resetGatewayRestartStateForInProcessRestart } from "../../../src/infra/restart.js";
-import { resetLogger, setLoggerOverride } from "../../../src/logging/logger.js";
+import { readConfiguredParsedLogTail } from "../../../src/logging/log-tail.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../../src/logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../src/plugins/plugin-metadata-lifecycle.js";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import { deleteTestEnvValue } from "../../../src/test-utils/env.js";
@@ -25,7 +27,6 @@ let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 let client: GatewayClient | undefined;
 const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
-const unarmedConfigWatchers: ReturnType<typeof chokidar.watch>[] = [];
 
 type ConfigRpcGatewayOptions = {
   configRelativePath?: string;
@@ -56,9 +57,26 @@ export async function rpcReq<T extends Record<string, unknown>>(
     if (!(error instanceof GatewayClientRequestError)) {
       throw error;
     }
+    let message = error.message;
+    if (isRecord(error.details) && Object.hasOwn(error.details, "persistedConfig")) {
+      try {
+        await flushLogger();
+        const tail = await readConfiguredParsedLogTail({
+          limit: 8,
+          maxBytes: 64 * 1024,
+          filter: ({ subsystem }) => subsystem === "gateway/reload",
+        });
+        if (tail.lines.length > 0) {
+          message += `\nRecent Gateway reload diagnostics:\n${tail.lines.map((line) => line.message).join("\n")}`;
+        }
+      } catch {
+        // Diagnostic I/O must not replace the config operation's original failure.
+        message += "\nRecent Gateway reload diagnostics could not be read.";
+      }
+    }
     return {
       ok: false,
-      error: { message: error.message, code: error.code, details: error.details },
+      error: { message, code: error.code, details: error.details },
     };
   }
 }
@@ -80,6 +98,7 @@ async function startConfigRpcGateway(
     env: {
       OPENCLAW_GATEWAY_TOKEN: undefined,
       OPENCLAW_GATEWAY_PASSWORD: undefined,
+      OPENCLAW_LOG_LEVEL: undefined,
       OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
       OPENCLAW_SKIP_CANVAS_HOST: "1",
@@ -93,7 +112,11 @@ async function startConfigRpcGateway(
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve(import.meta.dirname, "../../../dist/extensions"),
     },
   });
-  setLoggerOverride({ level: "silent", consoleLevel: "silent" });
+  setLoggerOverride({
+    file: state.path("gateway.log"),
+    level: "info",
+    consoleLevel: "silent",
+  });
   const config = { agents: { entries: { main: {} } } };
   const configPath = configRelativePath ? state.statePath(configRelativePath) : state.configPath;
   recordPhase?.("config.write");
@@ -104,15 +127,19 @@ async function startConfigRpcGateway(
     await state.writeConfig(config);
   }
   if (!watchConfigFiles) {
-    const watch = chokidar.watch;
-    vi.spyOn(chokidar, "watch").mockImplementation((paths, options) => {
-      if ((Array.isArray(paths) ? paths : [paths]).includes(configPath)) {
-        // Keep managed writes and the real read cache active without independent file notifications.
-        const watcher = new chokidar.FSWatcher(options);
-        unarmedConfigWatchers.push(watcher);
-        return watcher;
+    const createConfigFileAdapter = configFileSource.createConfigFileAdapter;
+    vi.spyOn(configFileSource, "createConfigFileAdapter").mockImplementation((options) => {
+      if (options.path !== configPath) {
+        return createConfigFileAdapter(options);
       }
-      return watch(paths, options);
+      // Managed writes and the real read cache remain active without independent notifications.
+      return {
+        start: () => {},
+        observePaths: async () => {},
+        acceptPaths: async () => {},
+        stop: async () => {},
+        status: () => "active" as const,
+      };
     });
   }
   hotReloadRecovery.mockClear();
@@ -172,12 +199,12 @@ async function stopConfigRpcGateway(recordPhase?: (phase: string) => void) {
       server = undefined;
     },
     () => {
-      recordPhase?.("watchers.close");
-      return Promise.all(unarmedConfigWatchers.splice(0).map((watcher) => watcher.close()));
-    },
-    () => {
       recordPhase?.("restart.after");
       return resetGatewayRestartStateForInProcessRestart();
+    },
+    () => {
+      recordPhase?.("logger.flush");
+      return flushLogger();
     },
     () => {
       recordPhase?.("state.cleanup");
@@ -317,15 +344,14 @@ export function installConfigWriteGatewayHooks(options: ConfigRpcGatewayOptions 
 }
 
 export function installSharedConfigWriteGatewayHooks({
-  configRelativePath,
   fixturePaths = [],
-}: {
-  configRelativePath?: string;
+  ...options
+}: ConfigRpcGatewayOptions & {
   fixturePaths?: string[];
 } = {}) {
   let original: Awaited<ReturnType<typeof getCurrentConfigObject>>;
   beforeAll(async () => {
-    await startConfigRpcGateway({ configRelativePath });
+    await startConfigRpcGateway(options);
     original = await getCurrentConfigObject();
   });
   beforeEach(() => {

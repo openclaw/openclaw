@@ -10,7 +10,9 @@ read_when:
 ## Guest runtime API
 
 The following TypeScript declarations document the guest API. Executable cells
-use plain JavaScript without type annotations.
+use plain JavaScript without type annotations. Every `exec` starts a fresh
+JavaScript context: variables and functions never carry over to another cell.
+`wait` resumes the same cell.
 
 ```typescript
 declare const catalog: ToolCatalog;
@@ -26,6 +28,8 @@ declare function clearTimeout(id: number): void;
 declare function text(value: unknown): void;
 declare function json(value: unknown): void;
 declare function yield_control(reason?: string): Promise<void>;
+declare function store(key: string, value: unknown): Promise<void>;
+declare function load(key: string): Promise<unknown>;
 ```
 
 `TextEncoder` and `TextDecoder` are available for local text and byte transforms.
@@ -79,8 +83,10 @@ fields into dependent logic in the same program. This also applies when a
 declared-output read feeds a final `-> ?` call: return or save that final raw
 value without wrapping it in a guessed answer shape.
 
-`results.load(id)` returns a detached JSON copy for later cells in the same
-agent run, and `results.delete(id)` frees capacity. Read `results.d.ts` through
+`results.load(id)` returns a detached JSON copy for later cells in the current
+reply, and `results.delete(id)` frees capacity. References expire when that
+reply ends; never reuse ids from earlier turns. Use `store` for small values
+needed later. Read `results.d.ts` through
 `API.read` for types, limits, and lifetime, or see
 [Reuse data across cells](/tools/code-mode/quickstart#reuse-data-across-cells).
 Oversized final objects and arrays may return an automatic `value.reference`
@@ -215,16 +221,59 @@ const hits = await search({ query: "OpenClaw code mode" });
 ```
 
 Calling a native global or native catalog handle returns the normal tool's JSON `details`
-value directly. MCP handles retain the native MCP result (`content`, optional
-`structuredContent`, and optional `isError`). Exact catalog ids and raw `{ tool, result }` envelopes are not
-guest-visible.
+value directly. When a tool marks its result `isError: true` and its details carry no
+non-empty `message` or `error` string, the value includes the tool's text content
+as `message`, so guest code and the model can see why the call failed. MCP handles
+retain the native MCP result (`content`, optional `structuredContent`, and
+optional `isError`). Exact catalog ids and raw `{ tool, result }` envelopes are
+not guest-visible.
 
 The `ls`, `find`, and `grep` tools include their bounded listing or search text
 in `content`, including empty-result messages and truncation notices. Directory
 pages retain `nextAfter`; search results retain their existing limit and
 truncation metadata.
 
-### Reading paginated file data
+## Session store
+
+Use `await store(key, value)` and `await load(key)` to keep small JSON values
+across cells and turns in the same session, including Gateway restarts:
+
+```javascript
+await store("shipmentSummary", { unpaid: 3, totalTons: 42 });
+```
+
+In a later cell or turn:
+
+```javascript
+const summary = await load("shipmentSummary");
+return summary;
+```
+
+Keys must be non-empty strings of at most 256 characters; invalid keys reject
+with `TypeError`. Values use the normal bridge JSON normalization. Each
+serialized value may use at most 256 KiB of encoded JSON, and all stored values
+together may use at most 1 MiB. Exceeding either limit rejects with `RangeError`
+and leaves the store unchanged. `await store(key, undefined)` deletes a key.
+`await load(key)` returns `undefined` when missing and otherwise returns a
+detached copy; editing that copy does not change the saved value.
+
+Writes are buffered per cell. Later loads in that cell see its pending writes,
+including after `wait`. Writes become available to other cells only when the
+cell settles `completed`. Failed, timed-out, aborted, expired, or disposed cells
+discard their pending writes. If persistence fails, the cell remains completed
+with a warning, and the run's projection stays unchanged. Verify the transcript
+before relying on the write: an append error can occur after a durable commit.
+
+The session transcript owns committed values. Forks and branches inherit only
+the values on their own transcript path; compaction preserves them. Custom
+store entries do not enter model context. Loading network-derived data carries
+its provenance into the receiving cell's normal untrusted-content wrapper.
+
+Both executors support these helpers in interactive cells with a bound session.
+Headless and `restartSafe` cells reject store operations, as do cells without
+an available session manager. Read `API.read("results.d.ts")` for the contract.
+
+## Reading paginated file data
 
 For text file pages, `read(...)` returns file text in `content`; filename-resolution
 and pagination notices stay in the human-readable tool display, not the structured

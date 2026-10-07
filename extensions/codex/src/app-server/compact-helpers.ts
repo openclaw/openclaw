@@ -1,84 +1,103 @@
 import {
+  AgentHarnessSessionSupersededError,
   embeddedAgentLog,
+  type AgentHarnessCompactParams,
   type CompactEmbeddedAgentSessionParams,
-  type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { JsonObject } from "./protocol.js";
+import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  retainCodexAppServerLiveThread,
+  revertCodexAppServerLiveThreadInstructions,
+} from "./client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
+import type { CodexAppServerClient } from "./client.js";
+import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
   CodexAppServerThreadBinding,
+  CodexBindingAuthority,
 } from "./session-binding.js";
 import { isSameCodexAppServerThreadOwner } from "./thread-ownership.js";
 
-export function codexNativeCompactionResult(
-  params: CompactEmbeddedAgentSessionParams,
-  outcome: { compacted: boolean; reason?: string; tokensAfter?: number; details: JsonObject },
-): EmbeddedAgentCompactResult {
-  return {
-    ok: true,
-    compacted: outcome.compacted,
-    ...(outcome.reason ? { reason: outcome.reason } : {}),
-    result: {
-      summary: "",
-      firstKeptEntryId: "",
-      tokensBefore: params.currentTokenCount ?? 0,
-      ...(outcome.tokensAfter !== undefined ? { tokensAfter: outcome.tokensAfter } : {}),
-      details: outcome.details,
-    },
-  };
-}
-
-export function skippedCodexNativeCompactionResult(
-  params: CompactEmbeddedAgentSessionParams,
-  skipped: {
-    reason: string;
-    code: string;
-    request?: "required_preflight" | "after_context_engine";
-    expectedThreadId?: string;
-    currentThreadId?: string;
-  },
-): EmbeddedAgentCompactResult {
-  return codexNativeCompactionResult(params, {
-    compacted: false,
-    reason: skipped.reason,
-    details: {
-      backend: "codex-app-server",
-      skipped: true,
-      reason: skipped.code,
-      request: skipped.request ?? "after_context_engine",
-      trigger: params.trigger ?? "unknown",
-      ...(skipped.expectedThreadId ? { expectedThreadId: skipped.expectedThreadId } : {}),
-      ...(skipped.currentThreadId ? { currentThreadId: skipped.currentThreadId } : {}),
-    },
-  });
-}
-
-export function failedCodexThreadBindingCompactionResult(
-  params: CompactEmbeddedAgentSessionParams,
-  recovery: {
-    reason: string;
-    recovery: "missing_thread_binding" | "stale_thread_binding";
-    threadId?: string;
-  },
-): EmbeddedAgentCompactResult {
-  embeddedAgentLog.warn("codex app-server compaction could not use thread binding", {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    threadId: recovery.threadId,
-    reason: recovery.reason,
-    recovery: recovery.recovery,
-  });
-  return {
-    ok: false,
-    compacted: false,
-    reason: recovery.reason,
-    failure: {
-      reason: recovery.recovery,
-      rawError: recovery.reason,
-    },
-  };
+/** Settles the consumed subscription without returning stale ownership to the next turn. */
+export async function settleCodexCompactionSubscription(params: {
+  client: CodexAppServerClient;
+  bindingStore: CodexAppServerBindingStore;
+  identity: CodexAppServerBindingIdentity;
+  binding: CodexAppServerThreadBinding;
+  authority: CodexBindingAuthority;
+  ownership?: CodexAppServerLiveThreadOwnership;
+  compacted: boolean;
+  release?: () => Promise<void>;
+}): Promise<void> {
+  let retained = false;
+  try {
+    if (params.compacted) {
+      // Incognito keeps a separately owned subscription. Revert its discarded refresh
+      // in place so the next turn redelivers the current instructions.
+      await params.authority.withCurrent(() =>
+        revertCodexAppServerLiveThreadInstructions(params.client, params.binding.threadId),
+      );
+    }
+    const ownership = params.ownership;
+    if (ownership) {
+      // Reset uses the same generation lease; publication also needs fresh lineage.
+      retained = await params.bindingStore.withLease(
+        params.identity,
+        async () => {
+          let pendingRetention: Promise<boolean> | undefined;
+          try {
+            await params.authority.withCurrent(() => {
+              if (
+                !isSameCodexAppServerThreadOwner(
+                  params.bindingStore.read(params.identity),
+                  params.binding,
+                )
+              ) {
+                return;
+              }
+              // Publication is synchronous; idle eviction settles outside the read grant.
+              pendingRetention = retainCodexAppServerLiveThread(
+                params.client,
+                params.binding.threadId,
+                ownership.release,
+                ownership.configFingerprint,
+                ownership.serviceTier,
+                // Native compaction restores creation-time instructions, not the injected refresh.
+                ownership.ephemeralPolicy && params.compacted
+                  ? {
+                      ...ownership.ephemeralPolicy,
+                      refreshableInstructions:
+                        ownership.ephemeralPolicy.nativeRefreshableInstructions,
+                    }
+                  : ownership.ephemeralPolicy,
+              );
+            });
+          } catch (error) {
+            // Reader release can fail after publication. Join eviction before cleanup;
+            // never replay publication or preserve a claim from a rejected authority scope.
+            await pendingRetention;
+            throw error;
+          }
+          return pendingRetention ? await pendingRetention : false;
+        },
+        { authority: params.authority },
+      );
+    }
+  } catch (error) {
+    // A replaced generation may settle native work, but cannot republish its owner.
+    if (!(error instanceof AgentHarnessSessionSupersededError)) {
+      throw error;
+    }
+  } finally {
+    if (!retained) {
+      await params.release?.();
+    }
+  }
 }
 
 export async function clearContextEngineProjectionBeforeNativeCompaction(params: {
@@ -87,6 +106,7 @@ export async function clearContextEngineProjectionBeforeNativeCompaction(params:
   identity: CodexAppServerBindingIdentity;
   binding: CodexAppServerThreadBinding;
   assertCurrent: () => void;
+  authority: CodexBindingAuthority;
 }): Promise<void> {
   const contextEngineBinding = params.binding.contextEngine;
   if (!contextEngineBinding?.projection) {
@@ -107,6 +127,7 @@ export async function clearContextEngineProjectionBeforeNativeCompaction(params:
       },
     },
     params.assertCurrent,
+    params.authority,
   );
   embeddedAgentLog.info("cleared codex context-engine projection before native compaction", {
     sessionId: params.sessionId,
@@ -140,4 +161,46 @@ export function isCodexThreadNotFoundError(error: unknown): boolean {
   // compaction.rs asserts message.contains("thread not found")). So the message
   // gates recovery, not user-facing classification; the generic code is ambiguous.
   return coerceErrorMessage(error).toLowerCase().includes("thread not found");
+}
+
+// ttlMs: 0 retains keys until the 4,096-entry LRU cap evicts them, after which a
+// previously suppressed warning can intentionally emit again.
+const warnedIgnoredCompactionOverrides = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+
+export function warnIfIgnoringOpenClawCompactionOverrides(
+  params: CompactEmbeddedAgentSessionParams,
+): void {
+  const compaction = asOptionalRecord(params.config?.agents?.defaults?.compaction);
+  const ignoredConfig = ["model", "thinkingLevel", "provider"].flatMap((field) => {
+    const value = compaction?.[field];
+    return typeof value === "string" && value.trim() ? [`agents.defaults.compaction.${field}`] : [];
+  });
+  if (ignoredConfig.length === 0) {
+    return;
+  }
+  const warningKey = ignoredConfig.join("\0");
+  if (warnedIgnoredCompactionOverrides.check(warningKey)) {
+    return;
+  }
+  embeddedAgentLog.warn(
+    "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
+    {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      ignoredConfig,
+    },
+  );
+}
+
+export function resolveCodexCompactionExecutionBlock(
+  params: AgentHarnessCompactParams<2> & { sandbox?: SandboxContext | null },
+) {
+  return resolveCodexNativeExecutionBlock({
+    config: params.config,
+    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.sandboxAgentId ?? params.agentId,
+    sandbox: params.sandbox,
+    surface: "native compaction",
+  });
 }

@@ -162,7 +162,7 @@ describe("AgentSession refusal compaction", () => {
         maxTokens: 16,
       } satisfies Model<"anthropic-messages">;
       const sessionManager = SessionManager.inMemory();
-      appendHistory(
+      await appendHistory(
         sessionManager,
         createAssistant(
           model,

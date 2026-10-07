@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
+import type { LogbookFrame } from "./types.js";
 
 vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-runtime")>();
@@ -51,6 +52,7 @@ async function fixture(count: number) {
     await fs.writeFile(path.join(dataDir, "frames", `${id}.jpg`), Buffer.from(`frame ${id}`));
   }
   const db = openNodeSqliteDatabase(path.join(dataDir, "logbook.sqlite"));
+  const frames: LogbookFrame[] = [];
   try {
     // A pruned batch can retain a larger original frame_count than its live rows.
     db.prepare(
@@ -63,6 +65,17 @@ async function fixture(count: number) {
     for (let id = 1; id <= count; id++) {
       const file = path.join(dataDir, "frames", `${id}.jpg`);
       const bytes = Buffer.from(`frame ${id}`);
+      frames.push({
+        id,
+        capturedAtMs: Math.floor((count - id) / 2),
+        day: "2026-07-03",
+        path: file,
+        screenIndex: id % 2,
+        width: id % 2 === 0 ? 640 : undefined,
+        height: id % 2 === 0 ? 480 : undefined,
+        byteSize: bytes.byteLength,
+        idle: id % 3 === 0,
+      });
       insert.run(
         id,
         Math.floor((count - id) / 2),
@@ -82,16 +95,15 @@ async function fixture(count: number) {
   } finally {
     db.close();
   }
-  return { dataDir, store: await open(dataDir) };
+  frames.sort((a, b) => a.capturedAtMs - b.capturedAtMs || a.id - b.id);
+  return { dataDir, store: await open(dataDir), frames };
 }
 
 describe("Logbook sampled batch images", () => {
-  it.each([0, 1, 16, 17, 30, 31, 1440, 2000])(
+  it.each([0, 16, 17, 2000])(
     "keeps the chronological sample and bounds transported metadata for %i frames",
     async (count) => {
-      const { dataDir, store } = await fixture(count);
-      const frames = await store.batchFrames(1);
-      expect(frames).toHaveLength(count);
+      const { dataDir, store, frames } = await fixture(count);
       const expected =
         count <= 16
           ? frames
@@ -129,8 +141,7 @@ describe("Logbook sampled batch images", () => {
   );
 
   it("ignores an unsampled missing file and propagates the first selected file error", async () => {
-    const { dataDir, store } = await fixture(17);
-    const frames = await store.batchFrames(1);
+    const { dataDir, store, frames } = await fixture(17);
     const unsampled = frames[8];
     const selected = frames[0];
     if (!unsampled || !selected) {

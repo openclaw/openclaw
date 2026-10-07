@@ -176,9 +176,10 @@ Console logs are **TTY-aware** and formatted for readability:
 Console formatting is controlled by `logging.consoleStyle`.
 
 SQLite worker diagnostics use stderr. After the final backend closes normally,
-the worker gives pending console output up to five seconds to drain before
-acknowledging close. This is best effort; forced worker termination can still
-discard pending diagnostics.
+the worker flushes queued file logs and gives pending console output up to five
+seconds to drain before acknowledging close. Source-loaded backends and compiled
+workers share the same file-log queue. Forced worker termination can still discard
+pending diagnostics.
 
 ### Gateway WebSocket logs
 
@@ -196,6 +197,42 @@ openclaw gateway
 openclaw gateway --verbose --ws-log compact
 openclaw gateway --verbose --ws-log full
 ```
+
+### Steering and input cancellation
+
+Ordinary channel reply routing logs
+`steering rejected; applying follow-up policy` at warning level when steering
+falls back. The fixed `reason` code distinguishes an unavailable owner or
+injection path, a pending source operation, changed authority, terminal-reply
+state, and runtime rejection.
+Records include the channel, opaque session ID, and input or active run IDs when
+supplied. `disposition` distinguishes a follow-up policy decision, confirmed
+or rejected queue admission, and a known queue-cap rejection; it does not confirm delivery.
+These records omit message text, attachments, session keys, and raw exceptions.
+
+When retained reply-delivery state prevents steering, the Gateway logs
+`chat steering rejected; falling back to follow-up dispatch`. Its structured
+fields distinguish the incoming input's `runId` from `activeRunId` and record
+the session, active source turn, recovery claim, and exact `reason`:
+
+- `terminal-pending` or `delivered-terminal`: a final-reply receipt is present.
+- `unresolved-terminal-tool` or `delivery-ambiguous`: a final-reply delivery is unresolved.
+- `already-delivered`: the active source turn is recorded as completed.
+- `unknown-source-with-terminal-history`: the active source is unknown and
+  completed source turns are retained.
+- `stale-claim`: the recovery claim does not authorize the active source turn.
+- `session-entry-unavailable`: the Gateway could not read the current session state.
+
+These checks also run during ordinary conversations; the warning does not mean
+a Gateway restart is in progress. Rejection falls back to follow-up dispatch;
+it does not itself cancel the input.
+
+`chat pending input aborted` records an accepted input that was aborted before
+consumption, including inputs waiting in the follow-up queue. The message includes
+the cause and whether the saved input became `cancelled` or `interrupted`.
+Structured fields include its run, session, and agent IDs. Causes distinguish
+`rpc`, `stop`, `timeout`, `restart`, `archive`, `delete`, `authority-revoked`, and `superseded`;
+unclassified aborts use `aborted`. These records omit message text and attachments.
 
 ## Configuring logging
 
@@ -256,6 +293,16 @@ response without a refusal; conflicts before that terminal cannot be retried
 because the final outcome is unknown. Failed or incomplete terminal responses,
 including content filtering, cannot be overridden by identity recovery. The
 identity checks stay enforced on every attempt.
+
+When OpenAI Responses cuts off a tool call at `max_output_tokens`, the embedded
+runner can continue once in the same run after earlier tools have settled. It
+appends a runtime transcript notice identifying the unfinished call when its ID
+is available and instructing the model to split the work into smaller tool calls.
+The incomplete call is not executed, completed tool results remain available,
+and earlier transcript entries are unchanged. A second truncation ends the run
+with the existing unfinished-tool-call warning. Transport error logs include the
+allowlisted incomplete reason without raw provider text; content-filtered and
+unrecognized incomplete responses retain their existing failure behavior.
 
 A worker message-size failure is separate from a model context-window limit.
 Retry with a smaller response or continue on the Gateway. If the worker cannot
@@ -520,8 +567,9 @@ holder sample.
 
 `operationId` and `holderOperationId` identify diagnostic operation instances
 within `diagnosticEpoch`, PID and thread. Operations use the fixed boundary
-labels `lifecycle`, `mutation` and `compaction`; they do not name arbitrary
-callers. Existing request traces appear in `operationTraceId`/`operationSpanId`
+labels `lifecycle`, `mutation` and `compaction`. Mutations also include the bounded
+`mutationKind` (for example, `create`, `archive`, `delete`, or `worktree-cleanup`);
+queue samples include `holderMutationKind`. Existing request traces appear in `operationTraceId`/`operationSpanId`
 and separate `holderTraceId`/`holderSpanId` fields when present. Missing trace
 fields remain unknown; no new trace or audit execution identity is created.
 
@@ -529,6 +577,10 @@ fields remain unknown; no new trace or audit execution identity is created.
 identity. It correlates only inside the same JavaScript runtime isolate and
 diagnostic epoch. Raw session keys and paths are omitted. The digest is
 operational correlation, not anonymization or authorization evidence.
+Both records include `sessionScopeHash`, the salted digest of the first normalized
+identity, and `identityCount`. For batches this names one scope, not every affected
+session. `holderSessionScopeHash` identifies that same scope for the current holder.
+No session titles, transcript content, repository names, or raw identities are logged.
 
 `slow session lifecycle operation` records operations taking at least one
 second through their actual queued work's settlement. It separates
@@ -551,7 +603,11 @@ capacity or after enablement. `omittedObservations` on a later record reports
 suppressed observations; missing records never prove no wait.
 
 Elapsed intervals can include asynchronous waits and nested work, so phase
-and queue totals need not form a disjoint partition. A holder sample identifies
+and queue totals need not form a disjoint partition. `isMainThread=true` identifies
+the emitting thread; a long `.run` interval does not establish event-loop blocking.
+Correlate it with event-loop delay or a CPU profile before attributing a stall.
+Work before lifecycle admission, including request preflight, is outside these intervals.
+A holder sample identifies
 who owns that queue at the sampled instant, not every predecessor responsible
 for the entire wait or which work consumed CPU. These are ordinary performance
 logs. They do not use or change [audit identity](/gateway/audit), decisions,
@@ -631,6 +687,31 @@ attribution. These diagnostics measure cleanup without changing its ordering or
 completion behavior.
 
 ### Slow agent database opens
+
+Foreground Gateway startup reports a bounded set of `startup phase` records even
+without opt-in tracing. CLI records identify entry-module loading, environment
+selection, command imports, and state preparation before `loading configuration`.
+Bootstrap subphases separate config-guard imports, config and database admission,
+plugin metadata, payload verification, and lease acquisition. Gateway records
+separate maintenance work, listener binding, plugin loading and attachment, worker
+startup, model preparation, channel startup, and restored subagent activation.
+Measured phases log both their start and elapsed
+duration; `total` is elapsed time from process startup (or the current in-process
+restart). These are wall times, including asynchronous waits, not CPU measurements.
+Nested durations overlap their parent phases; do not add them to the parent total.
+Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
+import and registration timings.
+
+Desktop permission narrowing and canonical session checks remain on their required
+admission paths. Transcript projection repair, orphan settlement, channel
+maintenance, pairing diagnostics, and restored-subagent activation run after
+readiness. Retired plugin captures join the existing post-ready idle cleanup.
+History reads use the transcript owner's bounded on-demand repair when needed.
+Orphan status and its failure receipt settle together in the database worker,
+with current run ownership checked before commit. These scheduling changes do
+not change stored formats or require an update migration.
+Each CLI admission pass shares one read-only state snapshot and releases it before
+live guards and writes; acquiring a preparation lease still starts a fresh pass.
 
 The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
 a persistent database open takes at least one second:
@@ -716,9 +797,9 @@ errors. These elapsed durations do not measure SQL CPU time or establish a
 causal link to a nearby request.
 
 Older builds report `session.reclamation.commit-settlement` for a parent-side
-synchronous SQLite probe after authorizing a reclamation or cold-storage commit.
+synchronous SQLite check after authorizing a reclamation or cold-storage commit.
 The parent now atomically accepts the commit after checking live authority and
-awaits settlement asynchronously, without that probe or its lock wait.
+awaits settlement asynchronously, without that check or its lock wait.
 
 Hot transcript reads identify their purpose in `operation`: `session transcript
 <purpose> read`, where `<purpose>` is `identity`, `header`, `tail`, `incremental`,
@@ -851,6 +932,13 @@ flags, they warn at 10 seconds elapsed or 5 seconds in one preparation stage. Co
 logs each completed slow stage immediately, including failures, and emits a
 `native-turn-handoff` summary before submitting the native turn. Timing records
 contain stage names and identifiers, not prompts or tool arguments.
+
+Dispatch preparation separates `reply.wait_admission_ticket` from
+`reply.admit_pre_dispatch`, `reply.admit_dispatch`, and
+`reply.admit_command_resolution`. These spans distinguish waiting behind an
+earlier input from waiting for the session's execution owner. A cancelled or
+failed request that never reaches the reply resolver still reports slow
+preparation under the same thresholds.
 
 Embedded-run startup, prep, core-plugin-tool and auth stage summaries include
 `pid`, `threadId` and `isMainThread` in the message to distinguish emitters sharing

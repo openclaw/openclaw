@@ -1,6 +1,3 @@
-/**
- * Handles assistant message deltas, reasoning, directives, and block replies.
- */
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
@@ -141,7 +138,6 @@ export function handleMessageUpdate(
     // streamReasoning rendering hook and message_tool_only source suppression
     // are gated downstream (dispatch wrapProgressCallback, #92738), so emission
     // here stays unconditional.
-    // Prefer full partial-message thinking when available; fall back to event payloads.
     const block =
       Array.isArray(msg.content) && msg.content.length === 1 ? msg.content[0] : undefined;
     const nativeThinking = block?.type === "thinking" ? block : undefined;
@@ -492,7 +488,6 @@ export function handleMessageUpdate(
     ) {
       openReasoningStream(ctx);
     }
-    // Detect when thinking block ends (</think> tag processed)
     if (
       !suppressMessageToolOnlySourceReplyOutput &&
       wasThinking &&

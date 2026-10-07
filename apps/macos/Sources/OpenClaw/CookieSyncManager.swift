@@ -153,9 +153,7 @@ final class CookieSyncManager: NSObject {
             return
         }
 
-        let profile = appState.cookieSyncIntoProfile
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .nonEmpty ?? "imported"
+        let profile = appState.cookieSyncIntoProfile.nonEmpty ?? "imported"
         guard let endpoint = self.remoteEndpoint else {
             self.stopChild(nextState: .error("no remote gateway credentials available"))
             return
@@ -182,8 +180,8 @@ final class CookieSyncManager: NSObject {
         guard case let .ready(mode, url, rawToken, rawPassword, _) = self.endpointState,
               mode == .remote
         else { return nil }
-        let token = rawToken?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        let password = rawPassword?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        let token = rawToken?.nonEmpty
+        let password = rawPassword?.nonEmpty
         guard token != nil || password != nil else { return nil }
         return Endpoint(url: url, token: token, password: token == nil ? password : nil)
     }
@@ -330,15 +328,8 @@ final class CookieSyncManager: NSObject {
         guard self.shouldBeActive else { return }
         self.retryAttempt += 1
         let delaySeconds = min(30, 1 << min(self.retryAttempt - 1, 5))
-        self.retryTask?.cancel()
-        self.retryTask = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: UInt64(delaySeconds) * 1_000_000_000)
-            } catch {
-                return
-            }
-            guard !Task.isCancelled, let self else { return }
-            self.scheduleReconcile(resetRetry: false, delay: 0)
+        SimpleTaskSupport.schedule(task: &self.retryTask, delay: TimeInterval(delaySeconds)) { [weak self] in
+            self?.scheduleReconcile(resetRetry: false, delay: 0)
         }
     }
 

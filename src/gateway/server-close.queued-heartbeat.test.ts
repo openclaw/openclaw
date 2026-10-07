@@ -12,6 +12,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import { buildGatewayCronService } from "./server-cron.js";
@@ -30,8 +31,10 @@ afterEach(() => vi.useRealTimers());
 it("settles queued heartbeat cron work before joining its shutdown drain", async () => {
   vi.useFakeTimers();
   const stateDir = tempDirs.make("gateway-close-queued-heartbeat-");
-  const cfg = { cron: { enabled: false }, agents: { list: [{ id: "main" }] } };
+  const cfg = { cron: { enabled: false }, agents: { entries: { main: {} } } };
+  const scheduler = createTestGatewayScheduler();
   const { cron } = buildGatewayCronService({
+    scheduler,
     cfg,
     deps: {} as CliDeps,
     broadcast: () => {},
@@ -43,6 +46,7 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
   const siblingStarted = createDeferredCore();
   const releaseSibling = createDeferredCore();
   const core = createCronServiceState({
+    scheduler,
     cronEnabled: true,
     storePath: path.join(stateDir, "jobs.json"),
     log: { debug() {}, info() {}, warn() {}, error() {} },

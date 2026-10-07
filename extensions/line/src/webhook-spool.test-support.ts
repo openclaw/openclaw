@@ -1,14 +1,9 @@
 // LINE event fixtures shared by handler, durable spool, and upgrade-migration suites.
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { webhook } from "@line/bot-sdk";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests as createChannelIngressQueue,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createChannelIngressQueueForTests as createChannelIngressQueue } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, vi } from "vitest";
 
 export type SpoolPayload = {
@@ -93,28 +88,16 @@ export async function withQueue<T>(
     legacySeed: ChannelIngressQueue<LegacySpoolPayload>,
   ) => Promise<T>,
 ): Promise<T> {
-  const createdDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-line-spool-"),
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-line-spool-", applyEnv: false },
+    async ({ stateDir }) => {
+      const queueOptions = { channelId: "line", accountId: "default", stateDir };
+      const queue = createChannelIngressQueue<SpoolPayload>(queueOptions);
+      // Upgrade tests seed the pre-drain row shape through the same store.
+      const legacySeed = createChannelIngressQueue<LegacySpoolPayload>(queueOptions);
+      return await fn(queue, legacySeed);
+    },
   );
-  const stateDir = await fs.realpath(createdDir);
-  const queue = createChannelIngressQueue<SpoolPayload>({
-    channelId: "line",
-    accountId: "default",
-    stateDir,
-  });
-  // A second wrapper over the same store, typed as the pre-drain row shape, so
-  // upgrade tests can seed legacy rows without casting the canonical queue.
-  const legacySeed = createChannelIngressQueue<LegacySpoolPayload>({
-    channelId: "line",
-    accountId: "default",
-    stateDir,
-  });
-  try {
-    return await fn(queue, legacySeed);
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
 }
 
 export async function waitForVerdict(

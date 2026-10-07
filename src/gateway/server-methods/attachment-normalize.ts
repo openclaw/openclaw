@@ -1,21 +1,8 @@
-// Attachment normalization accepts permissive RPC attachment payloads and turns
-// them into the bounded chat attachment shape used by gateway chat methods.
 import { asNonNegativeFiniteNumber as normalizeAttachmentNumber } from "@openclaw/normalization-core/number-coercion";
 import type { ChatAttachment } from "../chat-attachments.js";
 
 /** RPC attachment payload shape accepted by chat-like gateway methods. */
-export type RpcAttachmentInput = {
-  type?: unknown;
-  mimeType?: unknown;
-  fileName?: unknown;
-  origin?: unknown;
-  content?: unknown;
-  sizeBytes?: unknown;
-  durationMs?: unknown;
-  width?: unknown;
-  height?: unknown;
-  source?: unknown;
-};
+export type RpcAttachmentInput = Partial<Record<keyof ChatAttachment | "source", unknown>>;
 
 function normalizeAttachmentContent(content: unknown): string | undefined {
   // RPC callers may send browser ArrayBuffers, typed-array slices, or base64
@@ -32,7 +19,6 @@ function normalizeAttachmentContent(content: unknown): string | undefined {
   return undefined;
 }
 
-/** Convert permissive RPC attachment payloads into the bounded chat attachment shape. */
 export function normalizeRpcAttachmentsToChatAttachments(
   attachments: RpcAttachmentInput[] | undefined,
 ): ChatAttachment[] {
@@ -45,11 +31,12 @@ export function normalizeRpcAttachmentsToChatAttachments(
         const sourceRecord = source as
           | { type?: unknown; media_type?: unknown; data?: unknown }
           | undefined;
-        const sourceType = typeof sourceRecord?.type === "string" ? sourceRecord.type : undefined;
         const sourceMimeType =
           typeof sourceRecord?.media_type === "string" ? sourceRecord.media_type : undefined;
         const sourceContent =
-          sourceType === "base64" ? normalizeAttachmentContent(sourceRecord?.data) : undefined;
+          sourceRecord?.type === "base64"
+            ? normalizeAttachmentContent(sourceRecord.data)
+            : undefined;
         const sizeBytes = normalizeAttachmentNumber(a?.sizeBytes);
         const durationMs = normalizeAttachmentNumber(a?.durationMs);
         const width = normalizeAttachmentNumber(a?.width);

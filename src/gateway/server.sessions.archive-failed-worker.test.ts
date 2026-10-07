@@ -7,7 +7,10 @@ import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-prot
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   directSessionReq,
@@ -21,17 +24,17 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 const { createArchiveWorktreeFixture } = setupGatewaySessionsWorktreeTestHarness();
 const execFileAsync = promisify(execFile);
 
-function pendingWorkerCleanup(sessionId: string, key: string) {
+async function pendingWorkerCleanup(sessionId: string, key: string) {
   const placements = createWorkerSessionPlacementStore();
-  const requested = placements.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
-  const provisioning = placements.transition({
+  const requested = await placements.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
+  const provisioning = await placements.transition({
     sessionId,
     from: "requested",
     to: "provisioning",
     expectedGeneration: requested.generation,
     patch: { environmentId: "worker-cleanup-pending" },
   });
-  const failed = placements.fail({
+  const failed = await placements.fail({
     sessionId,
     expectedGeneration: provisioning.generation,
     recoveryError: "provider cleanup pending",
@@ -73,7 +76,7 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
     environment,
     reclaim,
     context: initialContext,
-  } = pendingWorkerCleanup(sessionId, key);
+  } = await pendingWorkerCleanup(sessionId, key);
   let context = initialContext;
   const patch = (archived: boolean) =>
     directSessionReq(
@@ -83,7 +86,8 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
     );
   expect(await patch(true)).toMatchObject({ ok: true });
   await disposeSessionReadContexts();
-  closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawAgentDatabasesAsync(path.dirname(storePath));
+  closeOpenClawAgentDatabasesForTest(path.dirname(storePath));
   // Reopening uses a fresh projection binding while retaining the same worker services.
   context = { ...context };
   expect(loadSessionEntry(scope)).toMatchObject({
@@ -127,7 +131,7 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
   await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
   expect(await patch(true)).toMatchObject({ ok: true });
   environment.state = "destroyed";
-  placements.transition({
+  await placements.transition({
     sessionId,
     from: "failed",
     to: "local",
@@ -137,7 +141,8 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
 });
 
 test("failed worker cleanup keeps worktree reconstruction blocked until the worker is gone", async () => {
-  const { key, sessionId, storePath, worktree } = await createArchiveWorktreeFixture();
+  const { key, sessionId, storePath, worktree, cleanupWorktrees } =
+    await createArchiveWorktreeFixture();
   await fs.writeFile(path.join(worktree.path, "draft.txt"), "restore this work\n");
   expect(
     await directSessionReq("sessions.patch", {
@@ -146,7 +151,8 @@ test("failed worker cleanup keeps worktree reconstruction blocked until the work
       archived: true,
     }),
   ).toMatchObject({ ok: true });
-  const { environment, reclaim, context } = pendingWorkerCleanup(sessionId, key);
+  await cleanupWorktrees();
+  const { environment, reclaim, context } = await pendingWorkerCleanup(sessionId, key);
   const restore = vi.spyOn(managedWorktrees, "restore");
   const unarchive = () =>
     directSessionReq(

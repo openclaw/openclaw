@@ -25,7 +25,7 @@ import {
 import type { AuthProfileStore } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
-type ExternalCliOverlayOptions = {
+export type ExternalCliOverlayOptions = {
   allowKeychainPrompt?: boolean;
   config?: OpenClawConfig;
   externalCliProviderIds?: Iterable<string>;
@@ -46,18 +46,6 @@ const testing = {
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.externalAuthTestApi")] =
     testing;
-}
-
-function normalizeExternalAuthProfile(
-  profile: ProviderExternalAuthProfile,
-): ProviderExternalAuthProfile | null {
-  if (!profile?.profileId || !profile.credential) {
-    return null;
-  }
-  return {
-    ...profile,
-    persistence: profile.persistence ?? "runtime-only",
-  };
 }
 
 function resolveExplicitProfileIds(values: Iterable<string> | undefined): Set<string> | undefined {
@@ -119,17 +107,6 @@ function resolveAllowedExternalCliAuthProfiles(params: {
   );
 }
 
-function hasPersistableExternalCliSyncCandidate(
-  store: AuthProfileStore,
-  params?: ExternalCliOverlayOptions,
-): boolean {
-  if (params?.externalCliProviderIds || params?.externalCliProfileIds) {
-    return true;
-  }
-  // MiniMax keeps its persisted external profile fresh without an explicit scope.
-  return store.profiles[MINIMAX_CLI_PROFILE_ID]?.type === "oauth";
-}
-
 function hasScopedExternalCliOverlay(params?: ExternalCliOverlayOptions): boolean {
   return Boolean(params?.externalCliProviderIds || params?.externalCliProfileIds);
 }
@@ -137,14 +114,17 @@ function hasScopedExternalCliOverlay(params?: ExternalCliOverlayOptions): boolea
 /** Persist safe external CLI OAuth profiles that own their local profile slot. */
 export function syncPersistedExternalCliAuthProfiles(
   store: AuthProfileStore,
-  params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
+  params?: ExternalCliOverlayOptions,
 ): AuthProfileStore {
-  if (!hasPersistableExternalCliSyncCandidate(store, params)) {
+  // MiniMax keeps its persisted external profile fresh without an explicit scope.
+  if (
+    !hasScopedExternalCliOverlay(params) &&
+    store.profiles[MINIMAX_CLI_PROFILE_ID]?.type !== "oauth"
+  ) {
     return store;
   }
   const persistedProfiles = resolveAllowedExternalCliAuthProfiles({
     store,
-    env: params?.env,
     externalCli: params,
   }).filter((profile) => profile.persistence === "persisted");
   if (persistedProfiles.length === 0) {
@@ -207,10 +187,13 @@ export function createExternalAuthRuntime(
     const pluginProfileIds = new Set<string>();
     const explicitProfileIds = resolveExplicitProfileIds(params.externalCli?.externalCliProfileIds);
     for (const rawProfile of profiles) {
-      const profile = normalizeExternalAuthProfile(rawProfile);
-      if (!profile) {
+      if (!rawProfile?.profileId || !rawProfile.credential) {
         continue;
       }
+      const profile: ProviderExternalAuthProfile = {
+        ...rawProfile,
+        persistence: rawProfile.persistence ?? "runtime-only",
+      };
       if (
         !isExternalAuthProfileAllowed(
           profile,

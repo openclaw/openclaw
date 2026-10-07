@@ -18,6 +18,10 @@ import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { resolveWidgetPresenters } from "../../plugins/widget-presenters.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  resetGeneratedMediaTaskActivityForTests,
+  admitMediaHandle,
+} from "../media-generation-activity.test-support.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configured-catalog.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
@@ -43,6 +47,7 @@ const png = Buffer.from(
 afterEach(() => {
   vi.restoreAllMocks();
   resetRecentMediaGenerationDuplicateGuardsForTests();
+  resetGeneratedMediaTaskActivityForTests();
   clearPluginMetadataLifecycleCaches();
   resetPluginRuntimeStateForTest();
 });
@@ -258,13 +263,16 @@ module.exports = { id: '${id}', register(api) {
           );
           const scheduled: Array<() => Promise<void>> = [];
           const sessionKey = "agent:main:discord:direct:donor-proof";
-          vi.spyOn(lifecycle, "createTaskRun").mockReturnValue({
-            taskId: "donor-task",
-            runId: "donor-run",
-            requesterSessionKey: sessionKey,
-            requesterAgentId: "main",
-            taskLabel: "Donor proof",
-          });
+          vi.spyOn(lifecycle, "createTaskRun").mockImplementation(async () =>
+            admitMediaHandle({
+              taskId: "donor-task",
+              detach: true,
+              runId: "donor-run",
+              requesterSessionKey: sessionKey,
+              requesterAgentId: "main",
+              taskLabel: "Donor proof",
+            }),
+          );
           vi.spyOn(lifecycle, "recordTaskProgress").mockImplementation(() => {});
           const completed = vi.spyOn(lifecycle, "completeTaskRun").mockImplementation(() => {});
           const failed = vi.spyOn(lifecycle, "failTaskRun").mockImplementation(() => {});

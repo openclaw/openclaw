@@ -1,5 +1,3 @@
-// Plugin host hook methods expose plugin UI descriptors and validate plugin
-// session action payload/result JSON against declared schemas.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -17,11 +15,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
-import {
-  validateJsonSchemaValue,
-  type JsonSchemaValidationError,
-  type JsonSchemaValue,
-} from "../../plugins/schema-validator.js";
+import { validateJsonSchemaValue, type JsonSchemaValue } from "../../plugins/schema-validator.js";
 import {
   listControlUiPluginDescriptors,
   listControlUiLinkReaders,
@@ -37,23 +31,6 @@ import { defineValidatedGatewayHandler } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/plugin-host-hooks");
 
-function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationError[]): string {
-  return errors.map((error) => error.text).join("; ");
-}
-
-/** Ensures plugin action result extension fields stay JSON-compatible on the wire. */
-function validatePluginSessionActionJsonFields(
-  result: Record<string, unknown>,
-): string | undefined {
-  for (const field of ["result", "reply", "details"] as const) {
-    if (result[field] !== undefined && !isPluginJsonValue(result[field])) {
-      return `plugin session action ${field} must be JSON-compatible`;
-    }
-  }
-  return undefined;
-}
-
-/** Gateway handlers for plugin-declared Control UI descriptors and session actions. */
 export const pluginHostHookHandlers: GatewayRequestHandlers = {
   "plugins.uiDescriptors": defineValidatedGatewayHandler(
     "plugins.uiDescriptors",
@@ -210,7 +187,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
               undefined,
               errorShape(
                 ErrorCodes.INVALID_REQUEST,
-                `plugin session action payload does not match schema: ${formatSessionActionPayloadSchemaErrors(validation.errors)}`,
+                `plugin session action payload does not match schema: ${validation.errors.map((error) => error.text).join("; ")}`,
               ),
             );
             return;
@@ -250,19 +227,26 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const jsonFieldError = result ? validatePluginSessionActionJsonFields(result) : undefined;
-        if (jsonFieldError) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, jsonFieldError));
+        const jsonResult: Record<string, unknown> | undefined = result || undefined;
+        const invalidJsonField =
+          jsonResult &&
+          ["result", "reply", "details"].find(
+            (field) => jsonResult[field] !== undefined && !isPluginJsonValue(jsonResult[field]),
+          );
+        if (invalidJsonField) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `plugin session action ${invalidJsonField} must be JSON-compatible`,
+            ),
+          );
           return;
         }
         if (!wireResult.ok) {
-          // Plugin-declared action failures are returned as a successful RPC
-          // with `ok: false` per PluginsSessionActionResultSchema. Reserve
-          // transport errorShape for protocol-level failures (validation,
-          // schema mismatch, dispatch error). Distinguishing these in the
-          // wire shape lets callers handle plugin failures (often retryable
-          // or user-facing) differently from transport errors (operator
-          // diagnostics).
+          // Plugin failures are successful RPCs with ok:false; transport errors
+          // are reserved for invalid protocol data or failed dispatch.
           respond(
             true,
             {

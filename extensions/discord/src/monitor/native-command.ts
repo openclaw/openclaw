@@ -13,26 +13,11 @@ import {
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
 import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import {
-  resolveDiscordAccountAllowFrom,
-  resolveDiscordAccountDmPolicy,
-  resolveDiscordMaxLinesPerMessage,
-} from "../accounts.js";
-import {
-  Button,
-  Command,
-  StringSelectMenu,
-  type CommandInteraction,
-  type CommandOptions,
-} from "../internal/discord.js";
-import {
-  resolveDiscordChannelPolicyCommandAuthorizer,
-  resolveDiscordOwnerAccess,
-} from "./allow-list.js";
+import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
+import { Command, type CommandInteraction, type CommandOptions } from "../internal/discord.js";
+import { resolveDiscordOwnerAccess } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { readDiscordInteractionPolicy } from "./live-policy-interaction.js";
@@ -71,6 +56,7 @@ import {
   DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
   deliverDiscordInteractionReply,
   hasRenderableReplyPayload,
+  resolveDiscordInteractionReplyOptions,
   safeDiscordInteractionCall,
   settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
@@ -247,11 +233,7 @@ async function dispatchDiscordCommandInteraction(
       ...(ephemeral !== undefined ? { ephemeral } : {}),
     };
     await safeDiscordInteractionCall("interaction reply", async () => {
-      if (preferFollowUp) {
-        await interaction.followUp(payload);
-        return;
-      }
-      await interaction.reply(payload);
+      await interaction[preferFollowUp ? "followUp" : "reply"](payload);
     });
   };
 
@@ -294,14 +276,14 @@ async function dispatchDiscordCommandInteraction(
     sender,
     allowNameMatching,
   });
-  const { commandsAllowFromAccess, guildInfo, channelConfig } =
-    resolveDiscordNativeCommandChannelAccessContext({
-      cfg,
-      discordConfig,
-      sender,
-      ...channelContext,
-      guild: interaction.guild ?? null,
-    });
+  const channelAccess = resolveDiscordNativeCommandChannelAccessContext({
+    cfg,
+    discordConfig,
+    sender,
+    ...channelContext,
+    guild: interaction.guild ?? null,
+  });
+  const { guildInfo, channelConfig } = channelAccess;
   let nativeRouteState:
     | ReturnType<typeof nativeCommandRuntime.resolveDiscordNativeInteractionRouteState>
     | undefined;
@@ -329,33 +311,13 @@ async function dispatchDiscordCommandInteraction(
       routeState.configuredBinding != null
     );
   };
-  if (channelConfig?.enabled === false && !canBypassConfiguredAcpGuildGuards()) {
-    await respond("This channel is disabled.");
+  if (channelAccess.channelDenial && !canBypassConfiguredAcpGuildGuards()) {
+    await respond(
+      channelAccess.channelDenial === "disabled"
+        ? "This channel is disabled."
+        : "This channel is not allowed.",
+    );
     return { accepted: false };
-  }
-  if (
-    interaction.guild &&
-    channelConfig?.allowed === false &&
-    !canBypassConfiguredAcpGuildGuards()
-  ) {
-    await respond("This channel is not allowed.");
-    return { accepted: false };
-  }
-  if (interaction.guild) {
-    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: cfg.channels?.discord !== undefined,
-      groupPolicy: discordConfig?.groupPolicy,
-      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
-    });
-    const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
-      groupPolicy,
-      guildInfo,
-      channelConfig,
-    });
-    if (!policyAuthorizer.allowed && !canBypassConfiguredAcpGuildGuards()) {
-      await respond("This channel is not allowed.");
-      return { accepted: false };
-    }
   }
   if (policy?.isCurrent() === false) {
     await respond("Access policy changed. Try this interaction again.", { ephemeral: true });
@@ -427,11 +389,7 @@ async function dispatchDiscordCommandInteraction(
   }
   if (!isDirectMessage) {
     commandAuthorized = await resolveDiscordGuildNativeCommandAuthorized({
-      cfg,
-      discordConfig,
-      commandsAllowFromAccess,
-      guildInfo,
-      channelConfig,
+      ...channelAccess,
       memberRoleIds,
       sender,
       allowNameMatching,
@@ -632,13 +590,9 @@ async function dispatchDiscordCommandInteraction(
     await deliverDiscordInteractionReply({
       interaction,
       payload: pluginReply,
-      textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
-        fallbackLimit: 2000,
-      }),
-      maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
+      ...resolveDiscordInteractionReplyOptions({ cfg, discordConfig, accountId }),
       preferFollowUp,
       responseEphemeral,
-      chunkMode: resolveChunkMode(cfg, "discord", accountId),
     });
     return { accepted: true, effectiveRoute };
   }
@@ -719,29 +673,23 @@ async function dispatchDiscordCommandInteraction(
   return { accepted: dispatched, effectiveRoute, hiddenFinalReply };
 }
 
-export function createDiscordCommandArgFallbackButton(params: DiscordCommandArgContext): Button {
-  return createDiscordCommandArgFallbackButtonUi({
-    ctx: { ...params, readPolicy: resolveDiscordNativePolicyReader(params) },
-    safeInteractionCall: safeDiscordInteractionCall,
-    dispatchCommandInteraction: dispatchDiscordCommandInteraction,
-  });
+function bindDiscordCommandControl<T>(
+  createControl: (params: Parameters<typeof createDiscordCommandArgFallbackButtonUi>[0]) => T,
+): (params: DiscordCommandArgContext) => T {
+  return (params) =>
+    createControl({
+      ctx: { ...params, readPolicy: resolveDiscordNativePolicyReader(params) },
+      safeInteractionCall: safeDiscordInteractionCall,
+      dispatchCommandInteraction: dispatchDiscordCommandInteraction,
+    });
 }
 
-export function createDiscordModelPickerFallbackButton(params: DiscordCommandArgContext): Button {
-  return createDiscordModelPickerFallbackButtonUi({
-    ctx: { ...params, readPolicy: resolveDiscordNativePolicyReader(params) },
-    safeInteractionCall: safeDiscordInteractionCall,
-    dispatchCommandInteraction: dispatchDiscordCommandInteraction,
-  });
-}
-
-export function createDiscordModelPickerFallbackSelect(
-  params: DiscordCommandArgContext,
-): StringSelectMenu {
-  return createDiscordModelPickerFallbackSelectUi({
-    ctx: { ...params, readPolicy: resolveDiscordNativePolicyReader(params) },
-    safeInteractionCall: safeDiscordInteractionCall,
-    dispatchCommandInteraction: dispatchDiscordCommandInteraction,
-  });
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+export const createDiscordCommandArgFallbackButton = bindDiscordCommandControl(
+  createDiscordCommandArgFallbackButtonUi,
+);
+export const createDiscordModelPickerFallbackButton = bindDiscordCommandControl(
+  createDiscordModelPickerFallbackButtonUi,
+);
+export const createDiscordModelPickerFallbackSelect = bindDiscordCommandControl(
+  createDiscordModelPickerFallbackSelectUi,
+);

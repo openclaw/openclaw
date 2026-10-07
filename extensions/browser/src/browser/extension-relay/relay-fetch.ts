@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 type PhysicalSender = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 type EventSender = (method: string, params: unknown) => void;
@@ -151,8 +152,13 @@ export class RelayFetch {
     if (lease?.owner === owner) {
       await this.release(lease, "close");
     }
-    const errors = await this.closeStreamSnapshot(
-      [...this.streams].filter(([, stream]) => stream.owner === owner),
+    const results = await Promise.allSettled(
+      [...this.streams]
+        .filter(([, stream]) => stream.owner === owner)
+        .map(([handle, stream]) => this.closeStream(handle, stream)),
+    );
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
     );
     if (errors.length > 0) {
       throw new AggregateError(errors, "Fetch stream cleanup failed");
@@ -191,17 +197,12 @@ export class RelayFetch {
           }
         }),
       );
-      let timer: NodeJS.Timeout | undefined;
-      const timedOut = await Promise.race([
+      const timedOut = await raceWithTimeout(
         settled.then(() => false),
-        new Promise<true>((resolve) => {
-          timer = setTimeout(() => resolve(true), timeoutMs);
-          timer.unref?.();
-        }),
-      ]);
-      if (timer) {
-        clearTimeout(timer);
-      }
+        timeoutMs,
+        () => true,
+        { ref: false },
+      );
       return {
         errors: [
           ...errors,
@@ -425,9 +426,6 @@ export class RelayFetch {
           this.fence(lease, error);
           throw error;
         }
-        await this.nativeFetch(lease, "Fetch.disable");
-        this.state = { kind: "idle" };
-        return;
       }
       await this.nativeFetch(lease, "Fetch.disable");
       lease.pauses.clear();
@@ -493,12 +491,5 @@ export class RelayFetch {
         return result;
       },
     ));
-  }
-
-  private async closeStreamSnapshot(streams: Array<[string, OwnedStream]>): Promise<unknown[]> {
-    const results = await Promise.allSettled(
-      streams.map(([handle, stream]) => this.closeStream(handle, stream)),
-    );
-    return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   }
 }

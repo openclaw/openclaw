@@ -222,6 +222,8 @@ targets:
         buildPhase: resources
     dependencies:
       - package: OpenClawKit
+      - package: OpenClawKit
+        product: OpenClawProtocol
       - sdk: AppIntents.framework
     settings:
       base:
@@ -425,6 +427,10 @@ targets:
         excludes:
           - Logic
       - path: ../macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift
+        group: Tests
+      - path: ../macos/Tests/OpenClawIPCTests/AsyncTestGate.swift
+        group: Tests
+      - path: ../macos/Tests/OpenClawIPCTests/TestWait.swift
         group: Tests
       - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/NativeGatewayWebSocketFixture.swift
         group: Tests

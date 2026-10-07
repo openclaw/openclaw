@@ -1,9 +1,3 @@
-/**
- * Browser agent action routes for download handling.
- *
- * Registers endpoints that wait for a pending download or trigger a referenced
- * page download while keeping files scoped to the configured downloads root.
- */
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureOutputDirectory } from "../output-directories.js";
@@ -22,7 +16,6 @@ import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toStringOrEmpty } from "./utils.js";
 
-/** Register download action endpoints on the browser control server. */
 export function registerBrowserAgentActDownloadRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,

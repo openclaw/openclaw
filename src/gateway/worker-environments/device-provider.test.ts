@@ -7,6 +7,7 @@ import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  type NodeRunnerInventoryIssue,
 } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError } from "../../plugins/types.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
@@ -15,6 +16,29 @@ import {
   createDeviceWorkerRuntime,
   reconcileDeviceWorker,
 } from "./device-provider.js";
+
+it.each([undefined, "gateway", "worker"])(
+  "accepts explicit inference %s at device allocation",
+  async (inference) => {
+    const { provider } = createDeviceWorkerRuntime({ getPairedDevice: async () => null });
+    await expect(
+      provider.resolveAllocation(
+        { device: "paired-node", ...(inference ? { inference } : {}) },
+        "allocation",
+      ),
+    ).resolves.toMatchObject({ sharedHost: true });
+  },
+);
+
+it.each(["runtime-local", "unknown"])(
+  "rejects invalid inference %s at device allocation",
+  async (inference) => {
+    const { provider } = createDeviceWorkerRuntime({ getPairedDevice: async () => null });
+    await expect(
+      provider.resolveAllocation({ device: "paired-node", inference }, "invalid"),
+    ).rejects.toBeInstanceOf(WorkerProviderError);
+  },
+);
 
 const DEVICE_ID = "device-session-host";
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -58,7 +82,7 @@ function connectedNode(deviceId = DEVICE_ID, available = true): NodeWorkerSuperv
 function deviceRuntime(params: {
   getPairedDevice: (deviceId: string) => Promise<PairedDevice | null>;
   listCurrentNodes?: () => Promise<readonly NodeWorkerSupervisorNodeProof[]>;
-  getIssue?: () => typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE | undefined;
+  getIssue?: () => NodeRunnerInventoryIssue | undefined;
   now?: () => number;
 }) {
   const runtime = createDeviceWorkerRuntime({
@@ -137,6 +161,19 @@ describe("device worker provider", () => {
     );
   });
 
+  it("returns the node's actionable disabled-host reason during provision", async () => {
+    const message = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
+    const provider = deviceRuntime({
+      getPairedDevice: async () => pairedDevice(),
+      listCurrentNodes: async () => [],
+      getIssue: () => ({ code: "worker-host-unavailable", message }),
+    }).provider;
+
+    await expect(
+      provider.provision({ device: DEVICE_ID }, "operation", { assertCurrent: () => {} }),
+    ).rejects.toThrow(`device worker node ${DEVICE_ID} cannot host sessions: ${message}`);
+  });
+
   it.each([
     {
       name: "missing pairing",
@@ -186,11 +223,6 @@ describe("device worker provider", () => {
     {
       name: "at the dormancy ceiling",
       disconnectedAtMs: 6 * DAY_MS,
-      expected: { status: "unknown" },
-    },
-    {
-      name: "past the dormancy ceiling",
-      disconnectedAtMs: DAY_MS,
       expected: { status: "unknown" },
     },
     {

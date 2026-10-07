@@ -19,7 +19,6 @@ export function stripSessionArchiveCompressionSuffix(fileName: string): string {
     : fileName;
 }
 
-/** Compresses archive content when the runtime supports zstd. */
 export function encodeSessionArchiveContent(content: string): {
   bytes: Buffer;
   suffix: "" | typeof SESSION_ARCHIVE_ZSTD_SUFFIX;
@@ -33,7 +32,6 @@ export function encodeSessionArchiveContent(content: string): {
   return { bytes: zstdCodec.compress(plain), suffix: SESSION_ARCHIVE_ZSTD_SUFFIX };
 }
 
-/** Reads an archived transcript, transparently decompressing zstd artifacts. */
 export function readSessionArchiveContentSync(filePath: string): string {
   if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
     return fs.readFileSync(filePath, "utf8");
@@ -46,7 +44,6 @@ export function readSessionArchiveContentSync(filePath: string): string {
   return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
 }
 
-/** Decodes staged archive bytes using the source archive's codec. */
 export function decodeSessionArchiveBytes(bytes: Uint8Array, compressed: boolean): string {
   if (!compressed) {
     return Buffer.from(bytes).toString("utf8");
@@ -59,10 +56,8 @@ export function decodeSessionArchiveBytes(bytes: Uint8Array, compressed: boolean
 
 /**
  * Materializes a compressed archive as a plain JSONL cache file and returns
- * the readable path; plain archives pass through untouched. Archives are
- * write-once (timestamped names), so a cache hit never needs revalidation —
- * this lets every downstream transcript reader (index, tail chunks, header
- * probes) work on archives without learning about compression.
+ * the readable path; plain archives pass through untouched. Source identity
+ * validates cached bytes so downstream readers need not handle compression.
  */
 export function materializeSessionArchiveForRead(filePath: string): string {
   if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {

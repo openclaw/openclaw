@@ -2,6 +2,7 @@ import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-l
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
 import type {
   SessionCapability,
@@ -33,6 +34,7 @@ type SidebarSessionListOwner = {
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
   sessionsLoading: boolean;
+  sessionsStartupPending?: boolean;
   sessionMutationError: string | null;
   expandedAgentId(): string;
   sessionListQuery(agentId: string): SessionListOptions;
@@ -64,7 +66,9 @@ function pruneSidebarAgentSessionCaches(
   const retainedAgentIds = new Set(agentIds.map(normalizeAgentId));
   for (const agentId of Object.keys(owner.sessionResultsByAgent)) {
     if (!retainedAgentIds.has(agentId)) {
-      delete owner.sessionResultsByAgent[agentId];
+      const next = { ...owner.sessionResultsByAgent };
+      delete next[agentId];
+      owner.sessionResultsByAgent = next;
     }
   }
   if (owner.sessionsAgentId && !retainedAgentIds.has(normalizeAgentId(owner.sessionsAgentId))) {
@@ -108,11 +112,14 @@ export function hasSidebarListFilter(owner: SidebarSessionQueryOwner): boolean {
 export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId: string) {
   const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
   return {
+    source: "sidebar",
+    excludeDock: true,
     ownerId: involvingMe ? undefined : ownerId || undefined,
     involvingMe: involvingMe || undefined,
     agentId,
     archivedFilter: owner.sidebarSessionStatusFilter(),
     limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+    rowMode: "compact",
     includeDerivedTitles: true,
     includeLastMessage: true,
   } as const;
@@ -124,8 +131,12 @@ export function publishSidebarSessionList(
 ): void {
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
+  owner.sessionsStartupPending = snapshot.startupPending === true;
   if (snapshot.result && snapshot.agentId) {
-    owner.sessionResultsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result;
+    const agentId = normalizeAgentId(snapshot.agentId);
+    if (owner.sessionResultsByAgent[agentId] !== snapshot.result) {
+      owner.sessionResultsByAgent = { ...owner.sessionResultsByAgent, [agentId]: snapshot.result };
+    }
   }
 }
 
@@ -152,6 +163,7 @@ export function subscribeFilteredSidebarSessions(
   apply(sessions.listSnapshot(scope));
   return () => {
     unsubscribe();
+    owner.sessionsStartupPending = false;
     publishSidebarSessionError(owner, null, "list");
   };
 }
@@ -222,11 +234,15 @@ export function subscribeSessionDataGatewayEvents(
 ): () => void {
   return gateway.subscribeEvents((event) => {
     if (event.event === "sessions.catalog.host") {
-      owner.handleSessionCatalogHostEvent(event.payload);
+      if (canCallGatewayMethod(gateway.snapshot, "sessions.catalog.list", "operator.read")) {
+        owner.handleSessionCatalogHostEvent(event.payload);
+      }
       return;
     }
     if (event.event === "sessions.catalog.changed") {
-      owner.handleSessionCatalogChanged(event.payload);
+      if (canCallGatewayMethod(gateway.snapshot, "sessions.catalog.list", "operator.read")) {
+        owner.handleSessionCatalogChanged(event.payload);
+      }
       return;
     }
     if (event.event === "presence") {

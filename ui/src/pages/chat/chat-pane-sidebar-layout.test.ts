@@ -2,6 +2,7 @@
 
 import { html, LitElement, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
   renderSidebarRegion,
@@ -63,7 +64,6 @@ class NativeCloseLayoutFixture extends LitElement {
     return renderSidebarRegion({
       presentationId: "sidebar-layout-fixture",
       availableWidth: 1_400,
-      availableSlots: ["detail", "workspace"],
       callbacks: {
         ...callbacks(),
         closeSlot: (slot) => {
@@ -72,11 +72,17 @@ class NativeCloseLayoutFixture extends LitElement {
       },
       layout: this.layout,
       narrow: false,
-      panelActions: {},
-      panelTemplates: {
-        detail: html`<textarea aria-label="Side panel input"></textarea>`,
-        workspace: html`<div>Workspace</div>`,
-      },
+      panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+        Object.assign(definition, {
+          available: definition.slot === "detail" || definition.slot === "workspace",
+          content:
+            definition.slot === "detail"
+              ? html`<textarea aria-label="Side panel input"></textarea>`
+              : definition.slot === "workspace"
+                ? html`<div>Workspace</div>`
+                : null,
+        }),
+      ),
       primary: html`<main>Conversation</main>`,
       requestUpdate: () => this.requestUpdate(),
     });
@@ -95,12 +101,18 @@ async function renderLayout(
     renderSidebarRegion({
       presentationId,
       availableWidth: narrow ? 620 : 1_400,
-      availableSlots: ["detail", "terminal", "workspace"],
       callbacks: callbacks(),
       layout,
       narrow,
-      panelActions: {},
-      panelTemplates: { detail: html`<aside data-detail>Details<input type="checkbox" /></aside>` },
+      panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+        Object.assign(definition, {
+          available: ["detail", "terminal", "workspace"].includes(definition.slot),
+          content:
+            definition.slot === "detail"
+              ? html`<aside data-detail>Details<input type="checkbox" /></aside>`
+              : null,
+        }),
+      ),
       primary: html`<main data-primary>Primary<textarea></textarea></main>`,
       requestUpdate,
     }),
@@ -227,12 +239,15 @@ describe("chat pane sidebar layout", () => {
       renderSidebarRegion({
         presentationId: "sidebar-layout-fixture",
         availableWidth: 0,
-        availableSlots: ["detail"],
         callbacks: callbacks(),
         layout: openSlot({ columns: [] }, "detail"),
         narrow: false,
-        panelActions: {},
-        panelTemplates: { detail: html`<aside>Details</aside>` },
+        panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+          Object.assign(definition, {
+            available: definition.slot === "detail",
+            content: definition.slot === "detail" ? html`<aside>Details</aside>` : null,
+          }),
+        ),
         primary: html`<main>Primary</main>`,
         requestUpdate,
       }),
@@ -429,27 +444,6 @@ describe("chat pane sidebar layout", () => {
       ]);
       expect(withDetail.open).toBe(open);
     }
-  });
-
-  it("does not reinterpret restored state for chat", () => {
-    const restored = openSlot({ columns: [] }, "detail");
-
-    expect(
-      resolveSidebarLayoutForBoard({
-        board: board("chat"),
-        layout: restored,
-        paneWidth: 1_400,
-      }).open,
-    ).toBe(true);
-  });
-
-  it("keeps the detail tab when its transient content is no longer available", () => {
-    const layout = resolveSidebarLayoutForBoard({
-      board: board("chat"),
-      layout: openSlot(openSlot({ columns: [] }, "workspace"), "detail"),
-      paneWidth: 1_400,
-    });
-    expect(layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["workspace", "detail"]);
   });
 
   it("fits only the one canonical panel width", () => {

@@ -1,8 +1,3 @@
-/**
- * Durable channel message sender.
- *
- * Sends rendered reply payloads, records live preview state, and classifies delivery outcomes.
- */
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
@@ -176,20 +171,6 @@ export function serializeDurableMessagePayloadOutcomes(
 
 const neverAbortedSignal = new AbortController().signal;
 
-function toDurableMessageIntent(
-  intent: OutboundDeliveryIntent,
-  renderedBatch: RenderedMessageBatch<ReplyPayload>,
-): DurableMessageSendIntent<ReplyPayload> {
-  return {
-    id: intent.id,
-    channel: intent.channel,
-    to: intent.to,
-    ...(intent.accountId ? { accountId: intent.accountId } : {}),
-    durability: intent.queuePolicy === "required" ? "required" : "best_effort",
-    renderedBatch,
-  };
-}
-
 export type DurableMessageSendContextParams = DurableMessageBatchSendParams & {
   durability?: Exclude<MessageDurabilityPolicy, "disabled">;
   /** Runs after the durable queue intent exists and before platform delivery starts. */
@@ -316,7 +297,14 @@ async function withMessageSendContext<T>(
           },
           onDeliveryIntent: (intent) => {
             deliveryIntent = intent;
-            const durableIntent = toDurableMessageIntent(intent, rendered);
+            const durableIntent: DurableMessageSendIntent<ReplyPayload> = {
+              id: intent.id,
+              channel: intent.channel,
+              to: intent.to,
+              ...(intent.accountId ? { accountId: intent.accountId } : {}),
+              durability: intent.queuePolicy === "required" ? "required" : "best_effort",
+              renderedBatch: rendered,
+            };
             ctx.intent = durableIntent;
             onDeliveryIntent?.(durableIntent);
           },
@@ -325,30 +313,25 @@ async function withMessageSendContext<T>(
         if (failedOutcome) {
           return failed(failedOutcome.error, failedOutcome.stage, results, payloadOutcomes);
         }
-        const receipt = createMessageReceiptFromOutboundResults({
-          results,
-          threadId: params.threadId == null ? undefined : String(params.threadId),
-          replyToId,
-        });
-        if (results.length === 0) {
-          return {
-            status: "suppressed",
-            results: [],
-            receipt,
-            ...(deliveryIntent ? { deliveryIntent } : {}),
-            reason:
-              payloadOutcomes.find((outcome) => outcome.status === "suppressed")?.reason ??
-              "no_visible_result",
-            ...(payloadOutcomes.length > 0 ? { payloadOutcomes: [...payloadOutcomes] } : {}),
-          };
-        }
-        return {
-          status: "sent",
-          results,
-          receipt,
+        const delivered = {
+          receipt: createMessageReceiptFromOutboundResults({
+            results,
+            threadId: params.threadId == null ? undefined : String(params.threadId),
+            replyToId,
+          }),
           ...(deliveryIntent ? { deliveryIntent } : {}),
           ...(payloadOutcomes.length > 0 ? { payloadOutcomes: [...payloadOutcomes] } : {}),
         };
+        return results.length === 0
+          ? {
+              ...delivered,
+              status: "suppressed",
+              results: [],
+              reason:
+                payloadOutcomes.find((outcome) => outcome.status === "suppressed")?.reason ??
+                "no_visible_result",
+            }
+          : { ...delivered, status: "sent", results };
       } catch (error: unknown) {
         if (isOutboundDeliveryError(error)) {
           return failed(error, error.stage, error.results, error.payloadOutcomes);
@@ -390,8 +373,7 @@ async function withMessageSendContext<T>(
   };
 
   try {
-    const result = await run(ctx);
-    return result;
+    return await run(ctx);
   } catch (error: unknown) {
     await ctx.fail(error);
     throw error;

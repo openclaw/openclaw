@@ -15,8 +15,8 @@ import type { ChannelHandler, DeliverOutboundPayloadsParams } from "./deliver-co
 import { applyMessageSendingHook, applyReplyPayloadSendingHook } from "./deliver-hooks.js";
 import {
   buildPayloadSummary,
-  normalizeEmptyPayloadForDelivery,
   normalizePayloadsForChannelDelivery,
+  normalizeTransformedPayloadForDelivery,
   resolveOutboundMediaAccessForSend,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
@@ -70,23 +70,12 @@ async function createPreparationHandler(params: DeliverOutboundPayloadsParams) {
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
     silent: params.silent,
-    mediaAccess: resolveOutboundMediaAccessForSend(params, params.channel, []),
+    mediaAccess: resolveOutboundMediaAccessForSend(params, []),
     gatewayClientScopes: params.gatewayClientScopes,
     conversationReadOrigin: params.conversationReadOrigin,
     preparedMessageId: params.preparedMessageId,
     requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
   });
-}
-
-function suppressionReasonForEmpty(params: {
-  replyHookChanged: boolean;
-  messageHookChanged: boolean;
-}) {
-  return params.messageHookChanged
-    ? ("empty_after_message_sending_hook" as const)
-    : params.replyHookChanged
-      ? ("empty_after_reply_payload_sending_hook" as const)
-      : ("no_visible_payload" as const);
 }
 
 function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
@@ -327,31 +316,20 @@ async function prepareOutboundPlan(
     }
     // Adapter normalization may project visible text into transport fields. Re-run it
     // after policy so durable custody cannot retain a stale pre-rewrite projection.
-    const normalizedPostHookPayload = handler.normalizePayload
-      ? handler.normalizePayload(postHookPayload)
-      : postHookPayload;
-    const normalizedPayload = normalizedPostHookPayload
-      ? copyMetadata(postHookPayload, normalizedPostHookPayload)
-      : null;
-    const strippedPayload = normalizedPayload
-      ? copyMetadata(
-          normalizedPayload,
-          stripInternalRuntimeScaffoldingFromPayload(normalizedPayload),
-        )
-      : null;
-    const nonEmptyPayload = strippedPayload
-      ? normalizeEmptyPayloadForDelivery(strippedPayload)
-      : null;
-    const preparedPayload =
-      nonEmptyPayload && strippedPayload ? copyMetadata(strippedPayload, nonEmptyPayload) : null;
+    const preparedPayload = normalizeTransformedPayloadForDelivery(
+      postHookPayload,
+      handler,
+      copyMetadata,
+    );
     if (!preparedPayload) {
       entries.push({
         sourceIndex,
         status: "suppressed",
-        reason: suppressionReasonForEmpty({
-          replyHookChanged: replyHookResult.changed,
-          messageHookChanged: messageHookResult.contentRewritten,
-        }),
+        reason: messageHookResult.contentRewritten
+          ? "empty_after_message_sending_hook"
+          : replyHookResult.changed
+            ? "empty_after_reply_payload_sending_hook"
+            : "no_visible_payload",
       });
       continue;
     }

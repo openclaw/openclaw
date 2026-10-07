@@ -59,21 +59,10 @@ export function requiresGoogleToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 }
 
-function getGeminiMajorVersion(modelId: string): number | undefined {
-  const match = modelId.toLowerCase().match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
-  if (!match) {
-    return undefined;
-  }
-  const majorVersion = match.at(1);
-  return majorVersion === undefined ? undefined : Number.parseInt(majorVersion, 10);
-}
-
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
-  const geminiMajorVersion = getGeminiMajorVersion(modelId);
-  if (geminiMajorVersion !== undefined) {
-    return geminiMajorVersion >= 3;
-  }
-  return true;
+  const match = modelId.toLowerCase().match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
+  const majorVersion = match?.at(1);
+  return majorVersion === undefined || Number.parseInt(majorVersion, 10) >= 3;
 }
 
 /** Project a prepared transcript; route repair and trusted video admission remain caller-owned. */
@@ -106,13 +95,14 @@ export function projectGoogleMessages(params: {
       flushToolResultRun();
     }
     if (msg.role === "user") {
-      if (typeof msg.content === "string") {
+      const sourceContent = msg.content;
+      if (typeof sourceContent === "string") {
         contents.push({
           role: "user",
-          parts: [{ text: sanitizeText(msg.content) || " " }],
+          parts: [{ text: sanitizeText(sourceContent) || " " }],
         });
       } else {
-        const parts: GoogleContentPart[] = msg.content.map((item) => {
+        const parts: GoogleContentPart[] = sourceContent.map((item) => {
           if (item.type === "text") {
             return { text: sanitizeText(item.text) || " " };
           }
@@ -148,35 +138,19 @@ export function projectGoogleMessages(params: {
         msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
 
       for (const block of msg.content) {
-        if (block.type === "text") {
+        if (block.type === "text" || block.type === "thinking") {
+          const text = block.type === "text" ? block.text : block.thinking;
           const thoughtSignature = isSameProviderAndModel
-            ? signature(block.textSignature)
+            ? signature(block.type === "text" ? block.textSignature : block.thinkingSignature)
             : undefined;
-          if ((!block.text || block.text.trim() === "") && (managed || !thoughtSignature)) {
+          if ((!text || text.trim() === "") && (managed || !thoughtSignature)) {
             continue;
           }
           parts.push({
-            text: sanitizeText(block.text),
+            ...(block.type === "thinking" && isSameProviderAndModel ? { thought: true } : {}),
+            text: sanitizeText(text),
             ...(thoughtSignature && { thoughtSignature }),
           });
-        } else if (block.type === "thinking") {
-          const thoughtSignature = isSameProviderAndModel
-            ? signature(block.thinkingSignature)
-            : undefined;
-          if ((!block.thinking || block.thinking.trim() === "") && (managed || !thoughtSignature)) {
-            continue;
-          }
-          if (isSameProviderAndModel) {
-            parts.push({
-              thought: true,
-              text: sanitizeText(block.thinking),
-              ...(thoughtSignature && { thoughtSignature }),
-            });
-          } else {
-            parts.push({
-              text: sanitizeText(block.thinking),
-            });
-          }
         } else if (block.type === "toolCall") {
           if (isSameProviderAndModel && (managed || model.provider !== "google-gemini-cli")) {
             sameRouteToolCallIds.add(block.id);
@@ -247,8 +221,7 @@ export function projectGoogleMessages(params: {
 
       const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
 
-      // Use "output" key for success, "error" key for errors as per SDK documentation
-      const responseValue = hasText ? sanitizeText(textResult) : (mediaPlaceholder ?? "");
+      const responseValue = hasText ? textResult : (mediaPlaceholder ?? "");
 
       const imageParts: GoogleContentPart[] = imageContent.map((imageBlock) => ({
         inlineData: {

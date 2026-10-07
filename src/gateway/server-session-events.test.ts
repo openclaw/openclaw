@@ -77,20 +77,32 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         }),
       }),
       expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
 
-  it.each(["missing", "rebuilding"])(
-    "invalidates history when the committed row is %s",
+  it.each(["missing", "rebuilding", "quoted reply"])(
+    "invalidates broad and targeted history when the committed row needs page reconciliation: %s",
     async (kind) => {
       if (kind === "missing") {
         readSessionMessageByIdAsyncMock.mockResolvedValueOnce({ found: false, oversized: false });
+      } else if (kind === "quoted reply") {
+        readSessionMessageByIdAsyncMock.mockResolvedValueOnce({
+          found: true,
+          oversized: false,
+          seq: 2,
+          message: { role: "user", content: "Quoted reply", __openclaw: { replyToId: "original" } },
+        });
       } else {
         readSessionMessageByIdAsyncMock.mockRejectedValueOnce(
           new SessionTranscriptProjectionUnavailableError("sess-main"),
         );
       }
-      const { broadcastToConnIds, handler } = createHandler(false);
+      const { broadcastToConnIds, handler } = createHandler(
+        false,
+        true,
+        () => new Set(["targeted"]),
+      );
       await handler({
         target: {
           agentId: "main",
@@ -101,11 +113,11 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageId: "removed-id",
         message: { role: "assistant", content: "stale queued content" },
       });
-      expect(broadcastToConnIds).toHaveBeenCalledOnce();
-      expect(broadcastToConnIds).toHaveBeenCalledWith(
+      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
         "sessions.changed",
-        expect.objectContaining({ sessionKey: "agent:main:main" }),
-        expect.any(Set),
+        expect.objectContaining({ sessionKey: "agent:main:main", phase: "message" }),
+        new Set(["conn-1", "targeted"]),
+        expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
       );
       expect(broadcastToConnIds.mock.calls[0]?.[1]).not.toHaveProperty("message");
       expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
@@ -132,6 +144,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageSeq: 1,
       }),
       expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
 
@@ -180,6 +193,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         phase: "message",
       }),
       new Set(["conn-broad", "conn-shared", "conn-targeted"]),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     expect(payload).not.toHaveProperty("message");
@@ -214,6 +228,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       "sessions.changed",
       expect.objectContaining({ sessionKey: "agent:main:current" }),
       new Set(["conn-1", "conn-current"]),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
 
@@ -413,19 +428,9 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       lifecycleRevision: "revision-before-reset",
     },
     {
-      updateSource: "legacy",
-      ownerChange: "deleted",
-      lifecycleRevision: undefined,
-    },
-    {
       updateSource: "committed",
       ownerChange: "rebound",
       lifecycleRevision: "revision-before-reset",
-    },
-    {
-      updateSource: "legacy",
-      ownerChange: "rebound",
-      lifecycleRevision: undefined,
     },
   ])(
     "discards a queued $updateSource message when its session owner is $ownerChange",
@@ -527,6 +532,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageSeq: 1,
       }),
       expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     expect(payload).not.toHaveProperty("lifecycleRevision");
@@ -563,6 +569,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageSeq: 1,
       }),
       expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
 
@@ -592,6 +599,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageSeq: 3,
       }),
       expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
 
@@ -626,6 +634,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         }),
       }),
       expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
 
@@ -735,6 +744,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       "session.message",
       expect.objectContaining({ sessionKey: "global" }),
       new Set(["conn-scoped", "conn-global"]),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     if (agentId) {

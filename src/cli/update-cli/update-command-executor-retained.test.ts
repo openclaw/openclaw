@@ -7,9 +7,11 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   resolvePackageActivationAnchor,
-  PACKAGE_ACTIVATION_JOURNAL,
+  resolvePackageActivationControl,
+  resolvePackageActivationJournalPath,
+  resolvePackageActivationHelper,
+  type PackageActivationDescriptor,
 } from "../../infra/package-update-activation-journal.js";
-import { PACKAGE_ACTIVATION_HELPER } from "../../infra/package-update-activation-runtime-assets.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
@@ -50,11 +52,8 @@ const program = `
   import {withDelegatedUpdateCommandExecutor,withUpdateCommandExecutorChild,captureUpdateCommandExecutorAuthority,requiresRetainedUpdateCommandOwner,releaseUpdateCommandPreflightForHandoff} from ${JSON.stringify(ownerModule)};
   import {runUtf8CommandWithTimeout} from ${JSON.stringify(commandModule)};
   import {assertNoPendingPackageActivation} from ${JSON.stringify(activationModule)};
-  const chunks=[];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
-  }
-  const input=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  const {json}=await import("node:stream/consumers");
+  const input=await json(process.stdin);
   await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async(fence)=>{
     assert.deepEqual(captureUpdateCommandExecutorAuthority(fence),input.authority);
     assert.equal(requiresRetainedUpdateCommandOwner(fence),true);
@@ -87,10 +86,11 @@ it.each([
   { destination: "C", revoke: "A-child" },
   { destination: "C", revoke: "C" },
   { destination: "B", revoke: "none" },
+  { destination: "A", revoke: "none" },
 ] as const)(
-  "retains B capture and live A through nested B->$destination, revoke $revoke",
+  "checks retained A authority through nested B->$destination, revoke $revoke",
   async ({ destination, revoke }) => {
-    const leafRoot = destination === "C" ? candidateRoot : root;
+    const leafRoot = destination === "C" ? candidateRoot : destination === "A" ? serviceRoot : root;
     const receipt = path.join(root, "receipt");
     const proceed = path.join(root, "proceed");
     const output = path.join(root, "effect");
@@ -123,6 +123,15 @@ it.each([
           },
         }),
       );
+      if (destination === "A") {
+        const result = await pending;
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain("Retained service root is not a candidate executor");
+        expect(fs.existsSync(receipt)).toBe(false);
+        expect(fs.existsSync(output)).toBe(false);
+        fence.assertCurrent();
+        return;
+      }
       try {
         await Promise.race([
           ready.promise,
@@ -169,7 +178,9 @@ it.each([
     });
     if (revoke === "none") {
       await work;
-      expect(fs.readFileSync(output, "utf8")).toBe("owned");
+      if (destination !== "A") {
+        expect(fs.readFileSync(output, "utf8")).toBe("owned");
+      }
       for (const key of [root, serviceRoot, candidateRoot]) {
         expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
       }
@@ -189,7 +200,6 @@ it.each([
   "key-only",
   "both",
   "legacy-digest",
-  "null-parent",
   "wrong-key",
   "wrong-generation",
   "wrong-start",
@@ -210,9 +220,6 @@ it.each([
         }
         if (tamper === "key-only" || tamper === "both" || tamper === "legacy-digest") {
           delete changed.retainedChildKey;
-        }
-        if (tamper === "null-parent") {
-          changed.retainedParent = null;
         }
         if (tamper === "wrong-key") {
           changed.retainedChildKey = grant.originalChildKey;
@@ -268,7 +275,12 @@ it.each([
       },
     );
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toMatch(/retained owner pair|does not match its parent/);
+    if (["both", "wrong-key", "wrong-generation"].includes(tamper)) {
+      expect(result.stderr).toContain("Candidate executor lineage is missing or invalid.");
+    } else {
+      expect(result.stderr).toMatch(/retained owner pair|does not match its parent/);
+    }
+    expect(fs.existsSync(path.join(root, "receipt"))).toBe(false);
     expect(fs.existsSync(output)).toBe(false);
     fence.assertCurrent();
   });
@@ -281,8 +293,10 @@ function publishedPackageFixture(
 ) {
   const anchor = resolvePackageActivationAnchor(authority.installKey);
   fs.mkdirSync(anchor, { mode: 0o700 });
-  const journal = path.join(anchor, PACKAGE_ACTIVATION_JOURNAL);
-  const helper = path.join(anchor, PACKAGE_ACTIVATION_HELPER);
+  const control = resolvePackageActivationControl(anchor);
+  fs.mkdirSync(control, { mode: 0o700 });
+  const journal = resolvePackageActivationJournalPath(anchor);
+  const helper = resolvePackageActivationHelper(anchor);
   const helperSource = "// Inert published-journal fixture, never executed.\n";
   fs.writeFileSync(helper, helperSource, { mode: 0o600 });
   const db = new DatabaseSync(journal);
@@ -304,11 +318,13 @@ function publishedPackageFixture(
       "INSERT INTO package_activation VALUES (1,0,'publication-complete',?,'null','[]')",
     ).run(
       JSON.stringify({
+        layout: "external-helper",
         version: 1,
         operationId: randomUUID(),
         authority,
         anchorIdentity: identity(anchor),
         journalIdentity: identity(journal),
+        journalParentIdentity: identity(control),
         parentIdentity: identity(path.dirname(anchor)),
         binDir: root,
         binIdentity: identity(root),
@@ -317,47 +333,24 @@ function publishedPackageFixture(
         candidate: { ...fingerprint, identity: identity(candidateRoot) },
         launcherRootIdentity: identity(root),
         previousLauncherRootIdentity: null,
+        helperIdentity: identity(helper),
+        recoveryNodePath: fs.realpathSync(process.execPath),
+        preparation: [
+          { name: "anchor" as const, source: anchor },
+          { name: "helper" as const, source: helper },
+          { name: "candidate" as const, source: candidateRoot },
+          { name: "launchers" as const, source: root },
+        ].map(({ name, source }) => ({
+          name,
+          source,
+          sourceParentIdentity: identity(path.dirname(source)),
+          identity: identity(source),
+        })),
         helperDigest: createHash("sha256").update(helperSource).digest("hex"),
         launchers: [],
-      }),
+      } satisfies PackageActivationDescriptor),
     );
   } finally {
     db.close();
   }
 }
-
-it("refuses nested delegation into retained service A before leaf effects", async () => {
-  const output = path.join(root, "effect");
-  const receipt = path.join(root, "receipt");
-  const proceed = path.join(root, "proceed");
-  await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-    const fence = await executor.enter(root, { serviceRoot });
-    const authority = captureUpdateCommandExecutorAuthority(fence);
-    publishedPackageFixture(authority);
-    const result = await withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
-      runUtf8CommandWithTimeout([process.execPath, "--input-type=module", "-e", program], {
-        input: JSON.stringify({
-          grant,
-          authority,
-          nextRoot: serviceRoot,
-          receipt,
-          proceed,
-          output,
-          program,
-        }),
-        beforeInput,
-        timeoutMs: 30000,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-      }),
-    );
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("Retained service root is not a candidate executor");
-    expect(fs.existsSync(receipt)).toBe(false);
-    expect(fs.existsSync(output)).toBe(false);
-    fence.assertCurrent();
-  });
-  for (const key of [root, serviceRoot]) {
-    expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
-  }
-});

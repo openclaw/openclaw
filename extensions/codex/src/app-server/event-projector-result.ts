@@ -18,6 +18,7 @@ import { CodexProjectionSettlement } from "./event-projector-settlement.js";
 import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexTerminalFailureProjection } from "./event-projector-terminal-failure.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
+import { CodexToolSearchEvidenceProjection } from "./event-projector-tool-search-evidence.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import { CodexUsageProjection } from "./event-projector-usage.js";
 import type { CodexTurn } from "./protocol.js";
@@ -56,6 +57,7 @@ export abstract class CodexTurnProjection {
   protected readonly eventProjection: CodexEventProjection;
   protected readonly nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector;
   protected readonly toolProgressProjection: CodexToolProgressProjection;
+  protected readonly toolSearchEvidenceProjection: CodexToolSearchEvidenceProjection | undefined;
   protected readonly toolTranscriptProjection: CodexToolTranscriptProjection;
   protected completedTurn: CodexTurn | undefined;
   protected readonly projectionController = new AbortController();
@@ -68,7 +70,6 @@ export abstract class CodexTurnProjection {
   protected contextTokensSource: "runtime" | "runtime-configured" | "resolved" | undefined;
   protected readonly usageProjection = new CodexUsageProjection();
   protected completedCompactionCount = 0;
-  protected pendingSteeringAssistantBoundaryItemId: string | undefined;
 
   constructor(
     protected readonly params: EmbeddedRunAttemptParams,
@@ -117,6 +118,10 @@ export abstract class CodexTurnProjection {
         checkpointMessage: this.transcriptCheckpoint.enqueue,
       },
     );
+    this.toolSearchEvidenceProjection =
+      options.trajectoryRecorder && process.env.OPENCLAW_BUILD_PRIVATE_QA === "1"
+        ? new CodexToolSearchEvidenceProjection(options.trajectoryRecorder, threadId, turnId)
+        : undefined;
     this.eventProjection = new CodexEventProjection(
       params.provider,
       threadId,
@@ -246,18 +251,9 @@ export abstract class CodexTurnProjection {
     const currentAttemptAssistant = providerRefusal
       ? lastAssistant
       : this.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
-    // Each snapshot entry is tagged with a stable mirror identity of the
-    // shape `${turnId}:${kind}`. The mirror's idempotency key is derived
-    // from this identity rather than from snapshot position or content
-    // hash, so:
-    //   - Re-mirror of the same turn (retry) → same identity → no-op.
-    //   - Re-emit of a prior turn's entry into a later turn's snapshot
-    //     (the cross-turn drift mode named in #77012) → original identity
-    //     is preserved → on-disk key still matches → also a no-op.
-    //   - Two distinct turns where the user repeats verbatim content →
-    //     distinct turnIds → distinct identities → both kept.
-    // Codex owns the canonical thread. These mirror records keep enough local
-    // context for OpenClaw history, search, and future harness switching.
+    // Stable turn/item identities deduplicate retries and cross-turn replays
+    // without collapsing identical text from distinct turns. Codex owns history;
+    // this mirror supports OpenClaw history, search, and harness switching.
     const messagesSnapshot = buildCodexMessagesSnapshot({
       runParams,
       turnId,

@@ -15,6 +15,7 @@ export {
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
+export * from "./schema/worker-gateway-tool.js";
 export * from "./schema/worker-computer.js";
 export * from "./schema/computer.js";
 export * from "./schema/skill-history.js";
@@ -46,18 +47,29 @@ export {
 } from "./schema/sessions-row.js";
 export * from "./schema/session-classification.js";
 export * from "./schema/session-participant.js";
+export {
+  SessionOwnerSessionCountSchema,
+  type SessionOwnerSessionCount,
+} from "./schema/sessions-list.js";
 export * from "./schema/sessions-suggestions.js";
+export * from "./schema/sessions-reactions.js";
 export * from "./schema/sessions-activity-summary.js";
 export * from "./schema/sessions-delete.js";
 export * from "./schema/sessions-goal.js";
+export {
+  SESSIONS_FILES_ASSETS_MAX_REFS,
+  SESSIONS_FILES_ASSET_MAX_BYTES,
+  SESSIONS_FILES_ASSETS_MAX_TOTAL_BYTES,
+} from "./schema/sessions.js";
 export * from "./schema/sessions-provider-review.js";
 export {
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
   SESSION_CREATE_RETRY_WINDOW_MS,
 } from "./schema/sessions-create.js";
-export { TASKS_LIST_CURSOR_MAX_LENGTH } from "./schema/tasks.js";
 export * from "./schema/projects.js";
 export * from "./migration-api.js";
+export * from "./schema/storage.js";
+export * from "./schema/backup.js";
 export * from "./restart-unavailable.js";
 export type * from "./public-session-catalog.js";
 export * from "./validator-registry.js";
@@ -79,3 +91,5 @@ export {
 export type * from "./schema-types.js";
 export type { GatewayCoreRequestParams } from "./core-request-params.js";
 export type { SessionsPatchResult } from "./sessions-patch-result.js";
+
+export * from "./schema/session-processes.js";

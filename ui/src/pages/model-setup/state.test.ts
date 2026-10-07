@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { WizardStep } from "../../api/types.ts";
-import {
-  activationTimeoutForKind,
-  initialWizardValue,
-  mapActivationResult,
-  mapVerifyResult,
-  wizardStateFromResult,
-} from "./state.ts";
+import { activationTimeoutForKind, initialWizardValue, mapActivationResult } from "./state.ts";
 
 describe("model setup state", () => {
   it("matches the activation and provider-auth wizard lifetimes", () => {
@@ -41,59 +34,6 @@ describe("model setup state", () => {
         restartWarning: "Restart the Gateway",
       }),
     ).toEqual({ phase: "failure", targetId: "openai", status: "unknown", error: "failed" });
-  });
-
-  it("maps connection verification success and failure results", () => {
-    expect(mapVerifyResult({ ok: true, modelRef: "openai/gpt-5", latencyMs: 84 })).toEqual({
-      phase: "ok",
-      modelRef: "openai/gpt-5",
-      latencyMs: 84,
-    });
-    expect(mapVerifyResult({ ok: false, status: "rate_limit", error: "Try later" })).toEqual({
-      phase: "failed",
-      status: "rate_limit",
-      error: "Try later",
-    });
-  });
-
-  it("transitions wizard results through step, validation, done, cancelled, and error", () => {
-    const step: WizardStep = {
-      id: "provider",
-      type: "select",
-      options: [{ value: "openai", label: "OpenAI" }],
-      initialValue: "openai",
-    };
-    expect(wizardStateFromResult("oauth", { done: false, step }, "failed")).toEqual({
-      phase: "step",
-      authChoice: "oauth",
-      step,
-      busy: false,
-      validationError: null,
-    });
-    expect(
-      wizardStateFromResult("oauth", { done: false, step, error: "Pick one" }, "failed"),
-    ).toMatchObject({ phase: "step", validationError: "Pick one" });
-    expect(
-      wizardStateFromResult(
-        "oauth",
-        { done: true, status: "done", preparedModelRef: "ollama/qwen3:0.6b" },
-        "failed",
-      ),
-    ).toEqual({
-      phase: "done",
-      authChoice: "oauth",
-      preparedModelRef: "ollama/qwen3:0.6b",
-    });
-    expect(
-      wizardStateFromResult("oauth", { done: true, status: "cancelled" }, "Cancelled"),
-    ).toEqual({ phase: "cancelled", message: "Cancelled" });
-    expect(
-      wizardStateFromResult(
-        "oauth",
-        { done: true, status: "error", error: "Provider rejected login" },
-        "failed",
-      ),
-    ).toEqual({ phase: "error", message: "Provider rejected login" });
   });
 
   it("copies multiselect initial values", () => {

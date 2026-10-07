@@ -7,7 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { renderDocsHeadingMap } from "./docs-list.js";
-import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.runtime.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const ROOT = resolveRepoRoot(import.meta.url);
@@ -23,188 +23,54 @@ const DEFAULT_CLAWHUB_REPO_CANDIDATES = [
   path.resolve(ROOT, "..", "clawhub-docs-clawhub"),
   path.resolve(ROOT, "..", "clawhub"),
 ];
+// File URLs declare the copied runtime closure without executing modules:
+// source sync runs before parser dependencies are installed.
 const SYNC_SUPPORT_FILES = [
-  // File URLs declare the copied runtime closure without executing modules:
-  // source sync runs before parser dependencies are installed.
-  {
-    source: new URL("./lib/docs-markdown.mjs", import.meta.url),
-    target: path.join(".openclaw-sync", "lib", "docs-markdown.mjs"),
-  },
-  {
-    source: new URL("./lib/docs-redirects.mjs", import.meta.url),
-    target: path.join(".openclaw-sync", "lib", "docs-redirects.mjs"),
-  },
-  {
-    source: path.join(ROOT, "scripts", "check-docs-mdx.mjs"),
-    target: path.join(".openclaw-sync", "check-docs-mdx.mjs"),
-  },
-  {
-    source: path.join(ROOT, "scripts", "check-docs-mdx.mts"),
-    target: path.join(".openclaw-sync", "check-docs-mdx.mts"),
-  },
-  {
-    source: path.join(ROOT, "scripts", "lib", "arg-utils.runtime.mjs"),
-    target: path.join(".openclaw-sync", "lib", "arg-utils.runtime.mjs"),
-  },
-  {
-    source: path.join(ROOT, "scripts", "lib", "tsx-cli-shim.mjs"),
-    target: path.join(".openclaw-sync", "lib", "tsx-cli-shim.mjs"),
-  },
-  {
-    source: path.join(ROOT, "scripts", "lib", "local-check-runtime.mts"),
-    target: path.join(".openclaw-sync", "lib", "local-check-runtime.mts"),
-  },
-  {
-    source: path.join(ROOT, "scripts", "tsx.mjs"),
-    target: path.join(".openclaw-sync", "tsx.mjs"),
-  },
+  ...[
+    "lib/docs-markdown.mjs",
+    "lib/docs-redirects.mjs",
+    "check-docs-mdx.mjs",
+    "check-docs-mdx.mts",
+    "lib/arg-utils.runtime.mjs",
+    "lib/tsx-cli-shim.mjs",
+    "lib/local-check-runtime.mts",
+    "tsx.mjs",
+  ].map((file) => ({
+    source: new URL(`./${file}`, import.meta.url),
+    target: path.join(".openclaw-sync", file),
+  })),
   {
     source: path.join(ROOT, ".github", "codex", "prompts", "docs-mdx-repair.md"),
     target: path.join(".openclaw-sync", "docs-mdx-repair.md"),
   },
 ];
 const GENERATED_LOCALES = [
-  {
-    language: "zh-Hans",
-    dir: "zh-CN",
-    navFile: "zh-Hans-navigation.json",
-    tmFile: "zh-CN.tm.jsonl",
-    navMode: "overlay",
-  },
-  {
-    language: "zh-Hant",
-    dir: "zh-TW",
-    navFile: "zh-Hant-navigation.json",
-    tmFile: "zh-TW.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "ja",
-    dir: "ja-JP",
-    navFile: "ja-navigation.json",
-    tmFile: "ja-JP.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "es",
-    dir: "es",
-    navFile: "es-navigation.json",
-    tmFile: "es.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "pt-BR",
-    dir: "pt-BR",
-    navFile: "pt-BR-navigation.json",
-    tmFile: "pt-BR.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "ko",
-    dir: "ko",
-    navFile: "ko-navigation.json",
-    tmFile: "ko.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "de",
-    dir: "de",
-    navFile: "de-navigation.json",
-    tmFile: "de.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "fr",
-    dir: "fr",
-    navFile: "fr-navigation.json",
-    tmFile: "fr.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "hi",
-    dir: "hi",
-    navFile: "hi-navigation.json",
-    tmFile: "hi.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "ar",
-    dir: "ar",
-    navFile: "ar-navigation.json",
-    tmFile: "ar.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "it",
-    dir: "it",
-    navFile: "it-navigation.json",
-    tmFile: "it.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "vi",
-    dir: "vi",
-    navFile: "vi-navigation.json",
-    tmFile: "vi.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "nl",
-    dir: "nl",
-    navFile: "nl-navigation.json",
-    tmFile: "nl.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "fa",
-    dir: "fa",
-    navFile: "fa-navigation.json",
-    tmFile: "fa.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "tr",
-    dir: "tr",
-    navFile: "tr-navigation.json",
-    tmFile: "tr.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "uk",
-    dir: "uk",
-    navFile: "uk-navigation.json",
-    tmFile: "uk.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "id",
-    dir: "id",
-    navFile: "id-navigation.json",
-    tmFile: "id.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "pl",
-    dir: "pl",
-    navFile: "pl-navigation.json",
-    tmFile: "pl.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "th",
-    dir: "th",
-    navFile: "th-navigation.json",
-    tmFile: "th.tm.jsonl",
-    navMode: "clone-en",
-  },
-  {
-    language: "ru",
-    dir: "ru",
-    navFile: "ru-navigation.json",
-    tmFile: "ru.tm.jsonl",
-    navMode: "clone-en",
-  },
-];
+  ["zh-Hans", "zh-CN"],
+  ["zh-Hant", "zh-TW"],
+  ["ja", "ja-JP"],
+  ["es"],
+  ["pt-BR"],
+  ["ko"],
+  ["de"],
+  ["fr"],
+  ["hi"],
+  ["ar"],
+  ["it"],
+  ["vi"],
+  ["nl"],
+  ["fa"],
+  ["tr"],
+  ["uk"],
+  ["id"],
+  ["pl"],
+  ["th"],
+  ["ru"],
+].map(([language, dir = language]) => ({
+  language,
+  dir,
+  navFile: `${language}-navigation.json`,
+  tmFile: `${dir}.tm.jsonl`,
+}));
 
 export function parseArgs(argv) {
   const args = {
@@ -217,37 +83,27 @@ export function parseArgs(argv) {
     clawhubSourceSha: process.env.OPENCLAW_DOCS_SYNC_CLAWHUB_SOURCE_SHA || "",
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const part = argv[index];
-    switch (part) {
-      case "--target":
-        args.target = requireOptionArgument(argv, index, part);
-        index += 1;
-        break;
-      case "--source-repo":
-        args.sourceRepo = requireOptionArgument(argv, index, part);
-        index += 1;
-        break;
-      case "--source-sha":
-        args.sourceSha = requireOptionArgument(argv, index, part);
-        index += 1;
-        break;
-      case "--clawhub-repo":
-        args.clawhubRepo = requireOptionArgument(argv, index, part);
-        index += 1;
-        break;
-      case "--clawhub-source-repo":
-        args.clawhubSourceRepo = requireOptionArgument(argv, index, part);
-        index += 1;
-        break;
-      case "--clawhub-source-sha":
-        args.clawhubSourceSha = requireOptionArgument(argv, index, part);
-        index += 1;
-        break;
-      default:
+  const flags = [
+    ["--target", "target"],
+    ["--source-repo", "sourceRepo"],
+    ["--source-sha", "sourceSha"],
+    ["--clawhub-repo", "clawhubRepo"],
+    ["--clawhub-source-repo", "clawhubSourceRepo"],
+    ["--clawhub-source-sha", "clawhubSourceSha"],
+  ];
+  parseFlagArgs(
+    argv,
+    args,
+    flags.map(([flag, key]) =>
+      stringFlag(flag, key, { allowInline: false, repeatable: true, rejectShortOptions: true }),
+    ),
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(part) {
         throw new Error(`unknown arg: ${part}`);
-    }
-  }
+      },
+    },
+  );
 
   if (!args.target) {
     throw new Error("missing --target");
@@ -288,28 +144,6 @@ function walkFiles(entryPath, out = []) {
       continue;
     }
     walkFiles(path.join(entryPath, entry.name), out);
-  }
-  return out;
-}
-
-function walkMarkdownFiles(entryPath, out = []) {
-  if (!fs.existsSync(entryPath)) {
-    return out;
-  }
-
-  const stat = fs.statSync(entryPath);
-  if (stat.isFile()) {
-    if (/\.mdx?$/i.test(entryPath)) {
-      out.push(entryPath);
-    }
-    return out;
-  }
-
-  for (const entry of fs.readdirSync(entryPath, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === ".git") {
-      continue;
-    }
-    walkMarkdownFiles(path.join(entryPath, entry.name), out);
   }
   return out;
 }
@@ -546,7 +380,7 @@ export function reportOrphanLocaleDocs(targetDocsDir) {
     if (!fs.existsSync(localeDir)) {
       continue;
     }
-    for (const filePath of walkMarkdownFiles(localeDir)) {
+    for (const filePath of walkFiles(localeDir).filter((file) => /\.mdx?$/i.test(file))) {
       const relativePath = path.relative(localeDir, filePath);
       // Check the assembled publish tree so externally mirrored docs, such as
       // ClawHub pages, count as valid English sources too.

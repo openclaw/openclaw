@@ -1,4 +1,3 @@
-// Discord type declarations define plugin contracts.
 export type ThreadBindingTargetKind = "subagent" | "acp";
 
 export type ThreadBindingRecord = {
@@ -60,6 +59,7 @@ export type ThreadBindingManager = {
     metadata?: Record<string, unknown>;
   }) => Promise<ThreadBindingRecord | null>;
   unbindThread: (params: {
+    assertCurrent?: () => void;
     threadId: string;
     expected?: ThreadBindingRecord;
     persist?: boolean;

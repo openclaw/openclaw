@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import {
   BUILTIN_THEMES,
   resolveThemeBranding,
@@ -6,6 +6,7 @@ import {
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
   normalizeCatalogOpenTarget,
+  normalizeChatMessageMaxWidth,
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
@@ -72,29 +73,35 @@ export function renderLanguageSection(props: ConfigProps) {
   `;
 }
 
-function renderSettingsMediaDeviceField(options: {
-  state: ConfigProps["microphone"];
-  title: string;
-  systemDefaultLabel: string;
-  emptyLabel: string;
-  fallbackLabel: (number: number) => string;
-  dataAttribute: "microphone" | "camera";
-  onRefresh: (() => void) | undefined;
-  onSelect: ((deviceId: string) => void) | undefined;
-}) {
-  const state = options.state;
-  if (!state || !options.onSelect) {
+function renderSettingsMediaDeviceField(props: ConfigProps, kind: "microphone" | "camera") {
+  const state = props[kind];
+  const title = t(`chat.composer.${kind}Input`);
+  const onSelect = kind === "microphone" ? props.onMicrophoneSelect : props.onCameraSelect;
+  const onRefresh = kind === "microphone" ? props.onMicrophoneRefresh : props.onCameraRefresh;
+  if (!state || !onSelect) {
     return nothing;
   }
   const selectedDeviceId = state.selectedDeviceId.trim();
   const selectedDeviceKnown = state.devices.some((device) => device.deviceId === selectedDeviceId);
   const selectOptions = [
-    { label: options.systemDefaultLabel, value: "" },
+    {
+      label: t(
+        kind === "microphone"
+          ? "chat.composer.systemDefaultMicrophone"
+          : "chat.composer.systemDefaultCamera",
+      ),
+      value: "",
+    },
     ...state.devices.map((device) => ({ label: device.label, value: device.deviceId })),
     // A remembered device that is unplugged right now stays selectable so the
     // choice survives until the user picks something else.
     ...(selectedDeviceId && !selectedDeviceKnown
-      ? [{ label: options.fallbackLabel(state.devices.length + 1), value: selectedDeviceId }]
+      ? [
+          {
+            label: t(`chat.composer.${kind}Fallback`, { number: String(state.devices.length + 1) }),
+            value: selectedDeviceId,
+          },
+        ]
       : []),
   ];
   let accessRequested = false;
@@ -103,7 +110,7 @@ function renderSettingsMediaDeviceField(options: {
       return;
     }
     accessRequested = true;
-    options.onRefresh?.();
+    onRefresh?.();
   };
   const requestAccessFromPointer = (event: PointerEvent) => {
     if (event.button === 0) {
@@ -118,24 +125,23 @@ function renderSettingsMediaDeviceField(options: {
   const note = state.error
     ? html`<span role="alert">${state.error}</span>`
     : !state.loading && state.devices.length === 0
-      ? options.emptyLabel
+      ? t(kind === "microphone" ? "chat.composer.noMicrophones" : "chat.composer.noCameras")
       : undefined;
   return renderSettingsRow({
-    title: options.title,
+    title,
     description: html`${note ? html`${note}<br />` : nothing}${t(
       "quickSettings.personal.browserOnly",
     )}`,
     control: html`
       <select
         class="settings-select settings-select--media-device"
-        data-settings-microphone=${options.dataAttribute === "microphone" ? "" : nothing}
-        data-settings-camera=${options.dataAttribute === "camera" ? "" : nothing}
-        aria-label=${options.title}
+        data-settings-microphone=${kind === "microphone" ? "" : nothing}
+        data-settings-camera=${kind === "camera" ? "" : nothing}
+        aria-label=${title}
         .value=${selectedDeviceId}
         @pointerdown=${requestAccessFromPointer}
         @keydown=${requestAccessFromKeyboard}
-        @change=${(event: Event) =>
-          options.onSelect?.((event.currentTarget as HTMLSelectElement).value)}
+        @change=${(event: Event) => onSelect((event.currentTarget as HTMLSelectElement).value)}
       >
         ${selectOptions.map(
           (option) => html`
@@ -149,36 +155,7 @@ function renderSettingsMediaDeviceField(options: {
   });
 }
 
-function renderSettingsMicrophoneField(props: ConfigProps) {
-  return renderSettingsMediaDeviceField({
-    state: props.microphone,
-    title: t("chat.composer.microphoneInput"),
-    systemDefaultLabel: t("chat.composer.systemDefaultMicrophone"),
-    emptyLabel: t("chat.composer.noMicrophones"),
-    fallbackLabel: (number) => t("chat.composer.microphoneFallback", { number: String(number) }),
-    dataAttribute: "microphone",
-    onRefresh: props.onMicrophoneRefresh,
-    onSelect: props.onMicrophoneSelect,
-  });
-}
-
-function renderSettingsCameraField(props: ConfigProps) {
-  return renderSettingsMediaDeviceField({
-    state: props.camera,
-    title: t("chat.composer.cameraInput"),
-    systemDefaultLabel: t("chat.composer.systemDefaultCamera"),
-    emptyLabel: t("chat.composer.noCameras"),
-    fallbackLabel: (number) => t("chat.composer.cameraFallback", { number: String(number) }),
-    dataAttribute: "camera",
-    onRefresh: props.onCameraRefresh,
-    onSelect: props.onCameraSelect,
-  });
-}
-
-export function renderChatPreferencesSection(
-  props: ConfigProps,
-  messageWidthInput: TemplateResult,
-) {
+export function renderChatPreferencesSection(props: ConfigProps) {
   const followUpSelection = props.chatFollowUpMode ?? "server";
   const serverQueueMode = props.serverQueueMode ?? t("chat.followUpModeLoading");
   const followUpDescription = props.chatFollowUpMode
@@ -202,8 +179,7 @@ export function renderChatPreferencesSection(
   );
   const holdToRecordDefaultDescription = renderSettingsDefaultDescription(
     t("common.enabled"),
-    (props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord) !==
-      UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
+    props.composerHoldToRecord !== UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
   );
   const showTaskProgressDefaultDescription = renderSettingsDefaultDescription(
     t("common.enabled"),
@@ -223,7 +199,30 @@ export function renderChatPreferencesSection(
           title: t("configView.chatPrefs.messageWidth"),
           description: html`${t("configView.chatPrefs.messageWidthHint")}<br />
             ${messageWidthDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
-          control: messageWidthInput,
+          control: html`
+            <input
+              class="settings-input"
+              data-settings-chat-message-width
+              aria-label=${t("configView.chatPrefs.messageWidth")}
+              type="text"
+              spellcheck="false"
+              placeholder="48rem"
+              .value=${props.chatMessageMaxWidth ?? ""}
+              @change=${(event: Event) => {
+                // SAFETY: The listener is bound directly to this input.
+                const input = event.currentTarget as HTMLInputElement;
+                const normalized = normalizeChatMessageMaxWidth(input.value);
+                if (input.value.trim() && !normalized) {
+                  input.setCustomValidity(t("configView.chatPrefs.messageWidthInvalid"));
+                  input.reportValidity();
+                  return;
+                }
+                input.setCustomValidity("");
+                input.value = normalized ?? "";
+                props.setChatMessageMaxWidth(normalized);
+              }}
+            />
+          `,
         })}
         ${renderSettingsToggleRow({
           title: t("configView.chatPrefs.showTaskProgress"),
@@ -302,31 +301,29 @@ export function renderChatPreferencesSection(
           ],
           onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
-        ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
-        ${
-          props.setComposerHoldToRecord
-            ? renderSettingsToggleRow({
-                title: t("chat.composer.holdToRecordSetting"),
-                description: html`${t("chat.composer.holdToRecordSettingDescription")}<br />
-                  ${holdToRecordDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
-                checked: props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
-                onChange: props.setComposerHoldToRecord,
-              })
-            : nothing
-        }
+        ${renderSettingsToggleRow({
+          title: t("configView.chatPrefs.openLinksExternally"),
+          description: html`${t("configView.chatPrefs.openLinksExternallyHint")}<br />
+            ${t("configView.chatPrefs.openLinksExternallyStorage")}`,
+          checked: props.openLinksExternally,
+          onChange: props.setOpenLinksExternally,
+        })}
+        ${renderSettingsMediaDeviceField(props, "microphone")}
+        ${renderSettingsMediaDeviceField(props, "camera")}
+        ${renderSettingsToggleRow({
+          title: t("chat.composer.holdToRecordSetting"),
+          description: html`${t("chat.composer.holdToRecordSettingDescription")}<br />
+            ${holdToRecordDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          checked: props.composerHoldToRecord,
+          onChange: props.setComposerHoldToRecord,
+        })}
       </div>
     </section>
   `;
 }
 
-// Lobster pet toggles and the Lobsterdex live with the rest of the appearance
-// prefs; the toggles are browser-local, so embedded editors omit this section.
 export function renderLobsterPetSection(props: ConfigProps) {
-  if (!props.setLobsterPetVisits || !props.setLobsterPetSounds) {
-    return nothing;
-  }
-  const lobsterPetVisits = props.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits;
-  const lobsterPetSounds = props.lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds;
+  const { lobsterPetVisits, lobsterPetSounds } = props;
   const activeTheme =
     BUILTIN_THEMES.find((theme) => theme.id === props.theme) ??
     props.themeCatalog?.themes.find((theme) => theme.id === props.theme);
@@ -357,25 +354,26 @@ export function renderLobsterPetSection(props: ConfigProps) {
       <div class="settings-group">
         ${renderSettingsToggleRow({
           title: t("quickSettings.appearance.lobsterVisits"),
-          description: lobsterPetVisits
-            ? html`${t("quickSettings.appearance.lobsterVisitsOn")}<br />
-                ${lobsterVisitsDefaultDescription}
-                ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`
-            : html`${t("quickSettings.appearance.lobsterVisitsOff")}<br />
-                ${lobsterVisitsDefaultDescription}
-                ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`,
+          description: html`${t(
+              lobsterPetVisits
+                ? "quickSettings.appearance.lobsterVisitsOn"
+                : "quickSettings.appearance.lobsterVisitsOff",
+            )}<br />
+            ${lobsterVisitsDefaultDescription}
+            ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`,
           checked: lobsterPetVisits,
-          onChange: (enabled) => props.setLobsterPetVisits?.(enabled),
+          onChange: props.setLobsterPetVisits,
         })}
         ${renderSettingsToggleRow({
           title: t("quickSettings.appearance.lobsterSounds"),
-          description: lobsterPetSounds
-            ? html`${t("quickSettings.appearance.lobsterSoundsOn")}<br />
-                ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`
-            : html`${t("quickSettings.appearance.lobsterSoundsOff")}<br />
-                ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          description: html`${t(
+              lobsterPetSounds
+                ? "quickSettings.appearance.lobsterSoundsOn"
+                : "quickSettings.appearance.lobsterSoundsOff",
+            )}<br />
+            ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: lobsterPetSounds,
-          onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
+          onChange: props.setLobsterPetSounds,
           onAct: (enabled) => {
             if (enabled) {
               previewLobsterChirp();
@@ -470,9 +468,7 @@ export function renderSidebarPreferencesSection(props: ConfigProps) {
   );
   // The delete dialog's "Don't ask me again" writes this off; this row is where
   // the operator turns it back on, so it has to stay next to the session prefs.
-  const setSessionDeleteConfirm = props.setSessionDeleteConfirm;
-  const sessionDeleteConfirm =
-    props.sessionDeleteConfirm ?? UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm;
+  const sessionDeleteConfirm = props.sessionDeleteConfirm;
   const deleteConfirmDefaultDescription = renderSettingsDefaultDescription(
     t("common.enabled"),
     sessionDeleteConfirm !== UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
@@ -491,17 +487,13 @@ export function renderSidebarPreferencesSection(props: ConfigProps) {
           checked: props.sidebarLiveActivity,
           onChange: props.setSidebarLiveActivity,
         })}
-        ${
-          setSessionDeleteConfirm
-            ? renderSettingsToggleRow({
-                title: t("configView.sidebarPrefs.deleteConfirm"),
-                description: html`${t("configView.sidebarPrefs.deleteConfirmHint")}<br />
-                  ${deleteConfirmDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
-                checked: sessionDeleteConfirm,
-                onChange: setSessionDeleteConfirm,
-              })
-            : nothing
-        }
+        ${renderSettingsToggleRow({
+          title: t("configView.sidebarPrefs.deleteConfirm"),
+          description: html`${t("configView.sidebarPrefs.deleteConfirmHint")}<br />
+            ${deleteConfirmDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          checked: sessionDeleteConfirm,
+          onChange: props.setSessionDeleteConfirm,
+        })}
       </div>
       ${
         hiddenCatalogIds.length > 0

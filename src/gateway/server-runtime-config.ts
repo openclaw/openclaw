@@ -1,5 +1,4 @@
-// Gateway startup runtime-config resolver.
-// Normalizes bind/auth/HTTP/Tailscale/hook settings before server construction.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type {
   GatewayAuthConfig,
@@ -18,7 +17,8 @@ import {
 } from "./auth.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { warnLegacyOpenClawEnvVars } from "./env-deprecation.js";
-import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
+import { commitHookTransformMappingReload } from "./hooks-mapping.js";
+import { resolveHooksConfig } from "./hooks.js";
 import {
   defaultGatewayBindMode,
   isLoopbackHost,
@@ -81,9 +81,9 @@ export function assertGatewayRuntimeSecurityConfig(
   const hasSharedSecret =
     (authMode === "token" && Boolean(resolvedAuth.token?.trim())) ||
     (authMode === "password" && Boolean(resolvedAuth.password?.trim()));
-  const controlUiAllowedOrigins = resolveControlUiAllowedOrigins(cfg)
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const hasControlUiAllowedOrigins = resolveControlUiAllowedOrigins(cfg).some((value) =>
+    value.trim(),
+  );
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
@@ -111,7 +111,7 @@ export function assertGatewayRuntimeSecurityConfig(
   if (
     controlUiEnabled &&
     !isLoopbackHost(bindHost) &&
-    controlUiAllowedOrigins.length === 0 &&
+    !hasControlUiAllowedOrigins &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
     // Remote Control UI must use explicit origins unless the operator deliberately accepts
@@ -127,7 +127,6 @@ export function assertGatewayRuntimeSecurityConfig(
   }
 }
 
-/** Resolves bind, auth, HTTP, Tailscale, and hook settings for one gateway start. */
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: OpenClawConfig;
   port: number;
@@ -179,11 +178,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
   const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
-  const controlUiRootRaw = params.cfg.gateway?.controlUi?.root;
-  const controlUiRoot =
-    typeof controlUiRootRaw === "string" && controlUiRootRaw.trim().length > 0
-      ? controlUiRootRaw.trim()
-      : undefined;
+  const controlUiRoot = normalizeOptionalString(params.cfg.gateway?.controlUi?.root);
   const tailscaleBase = params.cfg.gateway?.tailscale ?? {};
   const tailscaleOverrides = params.tailscale ?? {};
   const tailscaleConfig = mergeGatewayTailscaleConfig(tailscaleBase, tailscaleOverrides);
@@ -209,7 +204,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   };
   assertGatewayRuntimeSecurityConfig({ ...runtimeConfig, cfg: params.cfg, port: params.port });
   if (hooksConfig) {
-    commitHooksConfigReload();
+    commitHookTransformMappingReload();
   }
   return runtimeConfig;
 }

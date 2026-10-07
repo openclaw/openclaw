@@ -12,7 +12,8 @@ private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "Open
 
 extension OpenClawChatViewModel {
     public var canSend: Bool {
-        !isSubmittingDraft &&
+        !self.usesWebConversation &&
+            !isSubmittingDraft &&
             !isSending &&
             self.attachmentStagingCount == 0 &&
             !self.hasBlockingRunActivity &&
@@ -39,18 +40,23 @@ extension OpenClawChatViewModel {
             fallbackGeneration: runOwnershipGeneration)
     }
 
-    public func send() {
+    @discardableResult
+    public func send() -> Task<Void, Never>? {
+        guard !self.usesWebConversation else { return nil }
         logDiagnostic(
             "chat.ui send invoked sessionKey=\(sessionKey) "
                 + "inputLen=\(input.count) attachments=\(attachments.count) "
                 + "pending=\(pendingRunCount) sending=\(isSending) "
                 + "health=\(healthOK)")
-        Task { await self.performSend() }
+        // Reserve the accepted draft before scheduling work so initial route
+        // hydration cannot retire its owner before asynchronous validation starts.
+        guard let draft = captureSendDraft() else { return nil }
+        isSubmittingDraft = true
+        return Task { await self.performSend(draft) }
     }
 
     public func loadSlashCommandsIfNeeded() {
-        guard transport.supportsSlashCommandCatalog else { return }
-        guard !hasLoadedSlashCommands, !isLoadingSlashCommands else { return }
+        guard transport.supportsSlashCommandCatalog, !hasLoadedSlashCommands, !isLoadingSlashCommands else { return }
         Task { await self.loadSlashCommands(force: false) }
     }
 
@@ -77,9 +83,6 @@ extension OpenClawChatViewModel {
         input = command.acceptsArgs ? "\(invocation) " : invocation
         errorText = nil
     }
-
-    private static let resetTriggers: Set<String> = ["/reset", "/clear"]
-    private static let compactTriggers: Set<String> = ["/compact"]
 
     private func loadSlashCommands(force: Bool) async {
         guard transport.supportsSlashCommandCatalog else { return }
@@ -163,38 +166,28 @@ extension OpenClawChatViewModel {
         guard let commandName = slashCommandName(from: text), !commandName.isEmpty else {
             return false
         }
-        if self.commands(commands, containInvocationName: commandName) {
+        if commands.contains(where: { self.command($0, matchesInvocationName: commandName) }) {
             return true
         }
         guard commandName == "skill" else { return false }
         let parts = text.trimmingCharacters(in: .whitespacesAndNewlines)
             .split(whereSeparator: { $0.isWhitespace })
-        guard parts.count >= 2 else {
-            return self.commands(commands, containInvocationName: commandName)
-        }
+        guard parts.count >= 2 else { return false }
         let skillName = String(parts[1]).lowercased()
         return commands.contains { command in
             command.source == .skill && self.command(command, matchesInvocationName: skillName)
         }
     }
 
-    private static func commands(
-        _ commands: [OpenClawChatCommandChoice],
-        containInvocationName name: String) -> Bool
-    {
-        commands.contains { self.command($0, matchesInvocationName: name) }
-    }
-
     private static func command(
         _ command: OpenClawChatCommandChoice,
         matchesInvocationName name: String) -> Bool
     {
-        let normalizedName = name.lowercased()
-        if command.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedName {
+        if command.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == name {
             return true
         }
         return command.textAliases.contains { alias in
-            self.slashCommandName(from: alias) == normalizedName
+            self.slashCommandName(from: alias) == name
         }
     }
 
@@ -204,12 +197,21 @@ extension OpenClawChatViewModel {
         filter: OpenClawChatCommandFilter) -> [OpenClawChatCommandChoice]
     {
         let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let query = self.normalizedSlashQuery(trimmed)
-        let effectiveFilter: OpenClawChatCommandFilter =
-            self.queryTargetsSkills(trimmed) && filter == .all ? .skills : filter
+        let withoutSlash = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
+        let normalized = withoutSlash.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let targetsSkills = normalized == "skill" || normalized.hasPrefix("skill ")
+        let query = targetsSkills
+            ? String(normalized.dropFirst("skill".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            : normalized
+        let effectiveFilter: OpenClawChatCommandFilter = targetsSkills && filter == .all ? .skills : filter
         return commands.enumerated()
             .compactMap { index, command -> (Int, Int, OpenClawChatCommandChoice)? in
-                guard self.command(command, isIncludedIn: effectiveFilter) else { return nil }
+                switch effectiveFilter {
+                case .commands where command.source == .skill, .skills where command.source != .skill:
+                    return nil
+                default:
+                    break
+                }
                 guard let rank = self.commandSearchRank(command, query: query) else { return nil }
                 return (rank, index, command)
             }
@@ -220,38 +222,6 @@ extension OpenClawChatViewModel {
                 return $0.1 < $1.1
             }
             .map(\.2)
-    }
-
-    private static func normalizedSlashQuery(_ query: String) -> String {
-        let withoutSlash = query.hasPrefix("/") ? String(query.dropFirst()) : query
-        let lower = withoutSlash.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if lower == "skill" {
-            return ""
-        }
-        if lower.hasPrefix("skill ") {
-            return String(lower.dropFirst("skill ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return lower
-    }
-
-    private static func queryTargetsSkills(_ query: String) -> Bool {
-        let withoutSlash = query.hasPrefix("/") ? String(query.dropFirst()) : query
-        let lower = withoutSlash.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return lower == "skill" || lower.hasPrefix("skill ")
-    }
-
-    private static func command(
-        _ command: OpenClawChatCommandChoice,
-        isIncludedIn filter: OpenClawChatCommandFilter) -> Bool
-    {
-        switch filter {
-        case .all:
-            true
-        case .commands:
-            command.source != .skill
-        case .skills:
-            command.source == .skill
-        }
     }
 
     private static func commandSearchRank(
@@ -275,52 +245,10 @@ extension OpenClawChatViewModel {
         if command.description.lowercased().contains(query) {
             return 2
         }
-        if command.source.rawValue.lowercased().contains(query) {
+        if command.source.rawValue.contains(query) {
             return 3
         }
         return nil
-    }
-
-    private func handleLocalSlashCommandIfNeeded(_ command: String, draftInput: String) async -> Bool {
-        if command == "/new" {
-            if input == draftInput {
-                input = ""
-            }
-            await performStartNewSession(worktree: false)
-            return true
-        }
-        if Self.resetTriggers.contains(command) {
-            if input == draftInput {
-                input = ""
-            }
-            await performReset()
-            return true
-        }
-        if Self.compactTriggers.contains(command) {
-            if input == draftInput {
-                input = ""
-            }
-            await performCompact()
-            return true
-        }
-        return false
-    }
-
-    private static func isLiveOnlyLocalSlashCommand(_ command: String) -> Bool {
-        command == "/new" || self.resetTriggers.contains(command) || self.compactTriggers.contains(command)
-    }
-
-    private func prepareLiveOnlyLocalSlashCommand(session: SessionSnapshot) async -> Bool {
-        // Always probe: a preserved view model can retain stale healthy state
-        // after its transport disconnects without a health event. performSend
-        // owns the send gate across this await.
-        await pollHealthIfNeeded(force: true, sessionSnapshot: session)
-        guard isCurrentSession(session) else { return false }
-        guard healthOK else {
-            errorText = "Connect to the gateway to run this command."
-            return false
-        }
-        return true
     }
 
     private struct SendDraft {
@@ -360,15 +288,8 @@ extension OpenClawChatViewModel {
         case liveOnly
     }
 
-    private func performSend() async {
-        guard let draft = captureSendDraft() else { return }
-
-        // Own every asynchronous validation/probe below. Slash catalog lookup
-        // can suspend, so taking this gate later permits duplicate enqueues.
-        // It also makes the captured reply selection single-submission; exact
-        // target identity keeps a later re-selection safe from completion.
-        // Keep it separate from isSending: local /compact checks that flag.
-        isSubmittingDraft = true
+    private func performSend(_ draft: SendDraft) async {
+        // Admission covers every validation/probe; local /compact uses the separate isSending flag.
         defer { self.isSubmittingDraft = false }
 
         guard await self.validateSendDraft(draft) else { return }
@@ -382,6 +303,7 @@ extension OpenClawChatViewModel {
         }
 
         guard await self.prepareLiveRoute(for: draft) else { return }
+        guard await self.validateAttachmentBudgetForSend(draft.attachments, session: draft.session) else { return }
         guard self.composerModelAvailabilityMessage == nil else {
             logDiagnostic("chat.ui send ignored reason=model-auth sessionKey=\(sessionKey)")
             return
@@ -427,11 +349,20 @@ extension OpenClawChatViewModel {
 
     private func validateSendDraft(_ draft: SendDraft) async -> Bool {
         let command = draft.trimmed.lowercased()
-        if Self.isLiveOnlyLocalSlashCommand(command) {
-            let canRunCommand = await prepareLiveOnlyLocalSlashCommand(session: draft.session)
-            guard canRunCommand else { return false }
-        }
-        if await self.handleLocalSlashCommandIfNeeded(command, draftInput: draft.input) {
+        if ["/new", "/reset", "/clear", "/compact"].contains(command) {
+            // Preserved presentations can retain healthy state after a silent disconnect.
+            await pollHealthIfNeeded(force: true, sessionSnapshot: draft.session)
+            guard isCurrentSession(draft.session) else { return false }
+            guard healthOK else {
+                errorText = "Connect to the gateway to run this command."
+                return false
+            }
+            if input == draft.input { input = "" }
+            switch command {
+            case "/new": await performStartNewSession(worktree: false)
+            case "/compact": await performCompact()
+            default: await performReset()
+            }
             self.recordSuccessfulInput(
                 draft.trimmed,
                 submittedRevision: draft.composerRevision,
@@ -552,8 +483,7 @@ extension OpenClawChatViewModel {
         logDiagnostic(
             "chat.ui send queued sessionKey=\(draft.session.key) "
                 + "localRunId=\(runId) pending=\(pendingRunCount)")
-        turnToolCallsById = [:]
-        updateStreamingAssistantText(nil)
+        self.clearStreamingActivity()
 
         // Production attachment sends enter the durable outbox above. Fixture,
         // preview, and embedded transports may intentionally have no outbox;
@@ -571,6 +501,8 @@ extension OpenClawChatViewModel {
             encodedAttachments: encodedAttachments)
         let userMessageTimestamp = Date().timeIntervalSince1970 * 1000
         let userMessageID = UUID()
+        // History requested before this send cannot replace its optimistic row.
+        invalidateHistorySnapshots()
         appendMessage(
             OpenClawChatMessage(
                 id: userMessageID,
@@ -603,32 +535,17 @@ extension OpenClawChatViewModel {
         encodedAttachments: [OpenClawChatAttachmentPayload]) -> [OpenClawChatMessageContent]
     {
         var content: [OpenClawChatMessageContent] = [
-            OpenClawChatMessageContent(
-                type: "text",
-                text: messageText,
-                thinking: nil,
-                thinkingSignature: nil,
-                mimeType: nil,
-                fileName: nil,
-                content: nil,
-                id: nil,
-                name: nil,
-                arguments: nil),
+            OpenClawChatMessageContent(type: "text", text: messageText),
         ]
         for (attachment, payload) in zip(attachments, encodedAttachments) {
             content.append(
                 OpenClawChatMessageContent(
                     type: payload.type,
-                    text: nil,
-                    thinking: nil,
-                    thinkingSignature: nil,
                     mimeType: payload.mimeType,
                     fileName: payload.fileName,
+                    sizeBytes: attachment.data.count,
                     durationSeconds: attachment.durationSeconds,
-                    content: AnyCodable(payload.content),
-                    id: nil,
-                    name: nil,
-                    arguments: nil))
+                    content: AnyCodable(payload.content)))
         }
         return content
     }
@@ -643,8 +560,7 @@ extension OpenClawChatViewModel {
                         domain: "OpenClawChatCapabilitySettings",
                         code: 1,
                         userInfo: [NSLocalizedDescriptionKey: settingsError]),
-                    attempt: attempt,
-                    canPreserveInOutbox: false)
+                    attempt: attempt)
                 return
             }
             guard isCurrentSession(attempt.draft.session) else { return }
@@ -741,8 +657,7 @@ extension OpenClawChatViewModel {
         let reusedRunAlreadyFinal = hasRecordedFinalMessage(runId: remoteRunId)
         if reusedRunAlreadyFinal {
             clearPendingRun(remoteRunId, hapticEvent: .runCompleted)
-            turnToolCallsById = [:]
-            updateStreamingAssistantText(nil)
+            self.clearStreamingActivity()
         } else {
             armPendingRunOwner(
                 runId: remoteRunId,
@@ -755,14 +670,13 @@ extension OpenClawChatViewModel {
     private func handleLiveSendFailure(
         _ error: Error,
         attempt: LiveSendAttempt,
-        durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation? = nil,
-        canPreserveInOutbox: Bool = true) async
+        durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation? = nil) async
     {
         guard isCurrentSession(attempt.draft.session) else { return }
-        if canPreserveInOutbox,
-           let durableSessionSettingsExpectation,
+        if let durableSessionSettingsExpectation,
            attempt.encodedAttachments.isEmpty,
-           !(error is GatewayResponseError)
+           !(error is GatewayResponseError),
+           !(error is OpenClawChatSendOwnershipError)
         {
             runMessageScopesByRunID.removeValue(forKey: attempt.runId)
             clearPendingRun(attempt.runId)
@@ -785,11 +699,6 @@ extension OpenClawChatViewModel {
                 return
             }
             guard isCurrentSession(attempt.draft.session) else { return }
-            // Refused persistence (queue full / broken store): restore the
-            // draft so the text is not lost with the failed bubble.
-            if input.isEmpty {
-                input = attempt.draft.input
-            }
         }
         self.restoreDraftAfterLiveSendFailure(attempt)
         removePendingLocalUserEcho(for: attempt.runId)
@@ -803,12 +712,10 @@ extension OpenClawChatViewModel {
     }
 
     private func restoreDraftAfterLiveSendFailure(_ attempt: LiveSendAttempt) {
-        if attempt.encodedAttachments.isEmpty, input.isEmpty {
+        if input.isEmpty {
             input = attempt.draft.input
-        } else if !attempt.encodedAttachments.isEmpty {
-            if input.isEmpty {
-                input = attempt.draft.input
-            }
+        }
+        if !attempt.encodedAttachments.isEmpty {
             let currentAttachmentIDs = Set(attachments.map(\.id))
             let removedDraftAttachments = attempt.draft.attachments.filter {
                 !currentAttachmentIDs.contains($0.id)

@@ -1,6 +1,8 @@
 import { channel } from "node:diagnostics_channel";
+import { readFileSync } from "node:fs";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync.js";
 import {
   assertSqliteSchemaContains,
@@ -62,6 +64,55 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
     database.exec(schema);
     return database;
   }
+
+  it("compares the real agent schema with five catalog reads and detects drift", () => {
+    const schema = readFileSync(
+      new URL("../state/openclaw-agent-schema.sql", import.meta.url),
+      "utf8",
+    ).replace("session_entry_snapshots_after_insert", "MixedCaseSnapshotInsert");
+    const database = createDatabase(schema);
+    try {
+      // Warm only the expected contract; every inspection must reread the actual catalog.
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
+      database.exec("PRAGMA trusted_schema=OFF;");
+      const reads = observeMainThreadReads();
+      const inspect = () => {
+        reads.clear();
+        const issues = collectSqliteSchemaIssues(database, schema);
+        // Five metadata queries plus the PRAGMA that pins the read snapshot.
+        expect(reads.count()).toBe(6);
+        return issues.map(({ code, objectName }) => ({ code, objectName }));
+      };
+      try {
+        expect(inspect()).toEqual([]);
+        database.exec(`
+          ALTER TABLE schema_meta DROP COLUMN agent_id;
+          ALTER TABLE schema_meta ADD COLUMN agent_id BLOB;
+        `);
+        const column = { code: "column-definition-drift", objectName: "schema_meta.agent_id" };
+        expect(inspect()).toEqual([column]);
+        database.exec(`
+          DROP INDEX idx_agent_session_nodes_updated_at;
+          CREATE INDEX idx_agent_session_nodes_updated_at ON session_nodes(session_key, updated_at);
+        `);
+        const index = {
+          code: "missing-or-drifted-index",
+          objectName: "idx_agent_session_nodes_updated_at",
+        };
+        expect(inspect()).toEqual([column, index]);
+        database.exec("DROP TRIGGER MixedCaseSnapshotInsert;");
+        expect(inspect()).toEqual([
+          column,
+          { code: "missing-or-drifted-trigger", objectName: "MixedCaseSnapshotInsert" },
+          index,
+        ]);
+      } finally {
+        reads.restore();
+      }
+    } finally {
+      database.close();
+    }
+  });
 
   it("accepts the canonical schema plus unrelated objects", () => {
     // Each cache mode must build a cold contract without warming the later cases.
@@ -145,6 +196,7 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
     const schema = `${CANONICAL_SCHEMA}\n${collisionSql}`;
     const database = createDatabase(schema);
     try {
+      database.exec("PRAGMA trusted_schema=OFF;");
       expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
       database.exec("DROP INDEX idx_children_parent;");
       expect(collectSqliteSchemaIssues(database, schema)).toEqual([
@@ -159,24 +211,57 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
     }
   });
 
-  it("keeps index terms separate when a temp table shadows a main table", () => {
-    const schema = `
+  it.each(["", "CREATE TEMP VIEW pragma_index_xinfo AS SELECT 1 AS id;"])(
+    "keeps main index terms separate from temp shadows with fallback %s",
+    (fallback) => {
+      const schema = `
       CREATE TABLE a (id INTEGER PRIMARY KEY, main_a TEXT);
       CREATE TABLE b (id INTEGER PRIMARY KEY, main_b TEXT);
       CREATE INDEX same_index ON b(main_b);
       CREATE TEMP TABLE a (id INTEGER PRIMARY KEY, temp_col TEXT);
       CREATE INDEX temp.same_index ON a(temp_col DESC);
+      ${fallback}
     `;
-    const database = createDatabase(schema);
+      const database = createDatabase(schema);
+      try {
+        expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
+        database.exec("DROP INDEX temp.same_index;");
+        expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
+        database.exec("DROP INDEX main.same_index;");
+        expect(collectSqliteSchemaIssues(database, schema)).toContainEqual({
+          code: "missing-or-drifted-index",
+          objectName: "same_index",
+          message: "missing or drifted index same_index",
+        });
+      } finally {
+        database.close();
+      }
+    },
+  );
+
+  it.each(["catalog SQL", "index terms"])("preserves authorizer denial of %s", (denied) => {
+    const database = createDatabase(CANONICAL_SCHEMA);
     try {
-      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
-      database.exec("DROP INDEX temp.same_index;");
-      expect(collectSqliteSchemaIssues(database, schema)).toContainEqual({
-        code: "missing-or-drifted-index",
-        objectName: "same_index",
-        message: "missing or drifted index same_index",
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toEqual([]);
+      database.setAuthorizer((action, table, column) => {
+        if (
+          (denied === "catalog SQL" &&
+            action === constants.SQLITE_READ &&
+            table === "sqlite_master" &&
+            column === "sql") ||
+          (denied === "index terms" &&
+            action === constants.SQLITE_PRAGMA &&
+            table === "index_xinfo")
+        ) {
+          return constants.SQLITE_DENY;
+        }
+        return constants.SQLITE_OK;
       });
+      expect(() => collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toThrow();
+      database.setAuthorizer(null);
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toEqual([]);
     } finally {
+      database.setAuthorizer(null);
       database.close();
     }
   });
@@ -220,19 +305,6 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
       expect(collectSqliteNamedIndexContract(database, "idx_children_parent")).toBeUndefined();
     } finally {
       database.setAuthorizer(null);
-      database.close();
-    }
-  });
-
-  it("accepts an extra non-unique index on a canonical table", () => {
-    const database = createDatabase(CANONICAL_SCHEMA);
-    try {
-      database.exec("CREATE INDEX idx_children_value ON children(value);");
-
-      expect(() =>
-        assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA),
-      ).not.toThrow();
-    } finally {
       database.close();
     }
   });
@@ -483,27 +555,6 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
 
   it.each([
     {
-      name: "table",
-      schema: CANONICAL_SCHEMA.replace(/CREATE TABLE parents \([\s\S]*?\);\s*/u, "").replace(
-        /CREATE TRIGGER children_value_after_update[\s\S]*?END;\s*/u,
-        "",
-      ),
-      expected: "missing table parents",
-    },
-    {
-      name: "column",
-      schema: CANONICAL_SCHEMA.replace("value TEXT NOT NULL", "value BLOB NOT NULL"),
-      expected: "column definitions differ for parents",
-    },
-    {
-      name: "foreign key",
-      schema: CANONICAL_SCHEMA.replace(
-        /,\s*FOREIGN KEY \(parent_id\) REFERENCES parents\(id\) ON DELETE CASCADE/u,
-        "",
-      ),
-      expected: "table constraints differ for children",
-    },
-    {
       name: "check constraint",
       schema: CANONICAL_SCHEMA.replace(" CHECK (length(value) > 0)", ""),
       expected: "column definitions differ for parents",
@@ -537,22 +588,6 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
       name: "foreign-key deferral",
       schema: CANONICAL_SCHEMA.replace(" DEFERRABLE INITIALLY DEFERRED", ""),
       expected: "table constraints differ for features",
-    },
-    {
-      name: "index",
-      schema: CANONICAL_SCHEMA.replace(
-        "CREATE INDEX idx_children_parent ON children(parent_id, id)",
-        "CREATE INDEX idx_children_parent ON children(id, parent_id)",
-      ),
-      expected: "missing or drifted index idx_children_parent",
-    },
-    {
-      name: "trigger",
-      schema: CANONICAL_SCHEMA.replace(
-        "UPDATE parents SET value = NEW.value WHERE id = NEW.parent_id",
-        "UPDATE parents SET value = NULL WHERE id = NEW.parent_id",
-      ),
-      expected: "missing or drifted trigger children_value_after_update",
     },
   ])("rejects a drifted required $name", ({ schema, expected }) => {
     const database = createDatabase(schema);

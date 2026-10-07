@@ -2,6 +2,7 @@ import { html, nothing, svg } from "lit";
 import { t } from "../../i18n/index.ts";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { strokeIcon } from "../icons-tools.ts";
+import { renderReasonedDisabledControl } from "../reasoned-disabled-control.ts";
 
 export type DesktopAudioState =
   | "unavailable"
@@ -50,34 +51,42 @@ export function renderDesktopAudioControl(options: {
                 ? "desktop.audio.mute"
                 : "desktop.audio.unmute",
   );
-  return html`<button
-    class=${(options.documentMode ? "desktop-touch-action" : "desktop-toolbar-action") + " desktop-audio-button"}
-    type="button"
-    title=${label}
-    aria-label=${label}
-    aria-pressed=${active ? "true" : "false"}
-    aria-busy=${options.state === "starting" || options.state === "connecting" ? "true" : "false"}
-    ?disabled=${!options.connected || unavailable || options.state === "connecting"}
-    @click=${options.onToggle}
-  >
-    ${active ? playingIcon : mutedIcon}
-    <span class="desktop-audio-label"
-      >${t(options.state === "retired" ? "desktop.audio.reconnect" : unavailable ? "desktop.audio.unavailable" : active ? "desktop.audio.mute" : "desktop.audio.unmute")}</span
+  const setupUnavailable = options.state === "setup-unavailable";
+  const disabled = !options.connected || unavailable || options.state === "connecting";
+  return renderReasonedDisabledControl(
+    setupUnavailable ? t("desktop.audio.setupUnavailable") : null,
+    html`<button
+      class=${(options.documentMode ? "desktop-touch-action" : "desktop-toolbar-action") + " desktop-audio-button"}
+      type="button"
+      title=${setupUnavailable ? nothing : label}
+      aria-label=${label}
+      aria-pressed=${active ? "true" : "false"}
+      aria-busy=${options.state === "starting" || options.state === "connecting" ? "true" : "false"}
+      aria-disabled=${setupUnavailable ? "true" : nothing}
+      ?disabled=${disabled && !setupUnavailable}
+      @click=${() => {
+        if (!disabled) {
+          options.onToggle();
+        }
+      }}
     >
-  </button>`;
+      ${active ? playingIcon : mutedIcon}
+      <span class="desktop-audio-label"
+        >${t(options.state === "retired" ? "desktop.audio.reconnect" : unavailable ? "desktop.audio.unavailable" : active ? "desktop.audio.mute" : "desktop.audio.unmute")}</span
+      >
+    </button>`,
+  );
 }
 
 export function renderDesktopAudioNotice(state: DesktopAudioState) {
   const message =
-    state === "setup-unavailable"
-      ? t("desktop.audio.setupUnavailable")
-      : state === "blocked"
-        ? t("desktop.audio.blocked")
-        : state === "unsupported"
-          ? t("desktop.audio.unsupported")
-          : state === "error"
-            ? t("desktop.audio.failed")
-            : null;
+    state === "blocked"
+      ? t("desktop.audio.blocked")
+      : state === "unsupported"
+        ? t("desktop.audio.unsupported")
+        : state === "error"
+          ? t("desktop.audio.failed")
+          : null;
   return message
     ? html`<div class="desktop-note desktop-note--error" role="alert">${message}</div>`
     : nothing;

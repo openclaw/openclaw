@@ -8,6 +8,7 @@ import {
   CHROME_MCP_SESSION_TARGET_PREFIX,
   CHROME_MCP_SNAPSHOT_REF_PREFIX,
   MCP_REQUEST_TIMEOUT_CODE,
+  STALE_SELECTED_PAGE_ERROR,
   ChromeMcpReconnectRequiredError,
   type ChromeMcpCallOptions,
   type ChromeMcpOptionsInput,
@@ -21,15 +22,11 @@ import {
   type NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 import { redactChromeMcpProfileLabelForDiagnostic } from "./chrome-mcp-diagnostics.js";
-import {
-  chromeMcpProfileOptionsFromParams,
-  normalizeChromeMcpOptions,
-} from "./chrome-mcp-options.js";
+import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 import {
   extractChromeMcpToolError,
   extractStructuredPages,
   formatChromeMcpToolErrorMessage,
-  shouldReconnectForToolError,
 } from "./chrome-mcp-result.js";
 import { getChromeMcpSessionOwner } from "./chrome-mcp-session.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
@@ -123,34 +120,11 @@ async function withChromeMcpOperationLock<T>(
   }
 }
 
-export function clearChromeMcpSnapshotRefsForTarget(
-  routing: ChromeMcpRoutingState,
-  targetId: string,
-): void {
-  routing.snapshotsByTarget.delete(targetId);
-}
-
-function updateChromeMcpTargetMappings(
-  routing: ChromeMcpRoutingState,
-  targetIdByPageId: Map<number, string>,
-): void {
-  for (const [pageId, targetId] of routing.targetIdByPageId) {
-    if (!targetIdByPageId.has(pageId)) {
-      clearChromeMcpSnapshotRefsForTarget(routing, targetId);
-    }
-  }
-  routing.targetIdByPageId = targetIdByPageId;
-}
-
 /** UID-only MCP actions cannot distinguish collisions between renderer documents. */
 function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
   const documents = new Map<string, { document: ChromeMcpSnapshotNode; documentUid?: string }>();
   const pending = [{ node: root, document: root, documentUid: normalizeOptionalString(root.id) }];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) {
-      break;
-    }
+  for (let current = pending.pop(); current; current = pending.pop()) {
     const role = current.node.role?.trim().toLowerCase();
     const document = role === "rootwebarea" ? current.node : current.document;
     const documentUid =
@@ -192,11 +166,13 @@ export function registerChromeMcpSnapshot(
   const wrappedByUid = new Map<string, string>();
   const refs = new Map<string, { uid: string; documentUid?: string }>();
 
-  const wrapNode = (node: ChromeMcpSnapshotNode): ChromeMcpSnapshotNode => {
+  // Copy and rewrite iteratively; the renderer owns depth truncation.
+  const wrappedRoot = { ...root };
+  const stack = [wrappedRoot];
+  for (let node = stack.pop(); node; node = stack.pop()) {
     const rawUid = normalizeOptionalString(node.id);
-    let id: string | undefined;
     if (rawUid) {
-      id = wrappedByUid.get(rawUid);
+      let id = wrappedByUid.get(rawUid);
       if (!id) {
         id = `${CHROME_MCP_SNAPSHOT_REF_PREFIX}${routing.sessionNonce}:${routing.nextSnapshotRefId}`;
         routing.nextSnapshotRefId += 1;
@@ -206,46 +182,22 @@ export function registerChromeMcpSnapshot(
           documentUid: documents.get(rawUid)?.documentUid,
         });
       }
+      node.id = id;
     }
-    return {
-      ...node,
-      ...(id ? { id } : {}),
-    };
-  };
-
-  // Keep ref rewriting iterative; the renderer owns depth truncation.
-  let wrappedRoot: ChromeMcpSnapshotNode | undefined;
-  const stack: Array<{
-    source: ChromeMcpSnapshotNode;
-    parent?: ChromeMcpSnapshotNode[];
-    index?: number;
-  }> = [{ source: root }];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      break;
-    }
-    const wrapped = wrapNode(current.source);
-    if (current.parent && current.index !== undefined) {
-      current.parent[current.index] = wrapped;
-    } else {
-      wrappedRoot = wrapped;
-    }
-    const sourceChildren = current.source.children;
+    const sourceChildren = node.children;
     if (!sourceChildren) {
       continue;
     }
     const wrappedChildren: ChromeMcpSnapshotNode[] = [];
-    wrapped.children = wrappedChildren;
+    node.children = wrappedChildren;
     for (let index = sourceChildren.length - 1; index >= 0; index -= 1) {
       const child = sourceChildren[index];
       if (child) {
-        stack.push({ source: child, parent: wrappedChildren, index });
+        const wrapped = { ...child };
+        wrappedChildren[index] = wrapped;
+        stack.push(wrapped);
       }
     }
-  }
-  if (!wrappedRoot) {
-    throw new Error("Chrome MCP snapshot did not contain a root node");
   }
   routing.snapshotsByTarget.set(targetId, { documentUid, refs });
   return { root: wrappedRoot, documentUid };
@@ -313,7 +265,7 @@ export async function callTool(
   // poisons it, so the outer pre-operation list may reconnect once.
   const message = extractChromeMcpToolError(result, name, args);
   if (message) {
-    if (shouldReconnectForToolError(name, message)) {
+    if (name === "list_pages" && message.includes(STALE_SELECTED_PAGE_ERROR)) {
       if (!lease.temporary && lease.owner.isCurrent(lease.session)) {
         await lease.owner.close(lease.session);
       }
@@ -427,7 +379,12 @@ export function registerChromeMcpTargets(
     targetIdByPageId.set(page.id, targetId);
     targets.push({ page, targetId });
   }
-  updateChromeMcpTargetMappings(routing, targetIdByPageId);
+  for (const [pageId, targetId] of routing.targetIdByPageId) {
+    if (!targetIdByPageId.has(pageId)) {
+      routing.snapshotsByTarget.delete(targetId);
+    }
+  }
+  routing.targetIdByPageId = targetIdByPageId;
   return targets;
 }
 
@@ -435,10 +392,9 @@ export async function withChromeMcpTarget<T>(
   params: ChromeMcpTargetOperation,
   operation: (target: ChromeMcpPinnedTarget) => Promise<T>,
 ): Promise<T> {
-  const profileOptions = chromeMcpProfileOptionsFromParams(params);
   return await withChromeMcpLease(
     params.profileName,
-    profileOptions,
+    params.profile,
     params,
     async (lease, normalizedProfileOptions) => {
       const routing = getChromeMcpRoutingState(lease.session);

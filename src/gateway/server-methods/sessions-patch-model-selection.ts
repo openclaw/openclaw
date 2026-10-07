@@ -86,7 +86,7 @@ export function refreshSessionPatchQueuedSelection(params: {
   agentId: string;
   catalog?: ModelCatalogEntry[];
 }): void {
-  if (!("agentRuntime" in params.patch) && typeof params.patch.model !== "string") {
+  if (!("agentRuntime" in params.patch) && params.patch.model === undefined) {
     return;
   }
   const { cfg, entry, sessionKey, agentId } = params;
@@ -286,6 +286,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   catalog?: readonly ModelCatalogEntry[];
   callerCanConsent?: boolean;
   expectedEntry?: SessionEntry;
+  hydrateThinkingCatalog?: boolean;
   validateModelSelection?: () => ErrorShape | undefined;
 }): Promise<
   { ok: true; validate?: () => ErrorShape | undefined } | { ok: false; error: ErrorShape }
@@ -328,6 +329,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
         workspaceDir: params.entry.spawnedWorkspaceDir,
         ...model,
         catalog: params.catalog ?? [],
+        hydrateThinkingCatalog: params.hydrateThinkingCatalog,
         rawRuntime:
           typeof params.patch.agentRuntime === "string" ? params.patch.agentRuntime : undefined,
         sessionEntry: {

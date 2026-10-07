@@ -18,7 +18,6 @@ const shredderIcon = strokeIcon(svg` <path
   <path d="M2 13h20" />
   <path d="M6 20v-3" />`);
 
-/** Page-level session privacy control for the fixed new-session rail. */
 export function renderNewSessionIncognitoControl(
   submission: {
     visibility: NewSessionVisibility;
@@ -97,7 +96,6 @@ export function renderNewSessionIncognitoControl(
   `;
 }
 
-/** Persistent context beside the draft while ephemeral session mode is active. */
 export function renderNewSessionIncognitoNotice(active: boolean) {
   const description = t("newSession.incognitoDescription");
   return html`

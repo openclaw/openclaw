@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requirePersonalGitHubPublicationConfirmation } from "./github-personal-publication-store.js";
-import { createGitHubPublicationTranscriptReporter } from "./github-publication-transcript.js";
+import { reportGitHubPublicationTranscript } from "./github-publication-transcript.js";
 import { createGitHubPublicationCoordinator } from "./github-publication.js";
 import type {
   WorkerSessionPlacementStore,
@@ -11,20 +11,16 @@ import type {
 export function createGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
   getCommittedRuntimeConfig: () => OpenClawConfig;
-  loadSessionRuntime: Parameters<typeof createGitHubPublicationTranscriptReporter>[0];
+  loadSessionRuntime: Parameters<typeof reportGitHubPublicationTranscript>[0];
   warn: (message: string) => void;
 }) {
   const coordinator = createGitHubPublicationCoordinator(params);
   requirePersonalGitHubPublicationConfirmation(params.placements.workspaceResultInstanceId());
-  const report = createGitHubPublicationTranscriptReporter(params.loadSessionRuntime, coordinator);
-  const reportDeferred = async (publication: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-    result: Parameters<typeof report>[0]["result"];
-  }) => {
+  const reportDeferred = async (
+    publication: Parameters<typeof reportGitHubPublicationTranscript>[2],
+  ) => {
     try {
-      await report(publication);
+      await reportGitHubPublicationTranscript(params.loadSessionRuntime, coordinator, publication);
     } catch (error) {
       params.warn(
         `GitHub publication result reporting deferred for ${publication.sessionId}: ${formatErrorMessage(error)}`,
@@ -67,7 +63,7 @@ export function createGitHubPublicationRuntime(params: {
   };
   const reconcilePublications = async () => {
     try {
-      coordinator.deferOrphanedRequests();
+      await coordinator.deferOrphanedRequestsAsync();
       await coordinator.resumeSessionRequests();
     } catch (error) {
       params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);

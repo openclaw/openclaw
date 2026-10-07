@@ -9,11 +9,7 @@ import {
   deliverFallback,
   finalizePendingAnswerBlockDraft,
 } from "./bot-message-dispatch-delivery.js";
-import {
-  cleanupDrafts,
-  createDraftState,
-  waitForDraftEvents,
-} from "./bot-message-dispatch-draft.js";
+import { cleanupDrafts, createDraftState } from "./bot-message-dispatch-draft.js";
 import { createProgressState, settleFailedFinalDelivery } from "./bot-message-dispatch-progress.js";
 import { createReplyState } from "./bot-message-dispatch-reply.js";
 import {
@@ -22,19 +18,12 @@ import {
 } from "./bot-message-dispatch-session.js";
 import { createTelegramDispatchStatus } from "./bot-message-dispatch-status.js";
 import { runTelegramDispatchTurn } from "./bot-message-dispatch-turn.js";
-import {
-  findModelInCatalog,
-  loadPreparedModelCatalog,
-  modelSupportsVision,
-  resolveAgentDir,
-  resolveDefaultModelForAgent,
-} from "./bot-message-dispatch.agent.runtime.js";
+import { resolveAgentDir } from "./bot-message-dispatch.agent.runtime.js";
 import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
-  resolveMarkdownTableMode,
 } from "./bot-message-dispatch.runtime.js";
 import type {
   DispatchTelegramMessageParams,
@@ -47,39 +36,18 @@ import {
   buildTelegramNativeQuoteCandidate,
   type TelegramNativeQuoteCandidateByMessageId,
 } from "./bot/native-quote.js";
+import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
+import { resolveStickerVisionSupport } from "./sticker-vision.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
-
-async function resolveStickerVisionSupport(
-  cfg: DispatchTelegramMessageParams["cfg"],
-  agentId: string,
-) {
-  try {
-    const catalog = await loadPreparedModelCatalog({
-      config: cfg,
-      agentId,
-      agentDir: resolveAgentDir(cfg, agentId),
-      readOnly: true,
-    });
-    const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
-    const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
-    return entry ? modelSupportsVision(entry) : false;
-  } catch {
-    return false;
-  }
-}
 
 function includeStickerDescription(params: {
   body: string | undefined;
   formattedDescription: string;
 }): string {
-  if (!params.body) {
-    return params.formattedDescription;
-  }
-  const current = params.body.trim();
-  if (!current) {
+  if (!params.body?.trim()) {
     return params.formattedDescription;
   }
   if (params.body.includes(params.formattedDescription)) {
@@ -178,10 +146,10 @@ async function prepareTelegramSticker(params: {
     return;
   }
   const agentDir = resolveAgentDir(params.cfg, context.route.agentId);
-  const stickerSupportsVision = await resolveStickerVisionSupport(
-    params.cfg,
-    context.route.agentId,
-  );
+  const stickerSupportsVision = await resolveStickerVisionSupport({
+    cfg: params.cfg,
+    agentId: context.route.agentId,
+  });
   const description =
     sticker.cachedDescription ||
     (await describeStickerImage({
@@ -260,6 +228,7 @@ function scheduleDmTopicLabel(params: {
       const label = await generateTopicLabel({
         userMessage,
         prompt: autoTopicConfig.prompt,
+        maxLength: 128,
         cfg: params.cfg,
         agentId: context.route.agentId,
         agentDir: resolveAgentDir(params.cfg, context.route.agentId),
@@ -299,12 +268,13 @@ export const dispatchTelegramMessage = async (
   const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
   const status = createTelegramDispatchStatus({ context: dispatchContext });
-  const tableMode = resolveMarkdownTableMode({
+  const richMessagesParams = {
     cfg,
-    channel: "telegram",
     accountId: dispatchContext.route.accountId,
-    supportsBlockTables: telegramCfg.richMessages === true,
-  });
+    accountConfig: telegramCfg,
+  };
+  const richMessages = resolveTelegramRichMessages(richMessagesParams);
+  const tableMode = resolveTelegramTableMode(richMessagesParams);
   const resolvedReasoningLevel = resolveTelegramReasoningLevel({
     cfg,
     sessionKey: dispatchContext.ctxPayload.SessionKey,
@@ -324,20 +294,16 @@ export const dispatchTelegramMessage = async (
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
   const turnConfig = {
     ...dispatchParams,
+    ...quote,
     allowProviderPreview,
     chunkMode: resolveChunkMode(cfg, "telegram", dispatchContext.route.accountId),
     context: dispatchContext,
     dispatchStartedAt,
-    draftReplyToMessageId: quote.draftReplyToMessageId,
     isSuperseded: isDispatchSuperseded,
     loadFreshSessionEntry,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, dispatchContext.route.agentId),
-    replyQuoteByMessageId: quote.replyQuoteByMessageId,
-    replyQuoteEntities: quote.replyQuoteEntities,
-    replyQuoteMessageId: quote.replyQuoteMessageId,
-    replyQuotePosition: quote.replyQuotePosition,
-    replyQuoteText: quote.replyQuoteText,
     resolvedReasoningLevel,
+    richMessages,
     statusReactionController: status.controller,
     tableMode,
     telegramDeps,
@@ -358,65 +324,60 @@ export const dispatchTelegramMessage = async (
   };
 
   let isFirstTurnInSession = false;
-  let dispatchWasSuperseded: boolean;
   let turnDispatched: boolean | undefined;
   const isDmTopic =
     !dispatchContext.isGroup &&
     dispatchContext.threadSpec.scope === "dm" &&
     dispatchContext.threadSpec.id != null;
-  try {
-    await prepareTelegramSticker({ cfg, context: dispatchContext });
-    if (isDmTopic) {
-      try {
-        const sessionKey = dispatchContext.ctxPayload.SessionKey;
-        if (sessionKey) {
-          isFirstTurnInSession = !loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
-            .entry?.systemSent;
-        } else {
-          logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
-        }
-      } catch (err) {
-        logVerbose(`auto-topic-label: session store error: ${String(err)}`);
-      }
-    }
-    loadFreshSessionEntry.clear();
-    // Media hydration and other pre-dispatch work can outlive the durable
-    // ingress watchdog. Never enter the reply pipeline after that owner has
-    // already fenced this attempt; the canonical spool row will retry it.
-    if (isDispatchSuperseded()) {
-      status.finalizeInBackground({ outcome: "cancelled" }, "cancelled finalize");
-      return { kind: "completed" };
-    }
-    if (status.controller && !isRoomEvent) {
-      void status.controller.setThinking();
-    }
+  await prepareTelegramSticker({ cfg, context: dispatchContext });
+  if (isDmTopic) {
     try {
-      turnDispatched = await runTelegramDispatchTurn(turn);
+      const sessionKey = dispatchContext.ctxPayload.SessionKey;
+      if (sessionKey) {
+        isFirstTurnInSession = !loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
+          .entry?.systemSent;
+      } else {
+        logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
+      }
     } catch (err) {
-      turn.dispatchError = err;
+      logVerbose(`auto-topic-label: session store error: ${String(err)}`);
+    }
+  }
+  loadFreshSessionEntry.clear();
+  // Media hydration and other pre-dispatch work can outlive the durable
+  // ingress watchdog. Never enter the reply pipeline after that owner has
+  // already fenced this attempt; the canonical spool row will retry it.
+  if (isDispatchSuperseded()) {
+    status.finalizeInBackground({ outcome: "cancelled" }, "cancelled finalize");
+    return { kind: "completed" };
+  }
+  if (status.controller && !isRoomEvent) {
+    void status.controller.setThinking();
+  }
+  try {
+    turnDispatched = await runTelegramDispatchTurn(turn);
+  } catch (err) {
+    turn.dispatchError = err;
+    turn.previewLifecycle.observeFailure(
+      isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
+    );
+    runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+  } finally {
+    // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
+    turn.progressCompositor.cancel();
+    await turn.draftEventQueue;
+    try {
+      await finalizePendingAnswerBlockDraft(turn);
+    } catch (err) {
+      turn.dispatchError ??= err;
       turn.previewLifecycle.observeFailure(
         isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
       );
-      runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
-    } finally {
-      // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
-      turn.progressCompositor.cancel();
-      await waitForDraftEvents(turn);
-      try {
-        await finalizePendingAnswerBlockDraft(turn);
-      } catch (err) {
-        turn.dispatchError ??= err;
-        turn.previewLifecycle.observeFailure(
-          isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
-        );
-        runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
-      }
-      await cleanupDrafts(turn, isDispatchSuperseded());
+      runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
     }
-  } finally {
-    dispatchWasSuperseded = isDispatchSuperseded();
+    await cleanupDrafts(turn, isDispatchSuperseded());
   }
-
+  const dispatchWasSuperseded = isDispatchSuperseded();
   if (turnDispatched === false) {
     return { kind: "completed" };
   }

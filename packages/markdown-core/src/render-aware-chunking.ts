@@ -5,23 +5,18 @@ import { sliceMarkdownIRRanges } from "./ir-slice.js";
 import { mergeAnnotationSpans, mergeStyleSpans } from "./ir-spans.js";
 import { appendMarkdownIR, sliceMarkdownIR, type MarkdownIR } from "./ir.js";
 
-/** A rendered chunk paired with the Markdown IR slice that produced it. */
 export type RenderedMarkdownChunk<TRendered> = {
   /** Rendered payload for this chunk after caller-specific escaping/link rewriting. */
   rendered: TRendered;
-  /** Source IR slice used to produce the rendered payload. */
   source: MarkdownIR;
 };
 
-/** Inputs for chunking Markdown IR against the final rendered payload size. */
 export type RenderMarkdownIRChunksWithinLimitOptions<TRendered> = {
-  /** Parsed Markdown IR to split. */
   ir: MarkdownIR;
   /** Maximum measured size for each rendered chunk. */
   limit: number;
   /** Returns the size unit enforced by the target transport. */
   measureRendered: (rendered: TRendered) => number;
-  /** Renders a candidate IR slice for measuring and final output. */
   renderChunk: (ir: MarkdownIR) => TRendered;
   /** Re-annotate transcript-role headers promoted by a new message boundary. */
   assistantTranscriptRoleMessageBoundaries?: boolean;
@@ -32,25 +27,14 @@ type RenderedCandidate<TRendered> = {
   output: RenderedMarkdownChunk<TRendered>;
 };
 
-type RenderResolver<TRendered> = Pick<
-  RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
-  "measureRendered" | "renderChunk"
->;
-
-function prepareChunkForMessageBoundary<TRendered>(
-  options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
-  chunk: MarkdownIR,
-): MarkdownIR {
-  return options.assistantTranscriptRoleMessageBoundaries === true
-    ? annotateAssistantTranscriptRoleMessageBoundary(chunk)
-    : chunk;
-}
-
 function renderCandidate<TRendered>(
   options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
   rawSource: MarkdownIR,
 ): RenderedCandidate<TRendered> {
-  const source = prepareChunkForMessageBoundary(options, rawSource);
+  const source =
+    options.assistantTranscriptRoleMessageBoundaries === true
+      ? annotateAssistantTranscriptRoleMessageBoundary(rawSource)
+      : rawSource;
   return { rawSource, output: { source, rendered: options.renderChunk(source) } };
 }
 
@@ -66,27 +50,17 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
   // split). resolveIntegerOption rejects non-finite values and would fall back to 1,
   // shattering the text into one chunk per character; emit the whole IR as one chunk.
   if (options.limit === Number.POSITIVE_INFINITY) {
-    const source = prepareChunkForMessageBoundary(options, options.ir);
-    return [{ source, rendered: options.renderChunk(source) }];
+    return [renderCandidate(options, options.ir).output];
   }
 
   const normalizedLimit = resolveIntegerOption(options.limit, 1, { min: 1 });
-  const renderResolver: RenderResolver<TRendered> = {
-    measureRendered: options.measureRendered,
-    renderChunk: (chunk) => options.renderChunk(prepareChunkForMessageBoundary(options, chunk)),
-  };
   // Treat the pending worklist as a stack so each dequeue/enqueue stays O(1).
   // The initial reverse keeps the final order stable while avoiding shift/unshift
   // moving every remaining chunk for long messages.
   const pending = splitMarkdownIRPreserveWhitespace(options.ir, normalizedLimit).toReversed();
   const finalized: RenderedCandidate<TRendered>[] = [];
 
-  while (pending.length > 0) {
-    const chunk = pending.pop();
-    if (!chunk) {
-      continue;
-    }
-
+  for (let chunk = pending.pop(); chunk; chunk = pending.pop()) {
     const candidate = renderCandidate(options, chunk);
     if (
       options.measureRendered(candidate.output.rendered) <= normalizedLimit ||
@@ -96,17 +70,14 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
       continue;
     }
 
-    const split = splitMarkdownIRByRenderedLimit(chunk, normalizedLimit, renderResolver);
+    const split = splitMarkdownIRByRenderedLimit(chunk, normalizedLimit, options);
     if (split.length <= 1) {
       // Worst-case safety: avoid retry loops and keep the original chunk.
       finalized.push(candidate);
       continue;
     }
-    for (let index = split.length - 1; index >= 0; index -= 1) {
-      const next = split[index];
-      if (next) {
-        pending.push(next);
-      }
+    for (const next of split.toReversed()) {
+      pending.push(next);
     }
   }
 
@@ -118,46 +89,33 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
 function splitMarkdownIRByRenderedLimit<TRendered>(
   chunk: MarkdownIR,
   renderedLimit: number,
-  options: RenderResolver<TRendered>,
+  options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
 ): MarkdownIR[] {
   const currentTextLength = chunk.text.length;
-
-  const splitLimit = findLargestChunkTextLengthWithinRenderedLimit(chunk, renderedLimit, options);
-  if (splitLimit <= 0) {
-    return [chunk];
-  }
-
-  const split = splitMarkdownIRPreserveWhitespace(chunk, splitLimit);
-  const firstChunk = split[0];
-  if (firstChunk && options.measureRendered(options.renderChunk(firstChunk)) <= renderedLimit) {
-    return split;
-  }
-
-  return [
-    sliceMarkdownIR(chunk, 0, splitLimit),
-    sliceMarkdownIR(chunk, splitLimit, currentTextLength),
-  ];
-}
-
-function findLargestChunkTextLengthWithinRenderedLimit<TRendered>(
-  chunk: MarkdownIR,
-  renderedLimit: number,
-  options: RenderResolver<TRendered>,
-): number {
-  const currentTextLength = chunk.text.length;
-
   // Rendered length is not guaranteed to be monotonic after escaping/link or
   // file-reference rewriting, so test exact candidates from longest to shortest.
   for (let candidateLength = currentTextLength - 1; candidateLength >= 1; candidateLength -= 1) {
     const safeCandidateLength = findGraphemeChunkEnd(chunk.text, 0, candidateLength);
     const candidate = sliceMarkdownIR(chunk, 0, safeCandidateLength);
-    const rendered = options.renderChunk(candidate);
+    const rendered = renderCandidate(options, candidate).output.rendered;
     if (options.measureRendered(rendered) <= renderedLimit) {
-      return safeCandidateLength;
+      const split = splitMarkdownIRPreserveWhitespace(chunk, safeCandidateLength);
+      const firstChunk = split[0];
+      if (
+        firstChunk &&
+        options.measureRendered(renderCandidate(options, firstChunk).output.rendered) <=
+          renderedLimit
+      ) {
+        return split;
+      }
+      return [
+        sliceMarkdownIR(chunk, 0, safeCandidateLength),
+        sliceMarkdownIR(chunk, safeCandidateLength, currentTextLength),
+      ];
     }
     candidateLength = Math.min(candidateLength, safeCandidateLength);
   }
-  return 0;
+  return [chunk];
 }
 
 function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: number): number {
@@ -215,9 +173,6 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
   }
 
   const resolveWhitespaceBreak = (breakIndex: number, runStart: number): number => {
-    if (breakIndex <= start) {
-      return breakIndex;
-    }
     if (runStart <= start) {
       return breakIndex;
     }
@@ -246,9 +201,7 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   if (!ir.text) {
     return [];
   }
-
-  const normalizedLimit = resolveIntegerOption(limit, 1, { min: 1 });
-  if (normalizedLimit <= 0 || ir.text.length <= normalizedLimit) {
+  if (ir.text.length <= limit) {
     return [ir];
   }
 
@@ -259,8 +212,8 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   const ranges: SourceRange[] = [];
   let cursor = 0;
   while (cursor < ir.text.length) {
-    const maxEnd = Math.min(ir.text.length, cursor + normalizedLimit);
-    let preferredEnd = findMarkdownIRPreservedSplitIndex(ir.text, cursor, normalizedLimit);
+    const maxEnd = Math.min(ir.text.length, cursor + limit);
+    let preferredEnd = findMarkdownIRPreservedSplitIndex(ir.text, cursor, limit);
     let code = codeSpans[codeIndex];
     while (code && code.end <= preferredEnd) {
       code = codeSpans[++codeIndex];
@@ -276,7 +229,7 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
       }
       codeEnd = findGraphemeChunkEnd(ir.text, cursor, codeEnd, codeEnd, false);
       let nextContent = maxEnd;
-      const nextMaxEnd = Math.min(ir.text.length, codeEnd + normalizedLimit);
+      const nextMaxEnd = Math.min(ir.text.length, codeEnd + limit);
       while (nextContent < nextMaxEnd && /\s/u.test(ir.text[nextContent] ?? "")) {
         nextContent += 1;
       }

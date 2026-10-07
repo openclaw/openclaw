@@ -1,6 +1,8 @@
-// Restart request parsing keeps restart sentinel payloads limited to resumable
-// session, delivery, thread, and delay fields.
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import {
+  asSafeIntegerInRange,
+  MAX_TIMER_TIMEOUT_MS,
+  resolveOptionalIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
@@ -57,10 +59,7 @@ export function parseRestartRequestParams(params: unknown): {
     (params as { continuationMessage?: unknown }).continuationMessage,
   );
   const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
-  const restartDelayMs =
-    typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
-      ? Math.max(0, Math.floor(restartDelayMsRaw))
-      : undefined;
+  const restartDelayMs = resolveOptionalIntegerOption(restartDelayMsRaw, { min: 0 });
   return { sessionKey, deliveryContext, threadId, note, continuationMessage, restartDelayMs };
 }
 
@@ -111,13 +110,7 @@ export function parseTargetedGatewayRestartIntent(
   const force = raw.force === true;
   // Older Gateways ignore this optional field instead of rejecting force + waitMs.
   const budget = force ? raw.drainBudgetMs : raw.waitMs;
-  const waitMs =
-    typeof budget === "number" &&
-    Number.isSafeInteger(budget) &&
-    budget >= 0 &&
-    budget <= MAX_TIMER_TIMEOUT_MS
-      ? budget
-      : undefined;
+  const waitMs = asSafeIntegerInRange(budget, { min: 0, max: MAX_TIMER_TIMEOUT_MS });
   if (
     (raw.force !== undefined && typeof raw.force !== "boolean") ||
     (budget !== undefined && waitMs === undefined) ||

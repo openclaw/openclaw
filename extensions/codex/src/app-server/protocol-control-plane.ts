@@ -1,6 +1,5 @@
 import type { JsonObject, JsonValue } from "./protocol-json.js";
 
-/** Current Codex marketplace, app, skill, hook, and config wire contracts. */
 export type CodexExperimentalFeatureListParams = {
   cursor?: string | null;
   limit?: number | null;
@@ -72,9 +71,7 @@ export type CodexPluginInstalledResponse = {
   marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
 };
 
-export type CodexPluginListResponse = {
-  marketplaces: CodexPluginMarketplaceEntry[];
-  marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
+export type CodexPluginListResponse = CodexPluginInstalledResponse & {
   featuredPluginIds: string[];
 };
 
@@ -185,11 +182,6 @@ export type CodexAppsReadParams = {
 export type CodexAppsReadResponse = {
   apps: CodexConnectorMetadata[];
   missingAppIds: string[];
-};
-
-export type CodexSkillsListParams = {
-  cwds: string[];
-  forceReload?: boolean;
 };
 
 type CodexSkillScope = "user" | "repo" | "system" | "admin";

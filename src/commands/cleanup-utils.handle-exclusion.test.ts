@@ -4,6 +4,11 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -17,7 +22,120 @@ import { removeStateAndLinkedPaths } from "./cleanup-utils.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("refuses state removal while a peer owns a cached database, then removes after peer retirement", async () => {
+it.skipIf(process.platform === "win32")(
+  "retains native SQLite exclusion through removal against a legacy rollback-mode writer",
+  async ({ signal }) => {
+    const stateDir = tempDirs.make("openclaw-cleanup-legacy-writer-");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(databasePath));
+    fs.writeFileSync(configPath, "{}\n");
+    // A shipped native client does not know the new process-owner sidecar.
+    const child = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+      import { DatabaseSync } from "node:sqlite";
+      const database = new DatabaseSync(process.argv[1]);
+      database.exec("PRAGMA journal_mode=DELETE; PRAGMA busy_timeout=0; CREATE TABLE marker(value INTEGER); INSERT INTO marker VALUES (1)");
+      process.on("message", (message) => {
+        if (message === "close") {
+          database.close();
+          process.disconnect();
+          return;
+        }
+        let outcome;
+        try {
+          database.exec("BEGIN IMMEDIATE; INSERT INTO marker VALUES (2); COMMIT");
+          outcome = { committed: true };
+        } catch (error) {
+          outcome = { committed: false, errcode: error.errcode };
+        } finally {
+          if (database.isTransaction) database.exec("ROLLBACK");
+        }
+        process.send(outcome);
+      });
+      process.send({ ready: true });
+    `,
+        databasePath,
+      ],
+      { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+    );
+    const closed = once(child, "close");
+    void closed.catch(() => {});
+    const started = createDeferred();
+    const resumeRemoval = createDeferred();
+    const realRm = fsPromises.rm;
+    const remove = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, settings) => {
+      if (String(target) === configPath || String(target) === path.dirname(databasePath)) {
+        started.resolve();
+        await resumeRemoval.promise;
+      }
+      return realRm(target, settings);
+    });
+    const attemptWrite = async () => {
+      const reply = once(child, "message", { signal });
+      child.send("write");
+      const [outcome] = await withinTest(
+        awaitGateBeforeSettlement(reply, closed, "Legacy SQLite writer closed before replying"),
+        signal,
+      );
+      return outcome;
+    };
+    let deleting: Promise<boolean> | undefined;
+    try {
+      const [ready] = await withinTest(
+        awaitGateBeforeSettlement(
+          once(child, "message", { signal }),
+          closed,
+          "Legacy SQLite writer closed before readiness",
+        ),
+        signal,
+      );
+      expect(ready).toEqual({ ready: true });
+      deleting = removeStateAndLinkedPaths(
+        {
+          stateDir,
+          configPath,
+          oauthDir: path.join(stateDir, "credentials"),
+          configInsideState: true,
+          oauthInsideState: true,
+        },
+        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      );
+      expect(
+        await Promise.race([
+          started.promise.then(() => "removing"),
+          deleting.then(() => "removed"),
+        ]),
+      ).toBe("removing");
+      expect(fs.existsSync(databasePath)).toBe(true);
+      await expect(attemptWrite()).resolves.toEqual({ committed: false, errcode: 5 });
+      resumeRemoval.resolve();
+      await expect(deleting).resolves.toBe(true);
+      // Apple's SQLite VFS reports an unlinked vnode; bundled SQLite reports a moved database.
+      const removedFileCode = process.versions.bun && process.platform === "darwin" ? 6922 : 1032;
+      await expect(attemptWrite()).resolves.toEqual({ committed: false, errcode: removedFileCode });
+      expect(fs.existsSync(stateDir)).toBe(false);
+      child.send("close");
+      await withinTest(closed, signal);
+    } finally {
+      resumeRemoval.resolve();
+      try {
+        await deleting;
+      } finally {
+        remove.mockRestore();
+        await stopChildProcess(child, 5_000);
+      }
+    }
+  },
+);
+
+it("refuses state removal while a peer owns a cached database, then removes after peer retirement", async ({
+  signal,
+}) => {
   const stateDir = tempDirs.make("openclaw-cleanup-handle-exclusion-");
   const configPath = path.join(stateDir, "openclaw.json");
   fs.writeFileSync(configPath, "{}\n");
@@ -43,6 +161,8 @@ it("refuses state removal while a peer owns a cached database, then removes afte
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     },
   );
+  const closed = once(child, "close");
+  void closed.catch(() => {});
   const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const plan = {
     stateDir,
@@ -52,14 +172,22 @@ it("refuses state removal while a peer owns a cached database, then removes afte
     oauthInsideState: true,
   };
   try {
-    const [ready] = await once(child, "message", { signal: AbortSignal.timeout(15_000) });
+    const [ready] = await withinTest(
+      awaitGateBeforeSettlement(
+        once(child, "message", { signal }),
+        closed,
+        "Cached database peer closed before readiness",
+      ),
+      signal,
+    );
     expect(ready).toMatchObject({ ready: true });
-    await expect(removeStateAndLinkedPaths(plan, runtime)).rejects.toThrow(/handle/i);
+    await expect(removeStateAndLinkedPaths(plan, runtime)).rejects.toThrow(
+      "Cannot remove OpenClaw state directory while another SQLite connection is active",
+    );
     expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
-    const closed = once(child, "close", { signal: AbortSignal.timeout(10_000) });
     child.send({ close: true });
-    await closed;
+    await withinTest(closed, signal);
     await expect(removeStateAndLinkedPaths(plan, runtime)).resolves.toBe(true);
     expect(fs.existsSync(stateDir)).toBe(false);
   } finally {
@@ -75,21 +203,36 @@ it("drains the local cache and excludes reopening throughout awaited removal", a
   const database = openOpenClawStateDatabase(options);
   const retainedStatement = database.db.prepare("PRAGMA data_version");
   retainedStatement.get();
-  let reached!: () => void;
-  const started = new Promise<void>((resolve) => {
-    reached = resolve;
-  });
-  let resume!: () => void;
-  const resumeRemoval = new Promise<void>((resolve) => {
-    resume = resolve;
-  });
+  const started = createDeferred();
+  const resumeRemoval = createDeferred();
+  const unlinked = createDeferred();
+  const resumeFinalization = createDeferred();
+  const entryName = (entry: string | Buffer | fs.Dirent<string | Buffer>) =>
+    typeof entry === "string" || Buffer.isBuffer(entry) ? entry.toString() : entry.name.toString();
+  const readdir = fsPromises.readdir.bind(fsPromises);
+  const discovery = vi
+    .spyOn(fsPromises, "readdir")
+    .mockImplementation(async (directory, settings) => {
+      const entries = await readdir(directory, settings);
+      // Directory enumeration may reach the database before the config file.
+      return String(directory) === stateDir
+        ? entries.toSorted(
+            (left, right) =>
+              Number(entryName(right) === "state") - Number(entryName(left) === "state"),
+          )
+        : entries;
+    });
   const realRm = fsPromises.rm;
   const remove = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, settings) => {
-    if (String(target) === configPath) {
-      reached();
-      await resumeRemoval;
+    if (String(target) === configPath || String(target) === path.dirname(database.path)) {
+      started.resolve();
+      await resumeRemoval.promise;
     }
-    return realRm(target, settings);
+    await realRm(target, settings);
+    if (String(target) === path.dirname(database.path)) {
+      unlinked.resolve();
+      await resumeFinalization.promise;
+    }
   });
   const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const deleting = removeStateAndLinkedPaths(
@@ -103,16 +246,33 @@ it("drains the local cache and excludes reopening throughout awaited removal", a
     runtime,
   );
   try {
-    await started;
+    expect(
+      await Promise.race([
+        started.promise.then(() => "removing"),
+        unlinked.promise.then(() => "unlinked"),
+        deleting.then(() => "removed"),
+      ]),
+    ).toBe("removing");
     expect(database.db.isOpen).toBe(false);
     expect(() => retainedStatement.get()).toThrow(/finalized/);
     const before = fs.statSync(database.path, { bigint: true });
-    expect(() => openOpenClawStateDatabase(options)).toThrow(/state-handles/);
+    expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
     expect(fs.statSync(database.path, { bigint: true })).toEqual(before);
+    resumeRemoval.resolve();
+    expect(
+      await Promise.race([unlinked.promise.then(() => "unlinked"), deleting.then(() => "removed")]),
+    ).toBe("unlinked");
+    expect(fs.existsSync(database.path)).toBe(false);
+    expect(fs.existsSync(path.dirname(database.path))).toBe(false);
+    expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
+    expect(fs.existsSync(database.path)).toBe(false);
+    expect(fs.existsSync(path.dirname(database.path))).toBe(false);
   } finally {
-    resume();
+    resumeRemoval.resolve();
+    resumeFinalization.resolve();
     await deleting.finally(() => {
       remove.mockRestore();
+      discovery.mockRestore();
       closeOpenClawStateDatabaseForTest();
     });
   }

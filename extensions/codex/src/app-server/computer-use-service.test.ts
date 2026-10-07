@@ -52,12 +52,8 @@ describe("Codex Computer Use native service", () => {
       await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
 
       const result = await ensureCodexComputerUseServiceApp({
-        codexHome,
+        ...serviceOptions(codexHome, sourcePath),
         ...(ownership === "home" ? { ownershipRoot: codexHome } : {}),
-        platform: "darwin",
-        sourceAppCandidates: [sourcePath],
-        copyServiceApp: copyServiceFixture,
-        inspectServiceApp: inspectServiceFixture,
       });
 
       expect(result).toMatchObject({
@@ -109,112 +105,44 @@ describe("Codex Computer Use native service", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "rejects a symlinked isolated Codex home without touching its external target",
-    async () => {
-      const root = tempDirs.make("openclaw-computer-use-service-symlink-");
-      const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-      const agentDir = path.join(root, "agent");
-      const codexHome = path.join(agentDir, "codex-home");
-      const externalHome = path.join(root, "external-home");
-      const externalParent = path.join(externalHome, "computer-use");
-      const externalTarget = path.join(externalParent, "Codex Computer Use.app");
-      const sentinelPath = path.join(externalParent, "sentinel.txt");
-      await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-      await writeServiceFixture(externalTarget, STALE_IDENTITY);
-      await fs.writeFile(sentinelPath, "outside");
-      await fs.mkdir(agentDir, { recursive: true });
-      await fs.symlink(externalHome, codexHome);
-      const externalInode = (await fs.lstat(externalTarget)).ino;
-      const copyServiceApp = vi.fn(copyServiceFixture);
-
-      await expect(
-        ensureCodexComputerUseServiceApp({
-          codexHome,
-          platform: "darwin",
-          sourceAppCandidates: [sourcePath],
-          copyServiceApp,
-          inspectServiceApp: inspectServiceFixture,
-        }),
-      ).rejects.toThrow(/symlinked directory|real directory|symbolic link/iu);
-
-      expect(copyServiceApp).not.toHaveBeenCalled();
-      expect((await fs.lstat(codexHome)).isSymbolicLink()).toBe(true);
-      expect((await fs.lstat(externalTarget)).ino).toBe(externalInode);
-      await expect(inspectServiceFixture(externalTarget)).resolves.toEqual(STALE_IDENTITY);
-      await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("outside");
-      await expect(findInstallDebris(externalParent)).resolves.toEqual([]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "rejects a symlinked ownership root without touching its external target",
-    async () => {
+  it
+    .runIf(process.platform !== "win32")
+    .each(["ownership root", "isolated Codex home", "Computer Use parent"] as const)(
+    "rejects a symlinked %s without touching its external target",
+    async (boundary) => {
       const root = tempDirs.make("openclaw-computer-use-service-symlink-");
       const sourcePath = path.join(root, "source", "Codex Computer Use.app");
       const ownershipRoot = path.join(root, "agent");
       const codexHome = path.join(ownershipRoot, "codex-home");
-      const externalAgentRoot = path.join(root, "external-agent");
-      const externalParent = path.join(externalAgentRoot, "codex-home", "computer-use");
-      const externalTarget = path.join(externalParent, "Codex Computer Use.app");
-      const sentinelPath = path.join(externalParent, "sentinel.txt");
-      await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-      await writeServiceFixture(externalTarget, STALE_IDENTITY);
-      await fs.writeFile(sentinelPath, "outside");
-      await fs.symlink(externalAgentRoot, ownershipRoot);
-      const externalInode = (await fs.lstat(externalTarget)).ino;
-      const copyServiceApp = vi.fn(copyServiceFixture);
-
-      await expect(
-        ensureCodexComputerUseServiceApp({
-          codexHome,
-          ownershipRoot,
-          platform: "darwin",
-          sourceAppCandidates: [sourcePath],
-          copyServiceApp,
-          inspectServiceApp: inspectServiceFixture,
-        }),
-      ).rejects.toThrow(/symlinked directory|real director|symbolic link/iu);
-
-      expect(copyServiceApp).not.toHaveBeenCalled();
-      expect((await fs.lstat(ownershipRoot)).isSymbolicLink()).toBe(true);
-      expect((await fs.lstat(externalTarget)).ino).toBe(externalInode);
-      await expect(inspectServiceFixture(externalTarget)).resolves.toEqual(STALE_IDENTITY);
-      await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("outside");
-      await expect(findInstallDebris(externalParent)).resolves.toEqual([]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "rejects a symlinked Computer Use parent without touching its external target",
-    async () => {
-      const root = tempDirs.make("openclaw-computer-use-service-symlink-");
-      const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-      const codexHome = path.join(root, "codex-home");
       const targetParent = path.join(codexHome, "computer-use");
-      const externalParent = path.join(root, "external-computer-use");
+      const linkedPath =
+        boundary === "ownership root"
+          ? ownershipRoot
+          : boundary === "isolated Codex home"
+            ? codexHome
+            : targetParent;
+      const externalRoot = path.join(root, "external");
+      const externalParent = path.join(externalRoot, path.relative(linkedPath, targetParent));
       const externalTarget = path.join(externalParent, "Codex Computer Use.app");
       const sentinelPath = path.join(externalParent, "sentinel.txt");
       await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
       await writeServiceFixture(externalTarget, STALE_IDENTITY);
       await fs.writeFile(sentinelPath, "outside");
-      await fs.mkdir(codexHome, { recursive: true });
-      await fs.symlink(externalParent, targetParent);
+      await fs.mkdir(path.dirname(linkedPath), { recursive: true });
+      await fs.symlink(externalRoot, linkedPath);
       const externalInode = (await fs.lstat(externalTarget)).ino;
       const copyServiceApp = vi.fn(copyServiceFixture);
 
       await expect(
         ensureCodexComputerUseServiceApp({
-          codexHome,
-          platform: "darwin",
-          sourceAppCandidates: [sourcePath],
+          ...serviceOptions(codexHome, sourcePath),
+          ...(boundary === "ownership root" ? { ownershipRoot } : {}),
           copyServiceApp,
-          inspectServiceApp: inspectServiceFixture,
         }),
       ).rejects.toThrow(/symlinked directory|real directory|symbolic link/iu);
 
       expect(copyServiceApp).not.toHaveBeenCalled();
-      expect((await fs.lstat(targetParent)).isSymbolicLink()).toBe(true);
+      expect((await fs.lstat(linkedPath)).isSymbolicLink()).toBe(true);
       expect((await fs.lstat(externalTarget)).ino).toBe(externalInode);
       await expect(inspectServiceFixture(externalTarget)).resolves.toEqual(STALE_IDENTITY);
       await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("outside");
@@ -240,11 +168,8 @@ describe("Codex Computer Use native service", () => {
 
       await expect(
         ensureCodexComputerUseServiceApp({
-          codexHome,
-          platform: "darwin",
-          sourceAppCandidates: [sourcePath],
+          ...serviceOptions(codexHome, sourcePath),
           copyServiceApp,
-          inspectServiceApp: inspectServiceFixture,
         }),
       ).rejects.toThrow(/must not be a symbolic link/iu);
 
@@ -278,9 +203,7 @@ describe("Codex Computer Use native service", () => {
 
       await expect(
         ensureCodexComputerUseServiceApp({
-          codexHome,
-          platform: "darwin",
-          sourceAppCandidates: [sourcePath],
+          ...serviceOptions(codexHome, sourcePath),
           copyServiceApp: async (source, stagedTarget) => {
             await copyServiceFixture(source, stagedTarget);
             const stagingName = path.basename(path.dirname(stagedTarget));
@@ -294,7 +217,6 @@ describe("Codex Computer Use native service", () => {
             await fs.rename(targetParent, parkedParent);
             await fs.symlink(externalParent, targetParent);
           },
-          inspectServiceApp: inspectServiceFixture,
         }),
       ).rejects.toThrow(/service parent changed during refresh/iu);
 
@@ -324,11 +246,8 @@ describe("Codex Computer Use native service", () => {
     const copyServiceApp = vi.fn();
 
     const result = await ensureCodexComputerUseServiceApp({
-      codexHome,
-      platform: "darwin",
-      sourceAppCandidates: [sourcePath],
+      ...serviceOptions(codexHome, sourcePath),
       copyServiceApp,
-      inspectServiceApp: inspectServiceFixture,
     });
 
     expect(result).toMatchObject({
@@ -348,9 +267,7 @@ describe("Codex Computer Use native service", () => {
     const inspectServiceApp = vi.fn(inspectServiceFixture);
 
     const first = await ensureCodexComputerUseServiceApp({
-      codexHome,
-      platform: "darwin",
-      sourceAppCandidates: [sourcePath],
+      ...serviceOptions(codexHome, sourcePath),
       copyServiceApp,
       inspectServiceApp,
     });
@@ -358,9 +275,7 @@ describe("Codex Computer Use native service", () => {
     await writeServiceFixture(sourcePath, UNEXPECTED_IDENTITY);
 
     const second = await ensureCodexComputerUseServiceApp({
-      codexHome,
-      platform: "darwin",
-      sourceAppCandidates: [sourcePath],
+      ...serviceOptions(codexHome, sourcePath),
       copyServiceApp,
       inspectServiceApp,
     });
@@ -387,17 +302,12 @@ describe("Codex Computer Use native service", () => {
     const inspectServiceApp = vi.fn(inspectServiceFixture);
 
     await ensureCodexComputerUseServiceApp({
-      codexHome,
-      platform: "darwin",
-      sourceAppCandidates: [firstSourcePath],
-      copyServiceApp: copyServiceFixture,
+      ...serviceOptions(codexHome, firstSourcePath),
       inspectServiceApp,
     });
     await expect(
       ensureCodexComputerUseServiceApp({
-        codexHome,
-        platform: "darwin",
-        sourceAppCandidates: [failingSourcePath],
+        ...serviceOptions(codexHome, failingSourcePath),
         copyServiceApp: async (source, target) => {
           await copyServiceFixture(source, target);
           await writeFixtureIdentity(target, STALE_IDENTITY);
@@ -409,39 +319,11 @@ describe("Codex Computer Use native service", () => {
 
     await expect(
       ensureCodexComputerUseServiceApp({
-        codexHome,
-        platform: "darwin",
-        sourceAppCandidates: [firstSourcePath],
-        copyServiceApp: copyServiceFixture,
+        ...serviceOptions(codexHome, firstSourcePath),
         inspectServiceApp,
       }),
     ).resolves.toMatchObject({ status: "already_current", changed: false });
     expect(inspectServiceApp.mock.calls.length).toBeGreaterThan(inspectionsAfterFailure);
-  });
-
-  it("refreshes a complete but stale signed generation through the staged swap", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-    await writeServiceFixture(targetPath, STALE_IDENTITY);
-
-    const result = await ensureCodexComputerUseServiceApp({
-      codexHome,
-      platform: "darwin",
-      sourceAppCandidates: [sourcePath],
-      copyServiceApp: copyServiceFixture,
-      inspectServiceApp: inspectServiceFixture,
-    });
-
-    expect(result).toMatchObject({
-      status: "refreshed",
-      changed: true,
-      previousBuild: "1000502",
-      sourceBuild: "1000761",
-    });
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
   });
 
   it("reports a missing or untrusted source without changing the target", async () => {
@@ -473,13 +355,7 @@ describe("Codex Computer Use native service", () => {
     await fs.mkdir(targetPath, { recursive: true });
     await fs.writeFile(path.join(targetPath, "partial"), "incomplete");
 
-    const result = await ensureCodexComputerUseServiceApp({
-      codexHome,
-      platform: "darwin",
-      sourceAppCandidates: [sourcePath],
-      copyServiceApp: copyServiceFixture,
-      inspectServiceApp: inspectServiceFixture,
-    });
+    const result = await ensureCodexComputerUseServiceApp(serviceOptions(codexHome, sourcePath));
 
     expect(result).toMatchObject({ status: "refreshed", changed: true });
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
@@ -498,14 +374,11 @@ describe("Codex Computer Use native service", () => {
 
     await expect(
       ensureCodexComputerUseServiceApp({
-        codexHome,
-        platform: "darwin",
-        sourceAppCandidates: [sourcePath],
+        ...serviceOptions(codexHome, sourcePath),
         copyServiceApp: async (source, target) => {
           await copyServiceFixture(source, target);
           await writeFixtureIdentity(target, UNEXPECTED_IDENTITY);
         },
-        inspectServiceApp: inspectServiceFixture,
       }),
     ).rejects.toThrow("does not match its selected signed source");
 
@@ -522,14 +395,11 @@ describe("Codex Computer Use native service", () => {
     await writeServiceFixture(targetPath, STALE_IDENTITY);
 
     const result = await ensureCodexComputerUseServiceApp({
-      codexHome,
-      platform: "darwin",
-      sourceAppCandidates: [sourcePath],
+      ...serviceOptions(codexHome, sourcePath),
       copyServiceApp: async (source, target) => {
         await copyServiceFixture(source, target);
         await writeFixtureIdentity(targetPath, CURRENT_IDENTITY);
       },
-      inspectServiceApp: inspectServiceFixture,
     });
 
     expect(result).toMatchObject({ status: "already_current", changed: false });
@@ -547,14 +417,11 @@ describe("Codex Computer Use native service", () => {
 
     await expect(
       ensureCodexComputerUseServiceApp({
-        codexHome,
-        platform: "darwin",
-        sourceAppCandidates: [sourcePath],
+        ...serviceOptions(codexHome, sourcePath),
         copyServiceApp: async (source, target) => {
           await copyServiceFixture(source, target);
           await writeFixtureIdentity(targetPath, UNEXPECTED_IDENTITY);
         },
-        inspectServiceApp: inspectServiceFixture,
       }),
     ).rejects.toThrow("changed to an unexpected generation");
 
@@ -589,19 +456,13 @@ describe("Codex Computer Use native service", () => {
     });
 
     const first = ensureCodexComputerUseServiceApp({
-      codexHome,
-      platform: "darwin",
-      sourceAppCandidates: [firstSourcePath],
+      ...serviceOptions(codexHome, firstSourcePath),
       copyServiceApp,
-      inspectServiceApp: inspectServiceFixture,
     });
     await firstCopyStarted.promise;
     const second = ensureCodexComputerUseServiceApp({
-      codexHome,
-      platform: "darwin",
-      sourceAppCandidates: [secondSourcePath],
+      ...serviceOptions(codexHome, secondSourcePath),
       copyServiceApp,
-      inspectServiceApp: inspectServiceFixture,
     });
     firstCopyGate.resolve();
 
@@ -616,11 +477,8 @@ describe("Codex Computer Use native service", () => {
     });
     await expect(
       ensureCodexComputerUseServiceApp({
-        codexHome,
-        platform: "darwin",
-        sourceAppCandidates: [firstSourcePath],
+        ...serviceOptions(codexHome, firstSourcePath),
         copyServiceApp,
-        inspectServiceApp: inspectServiceFixture,
       }),
     ).resolves.toMatchObject({
       status: "refreshed",
@@ -644,22 +502,12 @@ describe("Codex Computer Use native service", () => {
     const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
     await writeServiceFixture(firstSourcePath, CURRENT_IDENTITY);
     await writeServiceFixture(secondSourcePath, UNEXPECTED_IDENTITY);
-    await ensureCodexComputerUseServiceApp({
-      codexHome,
-      platform: "darwin",
-      sourceAppCandidates: [firstSourcePath],
-      copyServiceApp: copyServiceFixture,
-      inspectServiceApp: inspectServiceFixture,
-    });
+    await ensureCodexComputerUseServiceApp(serviceOptions(codexHome, firstSourcePath));
 
     let currentnessChecks = 0;
     await expect(
       ensureCodexComputerUseServiceApp({
-        codexHome,
-        platform: "darwin",
-        sourceAppCandidates: [secondSourcePath],
-        copyServiceApp: copyServiceFixture,
-        inspectServiceApp: inspectServiceFixture,
+        ...serviceOptions(codexHome, secondSourcePath),
         assertCurrent: () => {
           currentnessChecks += 1;
           if (currentnessChecks === 2) {
@@ -697,6 +545,16 @@ describe("Codex Computer Use native service", () => {
     );
   });
 });
+
+function serviceOptions(codexHome: string, sourcePath: string): EnsureParams {
+  return {
+    codexHome,
+    platform: "darwin",
+    sourceAppCandidates: [sourcePath],
+    copyServiceApp: copyServiceFixture,
+    inspectServiceApp: inspectServiceFixture,
+  };
+}
 
 function serviceIdentity(
   overrides: Pick<ServiceIdentity, "version" | "build" | "cdHash" | "clientCdHash">,

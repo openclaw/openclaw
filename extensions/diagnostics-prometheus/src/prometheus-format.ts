@@ -16,12 +16,8 @@ export function escapeHelp(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n");
 }
 
-function escapeLabelValue(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, '\\"');
-}
-
 export function formatLabelEntry([key, value]: [string, string]): string {
-  return `${key}="${escapeLabelValue(value)}"`;
+  return `${key}="${escapeHelp(value).replace(/"/g, '\\"')}"`;
 }
 
 export function formatLabels(labels: LabelSet): string {

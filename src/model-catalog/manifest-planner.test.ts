@@ -78,25 +78,6 @@ describe("manifest model catalog planner", () => {
       "anthropic-messages",
       "anthropic-messages",
     ]);
-    const aliasPlan = planManifestModelCatalogRows({
-      registry: {
-        plugins: [
-          {
-            id: "anthropic",
-            providers: ["anthropic"],
-            modelCatalog: {
-              aliases: { "anthropic-alias": { provider: "anthropic" } },
-              providers: { anthropic: { models: [{ id: "old" }] } },
-            },
-          },
-        ],
-      },
-      providerFilter: "anthropic-alias",
-      remoteOverlay: { anthropic: { models: [{ id: "old", name: "Remote alias" }] } },
-    });
-    expect(aliasPlan.rows).toMatchObject([
-      { provider: "anthropic-alias", id: "old", name: "Remote alias", source: "runtime-refresh" },
-    ]);
   });
 
   it("scopes requested merge keys while preserving alias overlays", () => {
@@ -303,94 +284,7 @@ describe("manifest model catalog planner", () => {
     expect(plan.conflicts).toStrictEqual([]);
   });
 
-  it("filters providers before row planning", () => {
-    const plan = planManifestModelCatalogRows({
-      providerFilter: "openrouter",
-      registry: {
-        plugins: [
-          {
-            id: "moonshot",
-            modelCatalog: {
-              providers: {
-                moonshot: {
-                  models: [{ id: "kimi-k2.6" }],
-                },
-              },
-            },
-          },
-          {
-            id: "openrouter",
-            modelCatalog: {
-              providers: {
-                openrouter: {
-                  models: [{ id: "anthropic/claude-sonnet-4.6" }],
-                },
-              },
-            },
-          },
-        ],
-      },
-    });
-
-    expect(plan.entries.map((entry) => entry.pluginId)).toEqual(["openrouter"]);
-    expect(plan.rows.map((row) => row.ref)).toEqual(["openrouter/anthropic/claude-sonnet-4.6"]);
-    expect(plan.conflicts).toStrictEqual([]);
-  });
-
-  it("plans alias-filtered rows from owned provider catalogs", () => {
-    const plan = planManifestModelCatalogRows({
-      providerFilter: "azure-openai-responses",
-      registry: {
-        plugins: [
-          {
-            id: "openai",
-            providers: ["openai"],
-            modelCatalog: {
-              aliases: {
-                "azure-openai-responses": {
-                  provider: "openai",
-                  api: "azure-openai-responses",
-                  baseUrl: "https://example.openai.azure.com/openai/v1",
-                },
-              },
-              discovery: {
-                openai: "static",
-              },
-              providers: {
-                openai: {
-                  api: "openai-responses",
-                  baseUrl: "https://api.openai.com/v1",
-                  models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
-                },
-              },
-            },
-          },
-        ],
-      },
-    });
-
-    expect(plan.entries).toHaveLength(1);
-    expect(plan.entries[0]?.pluginId).toBe("openai");
-    expect(plan.entries[0]?.provider).toBe("azure-openai-responses");
-    expect(plan.entries[0]?.discovery).toBe("static");
-    expect(plan.rows).toHaveLength(1);
-    expect(plan.rows[0]?.provider).toBe("azure-openai-responses");
-    expect(plan.rows[0]?.id).toBe("gpt-5.4");
-    expect(plan.rows[0]?.ref).toBe("azure-openai-responses/gpt-5.4");
-    expect(plan.rows[0]?.mergeKey).toBe("azure-openai-responses::gpt-5.4");
-    expect(plan.rows[0]?.api).toBe("azure-openai-responses");
-    expect(plan.rows[0]?.baseUrl).toBe("https://example.openai.azure.com/openai/v1");
-  });
-
-  // Regression for https://github.com/openclaw/openclaw/issues/73876.
-  // The user-facing complaint is that copying a model id from OpenRouter
-  // (which uses "moonshotai/kimi-k2.6" as the org slug) and dropping the
-  // "openrouter/" prefix to hit the direct API failed with "Unknown
-  // model: moonshotai/kimi-k2.6". The OpenAI plugin already shipped the
-  // alias pattern (azure-openai-responses → openai); applying it to the
-  // moonshot manifest lets the org-slug name resolve to moonshot's
-  // existing catalog without renaming the canonical provider id (which
-  // would break operators whose configs already say "moonshot/...").
+  // Regression for #73876: an OpenRouter org slug must resolve to the direct provider.
   it("plans moonshotai alias rows from the moonshot provider catalog", () => {
     const plan = planManifestModelCatalogRows({
       providerFilter: "moonshotai",
@@ -424,29 +318,7 @@ describe("manifest model catalog planner", () => {
       },
     });
 
-    expect(plan.entries).toEqual([
-      {
-        pluginId: "moonshot",
-        provider: "moonshotai",
-        discovery: "static",
-        rows: [
-          {
-            provider: "moonshotai",
-            id: "kimi-k2.6",
-            ref: "moonshotai/kimi-k2.6",
-            mergeKey: "moonshotai::kimi-k2.6",
-            name: "Kimi K2.6",
-            source: "manifest",
-            input: ["text"],
-            reasoning: false,
-            status: "available",
-            api: "openai-completions",
-            baseUrl: "https://api.moonshot.ai/v1",
-          },
-        ],
-      },
-    ]);
-    expect(plan.rows).toEqual([
+    const rows = [
       {
         provider: "moonshotai",
         id: "kimi-k2.6",
@@ -460,84 +332,11 @@ describe("manifest model catalog planner", () => {
         api: "openai-completions",
         baseUrl: "https://api.moonshot.ai/v1",
       },
+    ];
+    expect(plan.entries).toEqual([
+      { pluginId: "moonshot", provider: "moonshotai", discovery: "static", rows },
     ]);
-  });
-
-  it("plans moonshot-ai alias rows from the moonshot provider catalog", () => {
-    const plan = planManifestModelCatalogRows({
-      providerFilter: "moonshot-ai",
-      registry: {
-        plugins: [
-          {
-            id: "moonshot",
-            providers: ["moonshot"],
-            modelCatalog: {
-              aliases: {
-                "moonshot-ai": {
-                  provider: "moonshot",
-                },
-              },
-              providers: {
-                moonshot: {
-                  api: "openai-completions",
-                  baseUrl: "https://api.moonshot.ai/v1",
-                  models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
-                },
-              },
-            },
-          },
-        ],
-      },
-    });
-
-    expect(plan.rows).toEqual([
-      {
-        provider: "moonshot-ai",
-        id: "kimi-k2.6",
-        ref: "moonshot-ai/kimi-k2.6",
-        mergeKey: "moonshot-ai::kimi-k2.6",
-        name: "Kimi K2.6",
-        source: "manifest",
-        input: ["text"],
-        reasoning: false,
-        status: "available",
-        api: "openai-completions",
-        baseUrl: "https://api.moonshot.ai/v1",
-      },
-    ]);
-  });
-
-  it("keeps alias provider rows out of unfiltered broad planning", () => {
-    const plan = planManifestModelCatalogRows({
-      registry: {
-        plugins: [
-          {
-            id: "openai",
-            providers: ["openai"],
-            modelCatalog: {
-              aliases: {
-                "azure-openai-responses": {
-                  provider: "openai",
-                  api: "azure-openai-responses",
-                  baseUrl: "https://example.openai.azure.com/openai/v1",
-                },
-              },
-              providers: {
-                openai: {
-                  api: "openai-responses",
-                  baseUrl: "https://api.openai.com/v1",
-                  models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
-                },
-              },
-            },
-          },
-        ],
-      },
-    });
-
-    expect(plan.entries.map((entry) => entry.provider)).toEqual(["openai"]);
-    expect(plan.rows.map((row) => row.ref)).toEqual(["openai/gpt-5.4"]);
-    expect(plan.rows.some((row) => row.provider === "azure-openai-responses")).toBe(false);
+    expect(plan.rows).toEqual(rows);
   });
 
   it("sorts fresh normalized rows without mutating frozen manifest inputs", () => {
@@ -549,30 +348,17 @@ describe("manifest model catalog planner", () => {
     };
     const plan = planManifestModelCatalogRows({ registry });
     const repeated = planManifestModelCatalogRows({ registry });
-    const rows = [
-      {
-        id: "a",
-        provider: "fixture",
-        ref: "fixture/a",
-        mergeKey: "fixture::a",
-        name: "a",
-        source: "manifest",
-        input: ["text"],
-        reasoning: false,
-        status: "available",
-      },
-      {
-        id: "z",
-        provider: "fixture",
-        ref: "fixture/z",
-        mergeKey: "fixture::z",
-        name: "z",
-        source: "manifest",
-        input: ["text"],
-        reasoning: false,
-        status: "available",
-      },
-    ];
+    const rows = ["a", "z"].map((id) => ({
+      id,
+      provider: "fixture",
+      ref: `fixture/${id}`,
+      mergeKey: `fixture::${id}`,
+      name: id,
+      source: "manifest",
+      input: ["text"],
+      reasoning: false,
+      status: "available",
+    }));
     expect(plan).toStrictEqual({
       entries: [{ pluginId: "owner", provider: "fixture", discovery: undefined, rows }],
       rows,

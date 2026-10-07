@@ -7,6 +7,7 @@ import type {
   AgentMessage,
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { NativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { appendSessionTranscriptMessageByIdentityStrict } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AgentsApiFunctionCall, AgentsApiItem } from "./agentsapi-client.js";
@@ -16,6 +17,47 @@ import {
   agentsApiNativeToolOutcome,
   agentsApiNativeToolOutput,
 } from "./agentsapi-native-items.js";
+import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
+
+type TranscriptAssertion = NativeSessionBindingAuthority["assertLegacyCurrent"];
+
+export function bindAgentsApiTranscriptAuthority(
+  owner: TranscriptAssertion,
+  signal: AbortSignal,
+): TranscriptAssertion {
+  const assertCurrent = () => {
+    owner();
+    signal.throwIfAborted();
+  };
+  const prepare = owner.prepareSessionSource;
+  return prepare
+    ? Object.assign(assertCurrent, {
+        async prepareSessionSource() {
+          const source = await prepare();
+          return {
+            ...source,
+            assertCurrent: () => {
+              source.assertCurrent();
+              signal.throwIfAborted();
+            },
+          };
+        },
+      })
+    : assertCurrent;
+}
+
+async function assertTranscriptCurrent(assertCurrent: TranscriptAssertion): Promise<void> {
+  if (!assertCurrent.prepareSessionSource) {
+    assertCurrent();
+    return;
+  }
+  const source = await assertCurrent.prepareSessionSource();
+  try {
+    source.assertCurrent();
+  } finally {
+    await source.release?.();
+  }
+}
 
 /** Canonical native facts use the same durable identities during live and historical repair. */
 export async function recordAgentsApiNativeToolTranscript(
@@ -31,7 +73,7 @@ export async function recordAgentsApiNativeToolTranscript(
     captureTruncated?: boolean;
   } = {},
 ): Promise<boolean> {
-  assertCurrent();
+  await assertTranscriptCurrent(assertCurrent);
   const tool = agentsApiNativeTool(item, params);
   if (!tool || !["completed", "failed", "incomplete"].includes(item.status ?? "")) {
     // A failed parent turn can retire before its command completes. Do not
@@ -93,7 +135,7 @@ export async function recordAgentsApiNativeToolInvocation(
   assertCurrent: () => void,
   nextTimestamp: () => number,
 ): Promise<boolean> {
-  assertCurrent();
+  await assertTranscriptCurrent(assertCurrent);
   const tool = agentsApiNativeTool(item, params);
   if (!tool || !canRecordAgentsApiNativeToolInvocation(item)) {
     return false;
@@ -156,35 +198,16 @@ export async function recordAgentsApiToolTranscript(
 export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMessage>(
   params: AgentHarnessAttemptParamsV2,
   message: TMessage,
-  assertCurrent: () => void,
+  assertCurrent: TranscriptAssertion,
 ): Promise<TMessage> {
-  assertCurrent();
-  const { agentId, sessionId, sessionKey, storePath } = params.sessionTarget ?? {};
-  if (
-    !agentId ||
-    !sessionId ||
-    !sessionKey ||
-    !storePath ||
-    sessionId !== params.sessionId ||
-    agentId !== params.agentId ||
-    sessionKey !== params.sessionKey
-  ) {
-    throw new Error("Agents API requires a matching host-prepared session target");
-  }
+  await assertTranscriptCurrent(assertCurrent);
   const append = await appendSessionTranscriptMessageByIdentityStrict({
-    ...params.sessionTarget,
-    agentId,
-    sessionId,
-    sessionKey,
-    storePath,
+    ...requireAgentsApiSessionTarget(params),
     config: params.config,
     message,
-    prepareMessageAfterIdempotencyCheck: (prepared) => {
-      assertCurrent();
-      return prepared;
-    },
+    beforeFreshMessageCommit: assertCurrent,
   });
-  assertCurrent();
+  await assertTranscriptCurrent(assertCurrent);
   if (append.kind !== "result") {
     throw new Error("Agents API transcript append was refused");
   }

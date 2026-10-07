@@ -19,9 +19,6 @@ const resolveChannelLabel = (channel: string) => {
   return channel;
 };
 
-/**
- * Formats the human-readable direct delivery summary for CLI output.
- */
 export function formatOutboundDeliverySummary(
   channel: string,
   result?: OutboundDeliveryResult,
@@ -41,9 +38,6 @@ export function formatOutboundDeliverySummary(
   return base;
 }
 
-/**
- * Formats the human-readable gateway delivery summary for CLI output.
- */
 export function formatGatewaySummary(params: {
   action?: string;
   channel?: string;

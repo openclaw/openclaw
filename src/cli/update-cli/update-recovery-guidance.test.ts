@@ -1,9 +1,12 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
+import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import {
   createUpdateRun,
+  finishUpdateRun,
   getUpdateRun,
   recordUpdateRunStep,
   recordUpdateRunVerification,
@@ -12,20 +15,40 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
 import { recordUpdateResultNextAction } from "./update-command-result.js";
 import { publishUpdateCommandTerminalResult } from "./update-command-terminal.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: vi.fn() }));
+vi.mock("./update-command-readiness.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-readiness.js")>()),
+  observeUpdateGatewayReadiness: vi.fn(),
+}));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const hostGuidance =
   "Run `openclaw triage` on this machine to open a coding agent that can diagnose and repair the installation.";
 const redeploy = "recreate or redeploy the container";
 const permissionDetail =
-  "Package update cannot write /usr/lib/node_modules (EACCES; owner UID 0 (root), GID 0). Run the package update as the directory's owning account, keeping the Gateway's existing state/configuration.";
+  "Package update cannot write /usr/lib/node_modules (EPERM; owner UID 0 (root), GID 0). Run the package update as the directory's owning account, keeping the Gateway's existing state/configuration.";
 const foreignDetail =
   "Selected npm destination /other is occupied by an unclaimed OpenClaw installation; launcher /other/bin/openclaw. Switch the runtime back and retry through the original absolute launcher.";
+function createRun(options: { nextAction?: string; profile?: string } = {}) {
+  const state = dirs.make("update-recovery-guidance-");
+  const env = {
+    OPENCLAW_STATE_DIR: state,
+    OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
+    OPENCLAW_PROFILE: options.profile,
+  };
+  return {
+    runId: createUpdateRun({ trigger: "cli", origin: { nextAction: options.nextAction } }, { env })
+      .runId,
+    env,
+  };
+}
+
 function failure(overrides: Partial<UpdateRunResult> = {}): UpdateRunResult {
   const failedStep = {
     name: "package-stage",
@@ -63,12 +86,129 @@ afterEach(() => {
 });
 
 describe("update recovery reporting", () => {
+  it.each([true, false])(
+    "publishes recovery observation consistently after validation fails (healthy=%s)",
+    async (healthy) => {
+      vi.mocked(isContainerEnvironment).mockReturnValue(false);
+      const run = createRun();
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const failedStep = {
+        name: "validating",
+        command: "validate runtime inventory",
+        cwd: "/fixture",
+        durationMs: 1,
+        exitCode: 1,
+        stderrTail: "Runtime inventory refused a retained backup link",
+      };
+      const result = failure({
+        reason: "update-failed",
+        before: { version: "2026.9.6" },
+        after: { version: "2026.9.6" },
+        failedStep,
+        steps: [failedStep],
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      });
+      vi.mocked(observeUpdateGatewayReadiness).mockResolvedValue({
+        health: {
+          runtime: { status: "running", pid: 12345 },
+          portUsage: { port: 19123, status: "busy", listeners: [], hints: [] },
+          healthy,
+          staleGatewayPids: [],
+          expectedVersion: "2026.9.6",
+          gatewayVersion: "2026.9.6",
+          ...(healthy ? {} : { channelProbeErrors: [{ id: "discord", error: "not ready" }] }),
+        },
+        readyz: healthy,
+        http: undefined,
+        launchAgentRecovery: null,
+      });
+      await verifyUpdatedGateway({
+        result,
+        opts: { run },
+        serviceEnv: run.env,
+        gatewayPort: 19123,
+        requireRunningService: true,
+        purpose: "recovery",
+      });
+      await publishUpdateCommandTerminalResult(
+        { opts: { run }, coreAlreadyCurrent: false },
+        result,
+        { rolledBack: false },
+      );
+      const stored = getUpdateRun(run.runId, { env: run.env });
+      expect(stored?.status).toBe("failed");
+      expect(stored?.reason).toBe("update-failed");
+      expect(stored?.verification.recovery).toEqual(result.recovery);
+      const terminal = log.mock.calls.flat().join("\n");
+      const reportPath = terminal.split("\n").find((line) => line.startsWith("Report: "));
+      expect(reportPath).toBeDefined();
+      const markdown = fs.readFileSync(reportPath!.slice("Report: ".length), "utf8");
+      for (const output of [terminal, markdown, stored?.origin.nextAction ?? ""]) {
+        if (healthy) {
+          expect(output).toContain("Your Gateway is still serving 2026.9.6; nothing to restore.");
+          expect(output).toContain("Fix update-failed then run `openclaw update` again.");
+          expect(output).not.toContain("did not pass verification");
+        } else {
+          expect(output).toContain("gateway is running 2026.9.6 but did not pass verification");
+          expect(output).toContain("channel-errors");
+          expect(output).toContain(hostGuidance);
+          expect(output).not.toContain("nothing to restore");
+        }
+      }
+      if (healthy) {
+        expect(terminal).toContain("Gateway: verified serving after update failure.");
+        expect(markdown).toContain("restart remains unsafe (runtime-verification-failed)");
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "records next action from the admitted row without a cold snapshot (terminal=%s)",
+    async (terminal) => {
+      vi.mocked(isContainerEnvironment).mockReturnValue(false);
+      const run = createRun({ nextAction: "previous guidance" });
+      const { env } = run;
+      if (terminal) {
+        finishUpdateRun(run.runId, { status: "failed", reason: "build-failed" }, { env });
+      }
+      const before = getUpdateRun(run.runId, { env });
+      closeOpenClawStateDatabaseForTest();
+      const read = vi
+        .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
+        .mockImplementation(() => {
+          throw new Error("SQLite source did not stabilize during update reporting");
+        });
+      let nextAction: string | undefined;
+      try {
+        nextAction = recordUpdateResultNextAction(
+          { opts: { run } },
+          {
+            status: "error",
+            mode: "git",
+            reason: "build-failed",
+            steps: [],
+            durationMs: 1,
+          },
+        );
+      } finally {
+        read.mockRestore();
+      }
+      expect(nextAction).toContain("openclaw triage");
+      const after = getUpdateRun(run.runId, { env });
+      if (terminal) {
+        expect(after).toEqual(before);
+      } else {
+        expect(after?.origin.nextAction).toBe(nextAction);
+        expect(after?.phase).toBe(before?.phase);
+        expect(after?.status).toBe("running");
+      }
+    },
+  );
   it.each([true, false, undefined])(
     "uses raw recovery facts for immediate guidance without replacing history (running=%s)",
     (serviceRunning) => {
-      vi.mocked(isContainerEnvironment).mockReturnValue(false);
-      const env = { OPENCLAW_STATE_DIR: dirs.make("recovery-guidance-observation-") };
-      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const run = createRun();
+      const { env } = run;
       recordUpdateRunVerification(
         run.runId,
         {
@@ -86,7 +226,7 @@ describe("update recovery reporting", () => {
       );
       const saved = getUpdateRun(run.runId, { env })?.verification;
       const latest = failure({
-        reason: "post-update-plugins",
+        reason: "global-install-permission-denied",
         recovery: { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" },
         verification:
           serviceRunning === undefined ? {} : { serviceRunning, runningVersion: "2026.9.5" },
@@ -115,16 +255,22 @@ describe("update recovery reporting", () => {
 
       expect(action).not.toContain("2026.8.99");
       expect(action).not.toContain("stale-unhealthy");
+      expect(action?.startsWith(permissionDetail)).toBe(true);
+      expect(action).toContain(redeploy);
+      expect(action).toContain("Update Doctor may have migrated state");
       expect(action).toContain("keep the update installed and do not roll back code alone");
       if (serviceRunning === true) {
         expect(action).toContain("gateway is running 2026.9.5");
         expect(action).not.toContain("Keep the gateway stopped");
       } else if (serviceRunning === false) {
         expect(action).toContain("Managed gateway remains stopped");
+        expect(action).toContain("Keep the gateway stopped");
+        expect(action).toContain("could not prove a runnable installation");
         expect(action).toContain("current-not-ready");
       } else {
         expect(action).not.toContain("gateway is running");
         expect(action).not.toContain("Managed gateway remains stopped");
+        expect(action).toContain("could not prove a runnable installation");
       }
       const recorded = getUpdateRun(run.runId, { env });
       expect(recorded?.verification).toEqual(saved);
@@ -132,84 +278,63 @@ describe("update recovery reporting", () => {
     },
   );
 
-  it.each(["node-runtime-preflight", "global-install-permission-denied"])(
-    "retains the actionable %s outcome in history",
-    async (reason) => {
-      vi.mocked(isContainerEnvironment).mockReturnValue(false);
-      const state = dirs.make("update-environment-report-");
-      const env = {
-        OPENCLAW_STATE_DIR: state,
-        OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
-      };
-      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-      const message =
-        reason === "node-runtime-preflight"
-          ? "openclaw@2026.9.4 requires Node >=24.16.0; this host runs 22.23.2; upgrade Node then rerun openclaw update."
-          : "Cannot write /usr/lib/node_modules (owner UID 0); run the package update as the owning account.";
-      const failedStep = {
-        name: reason,
-        command: "openclaw update",
-        cwd: "/fixture",
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: message,
-      };
-      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      await publishUpdateCommandTerminalResult(
-        { opts: { json: true, run }, coreAlreadyCurrent: false },
-        failure({
-          reason,
-          failedStep,
-          steps: [failedStep],
-        }),
-        { rolledBack: false },
-      );
-      const stored = getUpdateRun(run.runId, { env });
-      expect(stored?.origin.nextAction).toBe(message);
-      expect(stored && renderUpdateRunReport(stored).markdown).toContain(message);
-    },
-  );
+  it("retains the actionable Node runtime refusal in history", async () => {
+    const reason = "node-runtime-preflight";
+    vi.mocked(isContainerEnvironment).mockReturnValue(false);
+    const run = createRun();
+    const { env } = run;
+    const message =
+      "openclaw@2026.9.4 requires Node >=24.16.0; this host runs 22.23.2; upgrade Node then rerun openclaw update.";
+    const failedStep = {
+      name: reason,
+      command: "openclaw update",
+      cwd: "/fixture",
+      durationMs: 0,
+      exitCode: 1,
+      stderrTail: message,
+    };
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    await publishUpdateCommandTerminalResult(
+      { opts: { json: true, run }, coreAlreadyCurrent: false },
+      failure({
+        reason,
+        failedStep,
+        steps: [failedStep],
+      }),
+      { rolledBack: false },
+    );
+    const stored = getUpdateRun(run.runId, { env });
+    expect(stored?.origin.nextAction).toBe(message);
+    expect(stored && renderUpdateRunReport(stored).markdown).toContain(message);
+  });
 
-  it.each(["error", "skipped"] as const)(
-    "records an untouched dirty checkout (%s)",
-    async (status) => {
-      const state = dirs.make("dirty-update-report-");
-      const env = {
-        OPENCLAW_STATE_DIR: state,
-        OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
-      };
-      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      await publishUpdateCommandTerminalResult(
-        { opts: { json: true, run }, coreAlreadyCurrent: false },
-        failure({
-          status,
-          mode: "git",
-          reason: "dirty",
-          steps: [],
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        }),
-        { rolledBack: false },
-      );
-      const stored = getUpdateRun(run.runId, { env });
-      const action = stored?.origin.nextAction;
-      expect(action).toContain("before installation");
-      expect(action).toContain("checkout was preserved");
-      expect(action).toContain("Commit your changes and retry");
-      expect(action).not.toContain("could not prove a runnable installation");
-      expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
-      expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
-    },
-  );
+  it("records an untouched dirty checkout", async () => {
+    const run = createRun();
+    const { env } = run;
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    await publishUpdateCommandTerminalResult(
+      { opts: { json: true, run }, coreAlreadyCurrent: false },
+      failure({
+        mode: "git",
+        reason: "dirty",
+        steps: [],
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      }),
+      { rolledBack: false },
+    );
+    const stored = getUpdateRun(run.runId, { env });
+    const action = stored?.origin.nextAction;
+    expect(action).toContain("before installation");
+    expect(action).toContain("checkout was preserved");
+    expect(action).toContain("Commit your changes and retry");
+    expect(action).not.toContain("could not prove a runnable installation");
+    expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
+    expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
+  });
 
   it("persists activation timeout guidance for the owning profile", async () => {
-    const state = dirs.make("activation-timeout-report-");
-    const env = {
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
-      OPENCLAW_PROFILE: "work",
-    };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const run = createRun({ profile: "work" });
+    const { env } = run;
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 
     await publishUpdateCommandTerminalResult(
@@ -237,7 +362,6 @@ describe("update recovery reporting", () => {
     ["unknown", true, true, "global-install-foreign-destination"],
     ["unknown", true, false, "global-install-foreign-destination"],
     ["npm", false, true, "global-install-permission-denied"],
-    ["npm", true, true, "global-install-permission-denied"],
     ["pnpm", false, true, "global-install-failed"],
     ["bun", true, true, "global-install-failed"],
     ["npm", false, false, "global-install-permission-denied"],
@@ -246,12 +370,8 @@ describe("update recovery reporting", () => {
     "publishes consistent %s recovery (json=%s, container=%s, reason=%s)",
     async (mode, json, container, reason) => {
       vi.mocked(isContainerEnvironment).mockReturnValue(container);
-      const state = dirs.make("container-update-report-");
-      const env = {
-        OPENCLAW_STATE_DIR: state,
-        OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
-      };
-      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const run = createRun();
+      const { env } = run;
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
       const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const result = await publishUpdateCommandTerminalResult(
@@ -301,20 +421,12 @@ describe("update recovery reporting", () => {
     },
   );
 
-  it.each([
-    ["package-install", "global-install-failed"],
-    ["package-install-omit-optional", "global-install-failed"],
-    ["package-swap", "global-install-failed"],
-    ["global-install-permission-denied", "global-install-permission-denied"],
-  ])("covers the %s permission failure", (name, reason) => {
-    const result = failure({ reason });
+  it("recognizes permission failures from suffixed package steps", () => {
+    const result = failure();
     result.failedStep = {
       ...result.steps[0]!,
-      name,
-      stderrTail:
-        reason === "global-install-failed"
-          ? permissionDetail
-          : permissionDetail.replace("EACCES", "EPERM"),
+      name: "package-install-omit-optional",
+      stderrTail: permissionDetail.replace("EPERM", "EACCES"),
     };
     result.steps = [result.failedStep];
     expect(resolveUpdateResultNextAction({ result, env: {} })).toContain(redeploy);
@@ -322,7 +434,6 @@ describe("update recovery reporting", () => {
 
   it.each([
     ["success", { status: "ok" }],
-    ["git update", { mode: "git" }],
     ["unknown install", { mode: "unknown" }],
     ["missing failure", { steps: [], failedStep: undefined }],
   ] satisfies [string, Partial<UpdateRunResult>][])(
@@ -334,65 +445,32 @@ describe("update recovery reporting", () => {
     },
   );
 
-  it.each([
-    "other error",
-    "unrelated step",
-    "package Doctor",
-    "later failure",
-    "advisory",
-    "successful step",
-  ])("does not reinterpret %s as a container package failure", (kind) => {
-    const result = failure();
-    const step = result.steps[0]!;
-    if (kind === "other error") {
-      step.stderrTail = "ENOSPC: no space left on device";
-    }
-    if (kind === "unrelated step") {
-      step.name = "config validate";
-    }
-    if (kind === "package Doctor") {
-      step.name = "openclaw doctor";
-    }
-    if (kind === "later failure") {
-      result.failedStep = {
-        ...step,
-        name: "config validate",
-        stderrTail: "invalid configuration",
-      };
-      result.steps.push(result.failedStep);
-    }
-    if (kind === "advisory") {
-      step.advisory = { kind: "recoverable-maintenance", message: "Old backup retained" };
-    }
-    if (kind === "successful step") {
-      step.exitCode = 0;
-    }
-    expect(resolveUpdateResultNextAction({ result, env: {} })).toBe(hostGuidance);
-  });
-
-  it.each([true, false, undefined])(
-    "preserves migrated-state and service safety (running=%s)",
-    (serviceRunning) => {
-      const result = failure({
-        reason: "global-install-permission-denied",
-        recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
-      });
-      const action = resolveUpdateResultNextAction({
-        result,
-        serviceRunning,
-        runningVersion: "2.0.0",
-        env: {},
-      });
-      expect(action?.startsWith(permissionDetail)).toBe(true);
-      expect(action).toContain(redeploy);
-      expect(action).toContain("Update Doctor may have migrated state");
-      expect(action).toContain("keep the update installed and do not roll back code alone");
-      expect(action).toContain(
-        serviceRunning ? "gateway is running 2.0.0" : "could not prove a runnable installation",
-      );
-      if (serviceRunning === false) {
-        expect(action).toContain("Keep the gateway stopped");
+  it.each(["other error", "unrelated step", "later failure", "advisory", "successful step"])(
+    "does not reinterpret %s as a container package failure",
+    (kind) => {
+      const result = failure();
+      const step = result.steps[0]!;
+      if (kind === "other error") {
+        step.stderrTail = "ENOSPC: no space left on device";
       }
+      if (kind === "unrelated step") {
+        step.name = "config validate";
+      }
+      if (kind === "later failure") {
+        result.failedStep = {
+          ...step,
+          name: "config validate",
+          stderrTail: "invalid configuration",
+        };
+        result.steps.push(result.failedStep);
+      }
+      if (kind === "advisory") {
+        step.advisory = { kind: "recoverable-maintenance", message: "Old backup retained" };
+      }
+      if (kind === "successful step") {
+        step.exitCode = 0;
+      }
+      expect(resolveUpdateResultNextAction({ result, env: {} })).toBe(hostGuidance);
     },
   );
 

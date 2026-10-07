@@ -448,51 +448,45 @@ describe("llama.cpp provider plugin", () => {
     );
   });
 
-  it.each([
-    ["uses an active custom local model", { enabled: true, provider: "local" }],
-    ["uses another memory provider", { enabled: true, provider: "openai" }],
-    ["has memory search disabled", { enabled: false, provider: "local" }],
-  ] as const)(
-    "keeps chat preparation independent from embedding config when memory %s",
-    async (_label, searchConfig) => {
-      const staleEmbeddingSource = "hf:retired-org/removed-embedding-model-GGUF/embedding.gguf";
-      const configured = configuredOptions();
-      const providerConfig = configured.config.models.providers[LLAMA_CPP_PROVIDER_ID];
-      const config = {
-        ...configured.config,
-        memory: {
-          search: {
-            ...searchConfig,
-            local: { modelPath: staleEmbeddingSource },
-          },
+  it("keeps chat preparation independent from an active custom embedding model", async () => {
+    const staleEmbeddingSource = "hf:retired-org/removed-embedding-model-GGUF/embedding.gguf";
+    const configured = configuredOptions();
+    const providerConfig = configured.config.models.providers[LLAMA_CPP_PROVIDER_ID];
+    const config = {
+      ...configured.config,
+      memory: {
+        search: {
+          enabled: true,
+          provider: "local" as const,
+          local: { modelPath: staleEmbeddingSource },
         },
-      };
-      const provider = registerTextProvider();
-      const selectedModel = expectDefined(providerConfig.models[0], "managed chat model");
-      const inner = vi.fn(() => ({}) as never);
-      for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
-        const wrapped = provider[hook]?.({
-          config,
+      },
+    };
+    const provider = registerTextProvider();
+    const selectedModel = expectDefined(providerConfig.models[0], "managed chat model");
+    const inner = vi.fn(() => ({}) as never);
+    for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
+      const wrapped = provider[hook]?.({
+        config,
+        provider: LLAMA_CPP_PROVIDER_ID,
+        modelId: selectedModel.id,
+        model: {
+          ...selectedModel,
           provider: LLAMA_CPP_PROVIDER_ID,
-          modelId: selectedModel.id,
-          model: {
-            ...selectedModel,
-            provider: LLAMA_CPP_PROVIDER_ID,
-            baseUrl: providerConfig.baseUrl,
-          },
-          streamFn: inner,
-        } as never);
-        await wrapped?.({} as never, { messages: [] } as never, {});
-      }
+          baseUrl: providerConfig.baseUrl,
+        },
+        streamFn: inner,
+      } as never);
+      await wrapped?.({} as never, { messages: [] } as never, {});
+    }
 
-      expect(mocks.ensureChat).toHaveBeenCalledWith({
-        provider: providerConfig,
-        model: expect.objectContaining({ id: selectedModel.id }),
-      });
-      expect(mocks.ensureChat).toHaveBeenCalledTimes(2);
-      expect(inner).toHaveBeenCalledTimes(2);
-    },
-  );
+    expect(mocks.ensureChat).toHaveBeenCalledWith({
+      provider: providerConfig,
+      model: expect.objectContaining({ id: selectedModel.id }),
+    });
+    expect(mocks.ensureChat).toHaveBeenCalledTimes(2);
+    expect(inner).toHaveBeenCalledTimes(2);
+  });
 
   it("prepares managed chat before simple-completion transport", async () => {
     const configured = configuredOptions();

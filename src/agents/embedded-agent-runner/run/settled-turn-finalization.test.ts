@@ -54,7 +54,9 @@ const SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT =
 
 vi.mock("./backend.js", () => ({
   resolveRuntimeModelAttempt: backendMocks.resolveRuntimeModelAttempt,
-  runEmbeddedSettledTurnFinalizationWithBackend: backendMocks.runSettledFinalization,
+}));
+vi.mock("../../harness/selection.js", () => ({
+  runAgentHarnessSettledTurnFinalization: backendMocks.runSettledFinalization,
 }));
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: transcriptMocks.appendAssistantMirrorMessageByIdentity,
@@ -236,9 +238,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-      expect(result.finalizationOutcome).toBe(
-        outcome === "answered" ? "answered" : "completed-empty",
-      );
+      expect(result.finalizationOutcome).toBe(outcome === "answered" ? "answered" : "failed");
       expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(
         outcome === "answered" ? 1 : 2,
       );
@@ -252,7 +252,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       }
       expect(result.prepared.payloadsWithToolMedia).toEqual([
         expect.objectContaining({
-          text: outcome === "answered" ? finalText : SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
+          text: outcome === "answered" ? finalText : "LLM request timed out.",
         }),
       ]);
       expect(result.prepared.payloadsWithToolMedia?.[0]?.isError).not.toBe(true);
@@ -561,9 +561,11 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
         expect(result.attempt).toBe(attempt);
         expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({ isError: true });
       } else {
-        expect(result.finalizationOutcome).toBe("completed-empty");
+        expect(result.finalizationOutcome).toBe("failed");
         expect(result.prepared.payloadsWithToolMedia).toEqual([
-          expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
+          expect.objectContaining({
+            text: expect.stringContaining("Couldn't connect to the AI service."),
+          }),
         ]);
       }
     },
@@ -698,7 +700,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
         replayState: { hadPotentialSideEffects: true, replayInvalid: false },
       });
       const terminal = await resolveEmbeddedRunTerminal(terminalInput);
-      expect(terminalInput.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(terminalInput.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
       expect(terminal.action).toBe("complete");
       if (terminal.action !== "complete") {
         throw new Error("expected completed fallback");

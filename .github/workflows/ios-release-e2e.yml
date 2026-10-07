@@ -1,0 +1,216 @@
+name: iOS Release E2E
+
+on:
+  workflow_call:
+    inputs:
+      target_sha:
+        type: string
+        required: true
+      mode:
+        type: string
+        default: stock
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Stock qualification or four matched stock/SimSlim pairs
+        type: choice
+        options: [stock, compare]
+        default: stock
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: xcode-27-xlarge
+    timeout-minutes: 240
+    env:
+      TARGET_SHA: ${{ inputs.target_sha || github.sha }}
+      E2E_MODE: ${{ inputs.mode }}
+    steps:
+      - name: Initialize failure proof and validate inputs
+        id: start
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PROOF_PATH="$RUNNER_TEMP/ios-release-e2e-proof.json"
+          echo "PROOF_PATH=$PROOF_PATH" >> "$GITHUB_ENV"
+          echo "GATEWAY_SELECTION_DIR=$RUNNER_TEMP/ios-release-gateway-selection" >> "$GITHUB_ENV"
+          echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import json, os, re
+          sha = os.environ["TARGET_SHA"]
+          mode = os.environ["E2E_MODE"]
+          with open(os.environ["PROOF_PATH"], "w") as out:
+              json.dump({"schema": 2, "kind": "qualification", "status": "failed", "trials": [],
+                         "targetSha": sha if re.fullmatch(r"[a-f0-9]{40}", sha) else None,
+                         "harnessSha": None,
+                         "mode": mode if mode in ("stock", "compare") else None,
+                         "errors": ["workflow-setup-incomplete"]}, out)
+          PY
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$E2E_MODE" == stock || "$E2E_MODE" == compare ]] || exit 1
+          [[ "$TARGET_SHA" == "$GITHUB_SHA" ]] || exit 1
+
+      - name: Checkout exact qualification target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify target and require target-owned harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || exit 1
+          test -f scripts/ios-release-e2e.ts
+          test -f scripts/lib/ios-release-e2e-native.ts
+          test -f test/helpers/openclaw-test-instance.ts
+
+      - name: Find this run's stable Gateway selection
+        id: gateway-selection
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const name = `ios-release-gateway-selection-${context.runId}`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              ...context.repo,
+              run_id: context.runId,
+              name,
+              per_page: 100,
+            });
+            const matches = artifacts.filter((artifact) => artifact.name === name);
+            if (matches.length > 1) {
+              throw new Error('Multiple stable Gateway selections exist for this run.');
+            }
+            if (matches.length === 0) {
+              if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) {
+                throw new Error('This rerun has no saved stable Gateway selection. Start a new workflow run.');
+              }
+              core.setOutput('create', 'true');
+              core.setOutput('artifact-id', '');
+              return;
+            }
+            const artifact = matches[0];
+            if (artifact.expired || artifact.workflow_run?.id !== context.runId ||
+                artifact.workflow_run?.head_sha !== process.env.TARGET_SHA) {
+              throw new Error('The saved stable Gateway selection is expired or belongs to another source/run. Start a new workflow run.');
+            }
+            core.setOutput('create', 'false');
+            core.setOutput('artifact-id', String(artifact.id));
+
+      - name: Restore this run's stable Gateway selection
+        if: steps.gateway-selection.outputs.artifact-id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.gateway-selection.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+          path: ${{ env.GATEWAY_SELECTION_DIR }}
+          digest-mismatch: error
+
+      - name: Start shared toolchain installation clock
+        id: install-start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.21.0"
+          install-bun: "false"
+          cache-mode: "off"
+
+      - name: Prepare stable Gateway selection
+        env:
+          RESTORED_SELECTION: ${{ steps.gateway-selection.outputs.artifact-id != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RESTORED_SELECTION" == true ]]; then
+            test -f "$GATEWAY_SELECTION_DIR/selection.json"
+            test -f "$GATEWAY_SELECTION_DIR/package.json"
+            test -f "$GATEWAY_SELECTION_DIR/package-lock.json"
+          fi
+          node --import ./scripts/tsx.mjs scripts/ios-release-gateway.ts \
+            --target-sha "$TARGET_SHA" --selection-dir "$GATEWAY_SELECTION_DIR"
+
+      - name: Save this run's stable Gateway selection
+        if: steps.gateway-selection.outputs.create == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-gateway-selection-${{ github.run_id }}
+          path: |
+            ${{ env.GATEWAY_SELECTION_DIR }}/selection.json
+            ${{ env.GATEWAY_SELECTION_DIR }}/package.json
+            ${{ env.GATEWAY_SELECTION_DIR }}/package-lock.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Select Xcode and install pinned native tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain
+          swift_tools_dir="$RUNNER_TEMP/ios-release-e2e-tools"
+          ./scripts/install-xcodegen.sh "$swift_tools_dir"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$watch_toolchain"
+          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned comparison meter
+        id: simslim
+        if: inputs.mode == 'compare'
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/ios-release-e2e-simslim"
+          ./scripts/install-simslim.sh "$install_dir"
+          echo "binary=$install_dir/simslim" >> "$GITHUB_OUTPUT"
+
+      - name: Finish shared toolchain installation clock
+        id: install-end
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Qualify native pairing and chat
+        env:
+          OPENCLAW_CI_SIMSLIM_BINARY: ${{ steps.simslim.outputs.binary }}
+        run: |
+          node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
+            --mode "$E2E_MODE" --target-sha "$TARGET_SHA" --output "$PROOF_PATH" \
+            --gateway-selection "$GATEWAY_SELECTION_DIR"
+
+      - name: Complete sanitized timing proof
+        if: always()
+        env:
+          START_EPOCH: ${{ steps.start.outputs.epoch }}
+          INSTALL_START: ${{ steps.install-start.outputs.epoch }}
+          INSTALL_END: ${{ steps.install-end.outputs.epoch }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, time
+          path = os.environ["PROOF_PATH"]
+          with open(path) as source:
+              proof = json.load(source)
+          proof["workflowSha"] = os.environ["WORKFLOW_SHA"]
+          proof["overallMs"] = round((time.time() - int(os.environ["START_EPOCH"])) * 1000)
+          start, end = os.environ["INSTALL_START"], os.environ["INSTALL_END"]
+          proof["sharedInstallerMs"] = (int(end) - int(start)) * 1000 if start and end else None
+          with open(path, "w") as out:
+              json.dump(proof, out, indent=2)
+          PY
+
+      - name: Upload sanitized proof only
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-e2e-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ios-release-e2e-proof.json
+          if-no-files-found: error
+          retention-days: 14

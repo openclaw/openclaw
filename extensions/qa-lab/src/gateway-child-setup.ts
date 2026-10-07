@@ -29,7 +29,6 @@ import { createQaGatewayCliError, redactQaGatewayDebugText } from "./gateway-log
 import { reserveQaGatewayPort } from "./gateway-port-reservation.js";
 import { createQaGatewayProcessBoundaryController } from "./gateway-process-boundary.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
-import { resolveQaNodeExecPath } from "./node-exec.js";
 import type { QaCliBackendAuthMode } from "./providers/env.js";
 import { DEFAULT_QA_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import { readQaLiveProviderConfigOverrides } from "./providers/live-config.js";
@@ -46,7 +45,7 @@ import {
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
 export type QaGatewayChildStateMutationContext = {
   configPath: string;
   runtimeEnv: NodeJS.ProcessEnv;
@@ -78,6 +77,7 @@ export type QaGatewayChildParams = {
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
   forcedRuntime?: RuntimeId;
+  runtimeSelection?: QaRuntimeSelection;
   codexMockAutoCompactTokenLimit?: number;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
@@ -220,13 +220,14 @@ export async function prepareQaGatewayChild(
     autoCompactTokenLimit: params.codexMockAutoCompactTokenLimit,
   });
   const resolvedProvider = getQaProvider(providerMode);
-  const liveProviderIds = resolvedProvider.usesModelProviderPlugins
-    ? [params.primaryModel, params.alternateModel]
-        .map((modelRef) =>
-          typeof modelRef === "string" ? splitQaModelRef(modelRef)?.provider : undefined,
-        )
-        .filter((providerId): providerId is string => Boolean(providerId))
-    : [];
+  const liveProviderIds =
+    resolvedProvider.kind === "live"
+      ? [params.primaryModel, params.alternateModel]
+          .map((modelRef) =>
+            typeof modelRef === "string" ? splitQaModelRef(modelRef)?.provider : undefined,
+          )
+          .filter((providerId): providerId is string => Boolean(providerId))
+      : [];
   const liveProviderConfigs = await readQaLiveProviderConfigOverrides({
     providerIds: liveProviderIds,
   });
@@ -272,6 +273,7 @@ export async function prepareQaGatewayChild(
       fastMode: params.fastMode,
       thinkingDefault: params.thinkingDefault,
       forcedRuntime: params.forcedRuntime,
+      runtimeSelection: params.runtimeSelection,
       controlUiEnabled: params.controlUiEnabled,
     });
   const buildStagedGatewayConfig = async (gatewayPort: number) => {
@@ -285,7 +287,7 @@ export async function prepareQaGatewayChild(
       cfg,
       stateDir,
     });
-    const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
+    const mockAuthProviders = resolvedProvider.mockAuthProviders;
     if (mockAuthProviders && mockAuthProviders.length > 0) {
       if (usesPackagedCandidate) {
         cfg = applyQaMockAuthProfileConfig({ cfg, providers: mockAuthProviders });
@@ -316,17 +318,14 @@ export async function prepareQaGatewayChild(
   let env: NodeJS.ProcessEnv | null = null;
   let packagedMockAuthStaged = false;
 
-  const nodeExecPath = gatewayExecutablePath ?? (await resolveQaNodeExecPath());
+  const nodeExecPath = gatewayExecutablePath ?? process.execPath;
   const cliArgsPrefix = gatewayCommand?.processBoundary
     ? gatewayArgsPrefix
     : gatewayExecutablePath
       ? [...runtimePreloadArgs, ...gatewayArgsPrefix]
       : [...runtimePreloadArgs, distEntryPath, ...gatewayArgsPrefix];
-  const gatewayLaunchArgsPrefix = gatewayCommand?.processBoundary
-    ? gatewayArgsPrefix
-    : cliArgsPrefix;
   const buildGatewayArgs = () => [
-    ...gatewayLaunchArgsPrefix,
+    ...cliArgsPrefix,
     "gateway",
     "run",
     "--port",
@@ -417,6 +416,7 @@ export async function prepareQaGatewayChild(
               ...params.runtimeEnvPatch,
               ...buildQaForcedRuntimeEnvPatch({
                 forcedRuntime: params.forcedRuntime,
+                runtimeSelection: params.runtimeSelection,
                 providerMode,
                 providerBaseUrl: params.providerBaseUrl,
                 codexModelCatalogPath,
@@ -438,7 +438,7 @@ export async function prepareQaGatewayChild(
           encoding: "utf8",
           mode: 0o600,
         });
-        const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
+        const mockAuthProviders = resolvedProvider.mockAuthProviders;
         if (
           usesPackagedCandidate &&
           gatewayCommand &&

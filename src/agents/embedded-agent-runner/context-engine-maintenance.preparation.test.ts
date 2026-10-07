@@ -1,52 +1,24 @@
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import { markGatewayDraining } from "../../process/command-queue.js";
+import * as commandQueue from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import {
   AsyncWorkScope,
   getAsyncWorkSignal,
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
-import { isContextEngineMaintenanceTaskOwnerActive } from "../../tasks/context-engine-maintenance-task-owner.js";
-import type { DetachedTaskCreateParams } from "../../tasks/detached-task-runtime-contract.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   runContextEngineMaintenance,
   waitForDeferredTurnMaintenanceForSession,
 } from "./context-engine-maintenance.js";
-import { resetDeferredTurnMaintenanceStateForTest } from "./context-engine-maintenance.test-support.js";
-
-const mocks = vi.hoisted(() => ({
-  findActive: vi.fn(),
-  create: vi.fn(),
-  start: vi.fn(),
-  complete: vi.fn(),
-  fail: vi.fn(),
-  progress: vi.fn(),
-  findOwned: vi.fn(),
-  cancel: vi.fn(),
-  updatePolicy: vi.fn(),
-}));
-
-vi.mock("../../tasks/detached-task-runtime.js", () => ({
-  createQueuedTaskRun: mocks.create,
-  completeTaskRunByRunId: () => [],
-  failTaskRunByRunId: () => [],
-  recordTaskRunProgressByRunId: mocks.progress,
-}));
-vi.mock("../../tasks/detached-task-runtime.async.js", () => ({
-  startTaskRunByRunIdAsync: mocks.start,
-  completeTaskRunByRunIdAsync: mocks.complete,
-  failTaskRunByRunIdAsync: mocks.fail,
-}));
-vi.mock("../session-async-task-status.js", () => ({ findActiveSessionTask: mocks.findActive }));
-vi.mock("../../tasks/task-owner-access.js", () => ({
-  findTaskByRunIdForOwner: mocks.findOwned,
-  cancelTaskByIdForOwner: mocks.cancel,
-  updateTaskNotifyPolicyForOwner: mocks.updatePolicy,
-}));
+import {
+  createDeferredTurnMaintenanceAbortSignal,
+  resetDeferredTurnMaintenanceStateForTest,
+} from "./context-engine-maintenance.test-support.js";
+const enqueueMaintenance = commandQueue.enqueueCommandInLane;
 vi.mock("../../context-engine/registry.js", () => ({
   hasSameContextEngineInstance: (left: ContextEngine, right: ContextEngine) => left === right,
   resolveContextEngineOwnerPluginId: () => undefined,
@@ -57,7 +29,7 @@ vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({}),
 }));
 vi.mock("../../config/sessions/session-accessor.js", () => ({ publishTranscriptUpdate: vi.fn() }));
-vi.mock("../sessions/index.js", () => ({ SessionManager: { open: vi.fn() } }));
+vi.mock("../sessions/index.js", () => ({ SessionManager: { openAsync: vi.fn() } }));
 vi.mock("../sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: vi.fn(),
 }));
@@ -80,46 +52,25 @@ vi.mock("../../infra/agent-events.js", () => ({
 
 const sessionKey = "agent:main:maintenance-preparation";
 const unchanged = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
-type Failure = "lookup throws" | "creation throws" | "creation returns null" | "queue rejects";
-
-function fixture(fault?: Failure) {
+function fixture(failQueue = false) {
   const workRelease = createDeferred();
   const workEntered = createDeferred();
   const disposeRelease = createDeferred();
   const disposeEntered = createDeferred();
   const factoryRelease = createDeferred();
   const creatorRelease = createDeferred();
-  const rows = new Map<string, TaskRecord>();
   const deferred: Promise<void>[] = [];
   const foreground: Promise<unknown>[] = [];
   const creatorTails: Promise<void>[] = [];
-  let boundary: { kind: "lookup" | "creation"; run: () => void } | undefined;
+  let boundary: (() => void) | undefined;
   let cooperateDuringCreation = false;
   let creatorSignal: AbortSignal | undefined;
-  const enterBoundary = (kind: "lookup" | "creation") => {
-    if (boundary?.kind === kind) {
-      const run = boundary.run;
-      boundary = undefined;
-      run();
-    }
-  };
-  mocks.findActive.mockImplementation(() => {
-    enterBoundary("lookup");
-    if (fault === "lookup throws") {
-      throw new Error("Synthetic maintenance lookup failure");
-    }
-    return undefined;
-  });
-  mocks.create.mockImplementation((params: DetachedTaskCreateParams): TaskRecord | null => {
-    enterBoundary("creation");
-    if (fault === "creation throws") {
-      throw new Error("Synthetic maintenance creation failure");
-    }
-    if (fault === "creation returns null") {
-      return null;
-    }
-    if (fault === "queue rejects") {
-      markGatewayDraining();
+  vi.spyOn(commandQueue, "enqueueCommandInLane").mockImplementation((...args) => {
+    const enter = boundary;
+    boundary = undefined;
+    enter?.();
+    if (failQueue) {
+      throw new Error("Synthetic queue admission failure");
     }
     if (cooperateDuringCreation) {
       creatorTails.push(
@@ -129,32 +80,7 @@ function fixture(fault?: Failure) {
         }),
       );
     }
-    const task: TaskRecord = {
-      taskId: `task:${params.runId}`,
-      runtime: params.runtime,
-      taskKind: params.taskKind,
-      runId: params.runId,
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      task: params.task,
-      status: "queued",
-      createdAt: 1,
-      notifyPolicy: "silent",
-      deliveryStatus: "not_applicable",
-    };
-    rows.set(task.taskId, task);
-    return structuredClone(task);
-  });
-  mocks.findOwned.mockImplementation(({ runId }: { runId: string }) =>
-    [...rows.values()].find((task) => task.runId === runId),
-  );
-  mocks.cancel.mockImplementation(({ taskId }: { taskId: string }) => {
-    const task = rows.get(taskId);
-    if (task) {
-      task.status = "cancelled";
-    }
-    return task;
+    return enqueueMaintenance(...args);
   });
   const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () => {
     workEntered.resolve();
@@ -201,7 +127,6 @@ function fixture(fault?: Failure) {
   return {
     schedule,
     deferred,
-    rows,
     maintain,
     dispose,
     closeFactoryWork,
@@ -220,8 +145,8 @@ function fixture(fault?: Failure) {
     cooperateDuringCreation() {
       cooperateDuringCreation = true;
     },
-    onBoundary(kind: "lookup" | "creation", run: () => void) {
-      boundary = { kind, run };
+    onBoundary(run: () => void) {
+      boundary = run;
     },
     async cleanup() {
       releaseAll();
@@ -236,11 +161,8 @@ function fixture(fault?: Failure) {
 let sql: ReturnType<typeof observeMainThreadSql>;
 
 beforeEach(() => {
+  vi.restoreAllMocks();
   sql = observeMainThreadSql();
-  vi.clearAllMocks();
-  mocks.start.mockResolvedValue([]);
-  mocks.complete.mockResolvedValue([]);
-  mocks.fail.mockResolvedValue([]);
   resetCommandQueueStateForTest();
   resetDeferredTurnMaintenanceStateForTest();
 });
@@ -256,91 +178,36 @@ afterEach(() => {
 });
 
 describe("deferred maintenance synchronous preparation", () => {
-  it.each(["start", "completion", "failure"] as const)(
-    "retains maintenance ownership until task %s settles",
-    async (terminal) => {
-      vi.useFakeTimers();
-      const f = fixture();
-      const terminalEntered = createDeferred();
-      const terminalRelease = createDeferred();
-      let entered = false;
-      const transition =
-        terminal === "start"
-          ? mocks.start
-          : terminal === "completion"
-            ? mocks.complete
-            : mocks.fail;
-      transition.mockImplementationOnce(async () => {
-        entered = true;
-        terminalEntered.resolve();
-        await terminalRelease.promise;
-        return [];
+  it("reserves one tracked owner before synchronous queue reentry", async () => {
+    const f = fixture();
+    let checkpoint: Promise<void> | undefined;
+    let checkpointSettled = false;
+    f.onBoundary(() => {
+      checkpoint = waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => {
+        checkpointSettled = true;
       });
-      if (terminal === "failure") {
-        f.maintain.mockRejectedValueOnce(new Error("Synthetic maintenance failure"));
-      }
-      try {
-        await f.schedule();
-        f.workRelease.resolve();
-        await Promise.race([terminalEntered.promise, f.disposeEntered.promise]);
-        expect(entered).toBe(true);
-        if (terminal === "start") {
-          expect(f.maintain).not.toHaveBeenCalled();
-        }
-        const taskId = [...f.rows.keys()][0]!;
-        expect(isContextEngineMaintenanceTaskOwnerActive(taskId)).toBe(true);
-        expect(f.dispose).not.toHaveBeenCalled();
-        expect(f.release).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(11_000);
-        expect(mocks.progress).not.toHaveBeenCalled();
-        terminalRelease.resolve();
-        f.releaseAll();
-        await Promise.all(f.deferred);
-        expect(isContextEngineMaintenanceTaskOwnerActive(taskId)).toBe(false);
-        expect(f.dispose).toHaveBeenCalledOnce();
-        expect(f.release).toHaveBeenCalledOnce();
-        expect(f.failure).not.toHaveBeenCalled();
-      } finally {
-        terminalRelease.resolve();
-        await f.cleanup();
-      }
-    },
-  );
-
-  it.each(["lookup", "creation"] as const)(
-    "reserves one tracked owner before synchronous %s reentry",
-    async (kind) => {
-      const f = fixture();
-      let checkpoint: Promise<void> | undefined;
-      let checkpointSettled = false;
-      f.onBoundary(kind, () => {
-        checkpoint = waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => {
-          checkpointSettled = true;
-        });
-        void f.schedule();
-      });
-      try {
-        await f.schedule();
-        await f.workEntered.promise;
-        await Promise.resolve();
-        expect(checkpointSettled).toBe(false);
-        expect(f.deferred).toHaveLength(2);
-        expect(f.deferred[0]).toBe(f.deferred[1]);
-        expect(mocks.create).toHaveBeenCalledOnce();
-        expect(f.maintain).toHaveBeenCalledOnce();
-        f.releaseAll();
-        await Promise.all(f.deferred);
-        await checkpoint;
-        expect(f.maintain).toHaveBeenCalledTimes(2);
-        expect(f.dispose).toHaveBeenCalledOnce();
-        expect(f.closeFactoryWork).toHaveBeenCalledOnce();
-        expect(f.release).toHaveBeenCalledOnce();
-      } finally {
-        await f.cleanup();
-        await checkpoint;
-      }
-    },
-  );
+      void f.schedule();
+    });
+    try {
+      await f.schedule();
+      await f.workEntered.promise;
+      await Promise.resolve();
+      expect(checkpointSettled).toBe(false);
+      expect(f.deferred).toHaveLength(2);
+      expect(f.deferred[0]).toBe(f.deferred[1]);
+      expect(f.maintain).toHaveBeenCalledOnce();
+      f.releaseAll();
+      await Promise.all(f.deferred);
+      await checkpoint;
+      expect(f.maintain).toHaveBeenCalledTimes(2);
+      expect(f.dispose).toHaveBeenCalledOnce();
+      expect(f.closeFactoryWork).toHaveBeenCalledOnce();
+      expect(f.release).toHaveBeenCalledOnce();
+    } finally {
+      await f.cleanup();
+      await checkpoint;
+    }
+  });
 
   it("releases generation leases inside closing cleanup after abort descendants settle", async () => {
     const f = fixture();
@@ -412,45 +279,73 @@ describe("deferred maintenance synchronous preparation", () => {
     }
   });
 
-  it.each(["lookup throws", "creation throws", "creation returns null", "queue rejects"] as const)(
-    "owns caller transfer and joined cleanup when %s",
-    async (fault) => {
-      const f = fixture(fault);
-      try {
-        const foreground = f.schedule();
-        if (fault !== "queue rejects") {
-          expect(f.failure).toHaveBeenCalledOnce();
-        }
-        expect(f.deferred).toHaveLength(1);
-        await foreground;
-        await f.disposeEntered.promise;
-        expect(f.failure).toHaveBeenCalledOnce();
-        expect(f.maintain).not.toHaveBeenCalled();
-        expect(mocks.start).not.toHaveBeenCalled();
-        expect(f.closeFactoryWork).toHaveBeenCalledOnce();
-        expect(f.release).not.toHaveBeenCalled();
-        let settled = false;
-        const completion = Promise.allSettled(f.deferred).then(() => {
-          settled = true;
-        });
-        await Promise.resolve();
-        expect(settled).toBe(false);
-        f.disposeRelease.resolve();
-        await Promise.resolve();
-        expect(settled).toBe(false);
-        expect(f.release).not.toHaveBeenCalled();
-        f.factoryRelease.resolve();
-        await completion;
-        expect(f.dispose).toHaveBeenCalledOnce();
-        expect(f.release).toHaveBeenCalledOnce();
-        if (fault === "queue rejects") {
-          expect([...f.rows.values()].map((task) => task.status)).toEqual(["cancelled"]);
-        } else {
-          expect(f.rows.size).toBe(0);
-        }
-      } finally {
-        await f.cleanup();
-      }
-    },
-  );
+  it("owns caller transfer and joined cleanup when queue admission throws", async () => {
+    const f = fixture(true);
+    try {
+      const foreground = f.schedule();
+      expect(f.deferred).toHaveLength(1);
+      await foreground;
+      await f.disposeEntered.promise;
+      expect(f.failure).toHaveBeenCalledOnce();
+      expect(f.maintain).not.toHaveBeenCalled();
+      expect(f.closeFactoryWork).toHaveBeenCalledOnce();
+      expect(f.release).not.toHaveBeenCalled();
+      let settled = false;
+      const completion = Promise.allSettled(f.deferred).then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      f.disposeRelease.resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(f.release).not.toHaveBeenCalled();
+      f.factoryRelease.resolve();
+      await completion;
+      expect(f.dispose).toHaveBeenCalledOnce();
+      expect(f.release).toHaveBeenCalledOnce();
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+describe("createDeferredTurnMaintenanceAbortSignal", () => {
+  it("aborts on termination signals and unregisters listeners", () => {
+    const listeners = new EventEmitter();
+    const kill = vi.fn();
+    const processLike = {
+      on(event: "SIGINT" | "SIGTERM", listener: () => void) {
+        listeners.on(event, listener);
+        return this;
+      },
+      off(event: "SIGINT" | "SIGTERM", listener: () => void) {
+        listeners.off(event, listener);
+        return this;
+      },
+      listenerCount: listeners.listenerCount.bind(listeners),
+      kill,
+      pid: 4242,
+    } as unknown as NonNullable<
+      Parameters<typeof createDeferredTurnMaintenanceAbortSignal>[0]
+    >["processLike"];
+
+    const { abortSignal, dispose } = createDeferredTurnMaintenanceAbortSignal({ processLike });
+    const second = createDeferredTurnMaintenanceAbortSignal({ processLike });
+    expect(listeners.listenerCount("SIGINT")).toBe(1);
+    expect(listeners.listenerCount("SIGTERM")).toBe(1);
+
+    listeners.emit("SIGTERM");
+
+    expect(abortSignal?.aborted).toBe(true);
+    expect(second.abortSignal?.aborted).toBe(true);
+    expect(kill).toHaveBeenCalledWith(4242, "SIGTERM");
+    expect(listeners.listenerCount("SIGINT")).toBe(0);
+    expect(listeners.listenerCount("SIGTERM")).toBe(0);
+
+    dispose();
+    second.dispose();
+    expect(listeners.listenerCount("SIGINT")).toBe(0);
+    expect(listeners.listenerCount("SIGTERM")).toBe(0);
+  });
 });

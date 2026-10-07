@@ -7,6 +7,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import type { WhatsAppAccountConfig } from "./account-types.js";
 import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
@@ -24,7 +25,6 @@ const t = createSetupTranslator();
 type SetupPrompter = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
 type SetupRuntime = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["runtime"];
 type WhatsAppConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>;
-type WhatsAppAccountConfig = NonNullable<NonNullable<WhatsAppConfig["accounts"]>[string]>;
 
 function trimPromptText(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -36,13 +36,11 @@ function isDefaultWhatsAppAccountKey(accountId: string): boolean {
 
 function shouldWriteDefaultWhatsAppAccountConfigAtAccountScope(cfg: OpenClawConfig): boolean {
   const accounts = cfg.channels?.whatsapp?.accounts;
-  if (!accounts) {
-    return false;
-  }
-  if (accounts.default) {
-    return true;
-  }
-  return Object.keys(accounts).some((accountId) => !isDefaultWhatsAppAccountKey(accountId));
+  return Boolean(
+    accounts &&
+    (accounts.default ||
+      Object.keys(accounts).some((accountId) => !isDefaultWhatsAppAccountKey(accountId))),
+  );
 }
 
 function resolveDefaultWhatsAppAccountWriteKey(cfg: OpenClawConfig): string {
@@ -178,16 +176,8 @@ async function applyWhatsAppOwnerAllowlist(params: {
 }
 
 function parseWhatsAppAllowFromEntries(raw: string): { entries: string[]; invalidEntry?: string } {
-  const parts = splitSetupEntries(raw);
-  if (parts.length === 0) {
-    return { entries: [] };
-  }
   const entries: string[] = [];
-  for (const part of parts) {
-    if (part === "*") {
-      entries.push("*");
-      continue;
-    }
+  for (const part of splitSetupEntries(raw)) {
     const normalized = normalizeWhatsAppAllowFromEntry(part);
     if (!normalized) {
       return { entries: [], invalidEntry: part };
@@ -269,14 +259,13 @@ async function promptWhatsAppDmAccess(params: {
     ],
   })) as DmPolicy;
 
-  let next = mergeWhatsAppConfig(params.cfg, accountId, {
+  const next = mergeWhatsAppConfig(params.cfg, accountId, {
     selfChatMode: false,
     dmPolicy: policy,
   });
   if (policy === "open") {
     const allowFrom = normalizeWhatsAppAllowFromEntries(["*", ...existingAllowFrom]);
-    next = setWhatsAppAllowFrom(next, accountId, allowFrom.length > 0 ? allowFrom : ["*"]);
-    return next;
+    return setWhatsAppAllowFrom(next, accountId, allowFrom);
   }
   if (policy === "disabled") {
     return next;
@@ -387,21 +376,9 @@ export async function finalizeWhatsAppSetup(params: {
     initialValue: !linked,
   });
   if (wantsLink) {
-    const reportLoginFailure = async (error: unknown) => {
-      params.runtime.error(`WhatsApp login failed: ${String(error)}`);
-      await params.prompter.note(
-        t("wizard.channels.docs", { link: formatDocsLink("/whatsapp", "whatsapp") }),
-        t("wizard.whatsapp.helpTitle"),
-      );
-    };
-    let loginWeb: (typeof import("./login.js"))["loginWeb"] | undefined;
+    let persistenceGuardFailure: { error: unknown } | undefined;
     try {
-      ({ loginWeb } = await import("./login.js"));
-    } catch (error) {
-      await reportLoginFailure(error);
-    }
-    if (loginWeb) {
-      let persistenceGuardFailure: { error: unknown } | undefined;
+      const { loginWeb } = await import("./login.js");
       const beforeCredentialPersistence = params.options?.beforePersistentEffect
         ? async () => {
             try {
@@ -412,16 +389,18 @@ export async function finalizeWhatsAppSetup(params: {
             }
           }
         : undefined;
-      try {
-        await loginWeb(false, undefined, params.runtime, accountId, {
-          beforeCredentialPersistence,
-        });
-      } catch (error) {
-        if (persistenceGuardFailure) {
-          throw persistenceGuardFailure.error;
-        }
-        await reportLoginFailure(error);
+      await loginWeb(false, undefined, params.runtime, accountId, {
+        beforeCredentialPersistence,
+      });
+    } catch (error) {
+      if (persistenceGuardFailure) {
+        throw persistenceGuardFailure.error;
       }
+      params.runtime.error(`WhatsApp login failed: ${String(error)}`);
+      await params.prompter.note(
+        t("wizard.channels.docs", { link: formatDocsLink("/whatsapp", "whatsapp") }),
+        t("wizard.whatsapp.helpTitle"),
+      );
     }
   } else if (!linked) {
     await params.prompter.note(

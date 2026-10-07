@@ -169,7 +169,9 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   if (
     !state.activeRunSafeCommandTurn &&
     admissionTicket &&
-    !(await admissionTicket.wait(params.replyOptions?.abortSignal))
+    !(await state.traceReplyPhase("reply.wait_admission_ticket", () =>
+      admissionTicket.wait(params.replyOptions?.abortSignal),
+    ))
   ) {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
   }
@@ -182,9 +184,8 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     }
   };
   await assertCurrentBindingRoute();
-  const preDispatchAcquisition = await state.ensureDispatchReplyOperation(
-    "pre_dispatch",
-    Boolean(pluginOwnedBinding),
+  const preDispatchAcquisition = await state.traceReplyPhase("reply.admit_pre_dispatch", () =>
+    state.ensureDispatchReplyOperation("pre_dispatch", Boolean(pluginOwnedBinding)),
   );
   if (preDispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
@@ -286,17 +287,19 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               ...state.hookState.inboundClaimEvent,
               senderIsOwner: bindingAuthorization.senderIsOwner,
             };
-            return await state.runWithDispatchLifecycleAdmission(
+            const claim = state.runWithDispatchLifecycleAdmission(
               async () =>
                 await hookRunner.runInboundClaimForPluginOutcome(
                   pluginOwnedBinding.pluginId,
                   authorizedInboundClaimEvent,
                   withClaimingHookAdmission(
                     { ...state.hookState.inboundClaimContext, pluginBinding: pluginOwnedBinding },
-                    assertCurrentBindingRoute,
+                    { prepare: assertCurrentBindingRoute },
                   ),
                 ),
             );
+            state.trackDispatchLifecycleWork(claim);
+            return await claim;
           })()
         : (() => {
             const pluginLoaded =

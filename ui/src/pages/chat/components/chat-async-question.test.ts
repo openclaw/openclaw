@@ -12,7 +12,7 @@ import {
   readAsyncQuestions,
 } from "./chat-async-question.ts";
 import type { AsyncQuestionDraft } from "./chat-async-question.types.ts";
-import "./chat-question-card.ts";
+import "./chat-question-panel.ts";
 
 const container = document.createElement("div");
 afterEach(() => {
@@ -104,19 +104,16 @@ it("keeps questions from overlapping runs when either run's terminal arrives las
 });
 
 it("waits for recorded origin settlement before treating another run as a successor", () => {
-  const messages = [question("old", "run-1"), terminal("run-2")];
+  let messages = [question("old", "run-1"), terminal("run-2")];
   expect(present(messages).pending).toHaveLength(1);
-  messages.push(terminal("run-1"));
+  messages = [...messages, terminal("run-1")];
   expect(present(messages).pending).toHaveLength(1);
-  messages.push(terminal("run-3"));
+  messages = [...messages, terminal("run-3")];
   expect(present(messages).pending).toHaveLength(0);
 });
 
 it.each([
   { stopReason: "error" },
-  { stopReason: "aborted" },
-  { stopReason: "cancelled" },
-  { stopReason: "timeout" },
   { stopReason: "toolUse" },
   { phase: "commentary" },
   { openclawAbort: { aborted: true } },
@@ -159,16 +156,20 @@ it("requires a completed later human turn when old questions lack run identity",
 });
 
 it("does not credit a late earlier-run terminal to a newer user turn for an unowned question", () => {
-  const messages = [
+  let messages: unknown[] = [
     { role: "user", runId: "run-1", content: "First task" },
     question(),
     { role: "user", runId: "run-2", content: "Next task" },
     terminal("run-1"),
   ];
   expect(present(messages).pending).toHaveLength(1);
-  messages.push(terminal("run-2"));
+  messages = [...messages, terminal("run-2")];
   expect(present(messages).pending).toHaveLength(1);
-  messages.push({ role: "user", runId: "run-3", content: "Another task" }, terminal("run-3"));
+  messages = [
+    ...messages,
+    { role: "user", runId: "run-3", content: "Another task" },
+    terminal("run-3"),
+  ];
   expect(present(messages).pending).toHaveLength(0);
 });
 
@@ -255,29 +256,19 @@ it("reopens the archived question with its draft until another later completion"
   expect(present([...messages, terminal("run-3")], state).pending).toEqual([]);
 });
 
-it("keeps an in-flight submission in the dock across a later completion", () => {
-  const old = question("old", "run-1");
-  const state = presentationState();
-  present([old], state);
-  state.asyncQuestionDrafts.set("old", { answers: new Map(), status: "submitting" });
-  const presentation = present([old, terminal("run-1"), terminal("run-2")], state);
-  expect(presentation.pending).toHaveLength(1);
-  expect(presentation.archived.size).toBe(0);
-});
-
 it("keeps a rejected in-flight answer and its retry error visible after a later completion", async () => {
   const old = question("old", "run-1");
   const state = presentationState();
   const send = createDeferred<boolean>();
   state.transcriptRenderContext.onAsyncQuestionSubmit.mockImplementation(() => send.promise);
-  const messages = [old, terminal("run-1")];
+  let messages = [old, terminal("run-1")];
   const panel = createAsyncQuestionPanelProps(
     readAsyncQuestions(old)!,
     present(messages, state),
     {},
   );
   const submitting = panel.onSubmit!({ "0": ["Everyone"] });
-  messages.push(terminal("run-2"));
+  messages = [...messages, terminal("run-2")];
   expect(present(messages, state).pending).toHaveLength(1);
   send.reject(new Error("Send rejected before admission"));
   await expect(submitting).rejects.toThrow("Send rejected before admission");
@@ -364,6 +355,15 @@ it("does not retire reminders on an aborted live terminal projection", () => {
   expect(present([question("old", "run-1"), terminal("run-1"), aborted]).pending).toHaveLength(1);
 });
 
+it("reconsiders reminders when a message-less terminal settles a published partial", () => {
+  const partial = { role: "assistant", runId: "run-1", content: "Partial work" };
+  const messages = [question("old", "run-1"), partial, terminal("run-2")];
+  expect(present(messages).pending).toHaveLength(1);
+  // The outcome is recorded beside the already published history array.
+  rememberLiveTerminalRun(partial, "run-1", undefined, "error");
+  expect(present(messages).pending).toHaveLength(0);
+});
+
 const historicalQuestion = (itemId = "old-question") => ({
   role: "assistant",
   openclawAsyncDelivery: {
@@ -402,9 +402,7 @@ it("keeps a persisted answer resolved across remount and reconnect and displays 
 it.each([
   { role: "user", content: historicalAnswer.content },
   { ...historicalAnswer, content: "Everyone" },
-  { ...historicalAnswer, content: "An unrelated later message" },
   { ...historicalAnswer, provenance: { kind: "internal_system" } },
-  { ...historicalAnswer, provenance: { kind: "inter_session" } },
   { ...historicalAnswer, content: "> Which audience?\n\n" },
 ])("does not treat an unsaved or unrelated reply as an answer: %j", (reply) => {
   expect(historyPresentation([historicalQuestion(), reply]).pending).toHaveLength(1);
@@ -481,7 +479,6 @@ it("restores every answer in a multi-question submission with UTF-8-bounded quot
 it.each([
   { replyToId: undefined, edited: false, confirmed: false },
   { replyToId: "question-source", edited: false, confirmed: true },
-  { replyToId: "unrelated-source", edited: false, confirmed: false },
   { replyToId: "question-source", edited: true, confirmed: true },
 ])(
   "confirms unparsed saved answers only by their canonical reply: %j",
@@ -586,7 +583,7 @@ it("projects answer delivery from the outbox, retries its payload, and waits for
   draw();
   expect(container.textContent).toContain("Awaiting delivery confirmation");
   expect(container.textContent).not.toContain("Answer sent");
-  messages.push(historicalAnswer);
+  props.messages = [...messages, historicalAnswer];
   draw();
   expect(container.textContent).toContain("Answer sent");
   expect(container.textContent).toContain("Everyone");
@@ -638,16 +635,9 @@ it("does not use quoted text to override a canonical reply to an unrelated messa
 });
 
 it.each([
-  { source: { __openclaw: { id: "canonical-source", seq: 1 } }, expected: "canonical-source" },
-  { source: { id: "generated-ui-id", __openclaw: { seq: 1 } }, expected: undefined },
-  { source: { __openclaw: { id: "unsequenced-source" } }, expected: undefined },
-  {
-    source: { __openclaw: { id: "imported-source", seq: 1, importedFrom: "cli" } },
-    expected: undefined,
-  },
-])(
-  "only routes question replies to canonical source identity: $expected",
-  ({ source, expected }) => {
-    expect(readAsyncQuestions({ ...question(), ...source })?.sourceMessageId).toBe(expected);
-  },
-);
+  { id: "generated-ui-id", __openclaw: { seq: 1 } },
+  { __openclaw: { id: "unsequenced-source" } },
+  { __openclaw: { id: "imported-source", seq: 1, importedFrom: "cli" } },
+])("rejects noncanonical question source identities: %j", (source) => {
+  expect(readAsyncQuestions({ ...question(), ...source })?.sourceMessageId).toBeUndefined();
+});

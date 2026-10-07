@@ -1,6 +1,3 @@
-/**
- * Browser CLI inspection commands for screenshots and snapshots.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
@@ -19,6 +16,7 @@ import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerOption,
+  runBrowserCliCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 
@@ -45,8 +43,9 @@ function parseBrowserChoiceOption<const T extends string>(
   label: string,
   choices: readonly T[],
 ): T | undefined {
-  if ((choices as readonly string[]).includes(value)) {
-    return value as T;
+  const choice = choices.find((candidate) => candidate === value);
+  if (choice !== undefined) {
+    return choice;
   }
   defaultRuntime.error(danger(`Invalid ${label}: expected ${choices.join(" or ")}`));
   defaultRuntime.exit(1);
@@ -69,7 +68,6 @@ function resolveBrowserInspectTimeout(
   return { parent: { ...parent, timeout: String(timeoutMs) }, timeoutMs };
 }
 
-/** Registers Browser screenshot and snapshot commands. */
 export function registerBrowserInspectCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -95,7 +93,7 @@ export function registerBrowserInspectCommands(
       if (type === undefined) {
         return;
       }
-      try {
+      await runBrowserCliCommand(async () => {
         const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
         const result = await callBrowserRequest<{ path: string }>(request.parent, {
           method: "POST",
@@ -116,10 +114,7 @@ export function registerBrowserInspectCommands(
           return;
         }
         defaultRuntime.log(shortenHomePath(result.path));
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      }, "inline");
     });
 
   browser
@@ -170,7 +165,7 @@ export function registerBrowserInspectCommands(
       ) {
         return;
       }
-      try {
+      await runBrowserCliCommand(async () => {
         const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
         const query: Record<string, string | number | boolean | undefined> = {
           format,
@@ -192,6 +187,7 @@ export function registerBrowserInspectCommands(
           path: "/snapshot",
           query,
         });
+        const imagePath = result.format === "ai" ? result.imagePath : undefined;
 
         if (opts.out) {
           const payload =
@@ -202,50 +198,40 @@ export function registerBrowserInspectCommands(
               await fs.writeFile(tempPath, payload, "utf8");
             },
           });
-          if (parent?.json) {
-            defaultRuntime.writeJson({
-              ok: true,
-              out: opts.out,
-              ...(result.format === "ai" && result.imagePath
-                ? { imagePath: result.imagePath }
-                : {}),
-            });
-          } else {
-            defaultRuntime.log(shortenHomePath(opts.out));
-            if (result.format === "ai" && result.imagePath) {
-              defaultRuntime.log(shortenHomePath(result.imagePath));
-            }
-          }
-          return;
         }
 
         if (parent?.json) {
-          defaultRuntime.writeJson(result);
+          defaultRuntime.writeJson(
+            opts.out
+              ? {
+                  ok: true,
+                  out: opts.out,
+                  ...(imagePath ? { imagePath } : {}),
+                }
+              : result,
+          );
           return;
         }
 
-        if (result.format === "ai") {
+        if (opts.out) {
+          defaultRuntime.log(shortenHomePath(opts.out));
+        } else if (result.format === "ai") {
           defaultRuntime.log(result.snapshot);
-          if (result.imagePath) {
-            defaultRuntime.log(shortenHomePath(result.imagePath));
-          }
-          return;
+        } else {
+          defaultRuntime.log(
+            result.nodes
+              .map((n) => {
+                const indent = "  ".repeat(Math.min(20, n.depth));
+                const name = n.name ? ` "${n.name}"` : "";
+                const value = n.value ? ` = "${n.value}"` : "";
+                return `${indent}- ${n.role}${name}${value} [ref=${n.ref}]`;
+              })
+              .join("\n"),
+          );
         }
-
-        const nodes = "nodes" in result ? result.nodes : [];
-        defaultRuntime.log(
-          nodes
-            .map((n) => {
-              const indent = "  ".repeat(Math.min(20, n.depth));
-              const name = n.name ? ` "${n.name}"` : "";
-              const value = n.value ? ` = "${n.value}"` : "";
-              return `${indent}- ${n.role}${name}${value} [ref=${n.ref}]`;
-            })
-            .join("\n"),
-        );
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+        if (imagePath) {
+          defaultRuntime.log(shortenHomePath(imagePath));
+        }
+      }, "inline");
     });
 }

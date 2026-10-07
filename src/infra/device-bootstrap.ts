@@ -1,4 +1,3 @@
-// Bootstraps device identity and trust state on first run.
 import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -8,10 +7,10 @@ import {
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
-import {
-  DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
-  type DeviceBootstrapMutationAdmission,
-  type DeviceBootstrapOperations,
+import type { DeviceBootstrapOperations } from "./device-bootstrap.worker-kernel.js";
+import type {
+  CloudWorkerSetupMutationAdmission,
+  DeviceBootstrapMutationAdmission,
 } from "./device-bootstrap.worker-types.js";
 import { loadBoundDeviceBootstrapContextReadOnly } from "./device-pairing-store-readonly.js";
 import {
@@ -24,42 +23,12 @@ import { createAsyncLock } from "./pairing-files.js";
 const withLock = createAsyncLock();
 const log = createSubsystemLogger("device-bootstrap");
 
-function assertBootstrapTokenCurrent(facts: DeviceBootstrapMutationAdmission): void {
-  if (facts.issuedAtMs < Date.now() - DEVICE_BOOTSTRAP_TOKEN_TTL_MS) {
+function assertBootstrapTokenCurrent(
+  facts: Exclude<DeviceBootstrapMutationAdmission, { kind: "bootstrap.cloudWorkerSetup" }>,
+): void {
+  if (facts.expiresAtMs < Date.now()) {
     throw new DevicePairingAuthorityRefusedError();
   }
-}
-
-function resolveIssuedBootstrapProfileInput(params: {
-  profile?: DeviceBootstrapProfileInput;
-  roles?: readonly string[];
-  scopes?: readonly string[];
-}): DeviceBootstrapProfileInput | undefined {
-  if (params.profile) {
-    return params.profile;
-  }
-  if (params.roles || params.scopes) {
-    return {
-      roles: params.roles,
-      scopes: params.scopes,
-    };
-  }
-  return undefined;
-}
-
-function resolveIssuedBootstrapProfile(params: {
-  profile?: DeviceBootstrapProfileInput;
-  roles?: readonly string[];
-  scopes?: readonly string[];
-}): DeviceBootstrapProfile {
-  const input = resolveIssuedBootstrapProfileInput(params);
-  if (input) {
-    // Issued tokens can request many roles/scopes, but bootstrap handoff persists only the allowlist.
-    return normalizeDeviceBootstrapHandoffProfile(input);
-  }
-  // Generic bootstrap callers stay least-privilege. Official mobile setup
-  // passes the full profile explicitly after validating the advertised URL.
-  return PAIRING_SETUP_BOOTSTRAP_PROFILE;
 }
 
 function warnIfIssuedBootstrapScopesWereStripped(params: {
@@ -102,11 +71,14 @@ async function issueDeviceBootstrapTokenRecord(
 ): Promise<{ token: string; expiresAtMs: number }> {
   const assertCurrent = params.assertCurrent;
   return await withLock(async () => {
-    const profile = resolveIssuedBootstrapProfile(params);
-    warnIfIssuedBootstrapScopesWereStripped({
-      input: resolveIssuedBootstrapProfileInput(params),
-      profile,
-    });
+    const input =
+      params.profile ||
+      (params.roles || params.scopes ? { roles: params.roles, scopes: params.scopes } : undefined);
+    // Explicit profiles retain only the handoff allowlist; generic callers stay least-privilege.
+    const profile = input
+      ? normalizeDeviceBootstrapHandoffProfile(input)
+      : PAIRING_SETUP_BOOTSTRAP_PROFILE;
+    warnIfIssuedBootstrapScopesWereStripped({ input, profile });
     return await executeDevicePairingMutation(
       { type: "bootstrap.issue", input: { profile, setupId: params.setupId, nowMs: Date.now() } },
       { baseDir: params.baseDir, assertCurrent },
@@ -158,32 +130,33 @@ export async function ensureDevicePairSetupBootstrapToken(
 export async function consumeDeviceBootstrapTokenWithSetupCompletion(
   params: BootstrapParams<"bootstrap.consume"> & {
     pairedDeviceMatches?: (device: PairedDevice | null) => boolean;
+    admitsCloudWorkerSetup?: (setup: CloudWorkerSetupMutationAdmission) => boolean;
   },
 ): Promise<DeviceBootstrapOperations["bootstrap.consume"]["output"]> {
-  const { baseDir, pairedDeviceMatches, ...input } = params;
-  return await withLock(async () => {
-    try {
-      return await executeDevicePairingMutation(
-        { type: "bootstrap.consume", input: { ...input, nowMs: Date.now() } },
-        {
-          baseDir,
-          admit: (facts) => {
-            if (facts.kind === "bootstrap.consume") {
-              assertBootstrapTokenCurrent(facts);
-              if (pairedDeviceMatches && !pairedDeviceMatches(facts.pairedDevice)) {
-                throw new DevicePairingAuthorityRefusedError();
-              }
+  const { baseDir, pairedDeviceMatches, admitsCloudWorkerSetup, ...input } = params;
+  return await withLock(() =>
+    executeDevicePairingMutation(
+      { type: "bootstrap.consume", input: { ...input, nowMs: Date.now() } },
+      {
+        baseDir,
+        onAuthorityRefused: () => null,
+        admit: (facts) => {
+          if (facts.kind === "bootstrap.consume") {
+            assertBootstrapTokenCurrent(facts);
+            if (pairedDeviceMatches && !pairedDeviceMatches(facts.pairedDevice)) {
+              throw new DevicePairingAuthorityRefusedError();
             }
-          },
+          }
+          if (
+            facts.kind === "bootstrap.cloudWorkerSetup" &&
+            admitsCloudWorkerSetup?.(facts) !== true
+          ) {
+            throw new DevicePairingAuthorityRefusedError();
+          }
         },
-      );
-    } catch (error) {
-      if (error instanceof DevicePairingAuthorityRefusedError) {
-        return null;
-      }
-      throw error;
-    }
-  });
+      },
+    ),
+  );
 }
 
 /** Confirm that the pairing client received the credential-bearing handoff response. */
@@ -212,7 +185,6 @@ export async function readDevicePairSetupCompletion(
   );
 }
 
-/** Remove every outstanding bootstrap token. */
 export async function clearDeviceBootstrapTokens(
   params: BootstrapParams<"bootstrap.clear"> & { assertCurrent?: () => void } = {},
 ): Promise<DeviceBootstrapOperations["bootstrap.clear"]["output"]> {
@@ -225,7 +197,7 @@ export async function clearDeviceBootstrapTokens(
   );
 }
 
-/** Revoke one bootstrap token and retain its record for best-effort restoration. */
+/** Revoke a bootstrap token unless its cloud-worker environment is already bound to the token's device. */
 export async function revokeDeviceBootstrapToken(
   params: BootstrapParams<"bootstrap.revoke">,
 ): Promise<DeviceBootstrapOperations["bootstrap.revoke"]["output"]> {
@@ -256,26 +228,20 @@ export async function redeemDeviceBootstrapTokenProfile(
   params: BootstrapParams<"bootstrap.redeem">,
 ): Promise<DeviceBootstrapOperations["bootstrap.redeem"]["output"]> {
   const { baseDir, ...input } = params;
-  return await withLock(async () => {
-    try {
-      return await executeDevicePairingMutation(
-        { type: "bootstrap.redeem", input: { ...input, nowMs: Date.now() } },
-        {
-          baseDir,
-          admit: (facts) => {
-            if (facts.kind === "bootstrap.token") {
-              assertBootstrapTokenCurrent(facts);
-            }
-          },
+  return await withLock(() =>
+    executeDevicePairingMutation(
+      { type: "bootstrap.redeem", input: { ...input, nowMs: Date.now() } },
+      {
+        baseDir,
+        onAuthorityRefused: () => ({ recorded: false, fullyRedeemed: false }),
+        admit: (facts) => {
+          if (facts.kind === "bootstrap.token") {
+            assertBootstrapTokenCurrent(facts);
+          }
         },
-      );
-    } catch (error) {
-      if (error instanceof DevicePairingAuthorityRefusedError) {
-        return { recorded: false, fullyRedeemed: false };
-      }
-      throw error;
-    }
-  });
+      },
+    ),
+  );
 }
 
 /** Verify a bootstrap token, bind its first device identity, and stage requested scopes. */
@@ -283,26 +249,20 @@ export async function verifyDeviceBootstrapToken(
   params: BootstrapParams<"bootstrap.verify">,
 ): Promise<DeviceBootstrapOperations["bootstrap.verify"]["output"]> {
   const { baseDir, ...input } = params;
-  return await withLock(async () => {
-    try {
-      return await executeDevicePairingMutation(
-        { type: "bootstrap.verify", input: { ...input, nowMs: Date.now() } },
-        {
-          baseDir,
-          admit: (facts) => {
-            if (facts.kind === "bootstrap.token") {
-              assertBootstrapTokenCurrent(facts);
-            }
-          },
+  return await withLock(() =>
+    executeDevicePairingMutation(
+      { type: "bootstrap.verify", input: { ...input, nowMs: Date.now() } },
+      {
+        baseDir,
+        onAuthorityRefused: () => ({ ok: false, reason: "bootstrap_token_invalid" }),
+        admit: (facts) => {
+          if (facts.kind === "bootstrap.token") {
+            assertBootstrapTokenCurrent(facts);
+          }
         },
-      );
-    } catch (error) {
-      if (error instanceof DevicePairingAuthorityRefusedError) {
-        return { ok: false, reason: "bootstrap_token_invalid" };
-      }
-      throw error;
-    }
-  });
+      },
+    ),
+  );
 }
 
 /** Remove retained setup outcomes independently of status requests or later pairings. */
@@ -330,7 +290,6 @@ export async function getBoundDeviceBootstrapContext(params: {
   );
 }
 
-/** Read the profile from already-bound bootstrap context. */
 export async function getBoundDeviceBootstrapProfile(
   params: Parameters<typeof getBoundDeviceBootstrapContext>[0],
 ): Promise<DeviceBootstrapProfile | null> {

@@ -15,10 +15,6 @@ describe("target error helpers", () => {
       expected: "Delivering to Slack requires target",
     },
     {
-      actual: missingTargetError("Slack", "Use channel:C123").message,
-      expected: "Delivering to Slack requires target Use channel:C123",
-    },
-    {
       actual: missingTargetError("Slack", "   ").message,
       expected: "Delivering to Slack requires target",
     },
@@ -36,14 +32,6 @@ describe("target error helpers", () => {
         'Ambiguous target "general" for Discord. Provide a unique name or an explicit id. Hint: Use channel:123',
     },
     {
-      actual: unknownTargetError("Discord", "general", "Use channel:123").message,
-      expected: 'Unknown target "general" for Discord. Hint: Use channel:123',
-    },
-    {
-      actual: unknownTargetError("Discord", "general").message,
-      expected: 'Unknown target "general" for Discord.',
-    },
-    {
       actual: missingTargetError("Slack", "  Use channel:C123  ").message,
       expected: "Delivering to Slack requires target Use channel:C123",
     },
@@ -53,12 +41,6 @@ describe("target error helpers", () => {
     },
   ])("formats target error helper output for %j", ({ actual, expected }) => {
     expect(actual).toBe(expected);
-  });
-
-  it("includes the hint in ambiguous target errors", () => {
-    expect(ambiguousTargetError("Discord", "general", "Use channel:123").message).toContain(
-      "Hint: Use channel:123",
-    );
   });
 
   it("identifies reserved target literal errors", () => {

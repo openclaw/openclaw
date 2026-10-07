@@ -1,6 +1,5 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
-// Discord plugin module owns progress-window state and agent-event rendering.
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
@@ -54,7 +53,8 @@ export function createDiscordMessageProgressRuntime(params: {
   const reasoningWindowEnabled = reasoningLevel === "stream";
   // The durable verbose lane mirrors commentary, not tool lifecycle rows.
   // Yield only the draft content that has a durable counterpart.
-  let shouldYieldDraftCommentary: () => boolean = () => false;
+  let shouldYieldDraftCommentary = async () => false;
+  let turnCommentaryVisible = false;
   const handleAssistantMessageBoundary = () => {
     if (draftPreview.handleAssistantMessageBoundary()) {
       params.onTurnReset();
@@ -101,15 +101,16 @@ export function createDiscordMessageProgressRuntime(params: {
       : undefined,
     shouldDeliverCommentaryPayloads:
       draftPreview.isProgressMode && draftPreview.commentaryProgressEnabled
-        ? () => shouldYieldDraftCommentary()
+        ? () => turnCommentaryVisible
         : undefined,
     reasoningPayloadsEnabled: reasoningDurableEnabled,
-    onVerboseProgressVisibility: (isActive) => {
+    onVerboseProgressVisibilityAsync: async (isActive) => {
       shouldYieldDraftCommentary = isActive;
+      turnCommentaryVisible = await isActive();
     },
     onNarrationUpdate: draftPreview.narrationProgressEnabled
       ? async (payload) => {
-          if (abortSignal?.aborted || shouldYieldDraftCommentary()) {
+          if ((await shouldYieldDraftCommentary()) || abortSignal?.aborted) {
             return;
           }
           await draftPreview.pushNarrationProgress(payload.text);
@@ -141,7 +142,10 @@ export function createDiscordMessageProgressRuntime(params: {
       return await draftPreview.pushToolEvent(payload);
     },
     onItemEvent: async (payload) => {
-      if (payload.kind === "preamble" && shouldYieldDraftCommentary()) {
+      if (
+        payload.kind === "preamble" &&
+        ((await shouldYieldDraftCommentary()) || abortSignal?.aborted)
+      ) {
         return undefined;
       }
       return await draftPreview.pushItemEvent(payload);

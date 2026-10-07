@@ -3,6 +3,7 @@ import {
   parseFiniteNumber as readFiniteNumber,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../../plugins/types.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
 import { recordTalkObservabilityEvent } from "../../talk/observability.js";
@@ -13,7 +14,6 @@ import {
   createTalkSessionController,
 } from "../../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "../server-methods/shared-types.js";
-import { formatError } from "../server-utils.js";
 import { decodeTalkRelayAudioBase64 } from "./relay-audio-base64.js";
 import {
   closeExpiredTalkRelaySessions,
@@ -64,18 +64,6 @@ type CreateTalkTranscriptionRelaySessionParams = {
   connId: string;
   provider: RealtimeTranscriptionProviderPlugin;
   providerConfig: RealtimeTranscriptionProviderConfig;
-};
-
-type TalkTranscriptionRelaySessionResult = {
-  provider: string;
-  mode: "transcription";
-  transport: "gateway-relay";
-  transcriptionSessionId: string;
-  audio: {
-    inputEncoding: "g711_ulaw";
-    inputSampleRateHz: 8000;
-  };
-  expiresAt: number;
 };
 
 const transcriptionSessions = new Map<string, TranscriptionRelaySession>();
@@ -188,30 +176,18 @@ function closeTalkTranscriptionRelaySessionsForConnection(connId: string): Promi
   });
 }
 
-function pruneExpiredTranscriptionSessions(nowMs = Date.now()): void {
+function enforceTranscriptionSessionLimits(connId: string): void {
   closeExpiredTalkRelaySessions({
     sessions: transcriptionSessions.values(),
     closeSession: (session) => closeTranscriptionSession(session, "completed"),
-    nowMs,
   });
-}
-
-function countTranscriptionSessionsForConn(connId: string): number {
-  let count = 0;
-  for (const session of transcriptionSessions.values()) {
-    if (session.connId === connId) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function enforceTranscriptionSessionLimits(connId: string): void {
-  pruneExpiredTranscriptionSessions();
   if (transcriptionSessions.size >= MAX_TRANSCRIPTION_SESSIONS_GLOBAL) {
     throw new Error("Too many active transcription Talk sessions");
   }
-  if (countTranscriptionSessionsForConn(connId) >= MAX_TRANSCRIPTION_SESSIONS_PER_CONN) {
+  const connectionCount = [...transcriptionSessions.values()].filter(
+    (session) => session.connId === connId,
+  ).length;
+  if (connectionCount >= MAX_TRANSCRIPTION_SESSIONS_PER_CONN) {
     throw new Error("Too many active transcription Talk sessions for this connection");
   }
 }
@@ -219,7 +195,7 @@ function enforceTranscriptionSessionLimits(connId: string): void {
 /** Creates a transcription relay session and returns its browser audio contract. */
 export function createTalkTranscriptionRelaySession(
   params: CreateTalkTranscriptionRelaySessionParams,
-): TalkTranscriptionRelaySessionResult {
+) {
   enforceTranscriptionSessionLimits(params.connId);
   assertRelayInputAudioConfig(params.providerConfig);
   const transcriptionSessionId = randomUUID();
@@ -346,13 +322,13 @@ export function createTalkTranscriptionRelaySession(
 
   return {
     provider: params.provider.id,
-    mode: "transcription",
-    transport: "gateway-relay",
+    mode: "transcription" as const,
+    transport: "gateway-relay" as const,
     transcriptionSessionId,
     audio: {
       inputEncoding: RELAY_INPUT_ENCODING,
       inputSampleRateHz: RELAY_INPUT_SAMPLE_RATE_HZ,
-    },
+    } as const,
     expiresAt: Math.floor(expiresAtMs / 1000),
   };
 }

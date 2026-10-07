@@ -190,9 +190,6 @@ export function createDiscordMessageReactionRuntime(params: {
       return;
     }
     initialAckReactionQueued = true;
-    if (statusReactionsEnabled) {
-      statusReactionsActive = true;
-    }
     queueInitialDiscordAckReaction({
       enabled: statusReactionsEnabled,
       shouldSendAckReaction,

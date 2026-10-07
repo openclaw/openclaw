@@ -4,8 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import {
+  createNpmUpdateOptions,
   createNpmTarget,
   createRootRunner,
+  packageUpdateStepResult,
+  stagedNpmPrefix,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
@@ -47,17 +50,11 @@ describe("runGlobalPackageUpdateSteps", () => {
       await writeSourceCheckout(publishedRoot);
       const phases: string[] = [];
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: createNpmTarget(globalRoot),
-        installSpec: candidateRoot,
-        packageName: "openclaw",
+        ...createNpmUpdateOptions(globalRoot, candidateRoot),
         expectedGitCheckout: { root: candidateRoot, sha: SOURCE_SHA },
         activateGitRoot: publishedRoot,
-        runCommand: createRootRunner(globalRoot),
         runStep: async ({ name, argv }) => {
-          const stagePrefix = argv[argv.indexOf("--prefix") + 1];
-          if (!stagePrefix) {
-            throw new Error("missing stage prefix");
-          }
+          const stagePrefix = stagedNpmPrefix(argv);
           const layout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
           await fs.mkdir(layout.globalRoot, { recursive: true });
           await fs.mkdir(layout.binDir, { recursive: true });
@@ -87,7 +84,6 @@ describe("runGlobalPackageUpdateSteps", () => {
           expect(await fs.realpath(root)).toBe(publishedRoot);
           return { name: "doctor", command: "doctor --fix", cwd: root, durationMs: 0, exitCode: 0 };
         },
-        timeoutMs: 1000,
       });
       expect(result.failedStep).toBeNull();
       expect(phases).toEqual(["validate", "publish", "doctor"]);
@@ -145,33 +141,43 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  // Artifact validation is shared; each manager still exercises successful and rejected activation.
   describe.each(["npm", "pnpm", "bun"] as const)("%s source checkout activation", (manager) => {
-    it.each([
-      { name: "prepared checkout", error: null },
-      { name: "wrong checkout", error: "expected checkout" },
-      { name: "accidental source link", error: "source checkout" },
-      { name: "missing build entry", remove: "dist/entry.js", error: "entry=false" },
-      {
-        name: "missing runtime stamp",
-        remove: "dist/.runtime-postbuildstamp",
-        error: "runtimeStamp=missing",
-      },
-      {
-        name: "stale build identity",
-        stale: "dist/build-info.json",
-        error: "git runtime mismatch",
-      },
-      { name: "stale build stamp", stale: "dist/.buildstamp", error: "git runtime mismatch" },
-      { name: "missing build identity", remove: "dist/build-info.json", error: "build=missing" },
-      { name: "missing built SHA", error: "expected=missing" },
-      { name: "missing UI index", remove: "dist/control-ui/index.html", error: "ui=missing-index" },
-      {
-        name: "incomplete UI",
-        remove: "dist/control-ui/assets/startup.js",
-        error: "ui=incomplete",
-      },
-      { name: "missing launcher", remove: "openclaw.mjs", error: "missing" },
-    ])("verifies $name before finalization", async ({ name: caseName, error, remove, stale }) => {
+    it.each(
+      [
+        { name: "prepared checkout", error: null },
+        { name: "wrong checkout", error: "expected checkout" },
+        { name: "accidental source link", error: "source checkout" },
+        { name: "missing build entry", remove: "dist/entry.js", error: "entry=false" },
+        {
+          name: "missing runtime stamp",
+          remove: "dist/.runtime-postbuildstamp",
+          error: "runtimeStamp=missing",
+        },
+        {
+          name: "stale build identity",
+          stale: "dist/build-info.json",
+          error: "git runtime mismatch",
+        },
+        { name: "stale build stamp", stale: "dist/.buildstamp", error: "git runtime mismatch" },
+        { name: "missing build identity", remove: "dist/build-info.json", error: "build=missing" },
+        { name: "missing built SHA", error: "expected=missing" },
+        {
+          name: "missing UI index",
+          remove: "dist/control-ui/index.html",
+          error: "ui=missing-index",
+        },
+        {
+          name: "incomplete UI",
+          remove: "dist/control-ui/assets/startup.js",
+          error: "ui=incomplete",
+        },
+        { name: "missing launcher", remove: "openclaw.mjs", error: "missing" },
+      ].filter(
+        ({ name }) =>
+          manager === "npm" || name === "prepared checkout" || name === "wrong checkout",
+      ),
+    )("verifies $name before finalization", async ({ name: caseName, error, remove, stale }) => {
       await withTestDir({ prefix: "openclaw-package-update-source-" }, async (base) => {
         const prefix = path.join(base, "prefix");
         const globalRoot =
@@ -245,10 +251,7 @@ describe("runGlobalPackageUpdateSteps", () => {
             expect(name).toBe("package-install");
             let targetRoot: string;
             if (manager === "npm") {
-              const stagePrefix = argv[argv.indexOf("--prefix") + 1];
-              if (!stagePrefix) {
-                throw new Error("missing staged prefix");
-              }
+              const stagePrefix = stagedNpmPrefix(argv);
               expect(path.dirname(stagePrefix)).toBe(globalRoot);
               const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
               targetRoot = path.join(stageLayout.globalRoot, "openclaw");
@@ -288,13 +291,7 @@ describe("runGlobalPackageUpdateSteps", () => {
               targetRoot,
               process.platform === "win32" ? "junction" : undefined,
             );
-            return {
-              name,
-              command: argv.join(" "),
-              cwd: cwd ?? process.cwd(),
-              durationMs: 1,
-              exitCode: 0,
-            };
+            return packageUpdateStepResult({ name, argv, cwd });
           },
           timeoutMs: 1000,
           postVerifyStep,

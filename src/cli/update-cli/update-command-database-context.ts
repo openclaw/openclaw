@@ -1,4 +1,6 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import { resolveConfigPath } from "../../config/paths.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -20,10 +22,8 @@ import {
   revalidateUpdateDatabaseContext,
 } from "./update-command-managed-context.js";
 import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
-import {
-  GatewayServiceUpdateOwnershipError,
-  type ManagedServiceRootRedirect,
-} from "./update-command-service-plan.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   type PreManagedServiceStop,
@@ -40,6 +40,7 @@ type UpdateManagedServiceInspectionParams = {
   managedServiceRoot?: string;
   expectedServices?: ReadonlyMap<string, PreManagedServiceStop>;
   expectedForeground?: true;
+  assertCurrent?: () => void;
   handoffFromGateway?: Parameters<
     typeof maybeStopManagedServiceBeforeMutableUpdate
   >[0]["handoffFromGateway"];
@@ -68,6 +69,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       timeoutMs: params.timeoutMs,
       phase: "inspect",
       expectedService: params.expectedServices?.get(root),
+      assertCurrent: params.assertCurrent,
       handoffFromGateway: params.handoffFromGateway,
     }).catch((error: unknown) => {
       if (hasCommandProcessCleanupError(error)) {
@@ -84,7 +86,11 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       throw new UpdatePreMutationError(
         "managed-service-preflight",
         formatUpdateAncestryBlockMessage(inspected.blockMessage),
-        { failureFacts: collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) },
+        {
+          failureFacts:
+            inspected.blockFailureFacts ??
+            collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict),
+        },
       );
     }
     if (
@@ -93,21 +99,24 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
         inspected.serviceUpdateVerdict?.kind === "unresolved") &&
       inspected.offline !== true
     ) {
-      throw new UpdatePreMutationError(
+      const failure = createUpdatePreflightFailure(
+        "service-not-offline",
+        undefined,
         "managed-service-preflight",
-        "Another Gateway service uses this installation and is not verified offline. Stop it through its service owner before updating the foreground Gateway.",
-        { failureFacts: collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) },
       );
+      throw new UpdatePreMutationError("managed-service-preflight", failure.message, failure);
     }
     if (
       params.managedServiceRoot &&
       (inspected.serviceUpdateVerdict?.kind !== "owned" ||
         !inspected.serviceUpdateVerdict.refreshDefinition)
     ) {
-      throw new UpdatePreMutationError(
+      const failure = createUpdatePreflightFailure(
+        "service-definition-not-writable",
+        undefined,
         "managed-service-preflight",
-        "The Gateway cannot be rebound from its current installation: its owned service definition must be writable before this update can align it with the CLI.",
       );
+      throw new UpdatePreMutationError("managed-service-preflight", failure.message, failure);
     }
     services.set(root, inspected);
     if (inspected.serviceUpdateVerdict?.kind === "owned") {
@@ -121,10 +130,12 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
     invocationCwd: params.invocationCwd,
   });
   if ((params.managedServiceRootRedirect || params.managedServiceRoot) && !managedEnv) {
-    throw new UpdatePreMutationError(
+    const failure = createUpdatePreflightFailure(
+      "service-context-changed",
+      undefined,
       "managed-service-preflight",
-      "The managed Gateway service changed before database admission. Retry so its package root and state can be inspected together.",
     );
+    throw new UpdatePreMutationError("managed-service-preflight", failure.message, failure);
   }
   return {
     service,
@@ -137,6 +148,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
 export async function inspectUpdateDatabaseContexts(
   params: UpdateManagedServiceInspectionParams & {
     legacyConfigPlan?: LegacyConfigUpdatePlan;
+    callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
     candidateAdmissionChecks?: readonly string[];
   },
 ) {
@@ -157,7 +169,10 @@ export async function inspectUpdateDatabaseContexts(
       ? []
       : [
           await captureTargetDatabaseSchemaContext(process.env, {
-            legacyConfigPlan: params.legacyConfigPlan,
+            legacyConfigPlan:
+              params.callerLegacyConfigPlan?.snapshot.path === resolveConfigPath()
+                ? params.callerLegacyConfigPlan
+                : params.legacyConfigPlan,
             configValidation,
           }),
         ];
@@ -184,7 +199,7 @@ export async function revalidateUpdateDatabaseContexts(
       "Database admission was not inspected.",
     );
   }
-  await inspectUpdateDatabaseContexts({
+  await inspectUpdateManagedServices({
     ...params,
     roots: [...admission.services.keys()],
     expectedServices: admission.services,

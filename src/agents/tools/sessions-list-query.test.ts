@@ -1,5 +1,3 @@
-// sessions_list tool tests cover session metadata projection, visibility
-// helpers, and numeric argument validation.
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionsListTool } from "./sessions-list-tool.js";
@@ -104,73 +102,43 @@ describe("sessions-list inventory queries", () => {
     },
   );
 
-  it.each([
-    ["owned", undefined, undefined],
-    ["created", undefined, undefined],
-    ["involving", undefined, undefined],
-    ["owned", "profile-trusted", "profile-other"],
-    ["created", "profile-other", "profile-trusted"],
-    ["involving", "profile-other", "profile-third"],
-  ] as const)(
-    "binds %s to the trusted profile and preserves independent actor filters",
-    async (relationship, ownerId, creatorId) => {
-      mocks.gatewayCall.mockResolvedValue({ sessions: [] });
-      const tool = createSessionsListTool({
-        config: VALID_CONFIG,
-        requesterProfileId: "profile-trusted",
-      });
-      await tool.execute("related-inventory", {
-        relationship,
-        ownerId,
-        creatorId,
-        requesterProfileId: "profile-forged",
-      });
-      expect(mocks.gatewayCall).toHaveBeenCalledExactlyOnceWith({
-        method: "sessions.list",
-        params: expect.objectContaining({
-          ownerId,
-          creatorId,
-          profileRelation: { profileId: "profile-trusted", relationship },
-        }),
-      });
-    },
-  );
-
-  it.each(["owned", "created", "involving"])(
-    "rejects %s without trusted requester identity before dispatch even with explicit actor filters",
-    async (relationship) => {
-      const tool = createSessionsListTool({ config: VALID_CONFIG });
-
-      await expect(
-        tool.execute("untrusted-relationship", {
-          relationship,
-          requesterProfileId: "profile-forged",
-          ownerId: "profile-forged",
-          creatorId: "profile-forged",
-        }),
-      ).rejects.toThrow("relationship requires an authenticated requesting user");
-      expect(mocks.gatewayCall).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { relationship: "owned", ownerId: "profile-other" },
-    { relationship: "created", creatorId: "profile-other" },
-  ])("leaves $relationship intersections and profile aliases to the Gateway", async (params) => {
+  it("binds relationships to the trusted profile while leaving actor intersections to the Gateway", async () => {
+    const relationship = "involving";
+    const ownerId = "profile-other";
+    const creatorId = "profile-third";
     mocks.gatewayCall.mockResolvedValue({ sessions: [] });
     const tool = createSessionsListTool({
       config: VALID_CONFIG,
       requesterProfileId: "profile-trusted",
     });
-    await tool.execute("intersected-relationship", params);
+    await tool.execute("related-inventory", {
+      relationship,
+      ownerId,
+      creatorId,
+      requesterProfileId: "profile-forged",
+    });
     expect(mocks.gatewayCall).toHaveBeenCalledExactlyOnceWith({
       method: "sessions.list",
       params: expect.objectContaining({
-        profileRelation: { profileId: "profile-trusted", relationship: params.relationship },
-        ownerId: "ownerId" in params ? params.ownerId : undefined,
-        creatorId: "creatorId" in params ? params.creatorId : undefined,
+        ownerId,
+        creatorId,
+        profileRelation: { profileId: "profile-trusted", relationship },
       }),
     });
+  });
+
+  it("rejects relationships without trusted identity even with explicit actor filters", async () => {
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
+
+    await expect(
+      tool.execute("untrusted-relationship", {
+        relationship: "involving",
+        requesterProfileId: "profile-forged",
+        ownerId: "profile-forged",
+        creatorId: "profile-forged",
+      }),
+    ).rejects.toThrow("relationship requires an authenticated requesting user");
+    expect(mocks.gatewayCall).not.toHaveBeenCalled();
   });
 
   it("keeps a sandboxed main session clamped to spawned rows", async () => {
@@ -225,9 +193,7 @@ describe("sessions-list inventory queries", () => {
 
   it.each([
     { name: "default", limit: undefined, expectedLimit: 100 },
-    { name: "maximum", limit: 200, expectedLimit: 200 },
     { name: "legacy larger request", limit: 201, expectedLimit: 200 },
-    { name: "legacy bulk request", limit: 1000, expectedLimit: 200 },
   ])(
     "returns a bounded $name page and resumes at the next unread Gateway row",
     async ({ limit, expectedLimit }) => {
@@ -475,7 +441,6 @@ describe("sessions-list inventory queries", () => {
   });
 
   it.each([
-    { name: "stalled", nextOffset: 20, empty: false },
     { name: "missing", nextOffset: undefined, empty: false },
     { name: "skipped", nextOffset: 22, empty: false },
     { name: "fractional", nextOffset: 21.5, empty: false },

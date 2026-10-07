@@ -1,8 +1,5 @@
 /** Handles /goal session objective commands and continuation prompt formatting. */
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearSessionGoal,
   createSessionGoal,
@@ -16,6 +13,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply as goalReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const GOAL_COMMAND_PREFIX = "/goal";
@@ -40,19 +38,16 @@ const GOAL_ACTIONS = new Set([
 
 /** Parses /goal action text, defaulting unknown actions to goal creation. */
 export function parseGoalCommand(raw: string): { action: string; text: string } | null {
-  const trimmed = raw.trim();
-  const commandEnd = trimmed.search(/\s/);
-  const commandToken = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
-  if (normalizeOptionalLowercaseString(commandToken) !== GOAL_COMMAND_PREFIX) {
+  const argText = matchSlashCommandToken(raw, GOAL_COMMAND_PREFIX);
+  if (argText === null) {
     return null;
   }
-  const argText = commandEnd === -1 ? "" : trimmed.slice(commandEnd).trim();
   if (!argText) {
     return { action: "status", text: "" };
   }
   const actionEnd = argText.search(/\s/);
   const actionRaw = actionEnd === -1 ? argText : argText.slice(0, actionEnd);
-  const action = normalizeOptionalLowercaseString(actionRaw) ?? "status";
+  const action = actionRaw.toLowerCase();
   if (!GOAL_ACTIONS.has(action)) {
     return { action: "start", text: argText };
   }

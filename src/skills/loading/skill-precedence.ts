@@ -124,3 +124,25 @@ export function mergeSkillRecords<T extends { skill: Skill }>(
   }
   return [...merged.values()].toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"));
 }
+
+/** Append lower-precedence names without changing the order of either tier. */
+export function appendLowerPrecedenceSkillRecords<T extends { skill: Skill }>(
+  entries: T[],
+  lower: readonly T[],
+  onCollision: (winner: T, loser: T) => void,
+): T[] {
+  if (lower.length === 0) {
+    return entries;
+  }
+  const winners = new Map(entries.map((entry) => [entry.skill.name, entry]));
+  for (const entry of lower) {
+    const winner = winners.get(entry.skill.name);
+    if (winner) {
+      onCollision(winner, entry);
+    } else {
+      winners.set(entry.skill.name, entry);
+      entries.push(entry);
+    }
+  }
+  return entries;
+}

@@ -1,4 +1,3 @@
-// Xai plugin module implements model compat behavior.
 import {
   applyModelCompatPatch,
   type ModelCompatConfig,
@@ -11,19 +10,10 @@ export const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
 
 // Native xAI accepts common length/item bounds; only contains-count bounds remain
 // outside its documented schema contract. Proxy providers own stricter downstream policy.
-const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["minContains", "maxContains"]);
-
-function resolveXaiModelCompatPatch(): ModelCompatConfig {
-  return {
-    toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
-    unsupportedToolSchemaKeywords: Array.from(XAI_UNSUPPORTED_SCHEMA_KEYWORDS),
-    toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-  };
-}
-
 export function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
-  return applyModelCompatPatch(
-    model as T & { compat?: ModelCompatConfig },
-    resolveXaiModelCompatPatch(),
-  ) as T;
+  return applyModelCompatPatch(model as T & { compat?: ModelCompatConfig }, {
+    toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
+    unsupportedToolSchemaKeywords: ["minContains", "maxContains"],
+    toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
+  }) as T;
 }

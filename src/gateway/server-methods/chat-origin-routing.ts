@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -18,8 +19,6 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
-import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
@@ -48,19 +47,19 @@ type ChatSendOriginatingRoute = {
 };
 
 export type ChatSendExplicitOrigin = {
-  originatingChannel?: string;
-  originatingTo?: string;
+  originatingChannel: string;
+  originatingTo: string;
   accountId?: string;
   messageThreadId?: string;
 };
 
 export function normalizeExplicitChatSendOrigin(
-  params: ChatSendExplicitOrigin,
+  params: Partial<ChatSendExplicitOrigin>,
 ): { ok: true; value?: ChatSendExplicitOrigin } | { ok: false; error: string } {
-  const originatingChannel = normalizeOptionalChatText(params.originatingChannel);
-  const originatingTo = normalizeOptionalChatText(params.originatingTo);
-  const accountId = normalizeOptionalChatText(params.accountId);
-  const messageThreadId = normalizeOptionalChatText(params.messageThreadId);
+  const originatingChannel = normalizeOptionalString(params.originatingChannel);
+  const originatingTo = normalizeOptionalString(params.originatingTo);
+  const accountId = normalizeOptionalString(params.accountId);
+  const messageThreadId = normalizeOptionalString(params.messageThreadId);
   const hasAnyExplicitOriginField = Boolean(
     originatingChannel || originatingTo || accountId || messageThreadId,
   );
@@ -100,7 +99,7 @@ export function resolveChatSendOriginatingRoute(params: {
   mainKey?: string;
   sessionKey: string;
 }): ChatSendOriginatingRoute {
-  if (params.explicitOrigin?.originatingChannel && params.explicitOrigin.originatingTo) {
+  if (params.explicitOrigin) {
     return {
       originatingChannel: params.explicitOrigin.originatingChannel,
       originatingTo: params.explicitOrigin.originatingTo,
@@ -200,15 +199,14 @@ function isAcpSessionKey(sessionKey: string | undefined): boolean {
 }
 
 function resolveExplicitOriginBinding(origin: ChatSendExplicitOrigin | undefined) {
-  if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
+  if (!origin?.accountId) {
     return undefined;
   }
-  const channel = normalizeMessageChannel(origin.originatingChannel);
-  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+  if (origin.originatingChannel === INTERNAL_MESSAGE_CHANNEL) {
     return undefined;
   }
   return getSessionBindingService().resolveByConversation({
-    channel,
+    channel: origin.originatingChannel,
     accountId: origin.accountId,
     conversationId: origin.originatingTo,
   });
@@ -227,13 +225,10 @@ export function explicitOriginTargetsPluginBinding(
 }
 
 export function normalizeOptionalChatSystemReceipt(
-  value: unknown,
+  value: string | undefined,
 ): { ok: true; receipt?: string } | { ok: false; error: string } {
   if (value == null) {
     return { ok: true };
-  }
-  if (typeof value !== "string") {
-    return { ok: false, error: "systemProvenanceReceipt must be a string" };
   }
   const sanitized = sanitizeChatSendMessageInput(value);
   if (!sanitized.ok) {
@@ -251,9 +246,4 @@ export function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]
     info?.displayName === "ACP" &&
     info?.version === "acp"
   );
-}
-
-export function hasGatewayAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
 }

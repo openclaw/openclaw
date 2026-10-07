@@ -1,5 +1,11 @@
+import type { SqliteWorkerEphemeralTarget } from "../infra/sqlite-worker-contract.js";
+import {
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
+  isActiveStoreWriter,
   runQueuedStoreWrite,
   type StoreWriterQueue,
   type StoreWriterTiming,
@@ -21,12 +27,24 @@ export const SQLITE_SESSION_WRITER_QUEUES = admission.queues;
 
 export function runOpenClawAgentWriteAdmission<T>(
   options: OpenClawAgentDatabaseOptions,
-  run: () => Promise<T> | T,
+  run: (identity: DatabasePathIdentity, assertCurrent: () => void) => Promise<T> | T,
   reentrant = false,
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
 ): Promise<T> {
-  const storePath = resolveOpenClawAgentSqlitePath(options);
+  const pathname = resolveOpenClawAgentSqlitePath(options);
+  const identity = readDatabasePathIdentitySync(pathname);
+  const storePath = identity.canonicalPath;
+  const assertCurrent = () => {
+    const current = readDatabasePathIdentitySync(pathname);
+    if (
+      current.canonicalPath !== storePath ||
+      (identity.key.startsWith("file:") &&
+        (current.key !== identity.key || current.birthtime !== identity.birthtime))
+    ) {
+      throw new Error("Agent database target changed before write admission");
+    }
+  };
   return runQueuedStoreWrite({
     queues: admission.queues,
     storePath,
@@ -34,7 +52,10 @@ export function runOpenClawAgentWriteAdmission<T>(
     // Worker callbacks inherit their parent's async context, but not its native
     // writer lock. Their foreground writes must queue, never reenter that owner.
     reentrant: reentrant && !admission.workers.has(storePath),
-    fn: async () => await run(),
+    fn: async () => {
+      assertCurrent();
+      return await run(identity, assertCurrent);
+    },
     timing,
     signal,
   });
@@ -42,15 +63,31 @@ export function runOpenClawAgentWriteAdmission<T>(
 
 /** Reserve a native write permit without admitting inherited foreground callbacks. */
 export function runOpenClawAgentWorkerWrite<T>(
-  options: OpenClawAgentDatabaseOptions,
+  options:
+    | OpenClawAgentDatabaseOptions
+    | { target: Readonly<SqliteWorkerEphemeralTarget>; assertCurrent(): void },
   run: () => Promise<T>,
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
 ): Promise<T> {
-  const storePath = resolveOpenClawAgentSqlitePath(options);
+  if ("target" in options) {
+    const { handle, incarnation } = options.target;
+    return runQueuedStoreWrite({
+      queues: admission.queues,
+      storePath: `ephemeral:${handle}:${incarnation}`,
+      label: "incognito agent database write admission",
+      reentrant: false,
+      fn: async () => {
+        options.assertCurrent();
+        return run();
+      },
+      timing,
+      signal,
+    });
+  }
   return runOpenClawAgentWriteAdmission(
     options,
-    async () => {
+    async ({ canonicalPath: storePath }) => {
       const owner = {};
       admission.workers.set(storePath, owner);
       try {
@@ -65,4 +102,39 @@ export function runOpenClawAgentWorkerWrite<T>(
     timing,
     signal,
   );
+}
+
+/** Compose the existing foreground queues without inverting inherited acquisition order. */
+export async function runOpenClawAgentWriteAdmissions<T>(
+  options: readonly OpenClawAgentDatabaseOptions[],
+  run: () => Promise<T> | T,
+  reentrant = false,
+): Promise<T> {
+  const selected = new Map(
+    options.map((option) => [resolveOpenClawAgentSqlitePath(option), option]),
+  );
+  const paths = [...selected.keys()].toSorted();
+  const inherited = [...admission.queues.keys()].filter((pathname) =>
+    isActiveStoreWriter(admission.queues, pathname),
+  );
+  // A nested reader may share one foreground FIFO, never a reserved worker transaction.
+  if (
+    paths.some(
+      (pathname) =>
+        inherited.includes(pathname) &&
+        (!reentrant || paths.length !== 1 || admission.workers.has(pathname)),
+    )
+  ) {
+    throw new Error("Session read batch cannot reenter an active SQLite writer admission");
+  }
+  if (paths.some((pathname) => inherited.some((held) => held > pathname))) {
+    throw new Error("Session read batch would invert inherited SQLite writer admission order");
+  }
+  const acquire = (index: number): Promise<T> => {
+    const pathname = paths[index];
+    return pathname === undefined
+      ? Promise.resolve().then(run)
+      : runOpenClawAgentWriteAdmission(selected.get(pathname)!, () => acquire(index + 1), true);
+  };
+  return await acquire(0);
 }

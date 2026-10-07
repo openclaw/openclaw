@@ -7,15 +7,6 @@ import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 
 type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[0];
 
-/** Derived tool allowlists used for visible prompt tools, replay tools, and empty-allowlist checks. */
-type ToolSearchRunPlan = {
-  visibleAllowedToolNames: Set<string>;
-  replayAllowedToolNames: Set<string>;
-  liveAllowedToolNames: Set<string>;
-  capabilityToolNames: Set<string>;
-  hasCallableTools: boolean;
-};
-
 function hasExplicitlyAllowedClientTool(params: {
   clientTools?: CollectAllowedToolNamesParams["clientTools"];
   explicitAllowlistSources: Array<{ entries: string[] }>;
@@ -30,14 +21,6 @@ function hasExplicitlyAllowedClientTool(params: {
     createToolPolicyMatcher({ allow: source.entries }),
   );
   return names.some((name) => matchers.some((matches) => matches(name)));
-}
-
-function collectOpenClawCapabilityToolNames(
-  tools: CollectAllowedToolNamesParams["tools"],
-): Set<string> {
-  return collectAllowedToolNames({
-    tools: tools.filter((tool) => getPluginToolMeta(tool)?.pluginId !== "bundle-mcp"),
-  });
 }
 
 /**
@@ -56,7 +39,7 @@ export function buildToolSearchRunPlan(params: {
   deferredToolsCallable?: boolean;
   controlNames?: readonly string[];
   explicitAllowlistSources: Array<{ entries: string[] }>;
-}): ToolSearchRunPlan {
+}) {
   const controlNames = params.controlNames ?? [...TOOL_SEARCH_CONTROL_TOOL_NAMES];
   const visibleAllowedToolNames = collectAllowedToolNames({
     tools: params.visibleTools,
@@ -66,10 +49,12 @@ export function buildToolSearchRunPlan(params: {
     tools: params.uncompactedTools,
     clientTools: params.clientTools,
   });
-  const capabilityToolNames = collectOpenClawCapabilityToolNames([
-    ...(params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools),
-    ...(params.catalogCapabilityTools ?? []),
-  ]);
+  const capabilityToolNames = collectAllowedToolNames({
+    tools: [
+      ...(params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools),
+      ...(params.catalogCapabilityTools ?? []),
+    ].filter((tool) => getPluginToolMeta(tool)?.pluginId !== "bundle-mcp"),
+  });
   if (params.controlsEnabled) {
     // A control that was visible in the compacted prompt must remain allowed
     // during replay even when the uncompacted tool set would otherwise omit it.

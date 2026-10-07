@@ -10,32 +10,33 @@ const MAX_REPLY_USAGE_STATE_ENTRIES = 1_024;
 
 const store = new Map<string, { snapshot: PluginHookReplyUsageState; expiresAt: number }>();
 
-export function buildReplyUsageState(params: {
-  config: OpenClawConfig;
-  agentDir: string;
-  provider?: string;
-  model?: string;
-  fallbackExhausted?: boolean;
-  winnerProvider?: string;
-  winnerModel?: string;
-  reasoningEffort?: string;
-  fastMode?: boolean;
-  fallbackUsed?: boolean;
-  agentId: string;
-  sessionId: string;
-  chatType?: string;
-  authMode?: string;
-  overrideSource?: string;
-  requestedProvider?: string;
-  requestedModel?: string;
-  compactionCount?: number;
-  contextTokenBudget?: number;
-  contextUsedTokens?: number;
-  promptTokens?: number;
-  usage?: NormalizedUsage;
-  lastCallUsage?: NormalizedUsage;
-  durationMs?: number;
-}): PluginHookReplyUsageState {
+function projectHookUsage(usage?: NormalizedUsage): PluginHookReplyUsageState["usage"] {
+  if (!usage) {
+    return undefined;
+  }
+  const { input, output, cacheRead, cacheWrite, total } = usage;
+  return { input, output, cacheRead, cacheWrite, total };
+}
+
+export function buildReplyUsageState(
+  params: Omit<
+    PluginHookReplyUsageState,
+    "resolvedRef" | "requested" | "turnUsd" | "identity" | "usage" | "lastUsage"
+  > & {
+    config: OpenClawConfig;
+    agentDir: string;
+    agentId: string;
+    sessionId: string;
+    fallbackExhausted?: boolean;
+    winnerProvider?: string;
+    winnerModel?: string;
+    requestedProvider?: string;
+    requestedModel?: string;
+    promptTokens?: number;
+    usage?: NormalizedUsage;
+    lastCallUsage?: NormalizedUsage;
+  },
+): PluginHookReplyUsageState {
   const resolvedProvider = params.fallbackExhausted ? undefined : params.winnerProvider;
   const resolvedModel = params.fallbackExhausted ? undefined : params.winnerModel;
   return {
@@ -77,24 +78,8 @@ export function buildReplyUsageState(params: {
             promptTokens: params.promptTokens,
             usage: params.usage,
           }),
-    usage: params.usage
-      ? {
-          input: params.usage.input,
-          output: params.usage.output,
-          cacheRead: params.usage.cacheRead,
-          cacheWrite: params.usage.cacheWrite,
-          total: params.usage.total,
-        }
-      : undefined,
-    lastUsage: params.lastCallUsage
-      ? {
-          input: params.lastCallUsage.input,
-          output: params.lastCallUsage.output,
-          cacheRead: params.lastCallUsage.cacheRead,
-          cacheWrite: params.lastCallUsage.cacheWrite,
-          total: params.lastCallUsage.total,
-        }
-      : undefined,
+    usage: projectHookUsage(params.usage),
+    lastUsage: projectHookUsage(params.lastCallUsage),
   };
 }
 

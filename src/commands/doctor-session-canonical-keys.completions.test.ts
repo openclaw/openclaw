@@ -19,7 +19,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
+import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.test-support.js";
 
 const receipts: SessionPendingInputReceipt[] = [];
 afterEach(async () => {
@@ -93,7 +93,16 @@ function fixture(stateDir: string, alias = false) {
   };
   const rows = (destination = false) =>
     database(destination).db.prepare("SELECT * FROM session_input_completions").all();
-  return { env, cfg, database, scope, create, stage, rows, canonicalKey };
+  const repair = () => repairCanonicalSessionKeys({ apply: true, cfg, env });
+  const close = async () => {
+    await closeOpenClawAgentDatabasesAsync(stateDir);
+    closeOpenClawAgentDatabasesForTest();
+  };
+  const restart = async () => {
+    rotateAgentEventLifecycleGeneration();
+    await close();
+  };
+  return { database, scope, create, stage, rows, canonicalKey, repair, close, restart };
 }
 
 const completed = buildAgentRunTerminalOutcome({ status: "ok" });
@@ -102,7 +111,6 @@ const interrupted = buildAgentRunTerminalOutcome({ status: "timeout", stopReason
 
 describe("Doctor canonical completion receipt repair", () => {
   it.each([
-    { name: "completed", outcome: completed, final: true },
     { name: "operator Stop", outcome: stopped, final: true },
     { name: "restart interruption", outcome: interrupted, final: false },
     { name: "unhandled", outcome: undefined, final: false },
@@ -119,17 +127,11 @@ describe("Doctor canonical completion receipt repair", () => {
       if (outcome) {
         f.database(true).db.exec("DROP TABLE session_input_completions");
       }
-      rotateAgentEventLifecycleGeneration();
-      await closeOpenClawAgentDatabasesAsync(stateDir);
-      closeOpenClawAgentDatabasesForTest();
-
-      expect(
-        await repairCanonicalSessionKeys({ apply: true, cfg: f.cfg, env: f.env }),
-      ).toMatchObject({ repairedGroups: 1 });
+      await f.restart();
+      expect(await f.repair()).toMatchObject({ repairedGroups: 1 });
       expect(f.rows(true)).toEqual(before);
       expect(f.rows()).toEqual([]);
-      await closeOpenClawAgentDatabasesAsync(stateDir);
-      closeOpenClawAgentDatabasesForTest();
+      await f.close();
       const retry = await f.stage(true);
       if (final) {
         expect(retry.completion).toEqual(outcome);
@@ -139,9 +141,7 @@ describe("Doctor canonical completion receipt repair", () => {
         expect(retry.run(() => "unhandled work")).toBe("unhandled work");
         retry.complete!(completed);
       }
-      expect(
-        await repairCanonicalSessionKeys({ apply: true, cfg: f.cfg, env: f.env }),
-      ).toMatchObject({ repairedGroups: 0 });
+      expect(await f.repair()).toMatchObject({ repairedGroups: 0 });
       retry.finish("interrupted");
       const deleted = await deleteSessionEntryLifecycle({
         agentId: "main",
@@ -173,10 +173,8 @@ describe("Doctor canonical completion receipt repair", () => {
           ),
           f.scope().sessionKey,
         );
-      rotateAgentEventLifecycleGeneration();
-      await closeOpenClawAgentDatabasesAsync(stateDir);
-      closeOpenClawAgentDatabasesForTest();
-      await repairCanonicalSessionKeys({ apply: true, cfg: f.cfg, env: f.env });
+      await f.restart();
+      await f.repair();
       for (const row of before) {
         row.session_key = f.canonicalKey;
       }
@@ -199,10 +197,8 @@ describe("Doctor canonical completion receipt repair", () => {
         destination.complete!(sourceFinal ? interrupted : stopped);
         destination.finish("interrupted");
         const retained = sourceFinal ? f.rows() : f.rows(true);
-        rotateAgentEventLifecycleGeneration();
-        await closeOpenClawAgentDatabasesAsync(stateDir);
-        closeOpenClawAgentDatabasesForTest();
-        await repairCanonicalSessionKeys({ apply: true, cfg: f.cfg, env: f.env });
+        await f.restart();
+        await f.repair();
         expect(f.rows(true)).toEqual(retained);
         expect((await f.stage(true)).completion).toEqual(stopped);
       });
@@ -218,12 +214,8 @@ describe("Doctor canonical completion receipt repair", () => {
       (await f.stage(true, "different private result")).complete!(stopped);
       const source = f.rows();
       const destination = f.rows(true);
-      rotateAgentEventLifecycleGeneration();
-      await closeOpenClawAgentDatabasesAsync(stateDir);
-      closeOpenClawAgentDatabasesForTest();
-      await expect(
-        repairCanonicalSessionKeys({ apply: true, cfg: f.cfg, env: f.env }),
-      ).rejects.toThrow("conflicting input completions");
+      await f.restart();
+      await expect(f.repair()).rejects.toThrow("conflicting input completions");
       expect(f.rows()).toEqual(source);
       expect(f.rows(true)).toEqual(destination);
     });
@@ -242,12 +234,8 @@ describe("Doctor canonical completion receipt repair", () => {
       (await f.stage(true, "private child result", otherKey)).complete!(stopped);
       const source = f.rows();
       const destination = f.rows(true);
-      rotateAgentEventLifecycleGeneration();
-      await closeOpenClawAgentDatabasesAsync(stateDir);
-      closeOpenClawAgentDatabasesForTest();
-      await expect(
-        repairCanonicalSessionKeys({ apply: true, cfg: f.cfg, env: f.env }),
-      ).rejects.toThrow("conflicting input completions");
+      await f.restart();
+      await expect(f.repair()).rejects.toThrow("conflicting input completions");
       expect(f.rows()).toEqual(source);
       expect(f.rows(true)).toEqual(destination);
     });
@@ -259,9 +247,8 @@ describe("Doctor canonical completion receipt repair", () => {
       f.create();
       f.database().db.exec("DROP TABLE session_input_completions");
       f.database(true).db.exec("DROP TABLE session_input_completions");
-      await closeOpenClawAgentDatabasesAsync(stateDir);
-      closeOpenClawAgentDatabasesForTest();
-      await repairCanonicalSessionKeys({ apply: true, cfg: f.cfg, env: f.env });
+      await f.close();
+      await f.repair();
       expect(
         f
           .database(true)

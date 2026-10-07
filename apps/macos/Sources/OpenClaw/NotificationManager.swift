@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import OpenClawIPC
 import OpenClawKit
 import Security
 import UserNotifications
@@ -20,7 +19,7 @@ struct NotificationManager {
         title: String,
         body: String,
         sound: String?,
-        priority: NotificationPriority? = nil,
+        priority: OpenClawNotificationPriority? = nil,
         identifier: String = UUID().uuidString,
         requestPermission: Bool = true,
         isCurrent: () -> Bool = { true }) async -> Bool
@@ -34,6 +33,11 @@ struct NotificationManager {
         guard !Task.isCancelled else { return false }
         if status.authorizationStatus == .notDetermined {
             guard requestPermission else { return false }
+            guard AppLaunchRuntimePlan.current.allowsActivation else {
+                self.logger.warning(
+                    "Notification permission deferred by --no-activate; relaunch without the flag and retry.")
+                return false
+            }
             let granted = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
             guard !Task.isCancelled else { return false }
             if granted != true {
@@ -52,7 +56,6 @@ struct NotificationManager {
             content.sound = UNNotificationSound(named: UNNotificationSoundName(soundName))
         }
 
-        // Set interruption level based on priority
         if let priority {
             switch priority {
             case .passive:
@@ -198,7 +201,7 @@ final class BackgroundSessionNotifications: NSObject, UNUserNotificationCenterDe
                     let alert = NSAlert()
                     alert.messageText = "Background Session Notification Expired"
                     alert.informativeText = "Open the session from its Gateway's session list."
-                    alert.runModal()
+                    AppActivation.shared.presentAlert(alert)
                 }
             }
             self.remove(self.actions.retire([identifier]))
@@ -211,12 +214,6 @@ enum TestNotificationOutcome: Encodable, Equatable {
     case sent
     case error(String)
 
-    private enum State: String, Encodable {
-        case pending
-        case sent
-        case error
-    }
-
     private enum CodingKeys: String, CodingKey {
         case state
         case message
@@ -226,11 +223,11 @@ enum TestNotificationOutcome: Encodable, Equatable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .pending:
-            try container.encode(State.pending, forKey: .state)
+            try container.encode("pending", forKey: .state)
         case .sent:
-            try container.encode(State.sent, forKey: .state)
+            try container.encode("sent", forKey: .state)
         case let .error(message):
-            try container.encode(State.error, forKey: .state)
+            try container.encode("error", forKey: .state)
             try container.encode(message, forKey: .message)
         }
     }

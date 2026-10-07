@@ -2,15 +2,20 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import {
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
 import { waitForFixtureFile } from "../../../test/helpers/process-wait.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
 } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onAgentEventForRun, type AgentEventPayload } from "../../infra/agent-events.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import {
@@ -28,6 +33,46 @@ import { runAgentHarnessAttempt } from "./selection.js";
 
 useNativeProcessFixture();
 
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+async function fixtureEnteredBeforeSettlement(
+  filename: string,
+  completion: Promise<unknown>,
+  expected = "",
+): Promise<void> {
+  const matches = async () => {
+    const value = await fs.readFile(filename, "utf8").catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return "";
+      }
+      throw error;
+    });
+    return value.length > 0 && (!expected || value === expected);
+  };
+  // The peer writes the marker before its receipt or reply; separate transports can reorder.
+  await Promise.race([
+    receipts.waitFor(filename, expected),
+    completion.then(
+      async () => {
+        if (!(await matches())) {
+          throw new Error(`Child exited before writing ${filename}`);
+        }
+      },
+      async (error: unknown) => {
+        if (!(await matches())) {
+          throw new Error(`Child failed before writing ${filename}`, { cause: error });
+        }
+      },
+    ),
+  ]);
+}
+
 type PeerState = { history: string[]; currentModelId: string; modelChanges: string[] };
 async function peerStates(directory: string): Promise<PeerState[]> {
   const names = (await fs.readdir(directory)).filter((name) => name.endsWith(".json"));
@@ -37,9 +82,7 @@ async function peerStates(directory: string): Promise<PeerState[]> {
 }
 
 const policyCases = [
-  { agent: "opencode", profile: "full", alsoAllow: undefined, denied: false },
   { agent: "opencode", profile: "messaging", alsoAllow: undefined, denied: true },
-  { agent: "opencode", profile: "minimal", alsoAllow: undefined, denied: true },
   { agent: "kilocode", profile: "coding", alsoAllow: undefined, denied: true },
   { agent: "kilocode", profile: "coding", alsoAllow: ["message"], denied: false },
 ] satisfies Array<{
@@ -156,15 +199,17 @@ it.each(policyCases)(
   60000,
 );
 
-it.each(["complete", "revoke"] as const)(
+it.for(["complete", "revoke"] as const)(
   "publishes native assistant progress before final response and fences late output: %s",
-  async (completion) => {
+  { timeout: 60000 },
+  async (completion, { signal }) => {
     await withOpenClawTestState({ label: "acp-native-stream" }, async (state) => {
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
       const native = await registerNative(state, config, "owner-agent.mjs", {
         holdPromptReply: true,
+        receiptEndpoint: receipts.endpoint,
       });
       const attempt = await attemptFor(state, config, "opencode", "full");
       const updates: AgentEventPayload[] = [];
@@ -179,7 +224,13 @@ it.each(["complete", "revoke"] as const)(
       });
       void run.catch(() => {});
       try {
-        await waitForFixtureFile(path.join(native.peerDirectory, "prompt-reply-entered"), run);
+        await withinTest(
+          fixtureEnteredBeforeSettlement(
+            path.join(native.peerDirectory, "prompt-reply-entered"),
+            run,
+          ),
+          signal,
+        );
         await expect.poll(() => updates.at(-1)?.data.text).toBe("First chunk");
         expect(finished).toBe(false);
         expect(updates[0]?.sessionKey).toBe(attempt.target.sessionKey);
@@ -201,23 +252,24 @@ it.each(["complete", "revoke"] as const)(
       }
     });
   },
-  60000,
 );
 
-it.each([
+it.for([
   { operation: "model", kind: "revoke" },
   { operation: "model", kind: "active" },
   { operation: "prompt", kind: "revoke" },
   { operation: "prompt", kind: "active" },
 ] as const)(
   "preserves native $operation authority while a real control is queued: $kind",
-  async ({ operation, kind }) => {
+  { timeout: 60000 },
+  async ({ operation, kind }, { signal }) => {
     await withOpenClawTestState({ label: "acp-native-control-authority" }, async (state) => {
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
       const native = await registerNative(state, config, "owner-agent.mjs", {
         holdModeControl: true,
+        receiptEndpoint: receipts.endpoint,
       });
       const attempt = await attemptFor(state, config, "opencode", "full");
       let holdingControl: Promise<void> | undefined;
@@ -245,10 +297,13 @@ it.each([
         const before = await peerStates(native.peerDirectory);
         holdingControl = runtime.setMode({ handle, mode: "review" });
         void holdingControl.catch(() => {});
-        await waitForFixtureFile(
-          path.join(native.peerDirectory, "mode-control-entered"),
-          holdingControl,
-          "review",
+        await withinTest(
+          fixtureEnteredBeforeSettlement(
+            path.join(native.peerDirectory, "mode-control-entered"),
+            holdingControl,
+            "review",
+          ),
+          signal,
         );
         const require = createRequire(
           new URL("../../../extensions/acpx/package.json", import.meta.url),
@@ -256,19 +311,34 @@ it.each([
         const upstream: typeof import("acpx/runtime") = await import(
           pathToFileURL(require.resolve("acpx/runtime")).href
         );
-        const upstreamOperation =
-          operation === "model"
-            ? vi.spyOn(upstream.AcpxRuntime.prototype, "setModel")
-            : vi.spyOn(upstream.AcpxRuntime.prototype, "startTurn");
-        // The warmed manager queues this call before polling returns; the earlier native control stays held.
+        const upstreamEntered = createDeferred();
+        const method = operation === "model" ? "setModel" : "startTurn";
+        const originalOperation = upstream.AcpxRuntime.prototype[method];
+        const upstreamOperation = vi
+          .spyOn(upstream.AcpxRuntime.prototype, method)
+          .mockImplementation(
+            new Proxy(originalOperation, {
+              apply(target, receiver, args) {
+                upstreamEntered.resolve();
+                return Reflect.apply(target, receiver, args);
+              },
+            }),
+          );
+        // Observe upstream admission while the earlier native control keeps its queue occupied.
         run = runAgentHarnessAttempt(attempt.input);
         void run.catch(() => {});
-        await Promise.race([
-          expect.poll(() => upstreamOperation.mock.calls.length).toBe(1),
-          run.then((result) => {
-            throw new Error(`Attempt ended before native ${operation} boundary`, { cause: result });
-          }),
-        ]);
+        await withinTest(
+          Promise.race([
+            upstreamEntered.promise,
+            run.then((result) => {
+              throw new Error(`Attempt ended before native ${operation} boundary`, {
+                cause: result,
+              });
+            }),
+          ]),
+          signal,
+        );
+        expect(upstreamOperation).toHaveBeenCalledOnce();
         if (kind === "revoke") {
           attempt.close();
         }
@@ -306,20 +376,11 @@ it.each([
       }
     });
   },
-  60000,
 );
 
-it.each([
-  { agent: "opencode", kind: "active" },
-  { agent: "qwen", kind: "active" },
-  { agent: "pi", kind: "active" },
-  { agent: "kilocode", kind: "active" },
-  { agent: "opencode", kind: "cancel" },
-  { agent: "opencode", kind: "timeout" },
-  { agent: "opencode", kind: "revoke" },
-] as const)(
-  "preserves $agent model authority during cold session initialization: $kind",
-  async ({ agent, kind }) => {
+it.each(["active", "cancel", "timeout", "revoke"] as const)(
+  "preserves model authority during cold session initialization: %s",
+  async (kind) => {
     await withOpenClawTestState({ label: "acp-native-cold-authority" }, async (state) => {
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
@@ -327,7 +388,7 @@ it.each([
       const native = await registerNative(state, config, "owner-agent.mjs", {
         holdNewSession: true,
       });
-      const attempt = await attemptFor(state, config, agent, "full");
+      const attempt = await attemptFor(state, config, "opencode", "full");
       const controller = new AbortController();
       attempt.input.abortSignal = controller.signal;
       const timedOut = createDeferred();

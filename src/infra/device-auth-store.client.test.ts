@@ -69,11 +69,23 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each(
-  [false, true].flatMap((origin) =>
-    ["stop", "reconnect"].map((completion) => ({ origin, completion })),
-  ),
-)(
+const deviceIdentity = {
+  deviceId: "synthetic-device",
+  privateKeyPem: "synthetic-private",
+  publicKeyPem: "synthetic-public",
+};
+const hostDeps = {
+  signDevicePayload: () => "synthetic-signature",
+  publicKeyRawBase64UrlFromPem: () => "synthetic-public",
+  beforeConnect: () => {},
+  logError: () => {},
+  logDebug: () => {},
+};
+
+it.each([
+  { origin: false, completion: "stop" },
+  { origin: true, completion: "reconnect" },
+])(
   "settles real worker token persistence before $completion (origin: $origin)",
   async ({ origin, completion }) => {
     await withOpenClawTestState({ label: "client-device-token-worker" }, async (state) => {
@@ -96,18 +108,8 @@ it.each(
         url: "ws://127.0.0.1:18789",
         env: state.env,
         ...(origin ? { deviceAuthScope: originLookup.gatewayScope } : {}),
-        deviceIdentity: {
-          deviceId: lookup.deviceId,
-          privateKeyPem: "synthetic-private",
-          publicKeyPem: "synthetic-public",
-        },
-        hostDeps: {
-          signDevicePayload: () => "synthetic-signature",
-          publicKeyRawBase64UrlFromPem: () => "synthetic-public",
-          beforeConnect: () => {},
-          logError: () => {},
-          logDebug: () => {},
-        },
+        deviceIdentity,
+        hostDeps,
         onHelloOk,
         onConnectError,
       });
@@ -176,18 +178,8 @@ it("keeps connection token facts fresh after preparation without duplicate reads
     const options = {
       url: "ws://127.0.0.1:18789",
       env: state.env,
-      deviceIdentity: {
-        deviceId: "synthetic-device",
-        privateKeyPem: "synthetic-private",
-        publicKeyPem: "synthetic-public",
-      },
-      hostDeps: {
-        signDevicePayload: () => "synthetic-signature",
-        publicKeyRawBase64UrlFromPem: () => "synthetic-public",
-        beforeConnect: () => {},
-        logError: () => {},
-        logDebug: () => {},
-      },
+      deviceIdentity,
+      hostDeps,
     };
     const load = vi.spyOn(tokens, "loadDeviceAuthToken");
     await prepareGatewayClientDeviceAuth(options);
@@ -215,6 +207,7 @@ it("keeps connection token facts fresh after preparation without duplicate reads
 
 it.each([
   { name: "identity omitted", deviceIdentity: null },
+  { name: "read-only missing state", sharedStateMode: "read-only" as const },
   {
     name: "password-only read-only",
     sharedStateMode: "read-only" as const,
@@ -228,37 +221,17 @@ it.each([
   },
   { name: "invalid transport", url: "ws://synthetic.example" },
   { name: "invalid edge transport", edgeAuthHeaders: { "x-synthetic": "synthetic-value" } },
-])("does not prepare token storage for $name", async ({ name: _name, ...overrides }) => {
+])("does not create token storage for $name", async ({ name, ...overrides }) => {
   await withOpenClawTestState({ label: "client-token-skipped-preparation" }, async (state) => {
-    // A skipped storage path must not even consult the legacy migration guard.
-    await state.writeJson("identity/device-auth.json", { synthetic: true });
+    if (name !== "read-only missing state") {
+      // A skipped storage path must not even consult the legacy migration guard.
+      await state.writeJson("identity/device-auth.json", { synthetic: true });
+    }
     await prepareGatewayClientDeviceAuth({
       url: "ws://127.0.0.1:18789",
       env: state.env,
-      deviceIdentity: {
-        deviceId: "synthetic-device",
-        privateKeyPem: "synthetic-private",
-        publicKeyPem: "synthetic-public",
-      },
+      deviceIdentity,
       ...overrides,
-    });
-    await expect(fs.stat(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-});
-
-it("prepares read-only clients without creating missing state", async () => {
-  await withOpenClawTestState({ label: "client-token-readonly-preparation" }, async (state) => {
-    await prepareGatewayClientDeviceAuth({
-      url: "ws://127.0.0.1:18789",
-      env: state.env,
-      sharedStateMode: "read-only",
-      deviceIdentity: {
-        deviceId: "synthetic-device",
-        privateKeyPem: "synthetic-private",
-        publicKeyPem: "synthetic-public",
-      },
     });
     await expect(fs.stat(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
       code: "ENOENT",

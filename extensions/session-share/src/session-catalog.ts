@@ -4,7 +4,8 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   OpenClawPluginApi,
-  OpenClawPluginServiceContext,
+  OpenClawPluginServiceContextV2,
+  PluginServiceSchedulerV1,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -16,7 +17,6 @@ import {
 } from "openclaw/plugin-sdk/session-catalog";
 import { createSessionCatalogGitHubLinker } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { sessionShareNodeBinding } from "./config.js";
 import {
   SESSION_SHARE_COMMANDS,
@@ -28,13 +28,32 @@ import { parseSessionSharePage, parseSessionShareTranscriptPage } from "./wire.j
 type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
 type GitHubLinker = ReturnType<typeof createSessionCatalogGitHubLinker>;
 type CatalogIdentity = NonNullable<NonNullable<SessionCatalogSession["createdActor"]>["identity"]>;
-type CatalogPage = ReturnType<typeof parseSessionSharePage>;
-type NodePage = {
-  nodeId: string;
-  connection: CatalogNode["connectedAtMs"];
-  page?: CatalogPage;
-  pending?: Promise<CatalogPage>;
+type NodeSnapshot = {
+  node: CatalogNode;
+  config: ReturnType<PluginRuntime["config"]["current"]>;
+  scope: PluginServiceSchedulerV1;
+  sessions?: SessionCatalogSession[];
+  refreshedAt: number;
+  retryMs: number;
+  pending?: Promise<void>;
+  error?: SessionCatalogHost["error"];
 };
+
+const REFRESH_MS = 30_000;
+const MAX_STALENESS_MS = 60_000;
+const REFRESH_BUDGET_MS = 300_000;
+const MAX_SNAPSHOTS = 32;
+const MAX_REFRESHES = 4;
+const MAX_SNAPSHOT_ROWS = 10_000;
+const MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
+
+class SnapshotLimitError extends Error {
+  constructor() {
+    super(
+      "Shared catalog exceeds the snapshot limit (10,000 sessions or 16 MiB). Reduce the shared groups on the source node.",
+    );
+  }
+}
 
 const log = createSubsystemLogger("gateway/session-catalog");
 const nodeErrorCodes = new Set([
@@ -48,7 +67,7 @@ const nodeErrorCodes = new Set([
   "APPROVAL_AUTHORITY_CLOSED",
 ]);
 
-function observeCatalogPhase<T>(phase: "discovery" | "invoke", operation: () => Promise<T>) {
+async function observeCatalogRefresh<T>(operation: () => Promise<T>, warn: () => boolean) {
   if (!areDiagnosticsEnabledForProcess() || !log.isEnabled("warn")) {
     return operation();
   }
@@ -59,14 +78,13 @@ function observeCatalogPhase<T>(phase: "discovery" | "invoke", operation: () => 
         return;
       }
       const elapsedMs = performance.now() - started;
-      if (elapsedMs < 1_000) {
+      if (elapsedMs < 1_000 || !warn()) {
         return;
       }
       const details = asOptionalRecord(asOptionalRecord(error)?.details);
       const nodeError = asOptionalRecord(details?.nodeError);
       const nodeErrorCode = nodeError?.code;
-      log.warn("slow Session Share catalog phase", {
-        phase,
+      log.warn("slow Session Share catalog refresh", {
         elapsedMs: Math.round(elapsedMs),
         outcome,
         ...(nodeError
@@ -86,16 +104,9 @@ function observeCatalogPhase<T>(phase: "discovery" | "invoke", operation: () => 
     }
   };
   try {
-    return operation().then(
-      (value) => {
-        finish("resolved");
-        return value;
-      },
-      (error: unknown) => {
-        finish("rejected", error);
-        throw error;
-      },
-    );
+    const value = await operation();
+    finish("resolved");
+    return value;
   } catch (error) {
     finish("rejected", error);
     throw error;
@@ -148,35 +159,255 @@ function bindSession(
 }
 
 export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalogProvider {
-  const pages = new Map<string, NodePage>();
-  let connectedNodes = new Map<string, CatalogNode["connectedAtMs"]>();
-  const active = new Set<Promise<CatalogPage>>();
-  let config: ReturnType<PluginRuntime["config"]["current"]> | undefined;
-  let invokeNode: OpenClawPluginServiceContext["invokeNode"];
-  let lifetime = new AbortController();
-  api.registerService({
-    id: "session-share-catalog",
-    start(ctx) {
-      lifetime = new AbortController();
-      invokeNode = ctx.invokeNode;
-    },
-    async stop() {
-      invokeNode = undefined;
-      lifetime.abort();
-      pages.clear();
-      connectedNodes.clear();
-      await Promise.allSettled(active);
-    },
-  });
+  const snapshots = new Map<string, NodeSnapshot>();
+  let context: OpenClawPluginServiceContextV2 | undefined;
+  let nextWarningAt = 0;
+  const workers = new Set<number>();
+  const queued = new Map<NodeSnapshot, () => Promise<void>>();
   const bindingFor = (nodeId: string) =>
     sessionShareNodeBinding(api.runtime.config.current(), nodeId);
-  async function listNode(
+  const current = (entry: NodeSnapshot) =>
+    !entry.scope.signal.aborted &&
+    api.runtime.config.current() === entry.config &&
+    snapshots.get(entry.node.nodeId) === entry;
+  const retire = (entry: NodeSnapshot) => {
+    snapshots.delete(entry.node.nodeId);
+    entry.sessions = undefined;
+    void entry.scope.stop();
+  };
+  const sameConnection = (entry: NodeSnapshot, node: CatalogNode | undefined) =>
+    node?.connected && isSessionHost(node) && node.connectedAtMs === entry.node.connectedAtMs;
+
+  function pump(owner: OpenClawPluginServiceContextV2) {
+    if (context !== owner || owner.scheduler.signal.aborted) {
+      return;
+    }
+    for (let worker = 0; worker < MAX_REFRESHES; worker++) {
+      if (workers.has(worker) || !queued.size) {
+        continue;
+      }
+      workers.add(worker);
+      owner.scheduler.schedule({
+        id: `refresh:${worker}`,
+        delayMs: 0,
+        async run() {
+          try {
+            for (;;) {
+              const next = queued.entries().next().value;
+              if (!next) {
+                return;
+              }
+              const [entry, run] = next;
+              queued.delete(entry);
+              if (current(entry)) {
+                await run();
+              } else {
+                retire(entry);
+              }
+            }
+          } finally {
+            workers.delete(worker);
+            pump(owner);
+          }
+        },
+      });
+    }
+  }
+
+  function refresh(entry: NodeSnapshot, owner: OpenClawPluginServiceContextV2) {
+    const completion = Promise.withResolvers<void>();
+    entry.pending = completion.promise;
+    const signal = entry.scope.signal;
+    const release = () => {
+      queued.delete(entry);
+      completion.resolve();
+    };
+    signal.addEventListener("abort", release, { once: true });
+    queued.set(entry, async () => {
+      try {
+        const snapshot = await observeCatalogRefresh(
+          async () => {
+            const deadline = performance.now() + REFRESH_BUDGET_MS;
+            const sessions: SessionCatalogSession[] = [];
+            let cursor: string | undefined;
+            let bytes = 0;
+            do {
+              if (!current(entry) || !owner.invokeNode) {
+                throw new Error("Session Share catalog owner retired");
+              }
+              const timeoutMs = Math.min(REFRESH_MS, Math.ceil(deadline - performance.now()));
+              if (timeoutMs <= 0) {
+                throw new Error("Session Share catalog refresh timed out");
+              }
+              const page = parseSessionSharePage(
+                await owner.invokeNode({
+                  nodeId: entry.node.nodeId,
+                  command: SESSION_SHARE_LIST_COMMAND,
+                  params: { limit: 100, ...(cursor ? { cursor } : {}) },
+                  timeoutMs,
+                  signal,
+                }),
+              );
+              bytes += Buffer.byteLength(JSON.stringify(page));
+              if (
+                sessions.length + page.sessions.length > MAX_SNAPSHOT_ROWS ||
+                bytes > MAX_SNAPSHOT_BYTES
+              ) {
+                throw new SnapshotLimitError();
+              }
+              sessions.push(...page.sessions);
+              if (
+                page.nextCursor !== undefined &&
+                sessionCatalogPaging.decodeCursor(page.nextCursor) <=
+                  sessionCatalogPaging.decodeCursor(cursor)
+              ) {
+                throw new Error("Session Share catalog cursor did not advance");
+              }
+              cursor = page.nextCursor;
+            } while (cursor);
+            return sessions;
+          },
+          () => {
+            const now = performance.now();
+            if (now < nextWarningAt) {
+              return false;
+            }
+            nextWarningAt = now + MAX_STALENESS_MS;
+            return true;
+          },
+        );
+        const connectedNode = (await api.runtime.nodes.list()).nodes.find(
+          (candidate) => candidate.nodeId === entry.node.nodeId,
+        );
+        if (!current(entry)) {
+          return;
+        }
+        if (!sameConnection(entry, connectedNode)) {
+          retire(entry);
+          return;
+        }
+        entry.sessions = snapshot;
+        entry.refreshedAt = performance.now();
+        entry.retryMs = REFRESH_MS;
+        entry.error = undefined;
+      } catch (error) {
+        entry.retryMs = entry.error ? Math.min(entry.retryMs * 2, 300_000) : REFRESH_MS;
+        entry.error =
+          error instanceof SnapshotLimitError
+            ? { code: "CATALOG_TOO_LARGE", message: error.message }
+            : {
+                code: "NODE_INVOKE_FAILED",
+                message:
+                  "Cannot refresh OpenClaw sessions. Check the paired node's session-share configuration and connection.",
+              };
+      } finally {
+        entry.pending = undefined;
+        signal.removeEventListener("abort", release);
+        completion.resolve();
+        if (current(entry)) {
+          entry.scope.schedule({
+            id: "next-refresh",
+            delayMs: entry.retryMs,
+            run: () => refresh(entry, owner),
+          });
+        }
+      }
+    });
+    pump(owner);
+  }
+
+  function reconcile(nodes: CatalogNode[]) {
+    const owner = context;
+    if (!owner || owner.scheduler.signal.aborted) {
+      return;
+    }
+    const config = api.runtime.config.current();
+    for (const entry of snapshots.values()) {
+      if (
+        entry.config !== config ||
+        !sameConnection(
+          entry,
+          nodes.find((node) => node.nodeId === entry.node.nodeId),
+        )
+      ) {
+        retire(entry);
+      }
+    }
+  }
+
+  function admit(nodes: CatalogNode[]) {
+    const owner = context;
+    if (!owner || owner.scheduler.signal.aborted) {
+      return;
+    }
+    const config = api.runtime.config.current();
+    const selected = new Set(nodes.map((node) => node.nodeId));
+    for (const node of nodes.filter((candidate) => candidate.connected)) {
+      const existing = snapshots.get(node.nodeId);
+      if (existing) {
+        snapshots.delete(node.nodeId);
+        snapshots.set(node.nodeId, existing);
+        continue;
+      }
+      if (snapshots.size >= MAX_SNAPSHOTS) {
+        const victim = Array.from(snapshots.values()).find(
+          (candidate) => !candidate.pending && !selected.has(candidate.node.nodeId),
+        );
+        if (!victim) {
+          continue;
+        }
+        retire(victim);
+      }
+      const entry: NodeSnapshot = {
+        node,
+        config,
+        scope: owner.scheduler.scope(),
+        refreshedAt: 0,
+        retryMs: REFRESH_MS,
+      };
+      snapshots.set(node.nodeId, entry);
+      refresh(entry, owner);
+    }
+  }
+
+  api.registerService({
+    id: "session-share-catalog",
+    apiVersion: 2,
+    start(ctx) {
+      // The host joins the previous scheduler before starting a new service generation.
+      workers.clear();
+      context = ctx;
+      ctx.scheduler.schedule({
+        id: "nodes",
+        delayMs: 0,
+        everyMs: REFRESH_MS,
+        async run() {
+          if (!snapshots.size) {
+            return;
+          }
+          const { nodes } = await api.runtime.nodes.list();
+          if (context === ctx) {
+            reconcile(nodes);
+          }
+        },
+      });
+    },
+    stop() {
+      context = undefined;
+      snapshots.clear();
+      queued.clear();
+    },
+  });
+
+  function listNode(
     node: CatalogNode,
     query: Parameters<SessionCatalogProvider["list"]>[0],
-    deadline: number,
-  ): Promise<SessionCatalogHost> {
-    const { onHost, waitUntil, signal: callerSignal } = query;
+  ): SessionCatalogHost {
     const hostId = `node:${node.nodeId}`;
+    const { onHost, waitUntil, signal, allowPartialResults } = query;
+    const search = query.search?.trim().toLowerCase();
+    const cursor = query.cursors?.[hostId];
+    const limit = sessionCatalogPaging.boundedLimit(query.limitPerHost);
     const common = {
       hostId,
       label: nodeLabel(node),
@@ -184,23 +415,41 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       nodeId: node.nodeId,
       connected: node.connected === true,
     };
-    if (!node.connected) {
-      return {
-        ...common,
-        sessions: [],
-        error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
-      };
-    }
-    const failed = (): SessionCatalogHost => ({
+    const failed = (code: string, message: string): SessionCatalogHost => ({
       ...common,
       sessions: [],
-      error: {
-        code: "NODE_INVOKE_FAILED",
-        message:
-          "Cannot list OpenClaw sessions. Check the paired node's session-share configuration and connection.",
-      },
+      error: { code, message },
     });
-    const project = (page: CatalogPage): SessionCatalogHost => {
+    if (!node.connected) {
+      return failed("NODE_OFFLINE", "Paired node is offline");
+    }
+    const entry = snapshots.get(node.nodeId);
+    const project = (): SessionCatalogHost => {
+      if (!entry) {
+        return failed(
+          context ? "CATALOG_LOADING" : "NODE_INVOKE_FAILED",
+          "Session Share is unavailable or busy. Refresh the catalog.",
+        );
+      }
+      if (!current(entry)) {
+        return failed("NODE_INVOKE_FAILED", "Session Share is unavailable. Refresh the catalog.");
+      }
+      if (!entry.sessions || performance.now() - entry.refreshedAt >= MAX_STALENESS_MS) {
+        return entry.error
+          ? { ...common, sessions: [], error: entry.error }
+          : failed(
+              "CATALOG_LOADING",
+              "Session Share catalog is still loading. Refresh the catalog.",
+            );
+      }
+      const sessions = search
+        ? entry.sessions.filter(
+            (session) =>
+              session.name?.toLowerCase().includes(search) ||
+              session.threadId.toLowerCase().includes(search),
+          )
+        : entry.sessions;
+      const offset = sessionCatalogPaging.decodeCursor(cursor);
       const binding = bindingFor(node.nodeId);
       const linker =
         binding.owner || binding.linkGitHubIdentities
@@ -210,113 +459,33 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       const linkParticipant = binding.linkGitHubIdentities ? linker?.linkParticipant : undefined;
       return {
         ...common,
-        ...page,
-        sessions: page.sessions.map((session) =>
-          bindSession(session, hostId, owner, linkParticipant),
-        ),
+        sessions: sessions
+          .slice(offset, offset + limit)
+          .map((session) => bindSession(session, hostId, owner, linkParticipant)),
+        ...(offset + limit < sessions.length
+          ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + limit) }
+          : {}),
       };
     };
-    try {
-      query.signal?.throwIfAborted();
-      const cursor = query.cursors?.[hostId];
-      if (cursor !== undefined) {
-        sessionCatalogPaging.decodeCursor(cursor);
-      }
-      const invokeListing = invokeNode;
-      if (!invokeListing) {
-        return failed();
-      }
-      const params = {
-        limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
-        ...(query.search ? { searchTerm: query.search } : {}),
-        ...(cursor !== undefined ? { cursor } : {}),
-      };
-      const key = JSON.stringify([node.nodeId, params]);
-      let entry = pages.get(key);
-      if (!entry) {
-        if (pages.size >= 32) {
-          const evict = [...pages].find(([, candidate]) => !candidate.pending);
-          if (evict) {
-            pages.delete(evict[0]);
-          }
-        }
-        entry = { nodeId: node.nodeId, connection: node.connectedAtMs };
-        pages.set(key, entry);
-      }
-      const publication = entry;
-      const revision = config;
-      const signal = lifetime.signal;
-      const current = () =>
-        !signal.aborted &&
-        api.runtime.config.current() === revision &&
-        connectedNodes.has(node.nodeId) &&
-        connectedNodes.get(node.nodeId) === publication.connection;
-      const follower = Boolean(publication.pending);
-      if (!publication.pending) {
-        const pending = observeCatalogPhase("invoke", () =>
-          invokeListing({
-            nodeId: node.nodeId,
-            command: SESSION_SHARE_LIST_COMMAND,
-            params,
-            timeoutMs: 30_000,
-            signal,
-          }),
-        ).then((raw) => {
-          const page = parseSessionSharePage(raw);
-          if (current()) {
-            publication.page = page;
-          }
-          return page;
-        });
-        publication.pending = pending;
-        active.add(pending);
-        const release = () => {
-          publication.pending = undefined;
-          active.delete(pending);
-          // Bound retained pages without rejecting or retiring admitted source work.
-          if (pages.size > 32 && pages.get(key) === publication) {
-            pages.delete(key);
-          }
-        };
-        void pending.then(release, release);
-      }
-      // Hydration borrows service authority, never a requesting connection's node handle.
-      const completed = publication.pending.then(
-        (page) => (current() ? project(page) : failed()),
-        failed,
-      );
-      // Metadata lookups and pagination cannot consume pending host updates.
-      if (query.allowPartialResults !== true || !onHost || !waitUntil) {
-        return await completed;
-      }
-      const loading = (): SessionCatalogHost => {
-        publishSessionCatalogHost(
-          {
-            waitUntil,
-            onHost: (host) => {
-              if (current() && !callerSignal?.aborted) {
-                return onHost?.(host);
-              }
-            },
+    const host = project();
+    if (entry?.pending && allowPartialResults === true && onHost && waitUntil) {
+      publishSessionCatalogHost(
+        {
+          waitUntil,
+          onHost: (completedHost) => {
+            if (completedHost && current(entry) && !signal?.aborted) {
+              onHost(completedHost);
+            }
           },
-          completed,
-        );
-        return {
-          ...(publication.page ? project(publication.page) : { ...common, sessions: [] }),
-          pending: true,
-        };
-      };
-      const remaining = deadline - performance.now();
-      if (follower || publication.page || remaining <= 0) {
-        return loading();
+        },
+        entry.pending.then(() => (signal?.aborted ? undefined : project())),
+      );
+      if (!host.error) {
+        return { ...host, pending: true };
       }
-      return await withTimeout(completed, remaining, {
-        message: "Session Share catalog is still loading",
-      }).catch(loading);
-    } catch {
-      query.signal?.throwIfAborted();
-      return failed();
     }
+    onHost?.(host);
+    return host;
   }
 
   return {
@@ -325,42 +494,20 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     supportsProcessHomeIsolation: true,
     audience: "session-viewers",
     async list(query) {
-      const deadline = performance.now() + 5_000;
       query.signal?.throwIfAborted();
-      const currentConfig = api.runtime.config.current();
+      const config = api.runtime.config.current();
       let nodes: CatalogNode[];
       try {
-        nodes = (
-          await observeCatalogPhase(
-            "discovery",
-            () => query.listNodes?.() ?? api.runtime.nodes.list(),
-          )
-        ).nodes;
+        nodes = (await (query.listNodes?.() ?? api.runtime.nodes.list())).nodes;
       } catch {
         query.signal?.throwIfAborted();
         return [];
       }
       query.signal?.throwIfAborted();
-      if (api.runtime.config.current() !== currentConfig) {
+      if (api.runtime.config.current() !== config) {
         return [];
       }
-      if (config !== currentConfig) {
-        config = currentConfig;
-        pages.clear();
-      }
-      connectedNodes = new Map(
-        nodes
-          .filter((node) => node.connected && isSessionHost(node))
-          .map((node) => [node.nodeId, node.connectedAtMs]),
-      );
-      for (const [key, entry] of pages) {
-        if (
-          !connectedNodes.has(entry.nodeId) ||
-          connectedNodes.get(entry.nodeId) !== entry.connection
-        ) {
-          pages.delete(key);
-        }
-      }
+      reconcile(nodes);
       const requested = query.hostIds ? new Set(query.hostIds) : undefined;
       const eligible = nodes
         .filter(
@@ -371,22 +518,12 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
             nodeLabel(left).localeCompare(nodeLabel(right)) ||
             left.nodeId.localeCompare(right.nodeId),
         )
-        .slice(0, 32);
-      const pending = eligible.map(async (node) => {
-        const host = await listNode(node, query, deadline);
+        .slice(0, MAX_SNAPSHOTS);
+      admit(eligible);
+      const hosts = eligible.map((node) => {
         query.signal?.throwIfAborted();
-        if (!host.pending) {
-          query.onHost?.(host);
-        }
-        return host;
+        return listNode(node, query);
       });
-      let hosts: SessionCatalogHost[];
-      try {
-        hosts = await Promise.all(pending);
-      } finally {
-        // Keep every started invocation owned through retirement or publication failure.
-        await Promise.allSettled(pending);
-      }
       query.signal?.throwIfAborted();
       return hosts;
     },

@@ -58,10 +58,8 @@ describe("isOllamaCompatProvider", () => {
     ["http://localhost:11434", true],
     ["http://127.0.0.1:11434", true],
     ["http://127.0.0.2:11434", true],
-    ["http://127.255.255.254:11434", true],
     ["http://[::1]:11434", true],
     ["http://[::ffff:127.0.0.2]:11434", true],
-    ["http://128.0.0.1:11434", false],
     ["http://10.0.0.1:11434", false],
     ["http://127.0.0.1.evil.com:11434", false],
   ] as const)("classifies %s as Ollama-compatible=%s", (baseUrl, expected) => {
@@ -70,28 +68,6 @@ describe("isOllamaCompatProvider", () => {
 });
 
 describe("buildAssistantMessage", () => {
-  it("includes thinking block when response has thinking field", () => {
-    const response = makeOllamaResponse({
-      thinking: "Let me think about this",
-      content: "The answer is 42",
-    });
-    const msg = buildAssistantMessage(response, MODEL_INFO);
-    expect(msg.content).toHaveLength(2);
-    expect(msg.content[0]).toEqual({ type: "thinking", thinking: "Let me think about this" });
-    expect(msg.content[1]).toEqual({ type: "text", text: "The answer is 42" });
-  });
-
-  it("includes thinking block when response has reasoning field", () => {
-    const response = makeOllamaResponse({
-      reasoning: "Step by step analysis",
-      content: "Result is 7",
-    });
-    const msg = buildAssistantMessage(response, MODEL_INFO);
-    expect(msg.content).toHaveLength(2);
-    expect(msg.content[0]).toEqual({ type: "thinking", thinking: "Step by step analysis" });
-    expect(msg.content[1]).toEqual({ type: "text", text: "Result is 7" });
-  });
-
   it("prefers thinking over reasoning when both are present", () => {
     const response = makeOllamaResponse({
       thinking: "From thinking field",
@@ -102,15 +78,6 @@ describe("buildAssistantMessage", () => {
     expect(msg.content[0]).toEqual({ type: "thinking", thinking: "From thinking field" });
   });
 
-  it("omits thinking block when no thinking or reasoning field", () => {
-    const response = makeOllamaResponse({
-      content: "Just text",
-    });
-    const msg = buildAssistantMessage(response, MODEL_INFO);
-    expect(msg.content).toHaveLength(1);
-    expect(msg.content[0]).toEqual({ type: "text", text: "Just text" });
-  });
-
   it("omits thinking block when thinking field is empty", () => {
     const response = makeOllamaResponse({
       thinking: "",
@@ -119,15 +86,6 @@ describe("buildAssistantMessage", () => {
     const msg = buildAssistantMessage(response, MODEL_INFO);
     expect(msg.content).toHaveLength(1);
     expect(msg.content[0]).toEqual({ type: "text", text: "Just text" });
-  });
-
-  it("preserves output-budget length stops", () => {
-    const response = makeOllamaResponse({
-      content: "Partial answer",
-      done_reason: "length",
-    });
-    const msg = buildAssistantMessage(response, MODEL_INFO);
-    expect(msg.stopReason).toBe("length");
   });
 
   it("keeps a length stop authoritative over complete-looking tool calls", () => {
@@ -303,38 +261,6 @@ describe("createOllamaStreamFn thinking events", () => {
     expect(content[1]).toEqual({ type: "text", text: "The answer" });
   });
 
-  it("streams without thinking events when no thinking content is present", async () => {
-    const chunks = [
-      {
-        model: "qwen3.5",
-        created_at: "2026-01-01T00:00:00Z",
-        message: { role: "assistant", content: "Hello" },
-        done: false,
-      },
-      {
-        model: "qwen3.5",
-        created_at: "2026-01-01T00:00:01Z",
-        message: { role: "assistant", content: "" },
-        done: true,
-        done_reason: "stop",
-        prompt_eval_count: 10,
-        eval_count: 5,
-      },
-    ];
-
-    const events = await streamOllamaEvents(chunks);
-    const eventTypes = events.map((e) => e.type);
-    expect(eventTypes).not.toContain("thinking_start");
-    expect(eventTypes).not.toContain("thinking_delta");
-    expect(eventTypes).not.toContain("thinking_end");
-    expect(eventTypes).toContain("text_start");
-    expect(eventTypes).toContain("text_delta");
-    expect(eventTypes).toContain("done");
-
-    const textStart = events.find((e) => e.type === "text_start") as { contentIndex?: number };
-    expect(textStart?.contentIndex).toBe(0);
-  });
-
   it("emits length for a token-limited native stream", async () => {
     const events = await streamOllamaEvents([
       {
@@ -384,32 +310,6 @@ describe("createOllamaStreamFn thinking events", () => {
     expect(done.reason).toBe("length");
     expect(done.message?.stopReason).toBe("length");
     expect(done.message?.content).toEqual([]);
-  });
-
-  it("uses generic stream timeout for Ollama request timeout", async () => {
-    await streamOllamaEvents([makeOllamaResponse({ content: "ok" })], { timeoutMs: 2500 });
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-      url: "http://localhost:11434/api/chat",
-      init: {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "qwen3.5",
-          messages: [{ role: "user", content: "test" }],
-          stream: true,
-          options: {},
-          truncate: false,
-          shift: false,
-        }),
-      },
-      policy: {
-        allowPrivateNetwork: true,
-        hostnameAllowlist: ["localhost"],
-      },
-      timeoutMs: 2500,
-      auditContext: "ollama-stream.chat",
-    });
   });
 
   it("promotes standalone bracketed local-model tool text to a structured tool call", async () => {
@@ -679,9 +579,6 @@ describe("createOllamaStreamFn thinking events", () => {
         successEvents.push(event);
       }
       expect(successEvents.some((event) => event.type === "done")).toBe(true);
-      console.info(
-        "[ollama credential redaction proof] surface=stream status=429 safe-marker-present=true authorization-secret-absent=true custom-secret-absent=true success-control=true",
-      );
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

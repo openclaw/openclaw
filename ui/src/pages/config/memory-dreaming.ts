@@ -1,6 +1,3 @@
-// Pure view for the Dreaming tab of the Memory settings page: the global
-// schedule/storage/phase knobs. The controller (context, config writes, agent
-// picker) lives in memory-dreaming-page.ts, mirroring memory.ts/memory-page.ts.
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { renderModelPicker } from "../../components/model-picker.ts";
@@ -17,43 +14,36 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 
 registerSettingsEnglish();
 
-/** Manifest bounds for a numeric field; `count` is `{integer, minimum}`, `ratio` is `0..1`. */
 type DreamingNumberBounds = { integer: boolean; min: number; max?: number };
 
 const COUNT_FROM_ZERO: DreamingNumberBounds = { integer: true, min: 0 };
 const COUNT_FROM_ONE: DreamingNumberBounds = { integer: true, min: 1 };
 const RATIO: DreamingNumberBounds = { integer: false, min: 0, max: 1 };
 
-type DreamingFieldSpec =
+type DreamingFieldSpec = {
+  path: readonly string[];
+  labelKey: string;
+  helpKey: string;
+} & (
   | {
       kind: "text";
-      path: readonly string[];
-      labelKey: string;
-      helpKey: string;
       placeholderKey?: string;
       defaultValue?: string;
-      defaultLabelKey?: string;
     }
   | {
       kind: "number";
-      path: readonly string[];
-      labelKey: string;
-      helpKey: string;
       bounds: DreamingNumberBounds;
       defaultValue: number;
     }
   | {
       kind: "toggle";
-      path: readonly string[];
-      labelKey: string;
-      helpKey: string;
       /** Runtime value for an absent key; see resolveMemoryDreamingConfig. */
       fallback: boolean;
-    };
+    }
+);
 
 // Mirrors the memory-core manifest configSchema/uiHints
-// (extensions/memory-core/openclaw.plugin.json). Everything here previously
-// required hand-editing openclaw.json. `bounds` restates that manifest's
+// (extensions/memory-core/openclaw.plugin.json). `bounds` restates that manifest's
 // integer/minimum/maximum constraints so a rejected value is caught at the input
 // instead of after autosave hands it to the gateway.
 //
@@ -62,29 +52,14 @@ type DreamingFieldSpec =
 // key is not "off", so rendering `false` would report the opposite of what the
 // sweep actually does. Keep the two in sync.
 const DREAMING_SCHEDULE_FIELDS: readonly DreamingFieldSpec[] = [
-  {
+  ...["frequency", "timezone", "model"].map((key): DreamingFieldSpec => ({
     kind: "text",
-    path: ["frequency"],
-    labelKey: "memoryPage.dreaming.frequency.label",
-    helpKey: "memoryPage.dreaming.frequency.help",
-    placeholderKey: "memoryPage.dreaming.frequency.placeholder",
-    defaultValue: "0 3 * * *",
-  },
-  {
-    kind: "text",
-    path: ["timezone"],
-    labelKey: "memoryPage.dreaming.timezone.label",
-    helpKey: "memoryPage.dreaming.timezone.help",
-    placeholderKey: "memoryPage.dreaming.timezone.placeholder",
-  },
-  {
-    kind: "text",
-    path: ["model"],
-    labelKey: "memoryPage.dreaming.model.label",
-    helpKey: "memoryPage.dreaming.model.help",
-    placeholderKey: "memoryPage.dreaming.model.placeholder",
-    defaultLabelKey: "memoryPage.dreaming.model.default",
-  },
+    path: [key],
+    labelKey: `memoryPage.dreaming.${key}.label`,
+    helpKey: `memoryPage.dreaming.${key}.help`,
+    placeholderKey: `memoryPage.dreaming.${key}.placeholder`,
+    defaultValue: key === "frequency" ? "0 3 * * *" : undefined,
+  })),
   {
     kind: "toggle",
     path: ["verboseLogging"],
@@ -136,18 +111,11 @@ type DreamingSettingsProps = {
 };
 
 function readAtPath(root: Record<string, unknown> | null, path: readonly string[]): unknown {
-  let current: Record<string, unknown> | null = root;
-  for (const [index, key] of path.entries()) {
-    if (!current) {
-      return undefined;
-    }
-    const next = current[key];
-    if (index === path.length - 1) {
-      return next;
-    }
-    current = asConfigRecord(next);
+  let value: unknown = root;
+  for (const key of path) {
+    value = asConfigRecord(value)?.[key];
   }
-  return undefined;
+  return path.length ? value : undefined;
 }
 
 function hasAtPath(root: Record<string, unknown> | null, path: readonly string[]): boolean {
@@ -201,11 +169,7 @@ function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
           ? (props.timezoneDefault ?? t("memoryPage.dreaming.timezone.default"))
           : spec.path[0] === "model"
             ? resolveDreamingModelDefault(props.dreaming)
-            : spec.defaultValue
-              ? spec.defaultValue
-              : spec.defaultLabelKey
-                ? t(spec.defaultLabelKey)
-                : "";
+            : (spec.defaultValue ?? "");
   const defaultDescription = renderSettingsDefaultDescription(defaultValue, overridden);
   if (spec.kind === "toggle") {
     return renderSettingsToggleRow({

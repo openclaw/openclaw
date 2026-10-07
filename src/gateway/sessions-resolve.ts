@@ -1,6 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Gateway sessions.resolve implementation helper.
-// Resolves key/sessionId/label/shortId selectors into one canonical session key.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ErrorShape,
@@ -12,12 +10,15 @@ import {
   SESSION_UUID_SUFFIX_RE,
   SHORT_SESSION_ID_RE,
 } from "../../packages/session-url-contract/src/index.js";
-import { resolveLegacyFreeAcpSessionKey } from "../acp/runtime/session-meta-keys.js";
-import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
@@ -40,6 +41,14 @@ export type SessionsResolveResult =
   | { ok: true; ambiguous: true; candidates: SessionsResolveCandidate[] }
   | { ok: false; error: ErrorShape };
 
+type SessionResolveLookup = Parameters<SessionRowProjection["capture"]>[0];
+
+class SessionResolvePreparationRequired extends Error {
+  constructor(readonly queries: SessionResolveLookup[]) {
+    super("Session metadata must be prepared before resolution");
+  }
+}
+
 function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
   return {
     includeGlobal: p.includeGlobal === true,
@@ -49,14 +58,6 @@ function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
   };
 }
 
-function noSessionFoundResult(params: { p: SessionsResolveParams; message: string }) {
-  if (params.p.allowMissing) {
-    return { ok: true, missing: true } as const;
-  }
-  return invalidSessionRequest(params.message);
-}
-
-/** Rejects sessions whose owning agent no longer exists in config (#65524). */
 function validateSessionAgentExists(
   cfg: OpenClawConfig,
   key: string,
@@ -68,10 +69,6 @@ function validateSessionAgentExists(
     return null;
   }
   return invalidSessionRequest(`Agent "${deletedAgentId}" no longer exists in configuration`);
-}
-
-function normalizeShortSessionId(shortId: string): string | null {
-  return SHORT_SESSION_ID_RE.test(shortId) ? shortId.toLowerCase() : null;
 }
 
 function sessionResolveCandidate(
@@ -101,35 +98,60 @@ export async function withPreparedSessionResolve<T>(
       throw new Error("Session projection changed while resolving the session; retry the request");
     }
   };
-  if (key) {
-    return withReadySessionRows(
-      projection,
-      (cfg) => {
-        const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
-        return agent.ok ? [{ key, agentId: agent.agentId }] : [];
-      },
-      () => {
-        assertCurrent();
-        return consume(resolveSessionKeyFromResolveParams(params));
-      },
-    );
-  }
-  do {
-    await projection.ensureMaterialized();
+  const pending = new Map<string, SessionResolveLookup>();
+  const resolve = () => {
     assertCurrent();
-  } while (projection.needsMaterialization);
-  return consume(resolveSessionKeyFromResolveParams(params));
+    return consume(resolveSessionKeyFromResolveParams(params));
+  };
+  while (true) {
+    try {
+      if (key || pending.size > 0) {
+        return await withReadySessionRows(
+          projection,
+          (cfg) => {
+            const selected = [...pending.values()];
+            if (key) {
+              const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
+              if (agent.ok) {
+                selected.push({ key, agentId: agent.agentId });
+              }
+            }
+            return selected;
+          },
+          resolve,
+        );
+      }
+      do {
+        await projection.ensureMaterialized();
+        assertCurrent();
+      } while (projection.needsMaterialization);
+      return resolve();
+    } catch (error) {
+      if (!(error instanceof SessionResolvePreparationRequired)) {
+        throw error;
+      }
+      for (const query of error.queries) {
+        pending.set(JSON.stringify([query.agentId, query.key, query.storePath]), query);
+      }
+    }
+  }
 }
 
 export function resolveSessionKeyFromResolveParams(params: {
   client: GatewayClient | null;
   projection: SessionRowProjection;
   p: SessionsResolveParams;
+  /** Anonymous HTTP audience sees only current publication grants, never operator discovery. */
+  publicOnly?: boolean;
 }): SessionsResolveResult {
   const { client, p, projection } = params;
+  const noSessionFoundResult = (message: string): SessionsResolveResult =>
+    p.allowMissing ? { ok: true, missing: true } : invalidSessionRequest(message);
   const { cfg, policyConfig } = projection.state;
-  const { sharing } = prepareProjectedSessionPresentation(projection, client);
-  const { entryFilter } = sharing;
+  const entryFilter = params.publicOnly
+    ? (key: string, entry: SessionEntry) =>
+        !isIncognitoSessionKey(key) && Boolean(resolveSessionPublicShare(entry))
+    : prepareProjectedSessionPresentation(projection, client).sharing.entryFilter;
   const prepare = (
     agentId = p.agentId,
     configuredAgentsOnly = false,
@@ -150,35 +172,43 @@ export function resolveSessionKeyFromResolveParams(params: {
     getTarget: ReturnType<typeof prepare>["getTarget"],
   ) => {
     const facts = new Map<SessionEntry, SessionEntry["acp"]>();
-    const unresolved: Parameters<typeof readAcpSessionMetaBatch>[0]["entries"][number][] = [];
+    const unresolved: SessionResolveLookup[] = [];
     for (const [candidateKey, entry] of entries) {
-      const agentId = parseAgentSessionKey(candidateKey)?.agentId;
+      const parsed = parseAgentSessionKey(candidateKey);
       if (
-        !agentId ||
-        configuredAgentIds.has(agentId) ||
-        !resolveLegacyFreeAcpSessionKey(candidateKey)
+        !parsed ||
+        configuredAgentIds.has(parsed.agentId) ||
+        !parsed.rest.startsWith("acp:") ||
+        parsed.rest.startsWith("acp:binding:")
       ) {
         continue;
       }
-      const source = getTarget(candidateKey)?.materialized?.source;
-      if (entry.acp || source?.entry === entry) {
-        facts.set(entry, entry.acp ?? source?.thinkingProjection.acpMeta);
-      } else {
-        unresolved.push({ sessionKey: candidateKey, agentId, entry });
+      const target = getTarget(candidateKey);
+      const current =
+        target &&
+        projection.capture({
+          agentId: target.agentId,
+          key: target.key,
+          storePath: target.storeTarget.storePath,
+        });
+      const source = current?.materialized?.source;
+      if (source && source.entry === current?.entry) {
+        facts.set(entry, source.thinkingProjection.acpMeta);
+      } else if (current?.preparedAcpMeta !== undefined) {
+        facts.set(entry, current.preparedAcpMeta ?? undefined);
+      } else if (current) {
+        unresolved.push({
+          key: current.key,
+          agentId: current.agentId,
+          storePath: current.storeTarget.storePath,
+        });
       }
     }
     if (unresolved.length) {
-      for (const [entry, meta] of readAcpSessionMetaBatch({ cfg, entries: unresolved })) {
-        facts.set(entry, meta);
-      }
+      throw new SessionResolvePreparationRequired(unresolved);
     }
     return (candidateKey: string, entry: SessionEntry | undefined) =>
-      validateSessionAgentExists(
-        cfg,
-        candidateKey,
-        entry,
-        (entry && facts.get(entry)) ?? entry?.acp ?? null,
-      );
+      validateSessionAgentExists(cfg, candidateKey, entry, (entry && facts.get(entry)) ?? null);
   };
 
   const sessionIdMatches = (agentId?: string) => {
@@ -264,7 +294,7 @@ export function resolveSessionKeyFromResolveParams(params: {
     const selected = matches[0];
     return selected
       ? { ok: true, ...selected }
-      : noSessionFoundResult({ p, message: `No session found: ${p.reference.key}` });
+      : noSessionFoundResult(`No session found: ${p.reference.key}`);
   }
 
   if (hasKey) {
@@ -275,20 +305,21 @@ export function resolveSessionKeyFromResolveParams(params: {
       return requestedAgent;
     }
     if (authorizeIncognitoSessionTarget({ client, sessionKey: key, target: null })) {
-      return noSessionFoundResult({ p, message: `No session found: ${key}` });
+      return noSessionFoundResult(`No session found: ${key}`);
     }
     const target = projection.describe({ agentId: requestedAgent.agentId, key });
     if (target?.entry) {
       const { entry } = target;
       const spawnedBy = typeof p.spawnedBy === "string" && p.spawnedBy.trim().length > 0;
       if (
-        (hasOperatorBoundary(client, policyConfig) && entryFilter?.(target.key, entry) === false) ||
+        ((hasOperatorBoundary(client, policyConfig) || params.publicOnly) &&
+          entryFilter?.(target.key, entry) === false) ||
         (spawnedBy &&
           !filterAndSortSessionEntries({ ...prepare(requestedAgent.agentId) }).some(
             ([candidate]) => candidate === target.key,
           ))
       ) {
-        return noSessionFoundResult({ p, message: `No session found: ${key}` });
+        return noSessionFoundResult(`No session found: ${key}`);
       }
       return (
         prepareAgentChecks([[target.key, entry]], () => target)(target.key, entry) ?? {
@@ -298,7 +329,7 @@ export function resolveSessionKeyFromResolveParams(params: {
         }
       );
     }
-    return noSessionFoundResult({ p, message: `No session found: ${key}` });
+    return noSessionFoundResult(`No session found: ${key}`);
   }
 
   if (hasSessionId) {
@@ -360,7 +391,7 @@ export function resolveSessionKeyFromResolveParams(params: {
     const { matches, getTarget } = sessionIdMatches(p.agentId);
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
-      return noSessionFoundResult({ p, message: `No session found: ${sessionId}` });
+      return noSessionFoundResult(`No session found: ${sessionId}`);
     }
     if (selection.kind === "ambiguous") {
       return invalidSessionRequest(
@@ -387,10 +418,10 @@ export function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasShortId) {
-    const shortId = normalizeShortSessionId(rawShortId);
-    if (!shortId) {
+    if (!SHORT_SESSION_ID_RE.test(rawShortId)) {
       return invalidSessionRequest("shortId must be 8-32 hexadecimal characters");
     }
+    const shortId = rawShortId.toLowerCase();
     const prepared = prepare();
     const matchingEntries = filterAndSortSessionEntries({
       ...prepared,
@@ -417,7 +448,7 @@ export function resolveSessionKeyFromResolveParams(params: {
     // A stale display-name hint may narrow a tie, but it must never invalidate the id.
     const narrowed = slugMatches.length > 0 ? slugMatches : matches;
     if (narrowed.length === 0) {
-      return noSessionFoundResult({ p, message: `No session found: ${shortId}` });
+      return noSessionFoundResult(`No session found: ${shortId}`);
     }
     if (narrowed.length > 1) {
       // Bound the ambiguity payload; callers treat a full ten rows as possibly truncated.
@@ -443,10 +474,7 @@ export function resolveSessionKeyFromResolveParams(params: {
     },
   });
   if (matches.length === 0) {
-    return noSessionFoundResult({
-      p,
-      message: `No session found with label: ${parsedLabel.label}`,
-    });
+    return noSessionFoundResult(`No session found with label: ${parsedLabel.label}`);
   }
   if (matches.length > 1) {
     const keys = matches.map(([matchKey]) => matchKey).join(", ");

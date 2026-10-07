@@ -2,8 +2,13 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
-import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
+import {
+  isSessionStoreTopologyChange,
+  sessionChanges,
+  type SessionRowChange,
+} from "../../sessions/session-row-changes.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   registerOpenClawAgentDatabaseAsyncResource,
@@ -12,12 +17,14 @@ import {
 import {
   isPreparedSessionSharingChange,
   projectSessionSharingEntry,
-  readCommittedIncognitoSessionSharing,
   retainPreparedSessionGenerationFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
+import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-entry.js";
+import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
 import type { SessionDeliveryGeneration } from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
-import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import { isSessionStoreReadCandidateCurrent } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 
 class SessionDeliveryGenerationRevokedError extends Error {
@@ -44,12 +51,20 @@ export const isSessionDeliveryGenerationRevokedError = (error: unknown) =>
 const isSessionDeliveryGenerationUnavailableError = (error: unknown) =>
   isRecord(error) && error.code === "SESSION_DELIVERY_GENERATION_UNAVAILABLE";
 
-function isSessionDeliveryGeneration(value: unknown): value is SessionDeliveryGeneration {
+type SessionGenerationFacts = Omit<SessionDeliveryGeneration, "sessionId"> & {
+  sessionId: string | null;
+};
+
+function isSessionGenerationFacts(value: unknown): value is SessionGenerationFacts {
   return (
     isRecord(value) &&
-    [value.agentId, value.storePath, value.sessionKey, value.sessionId].every(
+    [value.agentId, value.storePath, value.sessionKey].every(
       (field) => typeof field === "string" && field.length > 0 && field === field.trim(),
     ) &&
+    (value.sessionId === null ||
+      (typeof value.sessionId === "string" &&
+        value.sessionId.length > 0 &&
+        value.sessionId === value.sessionId.trim())) &&
     typeof value.storePath === "string" &&
     path.isAbsolute(value.storePath) &&
     (value.lifecycleRevision === null ||
@@ -58,14 +73,20 @@ function isSessionDeliveryGeneration(value: unknown): value is SessionDeliveryGe
 }
 
 /** Prepare once per delivery attempt; committed entry publications keep final I/O checks live. */
-export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGeneration): Promise<{
+async function prepareSessionGenerationLease(
+  input: SessionGenerationFacts,
+  onRevoked?: (reason: unknown) => void,
+): Promise<{
   assertCurrent: () => void;
+  assertDeliveryCurrent: () => void;
+  prepareRead: () => Promise<void> | undefined;
   release: () => void;
 }> {
-  if (!isSessionDeliveryGeneration(input)) {
+  if (!isSessionGenerationFacts(input)) {
     throw new SessionDeliveryGenerationUnavailableError();
   }
   const generation = { ...input };
+  const binding = captureIncognitoSessionBinding(generation);
   const releases: Array<() => void> = [];
   const paths = new Set([path.resolve(generation.storePath)]);
   let active = true;
@@ -83,6 +104,10 @@ export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGen
       stop();
     }
   };
+  const revoke = () => {
+    release();
+    onRevoked?.(new SessionDeliveryGenerationUnavailableError());
+  };
   const assertActive = () => {
     if (revoked) {
       throw new SessionDeliveryGenerationRevokedError();
@@ -98,9 +123,8 @@ export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGen
       throw new SessionDeliveryGenerationUnavailableError();
     }
     if (
-      entry === null ||
-      entry.sessionId !== generation.sessionId ||
-      (entry.lifecycleRevision ?? null) !== generation.lifecycleRevision
+      (entry?.sessionId ?? null) !== generation.sessionId ||
+      (entry?.lifecycleRevision ?? null) !== generation.lifecycleRevision
     ) {
       revoked = true;
       throw new SessionDeliveryGenerationRevokedError();
@@ -108,6 +132,10 @@ export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGen
   };
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
+      if (isSessionStoreTopologyChange(change)) {
+        invalidated = true;
+        return;
+      }
       if (typeof change.scope === "object") {
         if (change.scope.agentId && change.scope.agentId !== generation.agentId) {
           return;
@@ -121,9 +149,12 @@ export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGen
           "catalog",
           "acp",
           "agent-runs",
+          "subagent-runs",
           "worker-placements",
           "worker-environments",
           "config",
+          "config-presentation",
+          "config-profiles",
         ].includes(change.scope)
       ) {
         return;
@@ -147,7 +178,15 @@ export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGen
     ) {
       return;
     }
-    if (!isPreparedSessionSharingChange(change)) {
+    if (binding && observeIncognito) {
+      try {
+        observeIncognito();
+      } catch (error) {
+        if (!isSessionDeliveryGenerationRevokedError(error)) {
+          invalidated = true;
+        }
+      }
+    } else if (!isPreparedSessionSharingChange(change)) {
       invalidated = true;
     } else if (observeIncognito && change.facts?.kind === "removed") {
       revoked = true;
@@ -165,28 +204,67 @@ export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGen
   releases.push(sessionChanges.subscribeFacts(changed));
   try {
     let readCurrent: () => void;
-    if (isIncognitoSessionKey(generation.sessionKey)) {
+    let prepareRead: () => Promise<void> | undefined = () => {
+      assertActive();
+      return undefined;
+    };
+    if (binding) {
+      const { actor, admissionSignal } = binding;
+      const claim = actor.sessions.captureCurrent(generation.sessionKey);
+      readCurrent = () => {
+        admissionSignal?.throwIfAborted();
+        actor.assertReadable();
+        claim.assertCurrent();
+        checkEntry(actor.sessions.readSharing(generation.sessionKey)?.entry ?? null);
+      };
+      observeIncognito = readCurrent;
+    } else if (isIncognitoSessionKey(generation.sessionKey)) {
       const database = getOpenIncognitoAgentDatabase(generation.agentId, generation.storePath);
-      if (!database) {
+      if (!database && generation.sessionId !== null) {
         throw new SessionDeliveryGenerationRevokedError();
       }
       releases.push(
         registerOpenClawAgentDatabaseAsyncResource({
           agentId: generation.agentId,
           path: generation.storePath,
-          revoke: release,
-          close: async () => release(),
+          revoke,
+          close: async () => revoke(),
         }),
       );
       readCurrent = () => {
         if (getOpenIncognitoAgentDatabase(generation.agentId, generation.storePath) !== database) {
           throw new SessionDeliveryGenerationUnavailableError();
         }
-        checkEntry(readCommittedIncognitoSessionSharing(database.db, generation.sessionKey)?.entry);
+        if (!database) {
+          checkEntry(null);
+          return;
+        }
+        const committed = readCommittedIncognitoSessionSharing(database.db, generation.sessionKey);
+        if (committed === undefined && generation.sessionId === null) {
+          // Temporary process-held compatibility: only its existing native reader can
+          // prove rowless absence. An unavailable/pending projection still throws above.
+          const read = loadSessionEntryReadOnlyResultInScope({
+            agentId: generation.agentId,
+            storePath: generation.storePath,
+            sessionKey: generation.sessionKey,
+          });
+          if (!read.ok) {
+            throw read.error;
+          }
+          checkEntry(read.value ?? null);
+        } else {
+          checkEntry(committed?.entry ?? (committed ? null : undefined));
+        }
       };
       observeIncognito = readCurrent;
     } else {
       const candidates = captureSessionStoreReadCandidates(generation.storePath);
+      const originalSources = new Map(
+        candidates.map((candidate) => [
+          path.resolve(candidate.physicalPath),
+          readDatabasePathIdentitySync(candidate.physicalPath),
+        ]),
+      );
       for (const candidate of candidates) {
         paths.add(path.resolve(candidate.path));
         paths.add(path.resolve(candidate.physicalPath));
@@ -195,8 +273,8 @@ export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGen
             registerOpenClawAgentDatabaseReadCandidateResource({
               ...candidate,
               path: pathname,
-              revoke: release,
-              close: async () => release(),
+              revoke,
+              close: async () => revoke(),
             }),
           );
         }
@@ -217,13 +295,25 @@ export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGen
             )?.entry;
             checkEntry(entry ?? null);
             const sharing = read!.result.sharing;
-            if (!sharing) {
-              throw new SessionDeliveryGenerationUnavailableError();
+            if (sharing) {
+              source = { path: sharing.source.path, identity: sharing.databaseIdentity };
+            } else {
+              const pathname = path.resolve(read!.database.path);
+              const original = originalSources.get(pathname);
+              // The existing-only worker returns no sharing metadata for a missing file.
+              // Retain that exact absent source; creation can never inherit this selection.
+              if (
+                generation.sessionId !== null ||
+                !original?.key.startsWith("path:") ||
+                readDatabasePathIdentitySync(pathname).key !== original.key
+              ) {
+                throw new SessionDeliveryGenerationUnavailableError();
+              }
+              source = { path: pathname, identity: original.key };
             }
-            source = { path: sharing.source.path, identity: sharing.databaseIdentity };
             paths.add(path.resolve(source.path));
             const prepared = retainPreparedSessionGenerationFacts({
-              databaseIdentity: sharing.databaseIdentity,
+              databaseIdentity: source.identity,
               sessionKey: generation.sessionKey,
               entry: entry ? projectSessionSharingEntry(entry) : undefined,
             });
@@ -232,44 +322,80 @@ export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGen
           },
         );
       }
-      readCurrent = () => {
+      const assertSourceCurrent = () => {
+        assertActive();
         for (const candidate of candidates) {
-          if (
-            captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
-            candidate.physicalPath
-          ) {
+          if (!isSessionStoreReadCandidateCurrent(candidate)) {
             throw new SessionDeliveryGenerationUnavailableError();
           }
         }
         if (!source || readDatabasePathIdentitySync(source.path).key !== source.identity) {
           throw new SessionDeliveryGenerationUnavailableError();
         }
+      };
+      readCurrent = () => {
+        assertSourceCurrent();
         checkEntry(retained?.readCurrent());
       };
+      prepareRead = () => {
+        assertSourceCurrent();
+        return retained?.prepareRead()?.then(assertSourceCurrent);
+      };
     }
-    const assertCurrent = () => {
+    const assertCurrent = (delivery = false) => {
       try {
         assertActive();
         if (
+          delivery &&
           [...paths].some((scope) =>
-            isSessionLifecycleMutationActive(scope, [generation.sessionKey, generation.sessionId]),
+            isSessionLifecycleMutationActive(
+              scope,
+              generation.sessionId
+                ? [generation.sessionKey, generation.sessionId]
+                : [generation.sessionKey],
+            ),
           )
         ) {
           throw new SessionDeliveryGenerationUnavailableError();
         }
         readCurrent();
       } catch (error) {
-        if (
+        const failure =
           isSessionDeliveryGenerationRevokedError(error) ||
           isSessionDeliveryGenerationUnavailableError(error)
-        ) {
-          throw error;
-        }
-        throw new SessionDeliveryGenerationUnavailableError({ cause: error });
+            ? error
+            : new SessionDeliveryGenerationUnavailableError({ cause: error });
+        onRevoked?.(failure);
+        throw failure;
       }
     };
+    for (let pending = prepareRead(); pending; pending = prepareRead()) {
+      await pending;
+    }
     assertCurrent();
-    return { assertCurrent, release };
+    if (onRevoked) {
+      let checkedPublications = publications;
+      // Public notifications run after every committed generation fact is installed.
+      releases.push(
+        sessionChanges.subscribe(() => {
+          if (checkedPublications === publications && !invalidated && !revoked) {
+            return;
+          }
+          checkedPublications = publications;
+          try {
+            assertCurrent();
+          } catch {
+            // assertCurrent has already revoked the execution owner.
+          }
+        }),
+      );
+    }
+    return {
+      assertCurrent,
+      assertDeliveryCurrent: () => assertCurrent(true),
+      prepareRead,
+      release,
+    };
   } catch (error) {
     release();
     if (
@@ -279,5 +405,44 @@ export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGen
       throw error;
     }
     throw new SessionDeliveryGenerationUnavailableError({ cause: error });
+  }
+}
+
+/** Session lifecycle owners compose these facts with their own admitted mutation authority. */
+export async function prepareSessionGenerationFacts(input: SessionGenerationFacts) {
+  const { assertCurrent, prepareRead, release } = await prepareSessionGenerationLease(input);
+  return { assertCurrent, prepareRead, release };
+}
+
+/** Stable cron roots retain their admitted run; exact-run keys already name one generation. */
+export async function prepareCronRootSessionGeneration(
+  input: Omit<SessionDeliveryGeneration, "lifecycleRevision"> & { lifecycleRevision?: string },
+  onRevoked?: (reason: unknown) => void,
+) {
+  if (!isCronSessionKey(input.sessionKey) || isCronRunSessionKey(input.sessionKey)) {
+    return undefined;
+  }
+  const { assertCurrent, release } = await prepareSessionGenerationLease(
+    {
+      ...input,
+      lifecycleRevision: input.lifecycleRevision ?? null,
+    },
+    onRevoked,
+  );
+  return { assertCurrent, release };
+}
+
+/** Delivery remains unavailable while any lifecycle mutation owns the session. */
+export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGeneration) {
+  if (!isSessionGenerationFacts(input) || input.sessionId === null) {
+    throw new SessionDeliveryGenerationUnavailableError();
+  }
+  const lease = await prepareSessionGenerationLease(input);
+  try {
+    lease.assertDeliveryCurrent();
+    return { assertCurrent: lease.assertDeliveryCurrent, release: lease.release };
+  } catch (error) {
+    lease.release();
+    throw error;
   }
 }

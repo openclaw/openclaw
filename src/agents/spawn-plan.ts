@@ -4,8 +4,8 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveChannelDefaultBindingPlacement,
   resolveInboundConversationResolution,
+  resolveSpawnThreadBindingPlacement,
 } from "../channels/conversation-resolution.js";
 import {
   formatThreadBindingDisabledError,
@@ -20,6 +20,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission.js";
+import { resolveSenderRestrictedSpawnError } from "./spawn-requester-policy.js";
 import { countActiveRunsForSession } from "./subagents/registry/subagent-registry.js";
 import { resolveSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
@@ -31,7 +32,7 @@ type SpawnBackendKind = "subagent" | "acp";
 export type PreparedSpawnThreadBinding = {
   channel: string;
   accountId: string;
-  placement: "current" | "child";
+  placement: "child";
   conversationId: string;
   parentConversationId?: string;
 };
@@ -95,26 +96,18 @@ function resolveRequesterBoundConversationRef(params: {
   if (activeBindings.length === 0) {
     return undefined;
   }
-  if (activeBindings.length === 1) {
-    const conversation = activeBindings[0]?.conversation;
-    return conversation
-      ? {
-          conversationId: conversation.conversationId,
-          ...(conversation.parentConversationId
-            ? { parentConversationId: conversation.parentConversationId }
-            : {}),
-        }
-      : undefined;
-  }
-  if (!params.fallback?.conversationId) {
+  if (activeBindings.length > 1 && !params.fallback?.conversationId) {
     return null;
   }
-  const matched = activeBindings.filter(
-    (record) =>
-      record.conversation.conversationId === params.fallback?.conversationId &&
-      normalizeOptionalString(record.conversation.parentConversationId) ===
-        normalizeOptionalString(params.fallback?.parentConversationId),
-  );
+  const matched =
+    activeBindings.length === 1
+      ? activeBindings
+      : activeBindings.filter(
+          (record) =>
+            record.conversation.conversationId === params.fallback?.conversationId &&
+            normalizeOptionalString(record.conversation.parentConversationId) ===
+              normalizeOptionalString(params.fallback?.parentConversationId),
+        );
   const conversation = matched.length === 1 ? matched[0]?.conversation : undefined;
   return conversation
     ? {
@@ -123,7 +116,9 @@ function resolveRequesterBoundConversationRef(params: {
           ? { parentConversationId: conversation.parentConversationId }
           : {}),
       }
-    : null;
+    : activeBindings.length === 1
+      ? undefined
+      : null;
 }
 
 function buildThreadBindingUnavailableError(kind: SpawnBackendKind, mode: SpawnMode): string {
@@ -132,13 +127,13 @@ function buildThreadBindingUnavailableError(kind: SpawnBackendKind, mode: SpawnM
   }
   if (mode === "session") {
     return (
-      'sessions_spawn(mode="session") is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). ' +
+      'sessions_spawn(mode="session") is only available on channels that open a separate thread for the worker (e.g. Discord or Matrix threads). ' +
       "This request is not running on a channel that can bind a subagent thread. " +
       'Use mode="run" for one-shot subagent work.'
     );
   }
   return (
-    "thread=true is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). " +
+    "thread=true is only available on channels that open a separate thread for the worker (e.g. Discord or Matrix threads). " +
     "This request is not running on a channel that can bind a subagent thread. " +
     "Retry without thread=true, or re-run sessions_spawn from a channel that supports threads."
   );
@@ -204,13 +199,19 @@ export function prepareSpawnThreadBinding(params: {
           : buildThreadBindingUnavailableError(params.kind, params.mode),
     };
   }
-  const placement =
-    resolveChannelDefaultBindingPlacement(policy.channel) ??
-    (capabilities.placements.includes("child") ? "child" : "current");
+  const placement = resolveSpawnThreadBindingPlacement(policy.channel, capabilities.placements);
+  if (placement !== "child") {
+    return {
+      ok: false,
+      error:
+        `thread=true on ${policy.channel} would bind this conversation to the worker instead of opening a separate thread. ` +
+        'Retry without thread=true (mode="run"); the result is announced back here.',
+    };
+  }
   if (!capabilities.bindSupported || !capabilities.placements.includes(placement)) {
     return {
       ok: false,
-      error: `Thread bindings do not support ${placement} placement for ${policy.channel}.`,
+      error: `Thread bindings do not support child placement for ${policy.channel}.`,
     };
   }
   const fallback = resolveInboundConversationResolution({
@@ -260,6 +261,7 @@ export function prepareSpawnThreadBinding(params: {
 
 export function resolveSpawnAdmission(params: {
   cfg: OpenClawConfig;
+  inheritedToolPolicySource?: "sender";
   enabled?: boolean;
   collector?: {
     liveChildren: number;
@@ -273,6 +275,7 @@ export function resolveSpawnAdmission(params: {
   requestedAgentId?: string;
   configuredAgentIds: string[];
   additionalActiveChildren?: number;
+  countActiveRuns?: typeof countActiveRunsForSession;
 }):
   | {
       ok: true;
@@ -284,6 +287,10 @@ export function resolveSpawnAdmission(params: {
       };
     }
   | { ok: false; governingCap?: ChildAdmissionCap; error: string } {
+  const requesterPolicyError = resolveSenderRestrictedSpawnError(params);
+  if (requesterPolicyError) {
+    return { ok: false, error: requesterPolicyError };
+  }
   if (params.enabled === false) {
     return { ok: true };
   }
@@ -311,7 +318,7 @@ export function resolveSpawnAdmission(params: {
         maxSpawnDepth,
         collect: false,
         activeChildren:
-          countActiveRunsForSession(params.requesterSessionKey, {
+          (params.countActiveRuns ?? countActiveRunsForSession)(params.requesterSessionKey, {
             collect: false,
             requesterAgentId: params.requesterAgentId,
           }) + (params.additionalActiveChildren ?? 0),

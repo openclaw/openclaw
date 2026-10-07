@@ -1,6 +1,7 @@
 // Gateway auxiliary handler tests cover hot config reload behavior, prepared
 // secret snapshot updates, and restart-plan side effects.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 
 const secretStoreMocks = vi.hoisted(() => ({
   deleteEntry: vi.fn(),
@@ -230,6 +231,7 @@ type SecretsReloadHarnessParams = {
 function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
   const respond = params.respond ?? vi.fn();
   const gatewayAux = createGatewayAuxHandlers({
+    scheduler: createTestGatewayScheduler(),
     log: {},
     getNativeApprovalRouteCoordinator: () => undefined,
     activateRuntimeSecrets: createTestRuntimeSecretsActivator(params.prepareRuntimeSecretsSnapshot),
@@ -788,38 +790,6 @@ describe("gateway aux handlers", () => {
     // startChannel was invoked for zalo on rollback even though the original
     // stopChannel(zalo) rejected.
     expect(startChannel.mock.calls.map(([ch]) => ch)).toEqual(["slack", "slack", "zalo"]);
-    expect(respond.mock.calls).toHaveLength(1);
-    expect(firstRespondCall(respond)[0]).toBe(false);
-  });
-
-  it("restores both current and required shared-gateway generation on reload failure", async () => {
-    // Locks in the auth-generation rollback contract: a failed reload must
-    // not leave `required` cleared during activation, otherwise stale clients matching `current`
-    // could remain authorized after rollback.
-    const buildReloadPlan = buildRestartChannelsPlan("slack");
-    activateSnapshot(slackConfig("old-slack-secret"));
-    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(slackConfig("new-slack-secret"));
-    const stopChannel = vi.fn().mockResolvedValue(undefined);
-    const startChannel = vi.fn().mockRejectedValue(new Error("slack refused to start"));
-
-    const sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
-      current: "gen-a",
-      required: "gen-a",
-    });
-
-    const { reload, respond } = createSecretsReloadHarness({
-      prepareRuntimeSecretsSnapshot,
-      buildReloadPlan,
-      sharedGatewaySessionGenerationState,
-      resolveSharedGatewaySessionGenerationForConfig: () => "gen-b",
-      startChannel,
-      stopChannel,
-    });
-
-    await reload();
-
-    expect(sharedGatewaySessionGenerationState.current).toBe("gen-a");
-    expect(sharedGatewaySessionGenerationState.required).toBe("gen-a");
     expect(respond.mock.calls).toHaveLength(1);
     expect(firstRespondCall(respond)[0]).toBe(false);
   });

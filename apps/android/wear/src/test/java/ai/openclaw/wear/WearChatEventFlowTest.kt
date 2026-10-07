@@ -2744,7 +2744,7 @@ class WearChatEventFlowTest {
     val abortRuns = mutableListOf<String?>()
     private var replyObserver: ActivityController<out ComponentActivity>? = null
     private val client =
-      WearProxyClient.createForTests(
+      WearProxyClient(
         nodeResolver = WearNodeResolver { "phone-a" },
         transport = WearMessageTransport { _, _, bytes -> respond(bytes) },
       )

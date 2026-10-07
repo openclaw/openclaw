@@ -4,7 +4,6 @@ import {
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
-// Codex plugin module implements command plugins management behavior.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
@@ -12,7 +11,10 @@ import { isOpenAiCuratedMarketplaceName } from "./app-server/plugin-inventory.js
 import type { v2 } from "./app-server/protocol.js";
 import { assertCodexHostOwnerCurrent, canMutateCodexHost } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
-import { buildCodexPluginAppLinks } from "./command-plugin-app-links.js";
+import {
+  buildCodexPluginAppLinks,
+  buildCodexPluginStatusButtons,
+} from "./command-plugin-app-links.js";
 import {
   describeConfiguredPluginIdentityConflict,
   marketplaceNamesRepresentSameCatalog,
@@ -88,7 +90,7 @@ export async function handleCodexPluginsSubcommand(
     }
     const current = await io.readConfig();
     return {
-      text: formatPluginList(current.plugins ?? {}, { globalEnabled: current.enabled === true }),
+      text: formatPluginList(current.plugins ?? {}, current.enabled === true),
     };
   }
 
@@ -560,26 +562,7 @@ async function installCodexPlugin(
               },
             ]
           : []),
-        {
-          type: "buttons",
-          buttons: [
-            ...(appLinks.length > 0
-              ? [
-                  {
-                    label: "Refresh hosted apps",
-                    action: { type: "command" as const, command: "/codex plugins refresh" },
-                  },
-                ]
-              : []),
-            {
-              label: "Check status",
-              action: {
-                type: "command",
-                command: `/codex plugins status ${requestedId}`,
-              },
-            },
-          ],
-        },
+        buildCodexPluginStatusButtons(requestedId, appLinks.length > 0),
         { type: "context", text: `${refreshWarning.trim()} ${POLICY_REFRESH_HINT}`.trim() },
       ],
     };
@@ -600,9 +583,8 @@ async function installCodexPlugin(
 
 function formatPluginList(
   plugins: Record<string, CodexPluginConfigEntry>,
-  options: { globalEnabled?: boolean } = {},
+  globalEnabled: boolean,
 ): string {
-  const globalEnabled = options.globalEnabled === true;
   const keys = Object.keys(plugins).toSorted();
   if (keys.length === 0) {
     return "No Codex sub-plugins configured under plugins.entries.codex.config.codexPlugins.plugins";

@@ -12,8 +12,13 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  publishSystemEventStoreResolver,
+  registerSystemEventStoreOwner,
+} from "../infra/system-event-ownership.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
@@ -81,13 +86,15 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
     const broadcast = vi.fn();
     const invalidateMentions = vi.fn();
     const gatewayContext = {
-      mentionInbox: { invalidate: invalidateMentions },
+      mentionInbox: { invalidateAsync: invalidateMentions },
     } as unknown as GatewayRequestContext;
     const reloader = startManagedGatewayConfigReloader({
+      scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
       getPluginRegistry: () => pluginRegistry,
       configRevisionProjector: {
         projectRawHash: (hash) => `opaque:${hash}`,
         projectResolvedHash: (hash) => `resolved:${hash}`,
+        hashResponseSessionBearer: () => "unused-test-scope",
       },
       minimalTestGateway: false,
       initialConfig,
@@ -225,6 +232,37 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
         clearRuntimeConfigSnapshot();
       }
     });
+
+    const retireStoreOwner = vi.fn();
+    const storeOwnerKey = Symbol.for("openclaw.test.managedReloadStoreOwner");
+    registerSystemEventStoreOwner(storeOwnerKey, retireStoreOwner);
+    try {
+      const commit = expectDefined(hoisted.onRuntimeConfigCommitted, "runtime config commit");
+      const neutralConfig: OpenClawConfig = {
+        ...initialConfig,
+        ui: { prefs: { sidebarEntries: ["route:usage"] } },
+      };
+      commit(buildGatewayReloadPlan(["ui.prefs.sidebarEntries"]), neutralConfig);
+      commit(buildGatewayReloadPlan(["logging.level"]), {
+        ...neutralConfig,
+        logging: { level: "debug" },
+      });
+      expect(retireStoreOwner).not.toHaveBeenCalled();
+
+      const replacementConfig: OpenClawConfig = {
+        ...neutralConfig,
+        session: { store: "/tmp/replacement-sessions.json" },
+      };
+      commit(buildGatewayReloadPlan(["session.store"]), replacementConfig);
+      expect(retireStoreOwner).toHaveBeenCalledOnce();
+      commit(buildGatewayReloadPlan(["env.OPENCLAW_STATE_DIR"]), replacementConfig);
+      expect(retireStoreOwner).toHaveBeenCalledTimes(2);
+      commit(buildGatewayReloadPlan(["ui.prefs.sidebarEntries"]), replacementConfig);
+      expect(retireStoreOwner).toHaveBeenCalledTimes(2);
+    } finally {
+      registerSystemEventStoreOwner(storeOwnerKey, () => {});
+      publishSystemEventStoreResolver(undefined);
+    }
 
     await reloader.stop();
     expect(hoisted.stop).toHaveBeenCalledOnce();

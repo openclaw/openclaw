@@ -1,4 +1,3 @@
-// Tracks queue state for active, pending, and recently deduped reply runs.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ModelCatalogEntry } from "../../../agents/model-catalog.types.js";
@@ -17,7 +16,7 @@ type FollowupQueueState = {
   items: FollowupRun[];
   draining: boolean;
   /** Exact operational drain generation; recovery may retire only this owner. */
-  drainOwner?: object;
+  drainOwner?: { rescheduleRequested: boolean };
   /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
   inFlight: Set<FollowupRun>;
   lastEnqueuedAt: number;
@@ -32,8 +31,8 @@ type FollowupQueueState = {
   /** Sources currently used by an async summary delivery cannot be evicted mid-run. */
   activeSummarySources: WeakSet<FollowupRun>;
   summaryElisions: Array<{
+    /** Storage grouping only; delivery rechecks mutable tool policy for every source. */
     contextKey: string;
-    count: number;
     /** Compact sources stay strong so cancellation follows summarized content until delivery. */
     sources: FollowupRun[];
     /** Summary lines stay index-aligned with sources across context isolation and eviction. */
@@ -77,14 +76,12 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
 }
 
 export function hasPendingFollowupQueueWork(keys: Iterable<string | undefined>): boolean {
-  const seen = new Set<string>();
   for (const key of keys) {
     const cleaned = normalizeOptionalString(key);
-    if (!cleaned || seen.has(cleaned)) {
+    if (!cleaned) {
       continue;
     }
-    seen.add(cleaned);
-    const queue = getExistingFollowupQueue(cleaned);
+    const queue = FOLLOWUP_QUEUES.get(cleaned);
     if (queue && (queue.items.length > 0 || queue.inFlight.size > 0 || queue.droppedCount > 0)) {
       return true;
     }
@@ -114,7 +111,6 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
       }
       const [source] = entry.sources.splice(sourceIndex, 1);
       entry.summaryLines.splice(sourceIndex, 1);
-      entry.count = entry.sources.length;
       queue.evictedSummaryCount += 1;
       sourceCount -= 1;
       if (source) {

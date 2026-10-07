@@ -1,4 +1,3 @@
-// Control UI route classifier for base-path and root-mounted SPA serving.
 import { resolvePluginDiscoveryIdentity } from "../plugins/catalog-discovery.js";
 import { acceptsControlUiHtmlResponse, isReadHttpMethod } from "./control-ui-http-utils.js";
 import {

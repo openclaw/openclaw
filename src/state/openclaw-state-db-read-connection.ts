@@ -1,12 +1,17 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
+import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import {
   createSqliteLifecycleAggregateError,
   SqliteCoordinatorError,
   throwSqliteLifecycleErrors,
-} from "../infra/sqlite-coordinator.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+} from "../infra/sqlite-lifecycle-errors.js";
+import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
@@ -20,6 +25,7 @@ import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
+import { getSqliteWorkerStateIntegrityAdmission } from "../infra/sqlite-worker-state-context.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -28,12 +34,24 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { openTrackedStateDatabaseResult } from "./openclaw-state-db-handle.js";
+import {
+  invalidateOpenClawStateRuntimeIntegrity,
+  type OpenClawStateIntegrityPolicy,
+} from "./openclaw-state-db-integrity-admission.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
 export type OpenClawStateReadConnection = {
   database: Pick<OpenClawStateDatabase, "db" | "path">;
+  snapshotSource?: {
+    retain(): {
+      location: string;
+      cleanupRoot?: string;
+      assertCurrent(): void;
+      release(): void;
+    };
+  };
   close: (retain?: boolean) => boolean;
 };
 
@@ -58,7 +76,11 @@ function retireReader(reader: RetainedReader): void {
 }
 
 function scheduleReaderRetirement(reader: RetainedReader): void {
-  if (retainedReaders.get(reader.identity.key) !== reader) {
+  // Unproven close delegates the same TTL to pool retirement after task custody is released.
+  if (
+    !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources ||
+    retainedReaders.get(reader.identity.key) !== reader
+  ) {
     return;
   }
   clearTimeout(reader.idleTimer);
@@ -152,11 +174,16 @@ export type OpenClawStateSettledRead<T> =
   | { status: "available"; value: T }
   | { status: "unavailable"; error: unknown };
 
-export function assertStateReadSchema(database: DatabaseSync, pathname: string): void {
+export function assertStateReadSchema(
+  database: DatabaseSync,
+  pathname: string,
+  integrityPolicy?: OpenClawStateIntegrityPolicy,
+): void {
   assertStateReadSchemaForPolicy(
     database,
     pathname,
     isExistingOpenClawStateSchema(pathname, database),
+    integrityPolicy,
   );
 }
 
@@ -164,9 +191,15 @@ function assertStateReadSchemaForPolicy(
   database: DatabaseSync,
   pathname: string,
   existingSchema: boolean,
+  integrityPolicy?: OpenClawStateIntegrityPolicy,
 ): void {
   if (existingSchema) {
-    assertExistingOpenClawStateRuntimeSchema(database, pathname);
+    assertExistingOpenClawStateRuntimeSchema(
+      database,
+      pathname,
+      getSqliteWorkerStateIntegrityAdmission(),
+      integrityPolicy,
+    );
   } else {
     assertSupportedStateSchemaVersion(database, pathname);
   }
@@ -207,7 +240,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
   retainConnection = false,
 ): OpenClawStateSettledRead<T> {
   const opening =
-    retainConnection && source === pathname && !snapshotRoot && !process.versions.bun
+    retainConnection && source === pathname && !snapshotRoot
       ? borrowStateReadConnection(pathname, expectedIdentity)
       : openStateReadConnectionResult(pathname, source, expectedIdentity, snapshotRoot, true);
   if (opening.status === "unavailable") {
@@ -222,12 +255,18 @@ export function readOpenClawStateReadOnlyLocation<T>(
     // Scope and path policy are authority, not ordinary schema SQL failure.
     const existingSchema = isExistingOpenClawStateSchema(pathname, opened.database.db);
     try {
-      runSqliteReadOperationSync(opened.database.db, () => {
-        assertStateReadSchemaForPolicy(opened.database.db, pathname, existingSchema);
-        admitSqliteSchema(opened.database.db);
-      });
-      result = { status: "available", value: operation(opened.database) };
+      result = {
+        status: "available",
+        value: runSqliteReadOperationSync(opened.database.db, () => {
+          assertStateReadSchemaForPolicy(opened.database.db, pathname, existingSchema);
+          admitSqliteSchema(opened.database.db);
+          return operation(opened.database);
+        }),
+      };
     } catch (error) {
+      if (isSqliteCorruptionError(error)) {
+        invalidateOpenClawStateRuntimeIntegrity(opened.database.db);
+      }
       result = { status: "unavailable", error };
     }
     const location = typeof source === "string" ? source : source.location;
@@ -393,6 +432,7 @@ function openStateReadConnectionResult(
   }
   const db = native.database;
   let closed = false;
+  let closing = false;
   const database = {
     db,
     path: pathname,
@@ -406,30 +446,43 @@ function openStateReadConnectionResult(
   };
   const connection: OpenClawStateReadConnection = {
     database: { db, path: pathname },
+    snapshotSource: snapshot
+      ? {
+          retain() {
+            const assertCurrent = () => {
+              if (closing || closed) {
+                throw new Error("Shared-state snapshot source is closing or closed");
+              }
+            };
+            assertCurrent();
+            return {
+              location: snapshot.location,
+              cleanupRoot: snapshot.cleanupRoot,
+              assertCurrent,
+              release: retainSnapshotTempDirectory(
+                snapshot.cleanupRoot ?? path.dirname(snapshot.location),
+              ),
+            };
+          },
+        }
+      : undefined,
     close() {
       if (closed) {
         return false;
       }
+      closing = true;
       // A failed close remains owned for retry, including private snapshot handles.
       const errors = openClawStateDatabaseCache.closeOpenClawStateDatabaseHandle(database);
       if (errors.length === 1 && errors[0] instanceof SnapshotCleanupIncompleteError) {
         return false;
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw createSqliteLifecycleAggregateError(
-          errors,
-          "Shared-state reader cleanup failed.",
-          errors[0],
-        );
-      }
+      throwSqliteLifecycleErrors(errors, "Shared-state reader cleanup failed.");
       closed = true;
       return true;
     },
   };
   try {
+    enableNodeSqliteKyselyStatementCache(db);
     if (expectedIdentity !== undefined) {
       assertExistingDatabaseIdentity(location, expectedIdentity);
     }

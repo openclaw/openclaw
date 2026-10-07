@@ -1,6 +1,3 @@
-/**
- * Resolves configured native harness policy for agent ids.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
 import {
@@ -14,16 +11,12 @@ import {
 } from "../model-runtime-policy.js";
 import { resolveOpenAIImplicitAgentRuntime } from "../openai-routing.js";
 
-/**
- * Effective runtime policy for selecting the agent harness that should execute a turn.
- */
 export type AgentHarnessPolicy = {
   runtime: EmbeddedAgentRuntime;
   runtimeSource?: "model" | "provider" | "implicit";
   forcedByEnvironment?: true;
 };
 
-/** Resolves model/provider/runtime config into the canonical harness runtime id. */
 export function resolveAgentHarnessPolicy(
   params: {
     provider?: string;

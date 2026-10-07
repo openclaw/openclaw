@@ -27,9 +27,12 @@ import {
   readUserProfileEmailBindingRevision,
   readUserProfileVersion,
 } from "./user-profile-events.js";
+import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
 import {
   profileCatalogPath,
+  projectUserProfileDisplays,
   projectHasMultipleSessionSharingIdentities,
+  resolveUserProfileReferenceInCatalog,
   selectHasMultipleSessionSharingIdentities,
   selectUserProfileIdentityInDatabase,
   selectUserProfileDisplaysInDatabase,
@@ -38,13 +41,12 @@ import {
 import type { UserProfileEmailBindingChange } from "./user-profile-mutation.js";
 import {
   applyUserProfileEmailBinding,
+  bindPreparedUserProfileIdentity,
   projectUserProfileDisplay,
   projectCatalogUserProfileIdentity,
-  matchUserProfileReference,
   resolveCatalogProfile,
   selectResolvedUserProfile,
   userProfileDisplaySelection,
-  selectProfileDisplayEntries,
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import { UserProfileNotFoundError } from "./user-profiles-schema.js";
@@ -78,12 +80,11 @@ export function readUserProfileIdentity(
 }
 
 /** Existing one-hop aliases are identity facts; this read never creates profile storage. */
-export function readUserProfileAliases(
+export const readUserProfileAliases = (
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
-): ReadonlySet<string> {
-  return new Set([profileId, ...(readUserProfileIdentity(profileId, options)?.aliases ?? [])]);
-}
+): ReadonlySet<string> =>
+  new Set([profileId, ...(readUserProfileIdentity(profileId, options)?.aliases ?? [])]);
 
 /** Gateway readers already retain this catalog with their session projection. */
 export function readResidentUserProfileId(
@@ -96,12 +97,58 @@ export function readResidentUserProfileId(
   }
   return resolveCatalogProfile(catalog.rows, profileId)?.id;
 }
+
+export function captureResidentUserProfileAccess(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const pathname = profileCatalogPath(options);
+  const catalog = profileCatalogs.get(pathname);
+  const bindings = catalog && profileBindings.get(catalog.rows);
+  if (!catalog?.valid || !bindings || !catalog.assertCurrent) {
+    throw new Error("User profile catalog is not ready");
+  }
+  const { rows, assertCurrent: guard } = catalog;
+  const assertCurrent = () => {
+    if (profileCatalogs.get(pathname) !== catalog || catalog.rows !== rows) {
+      throw new UserProfileNotFoundError(profileId);
+    }
+    guard(profileId);
+    const profile = resolveCatalogProfile(rows, profileId);
+    if (!profile) {
+      throw new UserProfileNotFoundError(profileId);
+    }
+    guard(profile.id);
+    return profile;
+  };
+  assertCurrent();
+  return {
+    assertCurrent,
+    readCurrentFacts() {
+      const profile = assertCurrent();
+      return {
+        profileId: profile.id,
+        emails: [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted(),
+        ...(profile.githubAccountIds ? { githubAccountIds: [...profile.githubAccountIds] } : {}),
+        assignedRole: profile.role ?? null,
+        githubLogin: profile.githubLogin ?? null,
+      };
+    },
+  };
+}
+
+/** Committed canonical row identity is the revision of catalog-derived avatar facts. */
+export function readResidentUserProfileRevision(profileId: string, pathname: string) {
+  const catalog = profileCatalogs.get(pathname);
+  return catalog?.valid ? resolveCatalogProfile(catalog.rows, profileId) : undefined;
+}
 type ProfileCatalog = {
   rows: Map<string, ProfileDisplayRow>;
   identity: DatabasePathIdentity;
   valid: boolean;
   leases: Set<symbol>;
   asyncOnly?: boolean;
+  assertCurrent?: (profileId: string) => void;
 };
 const profileCatalogs = new Map<string, ProfileCatalog>();
 type ProfileMutationPublication = {
@@ -201,7 +248,7 @@ function loadProfileCatalog(
     );
     catalog.rows =
       shared?.rows ??
-      new Map(tableExists(db, "user_profiles") ? selectProfileDisplayEntries(db) : []);
+      new Map(tableExists(db, "user_profiles") ? selectProfileAccessEntries(db) : []);
     Object.assign(catalog, { identity, valid: true });
     for (const publication of profileMutationPublications) {
       retainProfileMutationPublicationCatalog(publication, catalog, true);
@@ -247,7 +294,7 @@ function retainProfileMutationPublicationCatalog(
 function releaseProfileCatalog(catalog: ProfileCatalog, lease: symbol) {
   if (catalog.leases.delete(lease) && catalog.leases.size === 0) {
     for (const [pathname, current] of profileCatalogs) {
-      if (current === catalog) {
+      if (current.leases === catalog.leases) {
         profileCatalogs.delete(pathname);
       }
     }
@@ -406,20 +453,6 @@ export function retainUserProfileMutationPublication(
   };
 }
 
-export function retainUserProfilePublication(
-  identity: DatabasePathIdentity,
-  profileId: string,
-  before: ProfileDisplayRow | undefined,
-) {
-  const publication = retainUserProfileMutationPublication(identity, [[profileId, before]]);
-  return {
-    reconcile(this: void, observed: ProfileDisplayRow | undefined) {
-      publication.reconcile([[profileId, observed]]);
-    },
-    release: publication.release,
-  };
-}
-
 function observeProfileCatalogs(refresh = false): void {
   observeEmailBindings();
   if (stopCatalogEvents && !refresh) {
@@ -466,30 +499,27 @@ function observeProfileCatalogs(refresh = false): void {
 /** Retain exact identity and display/navigation facts; physical admission updates every locator before observers. */
 export function retainUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}): () => void {
   const pathname = profileCatalogPath(options);
+  const existing = profileCatalogs.has(pathname);
   const catalog: ProfileCatalog = profileCatalogs.get(pathname) ?? {
     rows: new Map(),
     identity: readDatabasePathIdentitySync(pathname),
     valid: false,
     leases: new Set<symbol>(),
   };
-  if (!profileCatalogs.has(pathname)) {
+  if (!existing) {
     withExistingOpenClawStateDatabaseReadOnly(
       ({ db }) => loadProfileCatalog(catalog, db, readDatabasePathIdentitySync(pathname)),
       { ...options, path: pathname },
     );
     profileCatalogs.set(pathname, catalog);
   }
-  observeProfileCatalogs(true);
+  observeProfileCatalogs(!existing);
   const lease = Symbol("profile catalog lease");
   catalog.leases.add(lease);
   return () => releaseProfileCatalog(catalog, lease);
 }
 
-/** Prepare once off-thread; execution reads only committed facts retained by this owner. */
-export async function prepareUserProfileIdentity(
-  profileId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): Promise<PreparedUserProfileIdentity> {
+async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}) {
   const context = captureOpenClawStateWorkerContext(options);
   const authority = await captureUserProfileAuthorityRead(context.admission);
   const pathname = context.admission.databasePath;
@@ -546,8 +576,8 @@ export async function prepareUserProfileIdentity(
         rows: new Map(reply?.profiles ?? []),
         identity: context.admission.identity,
         valid: true,
-        leases: new Set(),
-        asyncOnly: true,
+        leases: catalog?.leases ?? new Set(),
+        asyncOnly: catalog ? catalog.asyncOnly : true,
       };
       refreshObserver = true;
       profileCatalogs.set(pathname, catalog);
@@ -570,19 +600,11 @@ export async function prepareUserProfileIdentity(
   const identity = retained.identity.key;
   const rows = retained.rows;
   const bindings = profileBindings.get(rows)!;
-  const initial = [...bindings.byEmail.values()].filter(
-    (binding) => binding.profileId === profileId,
-  );
-  const ids = Object.freeze(
-    initial.flatMap((binding) => (binding.bindingId ? [binding.bindingId] : [])).toSorted(),
-  );
-  const lease = Symbol("prepared profile identity");
-  retained.leases.add(lease);
+  const release = retainUserProfileCatalog({ ...options, path: pathname });
   let active = true;
-  const assertCurrent = (requiredEmailBindingIds: readonly string[] = []) => {
+  const assertCurrent = (profileId: string) => {
     context.admission.assertCurrent();
     if (
-      !active ||
       !retained.valid ||
       context.admission.identity.key !== identity ||
       retained.identity.key !== identity ||
@@ -591,57 +613,61 @@ export async function prepareUserProfileIdentity(
       throw new UserProfileNotFoundError(profileId);
     }
     authority.assertSettled(profileId);
-    if (
-      resolveCatalogProfile(rows, profileId)?.id !== profileId ||
-      requiredEmailBindingIds.some((id) => bindings.byId.get(id) !== profileId)
-    ) {
-      throw new UserProfileNotFoundError(profileId);
-    }
   };
-  function readCurrentProfile(this: void, requiredEmailBindingIds?: readonly string[]) {
-    assertCurrent(requiredEmailBindingIds);
-    return { profileId, assignedRole: rows.get(profileId)?.role || null };
-  }
+  retained.assertCurrent = assertCurrent;
   return {
-    readCurrentProfile,
-    get emailBindingIds() {
-      assertCurrent();
-      if (initial.some((binding) => binding.bindingId === null)) {
+    rows,
+    bindings,
+    assertCurrent(profileId: string) {
+      if (!active) {
         throw new UserProfileNotFoundError(profileId);
       }
-      return ids;
-    },
-    readCurrentFacts(this: void, requiredEmailBindingIds) {
-      const profile = readCurrentProfile(requiredEmailBindingIds);
-      const aliases = new Set([profileId]);
-      for (const row of rows.values()) {
-        if (row.merged_into === profileId) {
-          aliases.add(row.id);
-        }
-      }
-      return {
-        profile: {
-          profileId: profile.profileId,
-          emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
-          assignedRole: profile.assignedRole,
-        },
-        aliases,
-      };
+      assertCurrent(profileId);
     },
     release(this: void) {
       if (active) {
         active = false;
-        releaseProfileCatalog(retained, lease);
+        release();
       }
     },
   };
+}
+
+/** Retain one off-thread preparation for a synchronous batch of current canonical identities. */
+export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}) {
+  const catalog = await acquireUserProfileCatalog(options);
+  return {
+    readCurrentIdentity(this: void, profileId: string) {
+      catalog.assertCurrent(profileId);
+      const profile = projectCatalogUserProfileIdentity(catalog.rows, profileId);
+      if (profile && profile.profileId !== profileId) {
+        catalog.assertCurrent(profile.profileId);
+      }
+      return profile;
+    },
+    release: catalog.release,
+  };
+}
+
+/** Prepare once off-thread; execution reads only committed facts retained by this owner. */
+export async function prepareUserProfileIdentity(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+  emailTargets?: readonly string[],
+): Promise<PreparedUserProfileIdentity> {
+  const capturedEmails = emailTargets?.slice();
+  return bindPreparedUserProfileIdentity(
+    profileId,
+    await acquireUserProfileCatalog(options),
+    capturedEmails,
+  );
 }
 
 /** Stage exact changed keys before commit so observers always see the whole committed catalog. */
 export function stageUserProfileCatalogChange(db: DatabaseSync, profileIds: string[]): void {
   const catalog = profileCatalogHandles.get(db);
   if (catalog) {
-    const rows = selectProfileDisplayEntries(db, profileIds);
+    const rows = selectProfileAccessEntries(db, profileIds);
     stageSqliteTransactionState(db, {
       stage: () => {},
       rollback: () => {},
@@ -685,20 +711,13 @@ export function getUserProfileDisplays(
   if (ids.length === 0) {
     return new Map();
   }
-  const project = (resolve: (id: string) => Omit<ProfileDisplayRow, "role"> | undefined) =>
-    new Map(
-      ids.flatMap((id) => {
-        const profile = resolve(id);
-        return profile ? [[id, projectUserProfileDisplay(profile)] as const] : [];
-      }),
-    );
   return (
     readProfileCatalog(
       options,
-      (resident) => project((id) => resolveCatalogProfile(resident, id)),
+      (resident) => projectUserProfileDisplays(ids, (id) => resolveCatalogProfile(resident, id)),
       (db) => {
         const rows = selectUserProfileDisplaysInDatabase(db, ids);
-        return project((id) => rows.get(id));
+        return projectUserProfileDisplays(ids, (id) => rows.get(id));
       },
     ) ?? new Map()
   );
@@ -717,19 +736,7 @@ export function resolveUserProfileReference(
   return (
     readProfileCatalog(
       options,
-      (resident) => {
-        const allowed = (row: ProfileDisplayRow) =>
-          !allowedProfileIds || allowedProfileIds.has(row.merged_into ?? row.id);
-        const raw = resident.get(reference);
-        return matchUserProfileReference(
-          reference,
-          raw && allowed(raw) ? resolveCatalogProfile(resident, reference)?.id : undefined,
-          (prefix) =>
-            [...resident.values()]
-              .filter((row) => allowed(row) && row.id.toLowerCase().startsWith(prefix))
-              .map((row) => row.merged_into ?? row.id),
-        );
-      },
+      (resident) => resolveUserProfileReferenceInCatalog(resident, reference, allowedProfileIds),
       (db) => selectUserProfileReferenceInDatabase(db, reference, allowedProfileIds),
     ) ?? ok(undefined)
   );

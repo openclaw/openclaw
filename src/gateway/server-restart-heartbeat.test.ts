@@ -7,6 +7,7 @@ import { createCronServiceState } from "../cron/service/state.js";
 import { executeJobCoreWithTimeout } from "../cron/service/timer-job-runner.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
 import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 
@@ -35,6 +36,7 @@ it("settles a queued heartbeat monitor before joining its cron run during shutdo
     runOnce: async () => ({ status: "skipped", reason: "requests-in-flight" }),
   });
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     // The execution core does not open the scheduler store.
     storePath: "unused-heartbeat-monitor",
     cronEnabled: false,

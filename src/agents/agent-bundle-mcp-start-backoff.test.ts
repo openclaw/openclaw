@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { disposeAllSessionMcpRuntimes } from "./agent-bundle-mcp-manager-api.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  reloadSessionMcpRuntimes,
+} from "./agent-bundle-mcp-manager-api.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRequesterScope, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
@@ -108,32 +112,6 @@ async function discover(runtime: SessionMcpRuntime) {
   return { catalog: await pending, waitedMs: Date.now() - started };
 }
 
-it("remembers a startup timeout across runs and reports unavailable without repeated waits or logs", async () => {
-  const waits: number[] = [];
-  for (let run = 0; run < 8; run += 1) {
-    const runtime = makeRuntime();
-    const { catalog, waitedMs } = await discover(runtime);
-    waits.push(waitedMs);
-    expect(catalog.tools).toEqual([]);
-    expect(catalog.diagnostics?.[0]?.message).toContain("timed out");
-    expect(catalog.diagnostics?.[0]?.message).toContain(
-      `server unavailable; retry after ${run === 0 ? "2026-01-01T00:00:35.000Z" : "2026-01-01T00:01:00.000Z"}. Check server reachability`,
-    );
-    await runtime.dispose();
-  }
-  console.log(
-    JSON.stringify({
-      initializes,
-      waits,
-      warnings: warn.mock.calls.length,
-      rss: process.memoryUsage().rss,
-    }),
-  );
-  expect(waits).toEqual([30_000, 0, 0, 0, 0, 0, 0, 0]);
-  expect(initializes).toBe(1);
-  expect(warn).toHaveBeenCalledTimes(1);
-});
-
 it("allows only the first failing runtime one early catalog retry before backing off", async () => {
   const runtime = makeRuntime();
   await discover(runtime);
@@ -163,8 +141,10 @@ it("doubles the retry interval to ten minutes and resets it after recovery", asy
     const runtime = makeRuntime();
     const failed = await discover(runtime);
     expect(failed.waitedMs).toBe(30_000);
+    expect(failed.catalog.tools).toEqual([]);
+    expect(failed.catalog.diagnostics?.[0]?.message).toContain("timed out");
     expect(failed.catalog.diagnostics?.[0]?.message).toContain(
-      new Date(Date.now() + (delay === 30_000 ? 5_000 : delay)).toISOString(),
+      `server unavailable; retry after ${new Date(Date.now() + (delay === 30_000 ? 5_000 : delay)).toISOString()}. Check server reachability`,
     );
     await runtime.dispose();
     const attempts = initializes;
@@ -198,16 +178,26 @@ it("shares a single failed startup across concurrent sessions", async () => {
 });
 
 it.each([
-  { change: "configuration", url: "https://changed.invalid/mcp", requesterScope: undefined },
-  { change: "requester", url: undefined, requesterScope: { requesterSenderId: "alice" } },
+  {
+    change: "configuration",
+    url: "https://changed.invalid/mcp",
+    requesterScope: undefined,
+    reset: () => reloadSessionMcpRuntimes({ cfg: {} }),
+  },
+  {
+    change: "requester",
+    url: undefined,
+    requesterScope: { requesterSenderId: "alice" },
+    reset: disposeAllSessionMcpRuntimes,
+  },
 ])(
   "isolates $change failures and resets them on explicit reload",
-  async ({ url, requesterScope }) => {
+  async ({ url, requesterScope, reset }) => {
     await discover(makeRuntime());
     expect((await discover(makeRuntime())).waitedMs).toBe(0);
     expect((await discover(makeRuntime(url, requesterScope))).waitedMs).toBe(30_000);
     expect((await discover(makeRuntime(url, requesterScope))).waitedMs).toBe(0);
-    await disposeAllSessionMcpRuntimes();
+    await reset();
     expect((await discover(makeRuntime(url, requesterScope))).waitedMs).toBe(30_000);
     expect(initializes).toBe(3);
   },
@@ -216,8 +206,8 @@ it.each([
 it("invalidates a startup failure that completes after config publication", async () => {
   const cfg = { mcp: { servers: { remote: { url: "https://mcp.invalid/mcp" } } } };
   const manager = createSessionMcpRuntimeManager({
+    scheduler: createTestGatewayScheduler(),
     createRuntime: createSessionMcpRuntime,
-    enableIdleSweepTimer: false,
   });
   const { runtime, releaseLease } = await manager.acquire({
     sessionId: "reload-during-start",

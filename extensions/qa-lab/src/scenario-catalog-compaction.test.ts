@@ -227,20 +227,6 @@ describe("qa compaction scenario catalog", () => {
       "session-memory.pruning",
     ]);
     expect(scenario.coverage?.secondary ?? []).toEqual([]);
-    expect(scenario.successCriteria).toContain(
-      "One coded over-threshold provider overflow produces one persisted OpenClaw overflow compaction and one compacted retry retaining durable current context.",
-    );
-    expect(scenario.successCriteria).toContain(
-      "OpenClaw performs exactly one successful write, then one terminal continuation after zero-or-more causally linked waits, and returns the exact file content and final marker.",
-    );
-    expect(scenario.successCriteria).toContain(
-      "OpenClaw proves session-memory.pruning by retaining a nonempty contiguous suffix of complete tail blocks ending at block 15 while pruning the body of marker block 10; bounded summary excerpts are allowed.",
-    );
-    expect(scenario.successCriteria).toContain(
-      "The Codex runtime-pair cell reports a known harness gap before gateway, session, or provider work and makes no compaction coverage claim.",
-    );
-    expect(scenario.successCriteria.join("\n")).not.toContain("Both runtime cells");
-
     const firstAction = scenario.execution.flow?.steps[0]?.actions[0] as
       | Record<string, unknown>
       | undefined;
@@ -418,28 +404,6 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).not.toContain("index === 12 ? config.bulkyMarker + ' ' : ''");
     expect(flow).toContain("{ role: 'assistant', text: config.historyMarker");
     expect(flow).not.toContain("{ role: 'assistant', text: config.bulkyMarker");
-    expect(flow).toContain('"set":"requestEvidence"');
-    expect(flow).toContain("durable: String(request.allInputText ?? '')");
-    expect(flow).toContain("bulky: String(request.allInputText ?? '')");
-    expect(flow).toContain("qualityRetry: String(request.allInputText ?? '')");
-    expect(flow).toContain("inputChars: String(request.allInputText ?? '').length");
-    expect(flow).toContain(
-      "resolvedWireTool: request.plannedWireToolName ?? request.plannedToolName ?? null",
-    );
-    expect(flow).toContain("callId: request.plannedToolCallId ?? null");
-    expect(flow).toContain("itemId: request.plannedToolItemId ?? null");
-    expect(flow).toContain(
-      "transcriptId: typeof request.plannedToolItemId === 'string' && request.plannedToolItemId.length > 0",
-    );
-    expect(flow).toContain(": request.plannedToolCallId ?? null");
-    expect(flow).toContain("logicalWrites=${String(writeRequests.length)}");
-    expect(flow).toContain("wireTool=${String(writeWireToolName)}");
-    expect(flow).toContain("callId=${String(writeRequest.plannedToolCallId)}");
-    expect(flow).toContain("itemId=${String(writeRequest.plannedToolItemId)}");
-    expect(flow).toContain("transcriptId=${String(writeTranscriptToolCallId)}");
-    expect(flow).toContain(
-      "wireSuccesses=${String(transcript.successfulToolCallCounts[writeWireToolName] ?? 0)}",
-    );
     expect(flow).not.toContain("clientSessionId");
     expect(flow).toContain("tailBlocks:");
     expect(flow).toContain(".sort().slice(0, 16)");

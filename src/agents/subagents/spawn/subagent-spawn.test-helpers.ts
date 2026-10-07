@@ -3,10 +3,15 @@
 import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi } from "vitest";
+import "../../../test-utils/prepare-compiled-subprocesses.js";
+import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import type { RegisterSubagentRunParams } from "../registry/subagent-registry-run-launch-record.js";
-import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.types.js";
+import type {
+  RegisterSubagentRunOptions,
+  SubagentRegistrationScope,
+} from "../registry/subagent-registry.types.js";
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
@@ -22,8 +27,24 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
     >
   >;
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
-  resetSubagentRegistryForTests: MockFn;
+  resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 };
+
+export function createSubagentRegistrationScopeForTest(
+  overrides: Partial<SubagentRegistrationScope> &
+    Pick<SubagentRegistrationScope, "settleFailedLaunch">,
+): SubagentRegistrationScope {
+  return {
+    canLaunch: () => true,
+    canAcceptLaunch: () => true,
+    canAbortAcceptedRun: () => true,
+    canCleanupSession: () => true,
+    canRetireReservation: () => true,
+    waitForClaim: () => undefined,
+    waitForRetirementPublication: () => undefined,
+    ...overrides,
+  };
+}
 
 export function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
   const call = mock.mock.calls[0];
@@ -129,12 +150,7 @@ export function createConfigOverride(overrides?: Record<string, unknown>) {
       defaults: {
         workspace: os.tmpdir(),
       },
-      list: [
-        {
-          id: "main",
-          workspace: "/tmp/workspace-main",
-        },
-      ],
+      entries: { main: { workspace: "/tmp/workspace-main" } },
     },
     ...overrides,
   });
@@ -294,7 +310,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     vi.resetModules();
   }
 
-  const resetSubagentRegistryForTests = vi.fn();
+  const resetSubagentRegistryForTests = vi.fn(async () => {});
 
   vi.doMock("../../provider-model-normalization.runtime.js", () => ({
     normalizeProviderModelIdWithRuntime: () => undefined,
@@ -352,6 +368,17 @@ export async function loadSubagentSpawnModuleForTest(params: {
     prepareModelChoice: params.prepareModelChoiceMock ?? supportedSpawnModelChoice,
     loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
       ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
+    withSessionEntryReadOnlyInWorker: async (
+      scope: { storePath?: string; sessionKey: string },
+      assertCurrent: () => void,
+      consume: (read: { ok: true; value: Record<string, unknown> | undefined }) => Promise<unknown>,
+    ) => {
+      assertCurrent();
+      const store = (params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore;
+      const value = await consume({ ok: true, value: store[scope.sessionKey] });
+      assertCurrent();
+      return value;
+    },
     loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),
     ensureContextEnginesInitialized:
       params.ensureContextEnginesInitializedMock ?? (() => undefined),
@@ -444,11 +471,12 @@ export async function loadSubagentSpawnModuleForTest(params: {
       ...fallback,
       ...primary,
     }),
-    resolveGatewaySessionStoreTarget: (targetParams: { key: string }) => ({
+    resolveGatewaySessionStoreTargetInWorker: async (targetParams: { key: string }) => ({
       agentId: "main",
       storePath: params.sessionStorePath ?? "/tmp/subagent-spawn-model-session.json",
       canonicalKey: targetParams.key,
       storeKeys: [targetParams.key],
+      store: params.loadSessionStoreMock?.(params.sessionStorePath) ?? {},
     }),
     normalizeDeliveryContext: identityDeliveryContext,
     resolveAgentConfig: params.resolveAgentConfig ?? (() => undefined),
@@ -464,44 +492,40 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }));
 
   vi.doMock("../registry/subagent-registry.js", () => ({
-    completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
+    completeCollectorLaunchCleanup:
+      params.completeCollectorLaunchCleanupMock ?? vi.fn(async () => {}),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun: vi.fn(
-      (record: RegisterSubagentRunParams, options?: RegisterSubagentRunOptions) => {
+      async (record: RegisterSubagentRunParams, options?: RegisterSubagentRunOptions) => {
         if (!record.queued || !options?.retainOwnership) {
-          return params.registerSubagentRunMock?.(record, options);
+          await params.registerSubagentRunMock?.(record, options);
+          return;
         }
         let retained = false;
-        const result = params.registerSubagentRunMock?.(record, {
+        await params.registerSubagentRunMock?.(record, {
           ...options,
           retainOwnership(scope) {
             retained = true;
             options.retainOwnership?.(scope);
           },
         } satisfies RegisterSubagentRunOptions);
-        return Promise.resolve(result).then(() => {
-          // Successful queued registration transfers custody; stricter test scopes win.
-          if (!retained) {
-            options.retainOwnership?.({
-              canLaunch: () => true,
-              canAcceptLaunch: () => true,
-              canCleanupSession: () => true,
-              canRetireReservation: () => true,
-              waitForClaim: () => undefined,
-              waitForRetirementPublication: () => undefined,
+        // Successful queued registration transfers custody; stricter test scopes win.
+        if (!retained) {
+          options.retainOwnership?.(
+            createSubagentRegistrationScopeForTest({
               settleFailedLaunch: async (error) => {
-                params.settleFailedQueuedSubagentLaunchMock?.(record.runId, error);
+                await params.settleFailedQueuedSubagentLaunchMock?.(record.runId, error);
               },
-            });
-          }
-        });
+            }),
+          );
+        }
       },
     ),
     resetSubagentRegistryForTests,
     settleFailedQueuedSubagentLaunch:
-      params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),
-    startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(() => true),
+      params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(async () => true),
+    startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(async () => true),
   }));
 
   const subagentSpawnModule = await import("./subagent-spawn.js");
@@ -510,3 +534,93 @@ export async function loadSubagentSpawnModuleForTest(params: {
     resetSubagentRegistryForTests,
   };
 }
+
+type InheritedSpawnPreferenceCase = {
+  name: string;
+  task: string;
+  requesterState: Readonly<Record<string, unknown>>;
+  preferenceKey: "thinkingLevel" | "fastMode";
+  expected: string | boolean;
+  agentDefaults?: Readonly<Record<string, unknown>>;
+  requesterAgent?: Readonly<Record<string, unknown>>;
+  collect?: boolean;
+  requesterRunId?: string;
+  requesterThinkingLevel?: ThinkLevel;
+  thinkingOverride?: string;
+};
+
+const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
+  {
+    name: "inherits active-turn Ultra instead of the stored session thinking level",
+    task: "inherit active thinking",
+    requesterState: { thinkingLevel: "medium" },
+    requesterThinkingLevel: "ultra",
+    preferenceKey: "thinkingLevel",
+    expected: "ultra",
+  },
+  {
+    name: "inherits active-turn off instead of a stored Ultra override",
+    task: "inherit active thinking off",
+    requesterState: { thinkingLevel: "ultra" },
+    requesterThinkingLevel: "off",
+    preferenceKey: "thinkingLevel",
+    expected: "off",
+  },
+  {
+    name: "keeps explicit child thinking ahead of active-turn Ultra",
+    task: "override active thinking",
+    requesterState: { thinkingLevel: "medium" },
+    requesterThinkingLevel: "ultra",
+    thinkingOverride: "low",
+    preferenceKey: "thinkingLevel",
+    expected: "low",
+  },
+  {
+    name: "inherits requester fast mode for collector children",
+    task: "inherit fast mode",
+    requesterState: { fastMode: "auto" },
+    preferenceKey: "fastMode",
+    expected: "auto",
+    collect: true,
+    requesterRunId: "parent-run",
+  },
+  {
+    name: "inherits requester fast mode for ordinary children with default Swarm config",
+    task: "inherit ordinary fast mode",
+    requesterState: { fastMode: true },
+    preferenceKey: "fastMode",
+    expected: true,
+  },
+  {
+    name: "persists inherited requester thinking off",
+    task: "inherit thinking off",
+    requesterState: { thinkingLevel: "off" },
+    preferenceKey: "thinkingLevel",
+    expected: "off",
+  },
+  {
+    name: "inherits global thinkingDefault when caller session and agent have no stored thinking",
+    task: "inherit global thinking default",
+    requesterState: {},
+    agentDefaults: { thinkingDefault: "medium" },
+    preferenceKey: "thinkingLevel",
+    expected: "medium",
+  },
+  {
+    name: "applies requester-agent subagent thinking before active-turn thinking",
+    task: "requester policy thinking",
+    requesterState: { thinkingLevel: "high" },
+    requesterAgent: { subagents: { thinking: "medium" } },
+    requesterThinkingLevel: "ultra",
+    preferenceKey: "thinkingLevel",
+    expected: "medium",
+  },
+];
+
+export const inheritedSpawnCases = {
+  preferences: inheritedSpawnPreferenceCases,
+  permissionModes: [
+    { label: "default", mode: undefined },
+    { label: "guarded", mode: "guarded" },
+  ] as const,
+};

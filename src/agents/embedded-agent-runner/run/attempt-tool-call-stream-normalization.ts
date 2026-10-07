@@ -1,4 +1,3 @@
-/** Normalizes live streamed tool-call names, ids, and unknown-tool loops. */
 import { randomUUID } from "node:crypto";
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import type { StreamFn } from "../../runtime/index.js";
@@ -21,14 +20,12 @@ type ToolCallMessageState =
   | { kind: "unknown"; toolName: string };
 type AssistantStream = Awaited<ReturnType<StreamFn>>;
 
-function createStandaloneTextToolCallId(): string {
-  return `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-}
-
 function normalizeToolCallsInMessage(
   message: unknown,
   allowedToolNames: Set<string> | undefined,
   fallbackIdByContentIndex: string[],
+  earlierToolCallIds: ReadonlySet<string>,
+  seenToolCallIds: Set<string>,
 ): ToolCallMessageState {
   if (!message || typeof message !== "object") {
     return undefined;
@@ -104,27 +101,31 @@ function normalizeToolCallsInMessage(
     if (!isRunnerToolCallBlock(block)) {
       continue;
     }
-    if (typeof block.id === "string") {
-      const trimmedId = block.id.trim();
-      if (trimmedId) {
-        if (!assignedIds.has(trimmedId)) {
-          if (block.id !== trimmedId) {
-            block.id = trimmedId;
-          }
-          assignedIds.add(trimmedId);
-          continue;
-        }
+    const trimmedId = typeof block.id === "string" ? block.id.trim() : "";
+    if (trimmedId && !earlierToolCallIds.has(trimmedId) && !assignedIds.has(trimmedId)) {
+      if (block.id !== trimmedId) {
+        block.id = trimmedId;
       }
+      assignedIds.add(trimmedId);
+      continue;
     }
 
     let fallbackId = fallbackIdByContentIndex[contentIndex];
-    while (!fallbackId || usedIds.has(fallbackId) || assignedIds.has(fallbackId)) {
-      fallbackId = createStandaloneTextToolCallId();
+    while (
+      !fallbackId ||
+      earlierToolCallIds.has(fallbackId) ||
+      usedIds.has(fallbackId) ||
+      assignedIds.has(fallbackId)
+    ) {
+      fallbackId = `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
     }
     fallbackIdByContentIndex[contentIndex] = fallbackId;
     block.id = fallbackId;
     usedIds.add(fallbackId);
     assignedIds.add(fallbackId);
+  }
+  for (const id of assignedIds) {
+    seenToolCallIds.add(id);
   }
 
   if (!hasAllowedToolNames) {
@@ -164,26 +165,20 @@ function guardUnknownToolLoopInMessage(
   params: {
     threshold?: number;
     countAttempt: boolean;
-    resetOnAllowedTool?: boolean;
-    resetOnMissingUnknownTool?: boolean;
-    rewriteMalformedBlankToolName?: boolean;
+    projection: "partial" | "message" | "result";
   },
 ): boolean {
   if (toolCallState?.kind === "allowed") {
-    if (params.resetOnAllowedTool === true) {
+    if (params.projection !== "partial") {
       state.lastUnknownToolName = undefined;
       state.count = 0;
     }
     return false;
   }
   if (toolCallState?.kind === "malformed") {
-    if (params.rewriteMalformedBlankToolName === true) {
+    if (params.projection === "result") {
       rewriteUnknownToolLoopMessage(message, toolCallState.toolName);
       return true;
-    }
-    if (params.countAttempt && params.resetOnMissingUnknownTool !== false) {
-      state.lastUnknownToolName = undefined;
-      state.count = 0;
     }
     return false;
   }
@@ -192,7 +187,7 @@ function guardUnknownToolLoopInMessage(
     return false;
   }
   if (toolCallState?.kind !== "unknown") {
-    if (params.countAttempt && params.resetOnMissingUnknownTool !== false) {
+    if (params.countAttempt && params.projection === "result") {
       state.lastUnknownToolName = undefined;
       state.count = 0;
     }
@@ -229,12 +224,16 @@ function guardUnknownToolLoopInMessage(
 function wrapStreamTrimToolCallNames(
   stream: AssistantStream,
   allowedToolNames: Set<string> | undefined,
-  options: { unknownToolThreshold?: number; state: UnknownToolLoopGuardState },
+  options: {
+    unknownToolThreshold?: number;
+    state: UnknownToolLoopGuardState;
+    earlierToolCallIds: ReadonlySet<string>;
+    seenToolCallIds: Set<string>;
+  },
 ): AssistantStream {
   const unknownToolGuardState = options.state;
-  // Provider-omitted ids are only message-local. Reuse one generated id per
-  // content position across this response's partial/final projections, while a
-  // later assistant response gets a fresh namespace and cannot alias it.
+  // Missing or colliding ids reuse one fallback per content position across
+  // this response's partial/final projections; later responses get fresh ids.
   const fallbackIdByContentIndex: string[] = [];
   let streamAttemptAlreadyCounted = false;
   const originalResult = stream.result.bind(stream);
@@ -244,12 +243,13 @@ function wrapStreamTrimToolCallNames(
       message,
       allowedToolNames,
       fallbackIdByContentIndex,
+      options.earlierToolCallIds,
+      options.seenToolCallIds,
     );
     guardUnknownToolLoopInMessage(message, toolCallState, unknownToolGuardState, {
       threshold: options.unknownToolThreshold,
       countAttempt: !streamAttemptAlreadyCounted,
-      resetOnAllowedTool: true,
-      rewriteMalformedBlankToolName: true,
+      projection: "result",
     });
     return message;
   };
@@ -259,11 +259,15 @@ function wrapStreamTrimToolCallNames(
       event.partial,
       allowedToolNames,
       fallbackIdByContentIndex,
+      options.earlierToolCallIds,
+      options.seenToolCallIds,
     );
     const messageState = normalizeToolCallsInMessage(
       event.message,
       allowedToolNames,
       fallbackIdByContentIndex,
+      options.earlierToolCallIds,
+      options.seenToolCallIds,
     );
     if (event.message && typeof event.message === "object") {
       const countedStreamAttempt = guardUnknownToolLoopInMessage(
@@ -273,8 +277,7 @@ function wrapStreamTrimToolCallNames(
         {
           threshold: options.unknownToolThreshold,
           countAttempt: !streamAttemptAlreadyCounted,
-          resetOnAllowedTool: true,
-          resetOnMissingUnknownTool: false,
+          projection: "message",
         },
       );
       streamAttemptAlreadyCounted ||= countedStreamAttempt;
@@ -284,6 +287,7 @@ function wrapStreamTrimToolCallNames(
       guardUnknownToolLoopInMessage(event.partial, partialState, unknownToolGuardState, {
         threshold: options.unknownToolThreshold,
         countAttempt: false,
+        projection: "partial",
       });
     }
   });
@@ -291,7 +295,6 @@ function wrapStreamTrimToolCallNames(
   return stream;
 }
 
-/** Normalizes streamed tool-call names and guards repeated unknown-tool loops. */
 export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -301,11 +304,27 @@ export function wrapStreamFnTrimToolCallNames(
     count: 0,
     countedMessages: new WeakSet<object>(),
   };
-  return (model, context, streamOptions) =>
-    mapAssistantMessageStream(baseFn(model, context, streamOptions), (stream) =>
+  // Kimi via opencode resets ids each response; retain seen ids across compaction.
+  const seenToolCallIds = new Set<string>();
+  return (model, context, streamOptions) => {
+    for (const message of context.messages ?? []) {
+      if (message.role !== "assistant") {
+        continue;
+      }
+      for (const block of message.content) {
+        if (isRunnerToolCallBlock(block) && typeof block.id === "string" && block.id.trim()) {
+          seenToolCallIds.add(block.id.trim());
+        }
+      }
+    }
+    const earlierToolCallIds = new Set(seenToolCallIds);
+    return mapAssistantMessageStream(baseFn(model, context, streamOptions), (stream) =>
       wrapStreamTrimToolCallNames(stream, allowedToolNames, {
         unknownToolThreshold: guardOptions?.unknownToolThreshold,
         state: unknownToolGuardState,
+        earlierToolCallIds,
+        seenToolCallIds,
       }),
     );
+  };
 }

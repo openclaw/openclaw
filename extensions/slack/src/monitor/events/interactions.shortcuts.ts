@@ -1,4 +1,5 @@
-import type { AllMiddlewareArgs, MessageShortcut, SlackShortcutMiddlewareArgs } from "@slack/bolt";
+import type { AllMiddlewareArgs, SlackShortcutMiddlewareArgs } from "@slack/bolt";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
@@ -7,11 +8,6 @@ import { enqueueSlackInteractionEvent } from "./interaction-event.js";
 
 type SlackShortcutHandlerArgs = SlackShortcutMiddlewareArgs &
   Pick<AllMiddlewareArgs, "context" | "client">;
-
-function resolveMessageThreadTs(body: MessageShortcut): string | undefined {
-  const threadTs = body.message.thread_ts;
-  return typeof threadTs === "string" && threadTs.trim() ? threadTs.trim() : undefined;
-}
 
 export function registerSlackShortcutHandler(params: {
   ctx: SlackMonitorContext;
@@ -58,7 +54,7 @@ export function registerSlackShortcutHandler(params: {
       );
       return;
     }
-    const threadTs = messageBody ? resolveMessageThreadTs(messageBody) : undefined;
+    const threadTs = normalizeOptionalString(messageBody?.message.thread_ts);
     const auth = await authorizeSlackSystemEventSender({
       ctx: runtimeContext,
       eventScope,

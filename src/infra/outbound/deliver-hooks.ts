@@ -24,7 +24,6 @@ import {
   type OutboundDeliveryFailureStage,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
-  type OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
 import type { QueuedReplyPayloadSendingHook } from "./delivery-queue-storage.js";
 import {
@@ -150,13 +149,11 @@ export async function applyMessageSendingHook(params: {
   hookMetadata?: Record<string, unknown>;
   contentRewritten: boolean;
   payload: ReplyPayload;
-  payloadSummary: NormalizedOutboundPayload;
 }> {
   const unchanged = () => ({
     cancelled: false,
     contentRewritten: false,
     payload: params.payload,
-    payloadSummary: params.payloadSummary,
   });
   if (!params.enabled) {
     return unchanged();
@@ -185,12 +182,10 @@ export async function applyMessageSendingHook(params: {
     );
     if (sendingResult?.cancel) {
       return {
+        ...unchanged(),
         cancelled: true,
         ...(sendingResult.cancelReason ? { cancelReason: sendingResult.cancelReason } : {}),
         ...(sendingResult.metadata ? { hookMetadata: sendingResult.metadata } : {}),
-        contentRewritten: false,
-        payload: params.payload,
-        payloadSummary: params.payloadSummary,
       };
     }
     if (sendingResult?.content == null) {
@@ -205,10 +200,6 @@ export async function applyMessageSendingHook(params: {
       cancelled: false,
       contentRewritten: true,
       payload,
-      payloadSummary: {
-        ...params.payloadSummary,
-        [spokenOnly ? "hookContent" : "text"]: sendingResult.content,
-      },
     };
   } catch {
     // Don't block delivery on hook failure.
@@ -268,14 +259,9 @@ export function toOutboundDeliveryError(params: {
   });
 }
 
-export function suppressedPayloadOutcome(params: {
-  index: number;
-  reason: OutboundPayloadDeliverySuppressionReason;
-  hookEffect?: {
-    cancelReason?: string;
-    metadata?: Record<string, unknown>;
-  };
-}): OutboundPayloadDeliveryOutcome {
+export function suppressedPayloadOutcome(
+  params: Omit<Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }>, "status">,
+): OutboundPayloadDeliveryOutcome {
   return {
     index: params.index,
     status: "suppressed",
@@ -283,5 +269,3 @@ export function suppressedPayloadOutcome(params: {
     ...(params.hookEffect ? { hookEffect: params.hookEffect } : {}),
   };
 }
-
-/** Adds directive-derived media to the queue copy before spool custody. */

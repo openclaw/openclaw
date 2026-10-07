@@ -1,9 +1,11 @@
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { CommandOwnerReference } from "../state/user-channel-identities.js";
 
 const COMMAND_OWNER_AUTHORITY = Symbol("openclaw.commandOwnerAuthority");
 type CommandOwnerAuthority = Readonly<{
   isCurrent: () => boolean;
   recoveryReference?: CommandOwnerReference;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }>;
 export type CommandOwnerAssertion = (() => void) & {
   readonly recoveryReference?: CommandOwnerReference | null;
@@ -14,9 +16,11 @@ export class CommandOwnerRevokedError extends Error {}
 class CommandOwnerCapability implements CommandOwnerAuthority {
   readonly #checkCurrent: () => boolean;
   readonly recoveryReference?: CommandOwnerReference;
+  readonly operatorAuthority?: AdmittedRunOperatorAuthority;
 
   constructor(authority: CommandOwnerAuthority) {
     this.#checkCurrent = authority.isCurrent.bind(authority);
+    this.operatorAuthority = authority.operatorAuthority;
     this.recoveryReference =
       authority.recoveryReference && Object.freeze({ ...authority.recoveryReference });
     Object.setPrototypeOf(this, null);

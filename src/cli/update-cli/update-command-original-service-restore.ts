@@ -20,6 +20,7 @@ export async function restoreOriginalManagedServiceDefinition(params: {
   original: OriginalManagedServiceRuntime;
   run: NonNullable<UpdateCommandOptions["run"]>;
   assertCurrent: () => void;
+  onGatewayStartAttempted?: () => void;
   stdout: NodeJS.WritableStream;
   timeoutMs?: number;
 }): Promise<void> {
@@ -83,6 +84,7 @@ export async function restoreOriginalManagedServiceDefinition(params: {
               true,
             );
             assertOwned();
+            params.onGatewayStartAttempted?.();
           },
           programArguments: [...definition.programArguments],
           workingDirectory: definition.workingDirectory,

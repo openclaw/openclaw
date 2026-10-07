@@ -9,9 +9,15 @@ export const UPGRADE_SURVIVOR_ASSERTION_SCENARIOS = Object.freeze([
 ]);
 
 // Oldest release line supported by the operator-state upgrade regression gate.
-export const OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE = "2026.6.34";
+export const OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE = catalog.oldestSupportedBaseline;
 export const MINIMUM_UPGRADE_SURVIVOR_BASELINE = "2026.6.1";
 export const CUSTOM_PLUGIN_SIBLINGS_BASELINE = "openclaw@2026.9.4";
+
+// 2026.9.7 retired code mode; older baselines must still seed the migration specimen.
+export function usesStructuredToolSearchAtBaseline(baselineVersion) {
+  const comparison = compareReleaseVersions(baselineVersion ?? "", "2026.9.7");
+  return comparison !== null && comparison >= 0;
+}
 
 const scenarioMinimumBaselines = new Map([
   ["custom-plugin-siblings", CUSTOM_PLUGIN_SIBLINGS_BASELINE],
@@ -28,10 +34,10 @@ const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "projects-doctor",
   "channel-owner-policy",
   "projects-startup-migration",
-  "taskflow-restoration",
   "workshop-doctor-recovery",
   "update-report-recovery",
   "dreaming-cron-doctor",
+  "cron-owner-doctor",
 ]);
 
 export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
@@ -45,15 +51,16 @@ export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
 const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
     scenario !== "abandoned-update" &&
+    scenario !== "backup-schedule" &&
     scenario !== "missing-configured-plugin-migration" &&
     scenario !== "missing-load-path" &&
     scenario !== "projects-doctor" &&
     scenario !== "channel-owner-policy" &&
     scenario !== "projects-startup-migration" &&
-    scenario !== "taskflow-restoration" &&
     scenario !== "workshop-doctor-recovery" &&
     scenario !== "update-report-recovery" &&
     scenario !== "dreaming-cron-doctor" &&
+    scenario !== "cron-owner-doctor" &&
     scenario !== "mobile-pairing-reconnect" &&
     scenario !== "watchos-direct-node" &&
     scenario !== "prerelease-plugin-registry" &&
@@ -64,6 +71,52 @@ const scenarioAliases = new Map([
   ["reported-issues", aggregateScenarios.filter((scenario) => scenario !== "sqlite-volume")],
   ["far-reaching", aggregateScenarios],
 ]);
+
+// Historical catalogs contain only scenarios. Candidate-owned qualification also
+// records its support floor; neither format can introduce executable policy.
+export function readUpgradeSurvivorScenarioCatalog(text, { includeAssertionOnly = true } = {}) {
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const hasBaseline = Object.hasOwn(value, "oldestSupportedBaseline");
+  if (
+    Object.keys(value).length !== (hasBaseline ? 3 : 2) ||
+    !Array.isArray(value.scenarios) ||
+    value.scenarios.length === 0 ||
+    !Array.isArray(value.assertionOnlyScenarios)
+  ) {
+    return undefined;
+  }
+  if (hasBaseline && value.oldestSupportedBaseline !== null) {
+    if (typeof value.oldestSupportedBaseline !== "string") {
+      return undefined;
+    }
+    const baseline = parseReleaseVersion(value.oldestSupportedBaseline);
+    if (
+      !baseline ||
+      baseline.channel !== "stable" ||
+      baseline.version !== value.oldestSupportedBaseline
+    ) {
+      return undefined;
+    }
+  }
+  const scenarios = [...value.scenarios, ...value.assertionOnlyScenarios];
+  if (
+    !scenarios.every(
+      (scenario) => typeof scenario === "string" && /^[a-z0-9][a-z0-9-]*$/u.test(scenario),
+    ) ||
+    new Set(scenarios).size !== scenarios.length
+  ) {
+    return undefined;
+  }
+  return includeAssertionOnly ? scenarios : value.scenarios;
+}
 
 export function normalizeUpgradeSurvivorBaselineSpec(raw) {
   const value = raw?.trim() ?? "";
@@ -164,15 +217,29 @@ function comparePublishedReleaseVersion(a, b) {
 }
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
+  if (scenario === "backup-schedule") {
+    return baselineSpec === "openclaw@2026.9.7";
+  }
+  if (scenario === "missing-load-path") {
+    const release = parseReleaseVersion((baselineSpec ?? "").replace(/^openclaw@/u, ""));
+    // Floating tags are checked again against the installed baseline before seeding.
+    if (!release) {
+      return true;
+    }
+    const comparison = compareReleaseVersions(release.version, "2026.7.2-beta.5");
+    return comparison !== null && comparison >= 0;
+  }
   const version = parsePublishedReleaseVersion(baselineSpec);
   if (scenario === "dreaming-cron-doctor") {
     return baselineSpec === "openclaw@2026.9.6";
   }
+  if (scenario === "cron-owner-doctor") {
+    return baselineSpec === "openclaw@2026.9.4" || baselineSpec === "openclaw@2026.9.7";
+  }
   if (
     scenario === "projects-doctor" ||
     scenario === "channel-owner-policy" ||
-    scenario === "projects-startup-migration" ||
-    scenario === "taskflow-restoration"
+    scenario === "projects-startup-migration"
   ) {
     return baselineSpec === "openclaw@2026.9.4";
   }

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  UPDATE_NPM_ERROR_CODES,
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
   UPDATE_RUN_STATUSES,
@@ -134,6 +135,8 @@ export const UpdateFailureFactSchema = z.object({
   errorName: z.string().max(80).nullable().optional(),
   location: z.string().max(160).nullable().optional(),
   destination: UpdateDestinationFailureSchema.optional(),
+  npmErrorCode: z.enum(UPDATE_NPM_ERROR_CODES).optional(),
+  packageSpec: z.string().max(200).optional(),
 });
 
 const UpdateRollbackOutcomeSchema = z.object({
@@ -185,6 +188,9 @@ const UpdateRunStepSchema = z.object({
   startedAtMs: timestamp.optional(),
   endedAtMs: timestamp.optional(),
   exitCode: z.number().int().nullable().optional(),
+  termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]).optional(),
+  signal: z.string().max(32).nullable().optional(),
+  stderrTail: z.string().max(8192).optional(),
   detail: text.optional(),
   failureFacts: z.array(UpdateFailureFactSchema).max(5).optional(),
   configChange: z
@@ -260,7 +266,7 @@ export const UpdateRunRecordSchema = z.object({
     version: text.optional(),
     sha: text.optional(),
     installationMethod: z
-      .enum(["git-checkout", "npm-global", "pnpm-global", "bun-global", "managed-service"])
+      .enum(["git-checkout", "npm-global", "pnpm-global", "bun-global", "managed-service", "ocm"])
       .nullable()
       .optional(),
   }),

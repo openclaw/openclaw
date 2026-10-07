@@ -9,6 +9,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { SessionUpstreamLinkCurrentCheck } from "./session-upstream-links.worker-contract.js";
 
 /** Creation-only authority. Copied fields never identify an initializer to the host. */
 export type SessionInitialization = {
@@ -41,17 +42,15 @@ type Owner = {
 type Source = {
   assertCurrent: () => void;
   assertRollbackCurrent: () => void;
-};
-type InitializationOwner = {
-  assertCurrent: () => void;
-  assertRollbackCurrent: () => void;
+  upstreamLinkCurrent?: SessionUpstreamLinkCurrentCheck;
 };
 // Built core chunks and source plugins must redeem the same process-local owner.
-const { rollbackOwner, sources } = resolveGlobalSingleton(
+const { rollbackOwner, sources, upstreamLinks } = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionInitialization"),
   () => ({
     rollbackOwner: new AsyncLocalStorage<Owner>(),
     sources: new AsyncLocalStorage<Source>(),
+    upstreamLinks: new WeakMap<SessionInitialization, SessionUpstreamLinkCurrentCheck>(),
   }),
 );
 
@@ -71,6 +70,7 @@ export async function withSessionInitializationSource<T>(
     const current = Object.freeze({
       assertCurrent: () => assertActive(source.assertCurrent),
       assertRollbackCurrent: () => assertActive(source.assertRollbackCurrent),
+      upstreamLinkCurrent: source.upstreamLinkCurrent,
     });
     return await sources.run(current, () => run(current.assertCurrent));
   } finally {
@@ -78,9 +78,7 @@ export async function withSessionInitializationSource<T>(
   }
 }
 
-export function captureSessionInitializationOwner(
-  harnessId: string | undefined,
-): InitializationOwner {
+export function captureSessionInitializationOwner(harnessId: string | undefined): Source {
   const source = sources.getStore();
   const scopedRegistry = () =>
     getPluginRuntimeGenerationRegistry() ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
@@ -110,6 +108,7 @@ export function captureSessionInitializationOwner(
     }
   };
   return {
+    upstreamLinkCurrent: source?.upstreamLinkCurrent,
     assertCurrent() {
       source?.assertCurrent();
       assertRegistryCurrent();
@@ -125,6 +124,7 @@ export function createSessionInitialization(
   target: Target,
   assertOwner: (phase: "forward" | "rollback", deleted: boolean) => void,
   preparation: { config: OpenClawConfig; agentId: string; entry: SessionEntry },
+  source?: Source,
 ) {
   const registry =
     getPluginRuntimeGenerationRegistry() ??
@@ -223,13 +223,22 @@ export function createSessionInitialization(
       deleted = true;
     },
   };
+  if (source?.upstreamLinkCurrent) {
+    upstreamLinks.set(owner.handle, source.upstreamLinkCurrent);
+  }
   return {
     handle: owner.handle,
     rollback: <T>(run: () => Promise<T>) => rollbackOwner.run(owner, run),
     close: () => {
       active = false;
+      upstreamLinks.delete(owner.handle);
     },
   };
+}
+
+/** Only the host creation owner can bind a source predicate to an initializer. */
+export function getSessionInitializationUpstreamLinkCurrent(handle: SessionInitialization) {
+  return upstreamLinks.get(handle);
 }
 
 export function getSessionInitializationRollback(

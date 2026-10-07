@@ -1,11 +1,7 @@
-/**
- * Process-local registry that lets Talk protocol methods resolve opaque
- * `sessionId` values to the concrete relay or managed-room backend.
- */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
-import { formatError } from "../server-utils.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 type TalkConnectionCleanupKind =
@@ -29,7 +25,6 @@ type UnifiedTalkSessionRecord =
   | {
       kind: "managed-room";
       handoffId: string;
-      token: string;
       roomId: string;
     };
 
@@ -170,7 +165,6 @@ export function cleanupTalkConnection(
   }
 }
 
-/** Associates a public Talk session id with its concrete gateway backend. */
 export function rememberUnifiedTalkSession(
   sessionId: string,
   session: UnifiedTalkSessionRecord,
@@ -178,7 +172,6 @@ export function rememberUnifiedTalkSession(
   unifiedTalkSessions.set(sessionId, session);
 }
 
-/** Resolves a Talk session id or throws the protocol-facing unknown-session error. */
 export function getUnifiedTalkSession(sessionId: string): UnifiedTalkSessionRecord {
   const session = unifiedTalkSessions.get(sessionId);
   if (!session) {
@@ -204,12 +197,10 @@ export function resolveUnifiedTalkSessionTarget(sessionId: string, connId: strin
   };
 }
 
-/** Removes a Talk session id after the concrete backend closes. */
 export function forgetUnifiedTalkSession(sessionId: string): void {
   unifiedTalkSessions.delete(sessionId);
 }
 
-/** Enforces that a relay-backed Talk session is controlled by its owner socket. */
 export function requireUnifiedTalkSessionConn(
   session: Extract<UnifiedTalkSessionRecord, { connId: string }>,
   connId: string | undefined,

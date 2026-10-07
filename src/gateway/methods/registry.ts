@@ -1,8 +1,6 @@
-// Gateway method registry normalizes method descriptors, enforces unique names, and exposes dispatch policy metadata.
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
-import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
-import "./core-method-policy.js";
+import type { OperatorScope } from "../operator-scopes.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
   type GatewayMethodDescriptor,
@@ -19,12 +17,8 @@ export {
 
 export type GatewayMethodRegistry = GatewayMethodRegistryView;
 
-function normalizeMethodName(name: string): string {
-  return name.trim();
-}
-
 function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethodDescriptor {
-  const name = normalizeMethodName(input.name);
+  const name = input.name.trim();
   if (!name) {
     throw new Error("gateway method descriptor name must not be empty");
   }
@@ -50,6 +44,16 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
       `session-scoped gateway methods require operator.write and an authenticated profile: ${name}`,
     );
   }
+  if (
+    input.shareKey &&
+    (input.sessionAccess ||
+      input.controlPlaneWrite ||
+      input.lifetime === "observation" ||
+      (input.shareMaxAgeMs !== undefined &&
+        (!Number.isFinite(input.shareMaxAgeMs) || input.shareMaxAgeMs <= 0)))
+  ) {
+    throw new Error(`gateway response sharing requires a bounded read-only method: ${name}`);
+  }
   return {
     ...input,
     name,
@@ -59,11 +63,11 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
       ? { startup: "unavailable-until-sidecars" }
       : {}),
     ...(input.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
+    ...(input.lifetime === "observation" ? { lifetime: "observation" } : {}),
     ...(input.advertise === false ? { advertise: false } : {}),
   };
 }
 
-/** Creates a read-only registry for gateway method lookup, listing, and policy metadata. */
 export function createGatewayMethodRegistry(
   inputs: readonly GatewayMethodDescriptorInput[],
   pluginRegistry?: PluginRegistry,
@@ -88,14 +92,24 @@ export function createGatewayMethodRegistry(
         .map((descriptor) => descriptor.name),
     getScope: (name) => byName.get(name)?.scope,
     getSessionAccess: (name) => byName.get(name)?.sessionAccess,
+    getReadSharing: (name) => {
+      const descriptor = byName.get(name);
+      return descriptor?.shareKey
+        ? {
+            shareKey: descriptor.shareKey,
+            shareInvalidationEvents: descriptor.shareInvalidationEvents ?? [],
+            shareMaxAgeMs: descriptor.shareMaxAgeMs ?? 1_000,
+          }
+        : undefined;
+    },
     isStartupUnavailable: (name) => byName.get(name)?.startup === "unavailable-until-sidecars",
+    isObservation: (name) => byName.get(name)?.lifetime === "observation",
     isControlPlaneWrite: (name) => byName.get(name)?.controlPlaneWrite === true,
     requiresAuthenticatedProfile: (name) => byName.get(name)?.profileAccess === "required",
     descriptors: () => descriptors,
   };
 }
 
-/** Converts a plain handler map into scoped descriptors owned by one gateway surface. */
 export function createGatewayMethodDescriptorsFromHandlers(params: {
   handlers: Record<string, GatewayMethodHandler>;
   owner: GatewayMethodOwner;
@@ -107,30 +121,11 @@ export function createGatewayMethodDescriptorsFromHandlers(params: {
     if (!scope) {
       throw new Error(`gateway method is missing a scope: ${name}`);
     }
-    const descriptor: GatewayMethodDescriptorInput = {
+    return {
       name,
       handler,
       owner: params.owner,
       scope,
     };
-    return descriptor;
-  });
-}
-
-/** Resolves plugin method descriptors, including the legacy handler-only registry shape. */
-export function createPluginGatewayMethodDescriptors(
-  registry: Pick<PluginRegistry, "gatewayHandlers"> &
-    Partial<Pick<PluginRegistry, "gatewayMethodDescriptors">>,
-): GatewayMethodDescriptorInput[] {
-  const descriptors = registry.gatewayMethodDescriptors ?? [];
-  if (descriptors.length > 0) {
-    return [...descriptors];
-  }
-  // Older plugin registries only carried handlers, so keep them callable but assign admin scope
-  // until the plugin can provide explicit descriptor metadata.
-  return createGatewayMethodDescriptorsFromHandlers({
-    handlers: registry.gatewayHandlers,
-    owner: { kind: "plugin", pluginId: "unknown" },
-    defaultScope: ADMIN_SCOPE,
   });
 }

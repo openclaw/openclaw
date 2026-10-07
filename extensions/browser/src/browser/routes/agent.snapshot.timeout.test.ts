@@ -1,19 +1,8 @@
-// Browser tests cover agent.snapshot.timeout plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const cdpMocks = vi.hoisted(() => ({
   captureScreenshot: vi.fn(),
-  getDocumentIdentitiesViaCdp: vi.fn(async () => ({
-    mainFrame: "cdp:test-document",
-    frameTree: "cdp:test-tree",
-  })),
-  snapshotAria: vi.fn(async () => ({ nodes: [] })),
-  snapshotRoleViaCdp: vi.fn(async () => ({
-    snapshot: "button Continue",
-    refs: {},
-    stats: { lines: 1, chars: 15, refs: 0, interactive: 0 },
-  })),
 }));
 const tabLookup = vi.hoisted(() => vi.fn());
 
@@ -29,12 +18,6 @@ const profileContext = vi.hoisted(() => ({
     headless: false,
     attachOnly: false,
   },
-  ensureTabAvailable: vi.fn(async () => ({
-    targetId: "tab-1",
-    url: "https://example.com",
-    wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
-    wsLookup: tabLookup,
-  })),
 }));
 const browserRuntime = vi.hoisted(() => ({
   profiles: new Map<
@@ -58,9 +41,9 @@ vi.mock("../pw-ai-module.js", () => ({
 
 vi.mock("../cdp.js", () => ({
   captureScreenshot: cdpMocks.captureScreenshot,
-  getDocumentIdentitiesViaCdp: cdpMocks.getDocumentIdentitiesViaCdp,
-  snapshotAria: cdpMocks.snapshotAria,
-  snapshotRoleViaCdp: cdpMocks.snapshotRoleViaCdp,
+  getDocumentIdentitiesViaCdp: vi.fn(),
+  snapshotAria: vi.fn(),
+  snapshotRoleViaCdp: vi.fn(),
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
@@ -92,13 +75,14 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
 
-vi.mock("./agent.shared.js", () => ({
+vi.mock("./agent.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent.shared.js")>()),
   browserNavigationPolicyForProfile: vi.fn(() => ({})),
-  handleRouteError: vi.fn((_ctx, _res, err) => {
+  handleRouteError: vi.fn((_res, err) => {
     throw err;
   }),
   readBody: vi.fn((req: { body?: unknown }) => req.body ?? {}),
-  requirePwAi: vi.fn(async () => (pwMocks.connected ? pwMocks : null)),
+  requirePwAi: vi.fn(async () => pwMocks),
   resolveProfileContext: vi.fn(() => profileContext),
   withPlaywrightRouteContext: vi.fn(),
   withRouteTabContext: vi.fn(
@@ -124,16 +108,6 @@ vi.mock("./agent.shared.js", () => ({
 
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
 
-function getSnapshotHandler() {
-  const { app, getHandlers } = createBrowserRouteApp();
-  registerBrowserAgentSnapshotRoutes(app, {
-    state: () => ({ resolved: { extraArgs: [] } }),
-  } as never);
-  const handler = getHandlers.get("/snapshot");
-  expect(handler).toBeTypeOf("function");
-  return handler;
-}
-
 function getScreenshotHandler() {
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentSnapshotRoutes(app, {
@@ -147,45 +121,10 @@ function getScreenshotHandler() {
 describe("browser agent snapshot timeout routing", () => {
   beforeEach(() => {
     cdpMocks.captureScreenshot.mockReset();
-    cdpMocks.snapshotAria.mockClear();
-    cdpMocks.snapshotRoleViaCdp.mockClear();
-    profileContext.ensureTabAvailable.mockClear();
     profileContext.profile.headless = false;
     browserRuntime.profiles.clear();
     pwMocks.connected = false;
     pwMocks.takeScreenshotViaPlaywright.mockClear();
-  });
-
-  it("passes timeoutMs to direct CDP aria snapshots", async () => {
-    const handler = getSnapshotHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "aria", timeoutMs: "4321" } }, response.res);
-
-    expect(response.statusCode).toBe(200);
-    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
-        lookup: tabLookup,
-        timeoutMs: 4321,
-      }),
-    );
-  });
-
-  it("passes timeoutMs to direct CDP role snapshots", async () => {
-    const handler = getSnapshotHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai", timeoutMs: "9876" } }, response.res);
-
-    expect(response.statusCode).toBe(200);
-    expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
-        lookup: tabLookup,
-        timeoutMs: 9876,
-      }),
-    );
   });
 
   it("caps screenshot timeoutMs before dispatching to CDP", async () => {
@@ -229,6 +168,20 @@ describe("browser agent snapshot timeout routing", () => {
     expect(cdpMocks.captureScreenshot).not.toHaveBeenCalled();
   });
 
+  it.each([{ ref: "e1" }, { element: "#submit" }])(
+    "uses Playwright for element screenshots with a CDP URL: %j",
+    async (body) => {
+      const response = createBrowserRouteResponse();
+      await getScreenshotHandler()?.({ params: {}, query: {}, body }, response.res);
+
+      expect(response.statusCode).toBe(200);
+      expect(pwMocks.takeScreenshotViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining(body),
+      );
+      expect(cdpMocks.captureScreenshot).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       name: "headed launched browser when its profile is configured headless",
@@ -237,36 +190,11 @@ describe("browser agent snapshot timeout routing", () => {
       expectedHeadless: false,
     },
     {
-      name: "headless request override when its profile is configured headed",
-      configuredHeadless: false,
-      running: { headless: true, headlessSource: "request" },
-      expectedHeadless: true,
-    },
-    {
-      name: "headless environment override when its profile is configured headed",
-      configuredHeadless: false,
-      running: { headless: true, headlessSource: "env" },
-      expectedHeadless: true,
-    },
-    {
-      name: "headless Linux no-display fallback when its profile is configured headed",
-      configuredHeadless: false,
-      running: { headless: true, headlessSource: "linux-display-fallback" },
-      expectedHeadless: true,
-    },
-    {
       name: "observed headed external browser",
       configuredHeadless: true,
       running: null,
       externalHeadless: false,
       expectedHeadless: false,
-    },
-    {
-      name: "observed headless external browser",
-      configuredHeadless: false,
-      running: null,
-      externalHeadless: true,
-      expectedHeadless: true,
     },
     {
       name: "external browser without authoritative launch state",

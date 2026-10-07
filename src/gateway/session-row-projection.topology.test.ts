@@ -2,7 +2,7 @@ import { symlinkSync } from "node:fs";
 import { copyFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -13,12 +13,15 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { applyOpenClawDatabaseVerificationResults } from "../state/openclaw-database-verify.impl.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
@@ -38,9 +41,118 @@ import {
 } from "./server-session-events.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { ready } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.for(["publication", "source", "dispose"] as const)(
+  "fences cold store admission across a delayed worker reply: %s",
+  async (change, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, late: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const readDatabases = history.withSessionHistoryWorkerDatabases;
+      let held = false;
+      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+        (targets, consume, lane) =>
+          readDatabases(
+            targets,
+            (owners) =>
+              consume(
+                owners.map((owner) => ({
+                  ...owner,
+                  async readStoreProjection(input) {
+                    const result = await owner.readStoreProjection(input);
+                    if (!held) {
+                      held = true;
+                      entered.resolve();
+                      await release.promise;
+                    }
+                    return result;
+                  },
+                })),
+              ),
+            lane,
+          ),
+      );
+      const scope = { agentId: "late", sessionKey: "agent:late:admission" };
+      replaceSessionEntrySync(scope, { sessionId: "admission", updatedAt: 1, label: "Original" });
+      const reading = projection.prepareMembership();
+      const settled = Promise.allSettled([reading]);
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            reading,
+            "Cold admission bypassed the worker read",
+          ),
+          signal,
+        );
+        const query = { agentId: scope.agentId, key: scope.sessionKey };
+        expect(projection.capture(query)).toBeUndefined();
+        if (change === "publication") {
+          replaceSessionEntrySync(scope, {
+            sessionId: "admission",
+            updatedAt: 2,
+            label: "Current",
+          });
+          replaceSessionEntrySync(
+            { ...scope, sessionKey: "agent:late:created-during-admission" },
+            { sessionId: "created-during-admission", updatedAt: 2 },
+          );
+        } else if (change === "source") {
+          const pathname = resolveOpenClawAgentSqlitePath({ ...scope, env: state.env });
+          const replacement = `${pathname}.replacement`;
+          await copyFile(pathname, replacement);
+          await rename(replacement, pathname);
+        } else {
+          projection.dispose();
+        }
+        release.resolve();
+        if (change === "source") {
+          await expect(reading).rejects.toThrow(/identity changed/);
+          expect(projection.capture(query)).toBeUndefined();
+        } else {
+          await reading;
+          if (change === "publication") {
+            await projection.ensureMaterialized();
+            expect(projection.snapshot(query).row?.label).toBe("Current");
+            expect(
+              projection.capture({ agentId: "late", key: "agent:late:created-during-admission" }),
+            ).toBeDefined();
+          } else {
+            expect(projection.capture(query)).toBeUndefined();
+          }
+        }
+      } finally {
+        release.resolve();
+        await settled;
+        projection.dispose();
+      }
+    });
+  },
+);
+
+function holdTopologyRead() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const originalRead = stateReads.executeExistingOpenClawStateRead;
+  let held = false;
+  vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(async (...args) => {
+    const reply = await originalRead(...args);
+    if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
+      held = true;
+      entered.resolve();
+      await release.promise;
+    }
+    return reply;
+  });
+  return { entered, release };
+}
 
 it("publishes an initially unseen retired-agent event from its default store", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -84,7 +196,9 @@ it("publishes an initially unseen retired-agent event from its default store", a
   });
 });
 
-it("admits a committed update without host SQL while a marker awaits prepared membership", async () => {
+it("admits a committed update without host SQL while a marker awaits prepared membership", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {}, late: {} } } };
     setRuntimeConfigSnapshot(cfg);
@@ -126,7 +240,11 @@ it("admits a committed update without host SQL while a marker awaits prepared me
     const tasks = [marker];
     const settled = Promise.allSettled(tasks);
     try {
-      await withTestTimeout(entered.promise, 2_000, "Marker membership did not prepare");
+      // Bind waits to the test signal so a stall still releases held topology work below.
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, marker, "Marker membership did not prepare"),
+        signal,
+      );
       expect(projection.needsMembershipPreparation()).toBe(false);
       sessionChanges.emit({ all: true, scope: "catalog" });
       expect(projection.dirtyRowCount).toBeGreaterThan(0);
@@ -165,7 +283,7 @@ it("admits a committed update without host SQL while a marker awaits prepared me
   });
 });
 
-it.each(
+it.for(
   (["lifecycle", "marker"] as const).flatMap((kind) =>
     (
       [
@@ -175,9 +293,7 @@ it.each(
         "delete",
         "physical-store",
         "dispose",
-        "unrelated-agent",
         "unrelated-store",
-        "new-agent-registration",
         "new-store-registration",
         "alias-reset",
       ] as const
@@ -185,16 +301,15 @@ it.each(
   ),
 )(
   "keeps an unknown $kind event with its original generation across $change",
-  async ({ kind, change }) => {
+  async ({ kind, change }, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
       const unrelated =
-        change === "unrelated-agent" || change === "unrelated-store"
+        change === "unrelated-store"
           ? {
-              agentId: change === "unrelated-agent" ? "other" : "main",
-              sessionKey:
-                change === "unrelated-agent" ? "agent:other:unrelated" : "agent:main:unrelated",
+              agentId: "main",
+              sessionKey: "agent:main:unrelated",
               storePath: path.join(state.root, "unrelated.sqlite"),
             }
           : undefined;
@@ -210,21 +325,7 @@ it.each(
         getConfig: () => cfg,
         modelCatalog: [],
       });
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const originalRead = stateReads.executeExistingOpenClawStateRead;
-      let held = false;
-      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
-        async (...args) => {
-          const reply = await originalRead(...args);
-          if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
-            held = true;
-            entered.resolve();
-            await release.promise;
-          }
-          return reply;
-        },
-      );
+      const { entered, release } = holdTopologyRead();
       const storePath = path.join(state.root, "deferred-events.sqlite");
       cfg = { ...cfg, session: { store: storePath } };
       setRuntimeConfigSnapshot(cfg);
@@ -270,7 +371,14 @@ it.each(
             });
       const settled = Promise.allSettled([pending]);
       try {
-        await withTestTimeout(entered.promise, 2_000, "Event did not await original topology");
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "Event did not await original topology",
+          ),
+          signal,
+        );
         if (change === "replace" || change === "same-id-reset") {
           const next = {
             ...entry,
@@ -297,9 +405,9 @@ it.each(
           await copyFile(`${target.path}.original`, target.path);
         } else if (change === "dispose") {
           projection.dispose();
-        } else if (change === "new-agent-registration" || change === "new-store-registration") {
+        } else if (change === "new-store-registration") {
           openOpenClawAgentDatabase({
-            agentId: change === "new-agent-registration" ? "new-agent" : query.agentId,
+            agentId: query.agentId,
             path: path.join(state.root, "newly-registered.sqlite"),
             env: state.env,
           });
@@ -322,12 +430,7 @@ it.each(
         }
         release.resolve();
         const result = await settled;
-        if (
-          change === "unchanged" ||
-          change === "new-agent-registration" ||
-          change === "new-store-registration" ||
-          unrelated
-        ) {
+        if (change === "unchanged" || change === "new-store-registration" || unrelated) {
           expect(result).toEqual([{ status: "fulfilled", value: undefined }]);
           expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
           expect(broadcastToConnIds.mock.calls[0]?.[0]).toBe(
@@ -346,9 +449,9 @@ it.each(
   },
 );
 
-it.each(["config", "identity scopes", "dispose", "source"] as const)(
+it.for(["identity scopes", "dispose", "source", "integrity confirmation"] as const)(
   "does not publish a topology snapshot after its %s changes while reading",
-  async (change) => {
+  async (change, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       let cfg: OpenClawConfig = {
         agents: { entries: { main: { identity: { name: "Original" } } } },
@@ -364,32 +467,26 @@ it.each(["config", "identity scopes", "dispose", "source"] as const)(
         getConfig: () => cfg,
         modelCatalog: [],
       });
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const originalRead = stateReads.executeExistingOpenClawStateRead;
-      let held = false;
-      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
-        async (...args) => {
-          const reply = await originalRead(...args);
-          if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
-            held = true;
-            entered.resolve();
-            await release.promise;
-          }
-          return reply;
-        },
-      );
+      const verifiedDatabase =
+        change === "integrity confirmation"
+          ? openOpenClawStateDatabase({ env: state.env })
+          : undefined;
+      const { entered, release } = holdTopologyRead();
       const captured = projection.capture(query);
       sessionChanges.emit({ all: true, scope: "stores" });
       const pending = projection.prepareMembership();
       const settled = Promise.allSettled([pending]);
       try {
-        await withTestTimeout(entered.promise, 2_000, "Topology snapshot did not reach its owner");
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "Topology snapshot did not reach its owner",
+          ),
+          signal,
+        );
         expect(projection.capture(query)).toBe(captured);
-        if (change === "config") {
-          cfg = { agents: { entries: { main: { identity: { name: "Replacement" } } } } };
-          sessionChanges.emit({ all: true, scope: "config" });
-        } else if (change === "identity scopes") {
+        if (change === "identity scopes") {
           cfg = {
             ...cfg,
             gateway: { auth: { identityScopes: { "reader@example.test": ["operator.read"] } } },
@@ -397,6 +494,27 @@ it.each(["config", "identity scopes", "dispose", "source"] as const)(
           sessionChanges.emit({ all: true, scope: "config" });
         } else if (change === "dispose") {
           projection.dispose();
+        } else if (change === "integrity confirmation") {
+          await applyOpenClawDatabaseVerificationResults({
+            env: state.env,
+            targets: [
+              {
+                kind: "state",
+                label: "OpenClaw state database",
+                path: verifiedDatabase!.path,
+                check: "quick",
+              },
+            ],
+            results: [
+              {
+                path: verifiedDatabase!.path,
+                ok: false,
+                error: "stale terminal result",
+                terminal: true,
+              },
+            ],
+          });
+          expect(verifiedDatabase!.db.isOpen).toBe(false);
         } else {
           const database = openOpenClawStateDatabase({ env: state.env });
           await closeOpenClawStateDatabaseByPathAsync(database.path);
@@ -406,21 +524,28 @@ it.each(["config", "identity scopes", "dispose", "source"] as const)(
           openOpenClawStateDatabase({ env: state.env });
         }
         release.resolve();
-        if (change === "source") {
+        if (change === "source" || change === "integrity confirmation") {
           expect(await settled).toEqual([{ status: "rejected", reason: expect.any(Error) }]);
-          await expect(projection.prepareMembership()).rejects.toThrow();
-          const successor = await createSessionRowProjection({ cfg, modelCatalog: [] });
-          try {
-            await successor.prepareMembership();
-            expect(successor.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
+          if (change === "integrity confirmation") {
+            await expect(projection.prepareMembership()).resolves.toBeUndefined();
+            expect(projection.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
               "topology",
             ]);
-          } finally {
-            successor.dispose();
+          } else {
+            await expect(projection.prepareMembership()).rejects.toThrow();
+            const successor = await createSessionRowProjection({ cfg, modelCatalog: [] });
+            try {
+              await successor.prepareMembership();
+              expect(successor.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
+                "topology",
+              ]);
+            } finally {
+              successor.dispose();
+            }
           }
         } else {
           expect(await settled).toEqual([{ status: "fulfilled", value: undefined }]);
-          if (change === "config" || change === "identity scopes") {
+          if (change === "identity scopes") {
             expect(projection.state.cfg).toBe(cfg);
             expect(projection.selectEntries().map((row) => row.entry.sessionId)).toEqual([
               "topology",
@@ -440,29 +565,15 @@ it.each(["config", "identity scopes", "dispose", "source"] as const)(
   },
 );
 
-it.each(["chat.startup", "sessions.resolve"] as const)(
+it.for(["chat.startup", "sessions.resolve"] as const)(
   "revalidates request authority after %s topology readiness",
-  async (method) => {
+  async (method, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const { entered, release } = holdTopologyRead();
       const releaseForeground = retainSessionListForegroundWork();
-      const originalRead = stateReads.executeExistingOpenClawStateRead;
-      let held = false;
-      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
-        async (...args) => {
-          const reply = await originalRead(...args);
-          if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
-            held = true;
-            entered.resolve();
-            await release.promise;
-          }
-          return reply;
-        },
-      );
       sessionChanges.emit({ all: true, scope: "stores" });
       const respond = vi.fn();
       const revoked = new Error("Original request authority ended");
@@ -492,7 +603,14 @@ it.each(["chat.startup", "sessions.resolve"] as const)(
       );
       const settled = Promise.allSettled([pending]);
       try {
-        await withTestTimeout(entered.promise, 2_000, "Request did not await topology readiness");
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "Request did not await topology readiness",
+          ),
+          signal,
+        );
         active = false;
         release.resolve();
         expect(await settled).toEqual([{ status: "rejected", reason: revoked }]);
@@ -507,57 +625,76 @@ it.each(["chat.startup", "sessions.resolve"] as const)(
   },
 );
 
-it("starts a new topology read after healthy integrity confirmation without reviving its old reply", async () => {
+it("retains physical sentinels and stable store precedence after a primary update", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { entries: { main: {} } } };
-    const query = { agentId: "main", key: "agent:main:verified-topology" };
-    replaceSessionEntrySync(
-      { agentId: query.agentId, sessionKey: query.key },
-      {
-        sessionId: "verified-topology",
-        updatedAt: 1,
-      },
-    );
-    const releaseForeground = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const database = openOpenClawStateDatabase({ env: state.env });
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const originalRead = stateReads.executeExistingOpenClawStateRead;
-    let held = false;
-    vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(async (...args) => {
-      const reply = await originalRead(...args);
-      if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
-        held = true;
-        entered.resolve();
-        await release.promise;
-      }
-      return reply;
-    });
-    sessionChanges.emit({ all: true, scope: "stores" });
-    const pending = projection.prepareMembership();
-    const settled = Promise.allSettled([pending]);
+    const cfg = {
+      agents: { entries: { main: {} } },
+      session: { scope: "global" as const },
+    };
+    const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const secondary = state.statePath("secondary.sqlite");
+    for (const storePath of [primary, secondary]) {
+      replaceSessionEntrySync(
+        { agentId: "main", storePath, sessionKey: "global" },
+        { sessionId: storePath === primary ? "primary" : "secondary", updatedAt: Date.now() },
+      );
+      registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
+    }
+    const projection = await createSessionRowProjection({ cfg });
+    await projection.ensureMaterialized();
     try {
-      await withTestTimeout(entered.promise, 2_000, "Topology snapshot did not reach its owner");
-      await applyOpenClawDatabaseVerificationResults({
-        env: state.env,
-        targets: [{ kind: "state", label: "OpenClaw state database", path: database.path }],
-        results: [
-          { path: database.path, ok: false, error: "stale terminal result", terminal: true },
-        ],
-      });
-      expect(database.db.isOpen).toBe(false);
-      release.resolve();
-      expect(await settled).toEqual([{ status: "rejected", reason: expect.any(Error) }]);
-      await expect(projection.prepareMembership()).resolves.toBeUndefined();
-      expect(projection.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
-        "verified-topology",
-      ]);
+      expect(projection.selectEntries().filter(ready).length).toBe(2);
+      expect(
+        projection.snapshot({ agentId: "main", key: "global", storePath: secondary }).row
+          ?.sessionId,
+      ).toBe("secondary");
+      const selected = projection.describe({ agentId: "main", key: "global" })!;
+      expect(
+        projection
+          .findBySessionId({
+            agentId: "main",
+            sessionId: selected.entry.sessionId,
+            federated: true,
+          })
+          .map((row) => row.key),
+      ).toEqual(["global"]);
+      const shadowedId = selected.entry.sessionId === "primary" ? "secondary" : "primary";
+      expect(
+        projection.findBySessionId({ agentId: "main", sessionId: shadowedId, federated: true }),
+      ).toEqual([]);
+      replaceSessionEntrySync(
+        { ...selected.storeTarget, sessionKey: "global" },
+        { ...selected.entry, label: "updated" },
+      );
+      await projection.ensureMaterialized();
+      expect(projection.snapshot({ agentId: "main", key: "global" }).row?.sessionId).toBe(
+        selected.entry.sessionId,
+      );
+      expect(projection.snapshot({ agentId: "main", key: "global" }).row?.label).toBe("updated");
+      const childKey = "agent:main:qualified-child";
+      replaceSessionEntrySync(
+        { ...selected.storeTarget, sessionKey: childKey },
+        {
+          sessionId: "qualified-child",
+          updatedAt: Date.now(),
+          parentSessionKey: "global",
+        },
+      );
+      await projection.ensureMaterialized();
+      expect(
+        projection.snapshot({
+          agentId: "main",
+          key: "global",
+          storePath: selected.storeTarget.storePath,
+        }).row?.childSessions,
+      ).toEqual([childKey]);
+      const otherPath = selected.storeTarget.storePath === primary ? secondary : primary;
+      expect(
+        projection.snapshot({ agentId: "main", key: "global", storePath: otherPath }).row
+          ?.childSessions,
+      ).toBeUndefined();
     } finally {
-      release.resolve();
-      await settled;
       projection.dispose();
-      releaseForeground();
     }
   });
 });

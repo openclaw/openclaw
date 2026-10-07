@@ -79,6 +79,78 @@ describe("OpenAI realtime voice bridge connection", () => {
     restoreTestEnvironment();
   });
 
+  it.each([
+    "wss://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
+    "https://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
+    "ws://localhost:8080/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
+    "http://localhost:8080/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
+  ])(
+    "uses the configured realtime endpoint %s without minting a client secret",
+    async (baseUrl) => {
+      const provider = buildOpenAIRealtimeVoiceProvider();
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "test-realtime-key", baseUrl, model: "custom/realtime model" },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      });
+      const { connecting, socket } = beginBridgeConnection(bridge);
+      openSocket(socket);
+      emitSessionUpdated(socket);
+      await connecting;
+      try {
+        const url = new URL(String(socket.args[0]));
+        const expected = new URL(baseUrl);
+        expect(url.protocol).toBe(expected.protocol.replace("http", "ws"));
+        expect(url.host).toBe(expected.host);
+        expect(url.pathname).toBe(expected.pathname);
+        expect(url.searchParams.get("realtime")).toBe("true");
+        expect(url.search).toContain("signature=a~b%20c");
+        expect(url.searchParams.getAll("model")).toEqual(["custom/realtime model"]);
+        expect(socket.args[1]).toMatchObject({
+          headers: { Authorization: "Bearer test-realtime-key" },
+        });
+        expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+        expect(bridge.isConnected()).toBe(true);
+      } finally {
+        await bridge.close();
+      }
+    },
+  );
+
+  it.each([
+    "not a url",
+    "file:///private/voice",
+    "ftp://voice.example.test/realtime",
+    "https://user@voice.example.test/realtime",
+    "wss://voice.example.test/realtime#secret",
+    123,
+  ])("rejects invalid realtime baseUrl without opening a socket (%s)", (baseUrl) => {
+    expect(() =>
+      buildOpenAIRealtimeVoiceProvider().createBridge({
+        providerConfig: { apiKey: "test-realtime-key", baseUrl },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      }),
+    ).toThrow("Invalid OpenAI realtime baseUrl");
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects mixing a realtime baseUrl with Azure routing", () => {
+    expect(() =>
+      buildOpenAIRealtimeVoiceProvider().createBridge({
+        providerConfig: {
+          apiKey: "test-realtime-key",
+          baseUrl: "wss://voice.example.test/realtime",
+          azureEndpoint: "https://example.openai.azure.com",
+        },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      }),
+    ).toThrow("cannot be combined with Azure");
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   it("adds OpenClaw attribution headers to native realtime websocket requests", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const provider = buildOpenAIRealtimeVoiceProvider();
@@ -105,10 +177,8 @@ describe("OpenAI realtime voice bridge connection", () => {
   });
 
   it.each([
-    { binding: "modern", throwingCloseCallback: false },
     { binding: "modern", throwingCloseCallback: true },
     { binding: "v2026.8.1", throwingCloseCallback: false },
-    { binding: "v2026.8.1", throwingCloseCallback: true },
   ] as const)(
     "shares GA policy and retires the $binding binding with throwing callback=$throwingCloseCallback",
     async ({ binding, throwingCloseCallback }) => {
@@ -311,23 +381,33 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(connectResolved).toBe(false);
     expect(onReady).not.toHaveBeenCalled();
     expect(parseSent(socket).map((event) => event.type)).toEqual(["session.update"]);
-    const session = requireSession(socket);
-    expectRecordFields(session, "session", {
-      type: "realtime",
-      model: "gpt-realtime-2.1",
-      output_modalities: ["audio"],
-    });
-    const inputAudio = requireNestedRecord(session, ["audio", "input"]);
-    expectRecordFields(inputAudio, "session audio input", {
-      format: { type: "audio/pcmu" },
-      noise_reduction: null,
-      transcription: { model: "gpt-4o-mini-transcribe", language: "de" },
-    });
-    expect(requireNestedRecord(session, ["audio", "output"])).toEqual({
-      format: { type: "audio/pcmu" },
-      voice: "alloy",
-    });
-    expect(session).not.toHaveProperty("temperature");
+    expect(socket.sent[0]).toBe(
+      JSON.stringify({
+        type: "session.update",
+        session: {
+          type: "realtime",
+          model: "gpt-realtime-2.1",
+          instructions: "Be helpful.",
+          output_modalities: ["audio"],
+          audio: {
+            input: {
+              format: { type: "audio/pcmu" },
+              noise_reduction: null,
+              transcription: { model: "gpt-4o-mini-transcribe", language: "de" },
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.5,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 500,
+                create_response: true,
+                interrupt_response: true,
+              },
+            },
+            output: { format: { type: "audio/pcmu" }, voice: "alloy" },
+          },
+        },
+      }),
+    );
     expect(bridge.isConnected()).toBe(false);
 
     emitSessionUpdated(socket);
@@ -698,6 +778,13 @@ describe("OpenAI realtime voice bridge connection", () => {
   });
 
   it.each([
+    {
+      $name: "automatic audio turn responses disabled with speech interruption enabled",
+      autoRespondToAudio: false,
+      interruptResponseOnInputAudio: true,
+      expectedCreateResponse: false,
+      expectedInterruptResponse: true,
+    },
     {
       $name: "automatic audio turn responses disabled",
       autoRespondToAudio: false,

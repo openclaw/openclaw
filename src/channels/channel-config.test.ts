@@ -8,7 +8,6 @@ import {
   resolveChannelEntryMatch,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
-  applyChannelMatchMeta,
   resolveChannelMatchConfig,
 } from "./channel-config.js";
 
@@ -110,15 +109,6 @@ describe("resolveChannelEntryMatchWithFallback", () => {
       expect(match.parentEntry).toBe(source === "parent" ? entries["My Team"] : undefined);
     },
   );
-});
-
-describe("applyChannelMatchMeta", () => {
-  it("copies match metadata onto resolved configs", () => {
-    const base: { matchKey?: string; matchSource?: ChannelMatchSource } = {};
-    const resolved = applyChannelMatchMeta(base, { matchKey: "general", matchSource: "direct" });
-    expect(resolved.matchKey).toBe("general");
-    expect(resolved.matchSource).toBe("direct");
-  });
 });
 
 describe("resolveChannelMatchConfig", () => {

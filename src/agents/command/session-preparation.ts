@@ -1,6 +1,10 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import {
+  isMainRestartRecoveryCandidate,
+  normalizeMainSessionRecoveryRunFences,
+} from "../../config/sessions/restart-recovery-state.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -13,6 +17,7 @@ import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
+import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
@@ -33,6 +38,7 @@ export function prepareCommandSessionRecoveryEntry(
   > & {
     deliveryContext?: DeliveryContext;
     now: number;
+    lifecycleGeneration: string;
     isSessionRollover: boolean;
   },
 ) {
@@ -49,6 +55,16 @@ export function prepareCommandSessionRecoveryEntry(
       ...entry,
       sessionId,
       updatedAt: now,
+      status: undefined,
+      abortedLastRun: false,
+      endedAt: undefined,
+      lastRunError: undefined,
+      restartRecoveryRuns: isMainRestartRecoveryCandidate(entry, params.sessionKey)
+        ? normalizeMainSessionRecoveryRunFences([
+            ...(entry.restartRecoveryRuns ?? []),
+            { runId, lifecycleGeneration: params.lifecycleGeneration },
+          ])
+        : entry.restartRecoveryRuns,
       sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
       lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
       ...buildCurrentRunRestartRecoveryClaim({
@@ -147,7 +163,10 @@ export async function prepareEmbeddedSessionState(params: {
   });
   const skillSnapshotState = await resolveReusableWorkspaceSkillSnapshot({
     workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId),
-    executionWorkspaceDir: params.executionWorkspaceDir,
+    ...resolveSessionSkillExecutionWorkspace(
+      sessionEntry?.worktree?.canonicalWorkspaceDir,
+      params.executionWorkspaceDir,
+    ),
     config: params.cfg,
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,

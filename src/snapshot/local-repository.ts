@@ -27,6 +27,7 @@ import {
 } from "../infra/fs-safe.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   createPrivateSqliteDirectory,
@@ -53,6 +54,7 @@ import {
   createOpenClawSnapshotCopy,
   normalizeSnapshotIdentity,
 } from "./openclaw-snapshot-copy.js";
+import { assertFreshRestoreTarget, assertNoSqliteSidecarsSync } from "./restore-paths.js";
 import {
   SNAPSHOT_MANIFEST_FILENAME,
   SNAPSHOT_SQLITE_FILENAME,
@@ -64,13 +66,11 @@ import {
   type SnapshotResult,
   type SnapshotSummary,
   type SnapshotVerificationResult,
-  type SqliteSnapshotProvider,
 } from "./snapshot-provider.js";
 
 const SNAPSHOT_DIRECTORY_MODE = 0o700;
 const SNAPSHOT_FILE_MODE = 0o600;
 const SNAPSHOT_PENDING_FILENAME = ".pending";
-const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 const SNAPSHOT_ARTIFACT_ENTRIES = new Set([
   SNAPSHOT_MANIFEST_FILENAME,
   SNAPSHOT_PENDING_FILENAME,
@@ -88,13 +88,11 @@ type LocalSqliteSnapshotProviderOptions = {
   readonly now?: () => Date;
 };
 
-export function createLocalSqliteSnapshotProvider(
-  options: LocalSqliteSnapshotProviderOptions,
-): SqliteSnapshotProvider {
+export function createLocalSqliteSnapshotProvider(options: LocalSqliteSnapshotProviderOptions) {
   return new LocalSqliteSnapshotProvider(options);
 }
 
-class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
+class LocalSqliteSnapshotProvider {
   readonly #allowedDatabaseRoles: readonly SnapshotDatabaseIdentity["role"][] | undefined;
   readonly #repositoryPath: string;
   readonly #validationRootPath: string;
@@ -288,7 +286,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
     const manifest = await readVerifiedSnapshotManifest(snapshotDir);
     assertAllowedDatabaseRole(manifest, this.#allowedDatabaseRoles);
     const resolvedTargetPath = path.resolve(targetPath);
-    await assertFreshRestorePathsAbsent(resolvedTargetPath);
+    await assertFreshRestoreTarget(resolvedTargetPath);
     const canonicalRepositoryPath = await fs.realpath(this.#repositoryPath);
     const canonicalRestoreParentPath = await canonicalPathFromExistingAncestor(
       path.dirname(resolvedTargetPath),
@@ -330,7 +328,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
     }
     // Existing databases need a crash-recoverable main/WAL/SHM swap protocol.
     // This path is deliberately fresh-only and refuses every preexisting sidecar.
-    await assertFreshRestorePathsAbsent(trustedTargetPath);
+    await assertFreshRestoreTarget(trustedTargetPath);
 
     return await withPrivateSqliteStagingDirectory({
       rootReceipt: restoreParentReceipt,
@@ -356,12 +354,15 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
           requireAtomicPublication: true,
           beforePublish: async () => {
             await assertDirectoryIdentity(trustedRestoreParentPath, restoreParentIdentity);
-            await assertFreshRestorePathsAbsent(trustedTargetPath);
+            await assertFreshRestoreTarget(trustedTargetPath);
           },
           afterPublish: (guard) => {
             guard.assertTargetMatchesExpectedContent(() => {
               assertDirectoryIdentitySync(trustedRestoreParentPath, restoreParentIdentity);
-              assertNoSqliteSidecarsSync(trustedTargetPath);
+              assertNoSqliteSidecarsSync(
+                trustedTargetPath,
+                "Restored SQLite database has unexpected sidecar",
+              );
             });
           },
         });
@@ -883,32 +884,6 @@ function readPendingSnapshotIdentity(pendingPath: string): Stats | undefined {
     throw new Error(`SQLite snapshot pending marker is unsafe: ${pendingPath}`);
   }
   return identity;
-}
-
-async function assertFreshRestorePathsAbsent(databasePath: string): Promise<void> {
-  for (const candidate of [
-    databasePath,
-    ...SQLITE_SIDECAR_SUFFIXES.map((suffix) => `${databasePath}${suffix}`),
-  ]) {
-    if (await lstatIfExists(candidate)) {
-      throw new Error(`Fresh SQLite restore path already exists: ${candidate}`);
-    }
-  }
-}
-
-function assertNoSqliteSidecarsSync(databasePath: string): void {
-  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
-    const sidecarPath = `${databasePath}${suffix}`;
-    try {
-      fsSync.lstatSync(sidecarPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-    throw new Error(`Restored SQLite database has unexpected sidecar: ${sidecarPath}`);
-  }
 }
 
 async function lstatIfExists(pathname: string): Promise<Stats | undefined>;

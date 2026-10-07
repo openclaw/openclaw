@@ -7,13 +7,13 @@ import {
   markInlineProviderApiKeyFailure,
 } from "../../auth-profiles.js";
 import { revokeRuntimeAuthMaterializations } from "../../auth-profiles/runtime-materializations.js";
-import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import {
   FailoverError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
 import { hasLongWindowRateLimitEvidence } from "../../failover/retry-evidence.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
@@ -23,6 +23,7 @@ import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_TRANSIENT_RETRIES = 8;
+const MAX_OUTPUT_LIMIT_RETRIES = 1;
 const MAX_TRANSIENT_RETRY_TIME_MS = 90_000;
 const TRANSIENT_RETRY_BASE_DELAY_MS = 1_000;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 30_000;
@@ -99,6 +100,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
   } = input;
   let rateLimitProfileRotations = 0;
   let transientRetryCount = 0;
+  let outputLimitRetryCount = 0;
   let rateLimitSeen = false;
   let transientRetryBudget: number | undefined;
   // Consecutive outages count failed-request time as well as backoff. A completed
@@ -252,6 +254,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
     maybeRetryTransient: async (retry: {
       reason: TransientRetryReason;
       message?: string;
+      code?: string;
       retryAfterMs?: number;
       /** Saved retry.provider.maxRetryDelayMs; undefined or 0 disables the cap. */
       maxRetryDelayMs?: number;
@@ -268,6 +271,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         decision: "accepted" | "rejected",
         reason:
           | "non_transient"
+          | "connection_retry_disabled"
           | "long_window_rate_limit"
           | "retry_budget_exhausted"
           | "retry_delay_unavailable"
@@ -285,6 +289,14 @@ export function createEmbeddedRunFailoverRetryController(input: {
           { config: params.config },
         );
       if (
+        params.retryConnectionErrors === false &&
+        retry.code !== undefined &&
+        ["ECONNREFUSED", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH"].includes(retry.code)
+      ) {
+        recordDecision("rejected", "connection_retry_disabled");
+        return false;
+      }
+      if (
         retry.reason !== "rate_limit" &&
         retry.reason !== "overloaded" &&
         retry.reason !== "server_error" &&
@@ -299,16 +311,8 @@ export function createEmbeddedRunFailoverRetryController(input: {
         recordDecision("rejected", "long_window_rate_limit");
         return false;
       }
-      // A 429 floor past the operator's maxRetryDelayMs is a usage window in
-      // everything but wording: Anthropic's session-window exhaustion answers
-      // with "try again later" and a Retry-After of hours, which matches no
-      // keyword pattern. The SDK already refused to wait that long under the
-      // same setting; sleeping it here instead holds the turn open until the
-      // run's own timeout kills it. With a fallback configured and an attempt
-      // that can still fail over, decline the wait now. Without either there is
-      // nothing to do but wait, so the floor is honored: after a replay-unsafe
-      // tool action neither profile rotation nor model fallback runs, so
-      // declining here would end the turn instead of continuing it.
+      // Honor the SDK's retry-delay cap when replay-safe fallback is available.
+      // Otherwise a long Retry-After must wait: declining would end the turn.
       const retryDelayCapMs =
         retry.maxRetryDelayMs !== undefined &&
         Number.isFinite(retry.maxRetryDelayMs) &&
@@ -335,7 +339,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
         transientRetryBudget ?? (rateLimit ? MAX_RATE_LIMIT_ATTEMPTS - 1 : MAX_TRANSIENT_RETRIES),
         rateLimitSeen ? MAX_RATE_LIMIT_ATTEMPTS - 1 : Infinity,
       );
-      if (retryCount >= retryBudget) {
+      if (
+        retryCount >= retryBudget ||
+        (retry.reason === "output_limit" && outputLimitRetryCount >= MAX_OUTPUT_LIMIT_RETRIES)
+      ) {
         recordDecision("rejected", "retry_budget_exhausted");
         return false;
       }
@@ -364,8 +371,11 @@ export function createEmbeddedRunFailoverRetryController(input: {
         `transient same-model retry ${retryCount + 1}/${retryBudget} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs}`,
       );
       await retry.onRetry?.({
-        attempt: retryCount + 1,
-        maxRetries: retryBudget,
+        attempt: retry.reason === "output_limit" ? outputLimitRetryCount + 1 : retryCount + 1,
+        maxRetries:
+          retry.reason === "output_limit"
+            ? Math.min(retryBudget, MAX_OUTPUT_LIMIT_RETRIES)
+            : retryBudget,
         delayMs,
         reason: retry.reason,
       });
@@ -388,6 +398,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
       }
       recordDecision("accepted", "backoff_completed");
       transientRetryCount += 1;
+      if (retry.reason === "output_limit") {
+        outputLimitRetryCount += 1;
+      }
       return true;
     },
   };

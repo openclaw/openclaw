@@ -26,7 +26,6 @@ import {
   analyzeVoiceReceiveError,
   DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
   DECRYPT_FAILURE_WINDOW_MS,
-  finishVoiceDecryptRecovery,
   noteVoiceDecryptFailure,
   resetVoiceReceiveRecoveryState,
 } from "./receive-recovery.js";
@@ -81,7 +80,7 @@ export class DiscordVoiceReceive {
     },
   ) {}
 
-  scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string, _reason: string): void {
+  scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string): void {
     // Before admission there is no worker subscription. Main expires only its
     // reservation; subscribed stream deadlines are driven by the worker receiver.
     if (entry.capture.get(userId)?.stream) {
@@ -191,12 +190,7 @@ export class DiscordVoiceReceive {
       admissionAllowFrom: this.params.admissionAllowFrom,
       runtime: this.params.runtime,
       speakerContext: this.params.speakerContext,
-      fetchGuildName: async (guildId: string) => {
-        const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
-        return guild && typeof guild.name === "string" && guild.name.trim()
-          ? guild.name
-          : undefined;
-      },
+      client: this.params.client,
       enqueuePlayback: (playbackEntry: VoiceSessionEntry, task: () => Promise<void>) => {
         playbackEntry.playbackQueue = playbackEntry.playbackQueue
           .then(task)
@@ -363,34 +357,6 @@ export class DiscordVoiceReceive {
       if (!conversation && !entry.transcripts?.isCurrent()) {
         return;
       }
-      const processFrame = async (
-        pcm: Buffer,
-        packetBytes: number,
-        receipt: DiscordVoiceAudioReceipt,
-      ): Promise<void> => {
-        if (failed) {
-          return;
-        }
-        pendingPackets -= 1;
-        pendingBytes -= packetBytes;
-        if (!receipt.capture && conversation && !conversation.ingress) {
-          const admitted = await waitForVoiceCaptureAdmission({
-            capture: reservation,
-            conversationAuthorized: conversation.ready.then(() => conversation.ingress !== null),
-            isRecordingCurrent: () => entry.transcripts?.isCurrent() === true,
-          });
-          if (!admitted) {
-            stream.destroy();
-            return;
-          }
-        }
-        if (failed) {
-          return;
-        }
-        realtimeRecording?.noteReceipt(receipt);
-        conversation?.sendAudio(pcm, receipt);
-        await recording.append(pcm, receipt);
-      };
       try {
         for await (const decoded of input) {
           const frame: {
@@ -400,7 +366,31 @@ export class DiscordVoiceReceive {
             frame: DiscordAudioFrame;
           } = decoded;
           try {
-            await processFrame(frame.pcm, frame.packetBytes, frame.receipt);
+            if (failed) {
+              continue;
+            }
+            pendingPackets -= 1;
+            pendingBytes -= frame.packetBytes;
+            const { pcm, receipt } = frame;
+            if (!receipt.capture && conversation && !conversation.ingress) {
+              const admitted = await waitForVoiceCaptureAdmission({
+                capture: reservation,
+                conversationAuthorized: conversation.ready.then(
+                  () => conversation.ingress !== null,
+                ),
+                isRecordingCurrent: () => entry.transcripts?.isCurrent() === true,
+              });
+              if (!admitted) {
+                stream.destroy();
+                continue;
+              }
+            }
+            if (failed) {
+              continue;
+            }
+            realtimeRecording?.noteReceipt(receipt);
+            conversation?.sendAudio(pcm, receipt);
+            await recording.append(pcm, receipt);
           } finally {
             stream.acknowledge(frame.frame);
           }
@@ -530,7 +520,7 @@ export class DiscordVoiceReceive {
     logger.info(
       `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} speaker=${context.speakerLabel} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} message=${formatVoiceLogPreview(message)}`,
     );
-    const turn = await runDiscordVoiceAgentTurn({
+    const text = await runDiscordVoiceAgentTurn({
       entry,
       accountId: this.params.accountId,
       userId,
@@ -542,16 +532,16 @@ export class DiscordVoiceReceive {
       voiceSelection: params.voiceSelection,
       ...(params.signal ? { signal: params.signal } : {}),
     });
-    if (!turn) {
+    if (text === null) {
       logVoiceVerbose(
         `realtime agent unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
       return "";
     }
     logger.info(
-      `discord voice: agent turn answer (${turn.text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}: ${formatVoiceLogPreview(turn.text)}`,
+      `discord voice: agent turn answer (${text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}: ${formatVoiceLogPreview(text)}`,
     );
-    return turn.text;
+    return text;
   }
 
   private startDecryptRecovery(entry: VoiceSessionEntry, force = false): void {
@@ -594,7 +584,7 @@ export class DiscordVoiceReceive {
         logger.warn(`discord voice: decrypt recovery failed: ${formatErrorMessage(recoverErr)}`),
       )
       .finally(() => {
-        finishVoiceDecryptRecovery(entry.receiveRecovery);
+        entry.receiveRecovery.decryptRecoveryInFlight = false;
       });
   }
 

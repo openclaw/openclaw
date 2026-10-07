@@ -14,7 +14,11 @@ import type {
 } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
-import { createSessionListEntryFilter, resolveSessionSharingTarget } from "../session-sharing.js";
+import {
+  createSessionListEntryFilter,
+  resolveSessionSharingTarget,
+  type canReceiveSessionEvent,
+} from "../session-sharing.js";
 import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
@@ -36,11 +40,14 @@ export function canAccessApprovalSession(params: {
   client: GatewayClient | null;
   sessionKey?: string | null;
   agentId?: string | null;
+  prepared?: Parameters<typeof canReceiveSessionEvent>[0]["prepared"];
 }): boolean {
   if (operatorSessionCap(params.client, params.cfg) !== "none") {
     return true;
   }
-  const visibilityFilter = createSessionListEntryFilter({ client: params.client, cfg: params.cfg });
+  const visibilityFilter = params.prepared
+    ? params.prepared.sharing.entryFilter
+    : createSessionListEntryFilter({ client: params.client, cfg: params.cfg });
   if (!visibilityFilter) {
     return true;
   }
@@ -49,35 +56,45 @@ export function canAccessApprovalSession(params: {
     return false;
   }
   const agentId = normalizeOptionalString(params.agentId);
-  const target = resolveSessionSharingTarget({
-    cfg: params.cfg,
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-  });
+  const target = params.prepared
+    ? params.prepared.target(sessionKey, agentId)
+    : resolveSessionSharingTarget({
+        cfg: params.cfg,
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+      });
   return Boolean(target && visibilityFilter(target.storeKey, target.entry));
+}
+
+/** Payloads are kind-specific; every approval kind carries its source session in the same fields. */
+export function readApprovalRequestSource<TPayload>(record: ExecApprovalRecord<TPayload>) {
+  const source = isRecord(record.request) ? record.request : undefined;
+  return {
+    sessionKey: normalizeOptionalString(source?.sessionKey),
+    agentId: normalizeOptionalString(source?.agentId),
+  };
 }
 
 export function isApprovalRecordVisibleToClient<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   client: GatewayClient | null;
   cfg?: OpenClawConfig;
+  prepared?: Parameters<typeof canAccessApprovalSession>[0]["prepared"];
 }): boolean {
   const scopes = Array.isArray(params.client?.connect?.scopes) ? params.client.connect.scopes : [];
   if (scopes.includes(ADMIN_SCOPE)) {
     return true;
   }
-  if (params.cfg) {
-    const source = isRecord(params.record.request) ? params.record.request : undefined;
-    if (
-      !canAccessApprovalSession({
-        cfg: params.cfg,
-        client: params.client,
-        sessionKey: normalizeOptionalString(source?.sessionKey),
-        agentId: normalizeOptionalString(source?.agentId),
-      })
-    ) {
-      return false;
-    }
+  if (
+    params.cfg &&
+    !canAccessApprovalSession({
+      cfg: params.cfg,
+      client: params.client,
+      ...readApprovalRequestSource(params.record),
+      prepared: params.prepared,
+    })
+  ) {
+    return false;
   }
   const requestedByDeviceId = normalizeNullableString(params.record.requestedByDeviceId);
   const requestedByClientId = normalizeNullableString(params.record.requestedByClientId);
@@ -197,9 +214,11 @@ async function resolveApprovalRecordForState<TPayload>(
   const snapshot = await params.manager.getSnapshot(resolvedId.id, params.authority);
   params.authority?.assertCurrent();
   const isResolved = snapshot?.resolvedAtMs !== undefined;
-  return !snapshot || isResolved !== (expectedState === "resolved") || !visible(snapshot)
-    ? { ok: false, response: "missing" }
-    : { ok: true, approvalId: resolvedId.id, snapshot };
+  if (!snapshot || isResolved !== (expectedState === "resolved") || !visible(snapshot)) {
+    return { ok: false, response: "missing" };
+  }
+  params.authority?.bindSource(readApprovalRequestSource(snapshot));
+  return { ok: true, approvalId: resolvedId.id, snapshot };
 }
 
 export function resolvePendingApprovalRecord<TPayload>(

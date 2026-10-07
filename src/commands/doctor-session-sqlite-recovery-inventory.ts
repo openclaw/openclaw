@@ -27,6 +27,7 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { listUpdateRuns } from "../infra/update-run-reader.js";
 
 type Outcome =
   | "candidate"
@@ -46,30 +47,13 @@ type RecoveryCleanupArtifact = {
   consequence?: string;
   removedBytes?: number;
 };
-export type RecoveryCleanupReport = {
-  stateDir: string;
-  artifacts: RecoveryCleanupArtifact[];
-  totals: {
-    candidateBytes: number;
-    verificationRequiredBytes: number;
-    protectedBytes: number;
-    blockedBytes: number;
-    removedBytes: number;
-    removedFiles: number;
-  };
-  status: "preview" | "refused" | "complete" | "blocked";
-};
+export type RecoveryCleanupReport = ReturnType<typeof summarizeRecoveryCleanup>;
 export type RecoveryArtifactReference = {
   run: ActiveSessionSqliteMigrationRun;
   target: SessionSqliteMigrationTargetManifest;
   move: SessionSqliteMigrationMove;
   trusted: boolean;
   consumedByRestore: boolean;
-};
-type RecoveryInventory = {
-  report: RecoveryCleanupReport;
-  references: Map<string, RecoveryArtifactReference[]>;
-  manifestPaths: string[];
 };
 
 export function resolveRecoveryArtifact(
@@ -81,10 +65,7 @@ export function resolveRecoveryArtifact(
   );
 }
 
-export function collectRecoveryInventory(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): RecoveryInventory {
+export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) {
   const stateDir = canonicalMigrationFilePath(path.join(resolveStateDir(params.env), "anchor"));
   const root = path.dirname(stateDir);
   const stores = new Set<string>();
@@ -117,6 +98,7 @@ export function collectRecoveryInventory(params: {
   const references = new Map<string, RecoveryArtifactReference[]>();
   const manifestPaths: string[] = [];
   const artifacts: RecoveryCleanupArtifact[] = [];
+  let laterUpdateStartedAt = 0;
   const manifestsDir = resolveSessionSqliteMigrationRunsDir(params.env);
   if (hasSymbolicLinkInDirectoryPath(manifestsDir)) {
     artifacts.push({
@@ -149,26 +131,39 @@ export function collectRecoveryInventory(params: {
       for (const target of manifest.targets) {
         const expected = resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath);
         const trusted =
-          stores.has(target.storePath) &&
           isPathInside(root, target.sqlitePath) &&
           isPathInside(root, target.storePath) &&
           !hasSymbolicLinkInDirectoryPath(path.dirname(target.storePath)) &&
           !hasSymbolicLinkInDirectoryPath(path.dirname(target.sqlitePath)) &&
-          (expected.agentId
-            ? target.sqlitePath === expected.path && target.agentId === expected.agentId
-            : path.dirname(target.sqlitePath) === path.dirname(expected.path));
+          (target.databaseIdentity ||
+            (stores.has(target.storePath) &&
+              (expected.agentId
+                ? target.sqlitePath === expected.path && target.agentId === expected.agentId
+                : path.dirname(target.sqlitePath) === path.dirname(expected.path))));
         for (const move of uniqueRestoreMoves(target)) {
           const refs = references.get(move.archivePath) ?? [];
           refs.push({
             run,
             target,
             move,
-            trusted,
+            trusted: Boolean(trusted),
             consumedByRestore: consumed.has(move.archivePath),
           });
           references.set(move.archivePath, refs);
         }
       }
+    }
+  }
+  if ([...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity))) {
+    try {
+      laterUpdateStartedAt = Math.max(
+        0,
+        ...listUpdateRuns({ limit: 100 }, { env: params.env })
+          .filter((run) => run.status === "succeeded" && run.finishedAtMs !== null)
+          .map((run) => run.createdAtMs),
+      );
+    } catch {
+      // Missing/unreadable update history cannot release rollback originals.
     }
   }
   for (const [archivePath, refs] of references) {
@@ -222,13 +217,22 @@ export function collectRecoveryInventory(params: {
       item.reason = refs.find(
         (ref) => ref.move.artifact?.classification === "protected",
       )!.move.artifact!.reason;
+    } else if (
+      refs.some(
+        ({ target, run }) =>
+          target.databaseIdentity &&
+          !(laterUpdateStartedAt > Date.parse(run.manifest.completedAt!)),
+      )
+    ) {
+      item.outcome = "protected";
+      item.reason = "awaiting-later-completed-update";
     } else if (refs.some(({ move }) => !move.artifact)) {
       item.outcome = "verification-required";
       item.reason = "historical-manifest-without-import-proof";
     } else if (
       current &&
       evidence &&
-      (["dev", "ino", "mtimeNs", "size"] as const).some(
+      (["ino", "mtimeNs", "size"] as const).some(
         (key) => String(current[key]) !== String(evidence.identity[key]),
       )
     ) {
@@ -267,8 +271,17 @@ export function collectRecoveryInventory(params: {
     }
     artifacts.push(item);
   }
-  for (const store of stores) {
-    const directory = path.dirname(store);
+  const recoveryDirectories = new Set([
+    path.join(root, "state"),
+    ...[...stores].flatMap((store) => [
+      path.dirname(store),
+      path.dirname(resolveUnsuffixedSqliteTargetFromSessionStorePath(store).path),
+    ]),
+    ...[...references.values()].flatMap((refs) =>
+      refs.filter((ref) => ref.trusted).map((ref) => path.dirname(ref.target.sqlitePath)),
+    ),
+  ]);
+  for (const directory of recoveryDirectories) {
     if (
       !isPathInside(root, directory) ||
       !statMigrationPath(directory)?.isDirectory() ||
@@ -277,10 +290,17 @@ export function collectRecoveryInventory(params: {
       continue;
     }
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (!isMigrationArchiveArtifactName(entry.name) && !entry.name.includes(".pre-doctor-")) {
+      if (
+        !isMigrationArchiveArtifactName(entry.name) &&
+        !entry.name.includes(".pre-doctor-") &&
+        !/^.+\.pre-startup-migration-.+\.bak$/.test(entry.name)
+      ) {
         continue;
       }
       const filePath = path.join(directory, entry.name);
+      if (references.has(filePath)) {
+        continue;
+      }
       artifacts.push({
         path: filePath,
         runs: [],
@@ -362,8 +382,18 @@ export function protectRecoveryDependencies(
     paths.add(to);
     dependents.set(from, paths);
   };
+  const backupGroups = new Map<string, string>();
   for (const [archive, references] of refs) {
     for (const ref of references.filter(active)) {
+      if (ref.target.databaseIdentity) {
+        const sibling = backupGroups.get(ref.run.manifestPath);
+        if (sibling) {
+          connect(archive, sibling);
+          connect(sibling, archive);
+        } else {
+          backupGroups.set(ref.run.manifestPath, archive);
+        }
+      }
       const dependencies =
         (ref.move.artifact ?? adoptions?.get(ref))?.dependencies ??
         (ref.move.kind === "legacy-store"
@@ -408,8 +438,8 @@ export function protectRecoveryDependencies(
 export function summarizeRecoveryCleanup(
   stateDir: string,
   artifacts: RecoveryCleanupArtifact[],
-  status: RecoveryCleanupReport["status"],
-): RecoveryCleanupReport {
+  status: "preview" | "refused" | "complete" | "blocked",
+) {
   const totals = {
     candidateBytes: 0,
     verificationRequiredBytes: 0,

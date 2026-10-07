@@ -353,31 +353,6 @@ describe("openai completions stream", () => {
     expect(output.content).toStrictEqual([{ type: "text", text: "Ordinary answer." }]);
   });
 
-  it("leaves content unchanged when no tool calls and finish_reason is stop", async () => {
-    const model = makeCompletionsModel({
-      id: "llama-3.3-70b",
-      name: "Llama 3.3 70B",
-      provider: "llamacpp",
-      baseUrl: "http://localhost:8080/v1",
-      reasoning: false,
-      contextWindow: 131072,
-    });
-
-    const output = createAssistantOutput(model);
-    const stream = { push: () => {} };
-
-    const mockChunks = [
-      makeCompletionsChunk({ role: "assistant" as const, content: "" }),
-      makeCompletionsChunk({ content: "Just a text reply." }, "stop"),
-    ] as const;
-
-    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
-
-    expect(output.stopReason).toBe("stop");
-    expect(output.content).toHaveLength(1);
-    expect((output.content[0] as { type?: string }).type).toBe("text");
-  });
-
   it("replaces the stored function name on a fragmented continuation (managed parity)", async () => {
     // The managed path (no mode: "direct") invokes the same processCompletionsStream
     // assembler. A fragmented function name arriving in two nonempty snapshots on

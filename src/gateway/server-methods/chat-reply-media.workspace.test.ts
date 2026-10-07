@@ -48,13 +48,12 @@ describe("WebChat reply media workspace ownership", () => {
     const cfg: OpenClawConfig = {
       tools: params.allowRead ? { allow: ["read"] } : { fs: { workspaceOnly: true } },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             agentDir: testState.statePath("agents", "main", "agent"),
             workspace: workspaceDir,
           },
-        ],
+        },
       },
     };
     return { cfg, workspaceDir };
@@ -181,7 +180,7 @@ describe("WebChat reply media workspace ownership", () => {
         ...(ownership === "repository" ? { repositoryWorkspaceId: "remote-repository" } : {}),
       };
       if (ownership === "cloud") {
-        createWorkerSessionPlacementStore().startDispatch({
+        await createWorkerSessionPlacementStore().startDispatch({
           sessionId: sessionEntry.sessionId,
           sessionKey: TEST_SESSION_KEY,
           agentId: "main",
@@ -413,7 +412,7 @@ describe("WebChat reply media workspace ownership", () => {
         ...(owner === "repository" ? { repositoryWorkspaceId: "remote-project" } : {}),
       };
       if (owner === "cloud" || owner === "rootless-cloud") {
-        createWorkerSessionPlacementStore().startDispatch({
+        await createWorkerSessionPlacementStore().startDispatch({
           sessionId: sessionEntry.sessionId,
           sessionKey: TEST_SESSION_KEY,
           agentId: "main",

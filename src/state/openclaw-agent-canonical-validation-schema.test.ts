@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { constants, DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   assertCanonicalSessionValidationSchema,
@@ -8,6 +10,7 @@ import {
 } from "./openclaw-agent-canonical-validation-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
+import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_V21_SQL } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -43,10 +46,13 @@ function clearPending(database: DatabaseSync) {
   database.exec("DELETE FROM session_canonical_validation_pending");
 }
 
-function withDatabase(run: (database: DatabaseSync) => void) {
-  const database = new DatabaseSync(":memory:");
+function withDatabase(run: (database: DatabaseSync) => void, admitted = false) {
+  const database = admitted ? openNodeSqliteDatabase(":memory:") : new DatabaseSync(":memory:");
   try {
     database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+    if (admitted) {
+      admitSqliteSchema(database);
+    }
     run(database);
   } finally {
     if (database.isOpen) {
@@ -205,24 +211,56 @@ describe("canonical validation schema admission", () => {
     missingTables: ["session_canonical_validation_pending"],
     cause: expect.objectContaining({ message: expect.stringMatching(/missing or drifted/u) }),
   });
-  it.each([
-    "DROP TABLE session_canonical_validation_pending",
-    "DROP TRIGGER session_nodes_canonical_pending_after_update",
-    "DROP TRIGGER session_windows_canonical_pending_after_delete",
-    "DROP TRIGGER session_key_contract_canonical_pending_after_update",
-    `CREATE TRIGGER clear_canonical_pending AFTER INSERT ON session_canonical_validation_pending
-      BEGIN DELETE FROM session_canonical_validation_pending; END`,
-  ])("rejects changed required schema after a cached admission (%#)", (change) => {
-    withDatabase((database) => {
-      assertCanonicalSessionValidationSchema(database);
-      database.exec(change);
-      expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
-        change.startsWith("DROP TABLE")
-          ? missingTable
-          : /canonical validation schema is missing or drifted/u,
-      );
+  it("refuses a drifted canonical trigger at read-only open", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const pathname = state.path("drifted.sqlite");
+      const seed = new DatabaseSync(pathname);
+      try {
+        seed.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        seed.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+          VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', 1, 1);
+          DROP TRIGGER session_nodes_canonical_pending_after_update;`);
+      } finally {
+        seed.close();
+      }
+      expect(() => {
+        const opened = openOpenClawAgentDatabaseReadOnly({
+          agentId: "main",
+          path: pathname,
+          env: state.env,
+        });
+        if (opened.found) {
+          opened.database.close();
+        }
+      }).toThrow(/canonical validation schema is missing or drifted.*openclaw doctor --fix/u);
     });
   });
+  it.each(
+    [
+      "DROP TABLE session_canonical_validation_pending",
+      "DROP TRIGGER session_nodes_canonical_pending_after_update",
+      "DROP TRIGGER session_windows_canonical_pending_after_delete",
+      "DROP TRIGGER session_key_contract_canonical_pending_after_update",
+      `CREATE TRIGGER clear_canonical_pending AFTER INSERT ON session_canonical_validation_pending
+      BEGIN DELETE FROM session_canonical_validation_pending; END`,
+      `CREATE TRIGGER session_canonical_validation_pending AFTER INSERT ON conversations
+      BEGIN DELETE FROM session_canonical_validation_pending; END`,
+    ].flatMap((change) => [false, true].map((admitted) => ({ change, admitted }))),
+  )(
+    "rejects changed required schema after cached admission, admitted=$admitted (%#)",
+    ({ change, admitted }) => {
+      withDatabase((database) => {
+        assertCanonicalSessionValidationSchema(database);
+        database.exec(change);
+        expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
+          change.startsWith("DROP TABLE")
+            ? missingTable
+            : /canonical validation schema is missing or drifted/u,
+        );
+      }, admitted);
+    },
+  );
 
   it("does not reuse validation performed inside a rolled-back schema transaction", () => {
     withDatabase((database) => {
@@ -290,7 +328,9 @@ describe("agent schema 21 migration", () => {
         database
           .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
           .run(sibling);
-        const before = database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all();
+        const before = database
+          .prepare("SELECT *, 0 AS snapshot_revision FROM session_nodes ORDER BY session_key")
+          .all();
         oldWriter = new DatabaseSync(pathname);
         const oldWrite = oldWriter.prepare(
           "UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?",

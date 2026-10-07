@@ -6,11 +6,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { isUsageIncomplete } from "../../lib/incomplete-usage-retry.ts";
 import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import {
   GatewayPageController,
@@ -26,22 +26,12 @@ import {
   createDefaultUsageDateRange,
   selectUsageSessionKeys,
   toggleUsageRangeSelection,
-  toUsageErrorMessage,
 } from "./helpers.ts";
 import { renderUsagePageShell } from "./page-shell.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
-import {
-  providerUsageFromSnapshotResult,
-  type ProviderUsageSnapshot,
-  requestUsageSnapshot,
-} from "./request-usage-snapshot.ts";
+import { type ProviderUsageSnapshot, requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import { createUsageRequest } from "./request.ts";
-import {
-  DEFAULT_VISIBLE_COLUMNS,
-  type SessionLogRole,
-  type UsageProps,
-  type UsageRouteData,
-} from "./types.ts";
+import type { SessionLogRole, UsageProps, UsageRouteData } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
 export type { UsageRouteData } from "./types.ts";
@@ -87,7 +77,6 @@ class UsagePage extends OpenClawLightDomElement {
   @state() private usageContextExpanded = false;
   @state() private usageHeaderPinned = false;
   @state() private usageSessionsTab: "all" | "recent" = "all";
-  @state() private usageVisibleColumns = [...DEFAULT_VISIBLE_COLUMNS];
   @state() private usageLogFilterRoles: SessionLogRole[] = [];
   @state() private usageLogFilterTools: string[] = [];
   @state() private usageLogFilterHasTools = false;
@@ -179,7 +168,7 @@ class UsagePage extends OpenClawLightDomElement {
         this.applyUsageError(snapshot.error.cause);
       }
       this.applyUsageLoadState(
-        providerUsageFromSnapshotResult(snapshot),
+        snapshot.ok ? snapshot.value.providerUsage : snapshot.error.providerUsage,
         value.epoch,
         current && snapshot.ok ? undefined : null,
       );
@@ -213,10 +202,7 @@ class UsagePage extends OpenClawLightDomElement {
       () => this.context?.agentSelection,
       (selection) => this.observeAgentScope(selection),
     )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    );
+    .watchStore(() => this.context?.agents);
 
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
@@ -323,7 +309,7 @@ class UsagePage extends OpenClawLightDomElement {
     if (snapshot.state === "settled") {
       const result = snapshot.result;
       this.providerUsageUnavailable = !result.ok;
-      this.providerUsageIncomplete = !result.ok || isUsageIncomplete(result.value);
+      this.providerUsageIncomplete = !result.ok || result.value.refreshing === true;
       if (result.ok && !this.providerUsageIncomplete) {
         this.providerUsageSummary = result.value;
       }
@@ -406,7 +392,7 @@ class UsagePage extends OpenClawLightDomElement {
     const missingScope = isMissingOperatorReadScopeError(error);
     this.usageError = missingScope
       ? formatMissingOperatorReadScopeMessage("usage")
-      : toUsageErrorMessage(error);
+      : formatUiError(error, "request failed");
     if (missingScope) {
       this.usageSnapshot = null;
     }
@@ -431,15 +417,11 @@ class UsagePage extends OpenClawLightDomElement {
     return this.usageRequest.run([client, refreshSessionKey]);
   }
 
-  private clearSelections() {
+  private clearSelectionsAndDetails() {
+    this.usageExportRequest.cancel();
     this.usageSelectedDays = [];
     this.usageSelectedHours = [];
     this.usageSelectedSessions = [];
-  }
-
-  private clearSelectionsAndDetails() {
-    this.usageExportRequest.cancel();
-    this.clearSelections();
     this.details.clear();
   }
 
@@ -530,9 +512,6 @@ class UsagePage extends OpenClawLightDomElement {
         error: this.usageError,
         sessions: this.usageResult?.sessions ?? [],
         creatorOptions: this.usageCreatorOptions,
-        agents:
-          this.context.agents.state.agentsList?.agents.map((entry) => entry.id).filter(Boolean) ??
-          [],
         sessionsLimitReached: (this.usageResult?.sessions.length ?? 0) >= 1000,
         totals: this.usageResult?.totals ?? null,
         aggregates: this.usageResult?.aggregates ?? null,
@@ -553,7 +532,6 @@ class UsagePage extends OpenClawLightDomElement {
         selectedSessions: this.usageSelectedSessions,
         selectedDays: this.usageSelectedDays,
         selectedHours: this.usageSelectedHours,
-        agentId: this.usageAgentId,
         creatorKey: this.usageCreatorKey,
         query: this.usageQuery,
         queryDraft: this.usageQueryDraft,
@@ -566,7 +544,6 @@ class UsagePage extends OpenClawLightDomElement {
         sessionSortDir: this.usageSessionSortDir,
         recentSessions: this.usageRecentSessions,
         sessionsTab: this.usageSessionsTab,
-        visibleColumns: this.usageVisibleColumns,
         contextExpanded: this.usageContextExpanded,
         headerPinned: this.usageHeaderPinned,
       },
@@ -610,9 +587,6 @@ class UsagePage extends OpenClawLightDomElement {
             this.usageScope = scope;
             this.clearSelectionsAndDetails();
             this.refreshPolicy.request("manual");
-          },
-          onAgentChange: (agentId) => {
-            this.context.agentSelection.setScope(agentId);
           },
           onCreatorChange: (creatorKey) => {
             this.usageCreatorKey = creatorKey;
@@ -683,11 +657,6 @@ class UsagePage extends OpenClawLightDomElement {
           onSessionSortChange: (sort) => (this.usageSessionSort = sort),
           onSessionSortDirChange: (direction) => (this.usageSessionSortDir = direction),
           onSessionsTabChange: (tab) => (this.usageSessionsTab = tab),
-          onToggleColumn: (column) => {
-            this.usageVisibleColumns = this.usageVisibleColumns.includes(column)
-              ? this.usageVisibleColumns.filter((entry) => entry !== column)
-              : [...this.usageVisibleColumns, column];
-          },
         },
         details: {
           onToggleContextExpanded: () => (this.usageContextExpanded = !this.usageContextExpanded),

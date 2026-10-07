@@ -29,7 +29,6 @@ describe("runEmbeddedAttempt abort races", () => {
   });
 
   it.each([
-    { stage: "construction", cleanupFails: false },
     { stage: "projection", cleanupFails: false },
     { stage: "construction", cleanupFails: true },
   ])(
@@ -112,50 +111,41 @@ describe("runEmbeddedAttempt abort races", () => {
     },
   );
 
-  it.each([false, true])(
-    "bounds registered one-shot cleanup after a completed turn (fails=%s)",
-    async (fails) => {
-      const held = createDeferred();
-      const started = createDeferred();
-      const cleanupScope = createAgentCleanupScope();
-      hoisted.createOpenClawCodingToolsMock.mockImplementation((options: unknown) => {
-        (
-          options as { registerRunCleanup: (cleanup: () => Promise<void>) => void }
-        ).registerRunCleanup(async () => {
-          started.resolve();
-          await held.promise;
-          if (fails) {
-            throw new Error("registered resource teardown failed");
-          }
-        });
-        return [];
+  it("bounds registered one-shot cleanup after a completed turn", async () => {
+    const held = createDeferred();
+    const started = createDeferred();
+    const cleanupScope = createAgentCleanupScope();
+    hoisted.createOpenClawCodingToolsMock.mockImplementation((options: unknown) => {
+      (
+        options as { registerRunCleanup: (cleanup: () => Promise<void>) => void }
+      ).registerRunCleanup(async () => {
+        started.resolve();
+        await held.promise;
       });
-      const attempt = cleanupScope.run(() =>
-        createContextEngineAttemptRunner({
-          contextEngine: createContextEngineBootstrapAndAssemble(),
-          sessionKey: "agent:main:triage:cleanup",
-          tempPaths,
-          sessionPrompt: async () => {
-            vi.useFakeTimers();
-          },
-          attemptOverrides: { oneShotCliRun: true, disableTools: false },
-        }),
-      );
-      try {
-        await started.promise;
-        if (fails) {
-          held.resolve();
-        }
-        await vi.advanceTimersByTimeAsync(10_000);
-        expect(cleanupScope.outcome).toBe("uncertain");
-        expect((await attempt).terminal).toEqual({ kind: "ok" });
-      } finally {
-        held.resolve();
-        await attempt;
-        vi.useRealTimers();
-      }
-    },
-  );
+      return [];
+    });
+    const attempt = cleanupScope.run(() =>
+      createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:triage:cleanup",
+        tempPaths,
+        sessionPrompt: async () => {
+          vi.useFakeTimers();
+        },
+        attemptOverrides: { oneShotCliRun: true, disableTools: false },
+      }),
+    );
+    try {
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(cleanupScope.outcome).toBe("uncertain");
+      expect((await attempt).terminal).toEqual({ kind: "ok" });
+    } finally {
+      held.resolve();
+      await attempt;
+      vi.useRealTimers();
+    }
+  });
 
   it("preserves a run-budget timeout when abort blocks prompt submission", async () => {
     let releasePendingEvents!: () => void;

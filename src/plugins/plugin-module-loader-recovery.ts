@@ -4,6 +4,7 @@ import type {
   PluginModuleLoaderOwner,
   PluginModuleLoaderRecovery,
 } from "./plugin-instance.types.js";
+import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
@@ -18,6 +19,7 @@ export type PluginInstanceModuleLoaderParams = {
   expectedSourceDigest?: string;
   createHostModuleLoader?: () => PluginModuleLoader;
   recoverySourceMap?: (source: string) => string;
+  nativeRecovery?: PluginNativeRecovery;
 };
 
 type RecoveryLoadFacts = Pick<
@@ -59,6 +61,7 @@ function createSourceModuleRecovery(
         standalone: facts.standalone,
         pluginSdkResolution: facts.pluginSdkResolution,
         recoverySourceMap: createRecoverySourceMap(recovery.resolve, facts.recoverySourceMap),
+        nativeRecovery: recovery.native,
       });
       instance.sourceDigest = facts.sourceDigest;
     },

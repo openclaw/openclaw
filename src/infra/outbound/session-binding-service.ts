@@ -1,6 +1,5 @@
-// Session binding service multiplexes channel adapters and the generic current
-// conversation store behind one bind/list/resolve/touch/unbind API.
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { resolveSpawnThreadBindingPlacement } from "../../channels/conversation-resolution.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "../../plugins/runtime-channel-state.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
@@ -28,6 +27,7 @@ import {
 } from "./session-binding-native-selection.js";
 import {
   buildChannelAccountKey,
+  captureConversationRef,
   normalizeConversationRef,
   withSessionBindingInspectionConversation,
 } from "./session-binding-normalization.js";
@@ -54,7 +54,7 @@ export { isSessionBindingError } from "./session-binding-errors.js";
 
 export type SessionBindingService = {
   bind: (input: SessionBindingBindInput) => Promise<SessionBindingRecord>;
-  getCapabilities: (params: { channel: string; accountId: string }) => SessionBindingCapabilities;
+  getCapabilities: (params: SessionBindingScope) => SessionBindingCapabilities;
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
   /** @deprecated Use touchAsync. Retained through the next Plugin SDK major. */
@@ -99,19 +99,11 @@ function normalizePlacement(raw: unknown): SessionBindingPlacement | undefined {
   return raw === "current" || raw === "child" ? raw : undefined;
 }
 
-function inferDefaultPlacement(ref: ConversationRef): SessionBindingPlacement {
-  return ref.conversationId ? "current" : "child";
-}
-
 function resolveAdapterPlacements(adapter: SessionBindingAdapter): SessionBindingPlacement[] {
-  const configured = adapter.capabilities?.placements?.map((value) => normalizePlacement(value));
-  const placements = configured?.filter((value): value is SessionBindingPlacement =>
-    Boolean(value),
+  const placements = adapter.capabilities?.placements?.filter(
+    (value) => normalizePlacement(value) !== undefined,
   );
-  if (placements && placements.length > 0) {
-    return uniqueValues(placements);
-  }
-  return ["current", "child"];
+  return placements?.length ? uniqueValues(placements) : ["current", "child"];
 }
 
 function resolveAdapterCapabilities(
@@ -200,10 +192,9 @@ export function unregisterSessionBindingAdapter(params: {
   ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, nextRegistrations);
 }
 
-function resolveAdapterForChannelAccount(params: {
-  channel: string;
-  accountId: string;
-}): NativeCapableSessionBindingAdapter | null {
+function resolveAdapterForChannelAccount(
+  params: SessionBindingScope,
+): NativeCapableSessionBindingAdapter | null {
   return (
     ADAPTERS_BY_CHANNEL_ACCOUNT.get(buildChannelAccountKey(params))?.at(-1)?.normalizedAdapter ??
     null
@@ -232,15 +223,21 @@ function assertAdapterSelectionCurrent(
   }
 }
 
-function captureConversationRef(ref: ConversationRef): ConversationRef {
-  return normalizeConversationRef({
-    channel: ref.channel,
-    accountId: ref.accountId,
-    conversationId: ref.conversationId,
-    ...(ref.parentConversationId !== undefined
-      ? { parentConversationId: ref.parentConversationId }
-      : {}),
-  });
+/**
+ * Workers spawned before child-only placement could bind the conversation a user was
+ * talking in. Those persisted bindings stay invisible, so the conversation routes to its
+ * normal agent; untouched, they expire through their owner's idle/max-age lifecycle.
+ */
+function routableBinding(record: SessionBindingRecord | null): SessionBindingRecord | null {
+  if (record?.metadata?.boundBy !== "system") {
+    return record;
+  }
+  const adapter = resolveAdapterForChannelAccount(record.conversation);
+  // The generic current-conversation store never offers child placement.
+  const placements = adapter ? resolveAdapterCapabilities(adapter).placements : [];
+  return resolveSpawnThreadBindingPlacement(record.conversation.channel, placements) === "child"
+    ? record
+    : null;
 }
 
 function getActiveRegisteredAdapters(
@@ -315,7 +312,7 @@ export async function listSessionBindingsBySessionAsync(
     results.push(...entries);
   }
   results.push(...generic);
-  return dedupeBindings(results);
+  return dedupeBindings(results).filter((record) => routableBinding(record));
 }
 
 export function inspectSessionBindingByConversation(
@@ -350,7 +347,7 @@ function availableBindingInspection(
   binding: SessionBindingRecord | null,
 ) {
   return withSessionBindingInspectionConversation(
-    { status: "available" as const, binding },
+    { status: "available" as const, binding: routableBinding(binding) },
     conversation,
   );
 }
@@ -432,189 +429,170 @@ export async function readSessionBindingSelectionCurrent(
   if (records.length !== conversations.length) {
     throw new Error("Session binding owner returned an incomplete conversation selection");
   }
-  return records;
+  return records.map(routableBinding);
 }
 
-function createDefaultSessionBindingService(): AsyncSessionBindingService {
-  return {
-    inspectByConversationAsync: inspectSessionBindingByConversationAsync,
-    bind: async (input) => {
-      const assertCurrent = input.assertCurrent;
-      const normalizedConversation = normalizeConversationRef(input.conversation);
-      const adapter = resolveAdapterForChannelAccount(normalizedConversation);
-      const genericCapabilities = adapter
-        ? null
-        : getGenericCurrentConversationBindingCapabilities(normalizedConversation);
-      if (!adapter && !genericCapabilities?.bindSupported) {
-        throw new SessionBindingError(
-          "BINDING_ADAPTER_UNAVAILABLE",
-          `Session binding adapter unavailable for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-          {
-            channel: normalizedConversation.channel,
-            accountId: normalizedConversation.accountId,
-          },
-        );
+const DEFAULT_SESSION_BINDING_SERVICE: AsyncSessionBindingService = {
+  inspectByConversationAsync: inspectSessionBindingByConversationAsync,
+  bind: async (input) => {
+    const assertCurrent = input.assertCurrent;
+    const normalizedConversation = normalizeConversationRef(input.conversation);
+    const scope = {
+      channel: normalizedConversation.channel,
+      accountId: normalizedConversation.accountId,
+    };
+    const adapter = resolveAdapterForChannelAccount(normalizedConversation);
+    const genericCapabilities = adapter
+      ? null
+      : getGenericCurrentConversationBindingCapabilities(normalizedConversation);
+    if (!adapter && !genericCapabilities?.bindSupported) {
+      throw new SessionBindingError(
+        "BINDING_ADAPTER_UNAVAILABLE",
+        `Session binding adapter unavailable for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
+        scope,
+      );
+    }
+    if (adapter && !adapter.bind) {
+      throw new SessionBindingError(
+        "BINDING_CAPABILITY_UNSUPPORTED",
+        `Session binding adapter does not support binding for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
+        scope,
+      );
+    }
+    const placement =
+      normalizePlacement(input.placement) ??
+      (normalizedConversation.conversationId ? "current" : "child");
+    const supportedPlacements = adapter
+      ? resolveAdapterPlacements(adapter)
+      : genericCapabilities!.placements;
+    if (!supportedPlacements.includes(placement)) {
+      throw new SessionBindingError(
+        "BINDING_CAPABILITY_UNSUPPORTED",
+        `Session binding placement "${placement}" is not supported for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
+        { ...scope, placement },
+      );
+    }
+    const bindInput = {
+      ...input,
+      conversation: normalizedConversation,
+      placement,
+    };
+    assertCurrent?.();
+    const bound = adapter
+      ? await adapter.bind!(bindInput)
+      : await bindGenericCurrentConversation(bindInput);
+    if (!bound) {
+      throw new SessionBindingError(
+        "BINDING_CREATE_FAILED",
+        "Session binding adapter failed to bind target conversation",
+        { ...scope, placement },
+      );
+    }
+    return bound;
+  },
+  getCapabilities: (params) => {
+    const adapter = resolveAdapterForChannelAccount(params);
+    if (!adapter) {
+      return (
+        getGenericCurrentConversationBindingCapabilities(params) ?? resolveAdapterCapabilities(null)
+      );
+    }
+    return resolveAdapterCapabilities(adapter);
+  },
+  listBySession: (targetSessionKey) => {
+    const key = targetSessionKey.trim();
+    if (!key) {
+      return [];
+    }
+    const results: SessionBindingRecord[] = [];
+    for (const adapter of getActiveRegisteredAdapters()) {
+      results.push(...adapter.listBySession(key));
+    }
+    results.push(...listGenericCurrentConversationBindingsBySession(key));
+    return dedupeBindings(results).filter((record) => routableBinding(record));
+  },
+  resolveByConversation: (ref) => {
+    const normalized = normalizeConversationRef(ref);
+    if (!normalized.channel || !normalized.conversationId) {
+      return null;
+    }
+    const adapter = resolveAdapterForChannelAccount(normalized);
+    return routableBinding(
+      adapter
+        ? adapter.resolveByConversation(normalized)
+        : resolveGenericCurrentConversationBinding(normalized),
+    );
+  },
+  resolveByConversationAsync: async (ref) => {
+    const normalized = captureConversationRef(ref);
+    if (!normalized.channel || !normalized.conversationId) {
+      return null;
+    }
+    const adapter = resolveAdapterForChannelAccount(normalized);
+    assertAdapterSelectionCurrent(normalized, adapter);
+    const binding = adapter
+      ? adapter.resolveByConversationAsync
+        ? await adapter.resolveByConversationAsync(normalized)
+        : adapter.resolveByConversation(normalized)
+      : await resolveGenericCurrentConversationBindingAsync(normalized, {
+          assertCurrent: () => assertAdapterSelectionCurrent(normalized, null),
+        });
+    assertAdapterSelectionCurrent(normalized, adapter);
+    return routableBinding(binding);
+  },
+  touch: (bindingId, at, scope) => {
+    const normalizedBindingId = bindingId.trim();
+    if (!normalizedBindingId) {
+      return;
+    }
+    const adapters = getActiveRegisteredAdapters(scope);
+    for (const adapter of adapters) {
+      adapter.touch?.(normalizedBindingId, at);
+    }
+    if (!scope || adapters.length === 0) {
+      touchGenericCurrentConversationBinding(normalizedBindingId, at, scope);
+    }
+  },
+  touchAsync: async (bindingId, at, scope) => {
+    const normalizedBindingId = bindingId.trim();
+    if (!normalizedBindingId) {
+      return;
+    }
+    const ownerScope = scope ? { channel: scope.channel, accountId: scope.accountId } : undefined;
+    const adapters = getActiveRegisteredAdapters(ownerScope);
+    for (const adapter of adapters) {
+      // Earlier adapters may await across retirement; never invoke or replace a stale owner.
+      if (!isSessionBindingAdapterCurrent(adapter)) {
+        continue;
       }
-      if (adapter && !adapter.bind) {
-        throw new SessionBindingError(
-          "BINDING_CAPABILITY_UNSUPPORTED",
-          `Session binding adapter does not support binding for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-          {
-            channel: normalizedConversation.channel,
-            accountId: normalizedConversation.accountId,
-          },
-        );
-      }
-      const placement =
-        normalizePlacement(input.placement) ?? inferDefaultPlacement(normalizedConversation);
-      const supportedPlacements = adapter
-        ? resolveAdapterPlacements(adapter)
-        : genericCapabilities!.placements;
-      if (!supportedPlacements.includes(placement)) {
-        throw new SessionBindingError(
-          "BINDING_CAPABILITY_UNSUPPORTED",
-          `Session binding placement "${placement}" is not supported for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-          {
-            channel: normalizedConversation.channel,
-            accountId: normalizedConversation.accountId,
-            placement,
-          },
-        );
-      }
-      const bindInput = {
-        ...input,
-        conversation: normalizedConversation,
-        placement,
-      };
-      assertCurrent?.();
-      const bound = adapter
-        ? await adapter.bind!(bindInput)
-        : await bindGenericCurrentConversation(bindInput);
-      if (!bound) {
-        throw new SessionBindingError(
-          "BINDING_CREATE_FAILED",
-          "Session binding adapter failed to bind target conversation",
-          {
-            channel: normalizedConversation.channel,
-            accountId: normalizedConversation.accountId,
-            placement,
-          },
-        );
-      }
-      return bound;
-    },
-    getCapabilities: (params) => {
-      const adapter = resolveAdapterForChannelAccount(params);
-      if (!adapter) {
-        return (
-          getGenericCurrentConversationBindingCapabilities(params) ??
-          resolveAdapterCapabilities(null)
-        );
-      }
-      return resolveAdapterCapabilities(adapter);
-    },
-    listBySession: (targetSessionKey) => {
-      const key = targetSessionKey.trim();
-      if (!key) {
-        return [];
-      }
-      const results: SessionBindingRecord[] = [];
-      for (const adapter of getActiveRegisteredAdapters()) {
-        const entries = adapter.listBySession(key);
-        if (entries.length > 0) {
-          results.push(...entries);
-        }
-      }
-      results.push(...listGenericCurrentConversationBindingsBySession(key));
-      return dedupeBindings(results);
-    },
-    resolveByConversation: (ref) => {
-      const normalized = normalizeConversationRef(ref);
-      if (!normalized.channel || !normalized.conversationId) {
-        return null;
-      }
-      const adapter = resolveAdapterForChannelAccount(normalized);
-      if (!adapter) {
-        return resolveGenericCurrentConversationBinding(normalized);
-      }
-      return adapter.resolveByConversation(normalized);
-    },
-    resolveByConversationAsync: async (ref) => {
-      const normalized = captureConversationRef(ref);
-      if (!normalized.channel || !normalized.conversationId) {
-        return null;
-      }
-      const adapter = resolveAdapterForChannelAccount(normalized);
-      assertAdapterSelectionCurrent(normalized, adapter);
-      const binding = adapter
-        ? adapter.resolveByConversationAsync
-          ? await adapter.resolveByConversationAsync(normalized)
-          : adapter.resolveByConversation(normalized)
-        : await resolveGenericCurrentConversationBindingAsync(normalized, {
-            assertCurrent: () => assertAdapterSelectionCurrent(normalized, null),
-          });
-      assertAdapterSelectionCurrent(normalized, adapter);
-      return binding;
-    },
-    touch: (bindingId, at, scope) => {
-      const normalizedBindingId = bindingId.trim();
-      if (!normalizedBindingId) {
-        return;
-      }
-      const adapters = getActiveRegisteredAdapters(scope);
-      for (const adapter of adapters) {
+      if (adapter.touchAsync) {
+        await adapter.touchAsync(normalizedBindingId, at);
+      } else {
+        // External adapters keep their synchronous contract during migration.
         adapter.touch?.(normalizedBindingId, at);
       }
-      if (!scope || adapters.length === 0) {
-        touchGenericCurrentConversationBinding(normalizedBindingId, at, scope);
+    }
+    if (!ownerScope || adapters.length === 0) {
+      await touchGenericCurrentConversationBindingAsync(normalizedBindingId, at, ownerScope, {
+        assertCurrent: (ref) => assertAdapterSelectionCurrent(ref, null),
+      });
+    }
+  },
+  unbind: async (input) => {
+    const removed: SessionBindingRecord[] = [];
+    const adapters = getActiveRegisteredAdapters(input.scope);
+    for (const adapter of adapters) {
+      if (!adapter.unbind) {
+        continue;
       }
-    },
-    touchAsync: async (bindingId, at, scope) => {
-      const normalizedBindingId = bindingId.trim();
-      if (!normalizedBindingId) {
-        return;
-      }
-      const ownerScope = scope ? { channel: scope.channel, accountId: scope.accountId } : undefined;
-      const adapters = getActiveRegisteredAdapters(ownerScope);
-      for (const adapter of adapters) {
-        // Earlier adapters may await across retirement; never invoke or replace a stale owner.
-        if (!isSessionBindingAdapterCurrent(adapter)) {
-          continue;
-        }
-        if (adapter.touchAsync) {
-          await adapter.touchAsync(normalizedBindingId, at);
-        } else {
-          // External adapters keep their synchronous contract during migration.
-          adapter.touch?.(normalizedBindingId, at);
-        }
-      }
-      if (!ownerScope || adapters.length === 0) {
-        await touchGenericCurrentConversationBindingAsync(normalizedBindingId, at, ownerScope, {
-          assertCurrent: (ref) => assertAdapterSelectionCurrent(ref, null),
-        });
-      }
-    },
-    unbind: async (input) => {
-      const removed: SessionBindingRecord[] = [];
-      const adapters = getActiveRegisteredAdapters(input.scope);
-      for (const adapter of adapters) {
-        if (!adapter.unbind) {
-          continue;
-        }
-        const entries = await adapter.unbind(input);
-        if (entries.length > 0) {
-          removed.push(...entries);
-        }
-      }
-      if (!input.scope || adapters.length === 0) {
-        removed.push(...(await unbindGenericCurrentConversationBindings(input)));
-      }
-      return dedupeBindings(removed);
-    },
-  };
-}
-
-const DEFAULT_SESSION_BINDING_SERVICE = createDefaultSessionBindingService();
+      removed.push(...(await adapter.unbind(input)));
+    }
+    if (!input.scope || adapters.length === 0) {
+      removed.push(...(await unbindGenericCurrentConversationBindings(input)));
+    }
+    return dedupeBindings(removed);
+  },
+};
 
 export function getSessionBindingService(): AsyncSessionBindingService {
   return DEFAULT_SESSION_BINDING_SERVICE;

@@ -4,6 +4,8 @@ import type {
   SessionOwner,
   SessionsAssignOwnerParams,
   SessionsDeleteResult,
+  SessionsDescribeParams,
+  SessionsListParams,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
   SessionsRecoverResult,
@@ -43,6 +45,7 @@ export type SessionState = {
   modelOverrides: Readonly<Record<string, string | null>>;
   loading: boolean;
   error: string | null;
+  startupPending?: boolean;
   deletedSessions: readonly SessionDeletionFact[];
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
@@ -62,6 +65,8 @@ export type SessionGroupMutationResult = "completed" | "stale";
 export type SessionGroupDefaultsStatus = "idle" | "loading" | "ready" | "unavailable";
 
 export type SessionListOptions = {
+  source?: SessionsListParams["source"];
+  rowMode?: "compact";
   agentId?: string;
   spawnedBy?: string;
   boardFace?: "chat" | "dashboard";
@@ -73,14 +78,18 @@ export type SessionListOptions = {
   involvingMe?: boolean;
   offset?: number;
   limit?: number;
+  /** Physical read size for a managed window that needs every page enriched. */
+  pageSize?: number;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
   excludeSubagents?: boolean;
   excludeCron?: boolean;
   excludeSystem?: boolean;
+  excludeDock?: boolean;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
+  includeOwnerSessionCounts?: boolean;
   archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };
@@ -97,7 +106,13 @@ export type SessionRefreshOutcome =
 
 export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "append">>;
 
-export type SessionListSnapshot = Pick<SessionState, "result" | "agentId" | "loading" | "error">;
+export type SessionListSnapshot = Pick<
+  SessionState,
+  "result" | "agentId" | "loading" | "error" | "startupPending"
+> & {
+  /** Outcome of the latest settled managed-list read, including suppressed availability errors. */
+  readSucceeded?: boolean;
+};
 
 export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
 
@@ -205,15 +220,29 @@ export type SessionCapability = {
     ) => GitHubPublicationBinding | null;
   };
   readonly state: SessionState;
+  /** Broad observer outage, independent of query and operation errors; changes notify subscribers. */
+  readonly eventSubscriptionError: string | null;
+  /** Advances for every publication, including pending facts outside state. */
+  readonly revision: number;
   /** Memory-only roster presentation; never authority for mutations or live row observations. */
   readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached">;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
+  /** Initial routing hints only; cached agent discovery never grants live authority. */
+  readonly cachedRoutingDefaults?: {
+    readonly mainKey: string;
+    readonly scope: "per-sender" | "global";
+  };
   whenCachedRosterSettled: () => Promise<void>;
   /** Captures the current Gateway connection generation for read-only requests. */
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */
   isConnectionScopeCurrent: (scope: SessionConnectionScope) => boolean;
+  /** Shares descriptor reads, including agent-implied scopes, until the session changes; refresh supersedes earlier reads. */
+  describe: (
+    params: SessionsDescribeParams,
+    options?: { refresh?: boolean; timeoutMs?: number; client?: SessionRequestClient },
+  ) => Promise<{ session?: GatewaySessionRow | null }>;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
   listSnapshot: (scope: SessionListScope) => SessionListSnapshot;
   subscribeList: (
@@ -286,6 +315,13 @@ export type SessionCapability = {
   ) => Promise<SessionOwner | null>;
   retireModelOverride: (key: string) => void;
   think: (key: string, agentId?: string | null) => string | undefined;
+  /** Pending settings may render before roster membership or physical identity exists. */
+  settingsPreview: (
+    key: string,
+    agentId?: string,
+  ) =>
+    | Pick<GatewaySessionRow, "thinkingLevel" | "fastMode" | "effectiveFastMode" | "contextWindow">
+    | undefined;
   /** Local previews update the primary snapshot; explicit targets also update held incarnations. */
   patchRowLocal: (
     key: string,
@@ -327,7 +363,7 @@ export type SessionCapability = {
   ) => Promise<SessionWorkspaceSetResult | null>;
   subscribeMessages: (
     key: string,
-    options?: { agentId?: string | null; includeApprovals?: boolean },
+    options?: { agentId?: string | null; includeApprovals?: boolean; mode?: "narration" },
   ) => Promise<SessionMessageSubscription>;
   unsubscribeMessages: (subscription: SessionMessageSubscription) => Promise<void>;
   rewind: (

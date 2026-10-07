@@ -9,7 +9,11 @@ import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
@@ -33,6 +37,16 @@ const captureProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 type SessionTransitionFrames = {
   invalid: number;
+  firstInvalid: {
+    activeViewTransition: boolean;
+    handoffCover: boolean;
+    newSessionVisible: boolean;
+    chatVisible: boolean;
+    loadingSkeleton: boolean;
+    routeId?: string;
+    routeStatus?: string;
+    loaderPending: boolean;
+  } | null;
   running: boolean;
   transition: {
     activeViewTransition: boolean;
@@ -198,8 +212,28 @@ suite.define(() => {
     const gateway = await installMockGateway(page);
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator(".new-session-page__message").fill("verify the default mock");
-      await page.getByRole("button", { name: "Start session" }).click();
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill("verify the default mock");
+      const confirmationConsumed = await composer.evaluate((textarea) => {
+        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        const end = new CompositionEvent("compositionend", { bubbles: true });
+        textarea.dispatchEvent(end);
+        const confirm = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
+        textarea.dispatchEvent(confirm);
+        return confirm.defaultPrevented;
+      });
+      expect(confirmationConsumed).toBe(false);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await composer.inputValue()).toBe("verify the default mock");
+      await captureProof(page, "ime-confirmation-retains-draft.png");
+      await composer.dispatchEvent("keyup", { key: "Enter" });
+      await composer.press("Enter");
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { agentId: "main", message: "verify the default mock" },
@@ -216,6 +250,7 @@ suite.define(() => {
       }
       const firstKey = firstParams.key;
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
+      await captureProof(page, "ime-deliberate-enter-created.png");
 
       await page.getByRole("link", { name: "New conversation" }).first().click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
@@ -287,11 +322,18 @@ suite.define(() => {
     const chatModuleBlocked = new Promise<void>((resolve) => {
       releaseChatModule = resolve;
     });
-    await page.route("**/assets/route-entry-*.js*", async (route) => {
-      chatModuleRequested = true;
-      await chatModuleBlocked;
-      await route.continue();
-    });
+    await page.route(
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
+      async (route) => {
+        chatModuleRequested = true;
+        await chatModuleBlocked;
+        await route.continue();
+      },
+    );
+    const pendingPreviewModule = await holdModuleResponse(
+      page,
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.ts"),
+    );
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-sol",
       featureMethods: [
@@ -386,7 +428,12 @@ suite.define(() => {
       await expectPendingNewSessionPresentation(page);
 
       await page.evaluate(() => {
-        const frames: SessionTransitionFrames = { invalid: 0, running: true, transition: null };
+        const frames: SessionTransitionFrames = {
+          invalid: 0,
+          firstInvalid: null,
+          running: true,
+          transition: null,
+        };
         Reflect.set(globalThis, "__openclawSessionTransitionFrames", frames);
         const sample = () => {
           const outlet = document.querySelector("openclaw-router-outlet");
@@ -403,6 +450,20 @@ suite.define(() => {
             (!newSessionVisible && !chatVisible)
           ) {
             frames.invalid += 1;
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: ApplicationContext };
+            };
+            const route = app.runtime?.context.router.getState().matches[0];
+            frames.firstInvalid ??= {
+              activeViewTransition: Boolean(document.activeViewTransition),
+              handoffCover,
+              newSessionVisible,
+              chatVisible,
+              loadingSkeleton: Boolean(outlet?.querySelector(".loading-skeleton")),
+              routeId: route?.routeId,
+              routeStatus: route?.status,
+              loaderPending: route?.isFetching === "loader",
+            };
           }
           const routeAnimation = document.getAnimations().some((animation) => {
             const effect = animation.effect as KeyframeEffect | null;
@@ -428,6 +489,22 @@ suite.define(() => {
 
       await gateway.deferNext("chat.startup");
       releaseChatModule();
+      await pendingPreviewModule.request;
+      await page.waitForFunction(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: { context: ApplicationContext };
+        };
+        const route = app.runtime?.context.router.getState().matches[0];
+        return route?.routeId === "chat" && route.module && route.isFetching === "loader";
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      await captureProof(page, "01b-chat-preview-loading.png");
+      pendingPreviewModule.release();
       await gateway.waitForRequest("chat.startup");
       await expect
         .poll(() =>
@@ -461,9 +538,9 @@ suite.define(() => {
           "__openclawSessionTransitionFrames",
         ) as SessionTransitionFrames;
         frames.running = false;
-        return frames.invalid;
+        return { invalid: frames.invalid, firstInvalid: frames.firstInvalid };
       });
-      expect(invalidFrames).toBe(0);
+      expect(invalidFrames.invalid, JSON.stringify(invalidFrames.firstInvalid)).toBe(0);
       await captureProof(page, "02-session-route-transition.png");
       await gateway.resolveDeferred("sessions.list", createdSessionList);
       await gateway.resolveDeferred("chat.startup");

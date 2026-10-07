@@ -12,12 +12,12 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripToolCallXmlTags,
-} from "./text-runtime.js";
+} from "openclaw/plugin-sdk/text-chunking";
+import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 
 type WhatsAppOutboundPayloadLike = {
   text?: string;

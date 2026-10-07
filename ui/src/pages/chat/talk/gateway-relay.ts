@@ -13,7 +13,6 @@ import {
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
   RealtimeTalkPcmOutputQueue,
-  type RealtimeTalkAudioFrame,
 } from "./audio.ts";
 import type { DelayedToolResult, GatewayRelayEvent } from "./gateway-relay-types.ts";
 import {
@@ -273,6 +272,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
   }
 
+  // Keep callback-written errors outside start()'s field narrowing.
   private currentStartupError(): Error | null {
     return this.startupError;
   }
@@ -383,7 +383,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           });
           return;
         case "toolCallCancelled":
-          this.cancelToolCall(event.callId);
+          this.completeToolCall(event.callId, true);
           return;
         case "toolResult":
           if (this.isFinalToolResult(event)) {
@@ -459,9 +459,19 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (!callId || !name) {
       return;
     }
-    if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
-      const abortController = this.startToolExecution(callId);
-      try {
+    if (
+      name !== REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME &&
+      name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+    ) {
+      await this.submitToolResult(callId, {
+        error: `Tool "${name}" not available in browser Talk`,
+      });
+      return;
+    }
+    const abortController = new AbortController();
+    this.toolAbortControllers.set(callId, abortController);
+    try {
+      if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
         await submitRealtimeTalkAgentControl({
           ctx: this.ctx,
           callId,
@@ -470,19 +480,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           signal: abortController.signal,
           submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
         });
-      } finally {
-        this.finishToolExecution(callId, abortController);
+        return;
       }
-      return;
-    }
-    if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      await this.submitToolResult(callId, {
-        error: `Tool "${name}" not available in browser Talk`,
-      });
-      return;
-    }
-    const abortController = this.startToolExecution(callId);
-    try {
       if (event.forced) {
         await this.submitToolResult(
           callId,
@@ -511,7 +510,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
       });
     } finally {
-      this.finishToolExecution(callId, abortController);
+      if (this.toolAbortControllers.get(callId) === abortController) {
+        this.toolAbortControllers.delete(callId);
+      }
     }
   }
 
@@ -530,7 +531,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       shouldAllowProviderResponse &&
       (this.pendingOutputCancellations > 0 || this.outputPlaybackDelayMs() > 0)
     ) {
-      this.scheduleDelayedToolResult({ callId, result, ...(options ? { options } : {}) });
+      const pending = { callId, result, ...(options ? { options } : {}) };
+      this.delayedToolResults.add(pending);
+      this.rescheduleDelayedToolResult(pending);
       return;
     }
     await this.sendToolResultNow(callId, result, options);
@@ -565,11 +568,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       0,
       Math.ceil((this.outputQueue.queuedUntil - this.outputContext.currentTime) * 1000),
     );
-  }
-
-  private scheduleDelayedToolResult(pending: DelayedToolResult): void {
-    this.delayedToolResults.add(pending);
-    this.rescheduleDelayedToolResult(pending);
   }
 
   private rescheduleDelayedToolResult(pending: DelayedToolResult): void {
@@ -634,7 +632,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.ctx.callbacks.onStatus?.("error", message);
   }
 
-  private completeToolCall(callIdRaw: string | undefined): void {
+  private completeToolCall(callIdRaw: string | undefined, cancelled = false): void {
     const callId = callIdRaw?.trim();
     if (!callId) {
       return;
@@ -642,37 +640,18 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.completedToolCalls.add(callId);
     // The Gateway broadcasts acceptance before resolving the matching RPC.
     // Do not turn our own accepted result into a late consult cancellation.
-    if (this.submittingToolCalls.has(callId)) {
+    if (!cancelled && this.submittingToolCalls.has(callId)) {
       return;
     }
     this.toolAbortControllers.get(callId)?.abort();
     this.toolAbortControllers.delete(callId);
-  }
-
-  private cancelToolCall(callIdRaw: string | undefined): void {
-    const callId = callIdRaw?.trim();
-    if (!callId) {
+    if (!cancelled) {
       return;
     }
-    this.completedToolCalls.add(callId);
-    this.toolAbortControllers.get(callId)?.abort();
-    this.toolAbortControllers.delete(callId);
     for (const pending of this.delayedToolResults) {
       if (pending.callId === callId) {
         this.discardDelayedToolResult(pending);
       }
-    }
-  }
-
-  private startToolExecution(callId: string): AbortController {
-    const abortController = new AbortController();
-    this.toolAbortControllers.set(callId, abortController);
-    return abortController;
-  }
-
-  private finishToolExecution(callId: string, abortController: AbortController): void {
-    if (this.toolAbortControllers.get(callId) === abortController) {
-      this.toolAbortControllers.delete(callId);
     }
   }
 
@@ -741,7 +720,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       this.speechFramesDuringPlayback = 0;
       return false;
     }
-    const frame: RealtimeTalkAudioFrame = measureRealtimeTalkAudioFrame(samples);
+    const frame = measureRealtimeTalkAudioFrame(samples);
     if (frame.rms >= BARGE_IN_RMS_THRESHOLD && frame.peak >= BARGE_IN_PEAK_THRESHOLD) {
       this.speechFramesDuringPlayback += 1;
     } else {

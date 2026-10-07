@@ -1,8 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
@@ -16,11 +14,13 @@ import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
-import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
-import { persistValidatedDowngradeConfig } from "./update-command-config.js";
+import {
+  capturePreUpdateSourceConfig,
+  persistValidatedDowngradeConfig,
+} from "./update-command-config.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import {
   collectPostCorePluginAdvisories,
@@ -35,6 +35,7 @@ import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { withOwnedManagedUpdateEnv, withUpdateEnv } from "./update-command-service-env.js";
 
 export async function convergeUpdatePlugins(params: {
+  databaseBackup?: import("../../infra/update-database-backup.js").UpdateDatabaseBackup;
   coreAlreadyCurrent?: boolean;
   /** Local running-code context, never installation state or mutation authority. */
   candidateRuntime?: boolean;
@@ -76,14 +77,7 @@ export async function convergeUpdatePlugins(params: {
         ? result.recovery
         : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
   });
-  const preUpdateConfig = params.configSnapshot.valid
-    ? {
-        sourceConfig: params.configSnapshot.sourceConfig,
-        authoredConfig: isRecord(params.configSnapshot.parsed)
-          ? (params.configSnapshot.parsed as OpenClawConfig) // SAFETY: valid snapshot validated this authored record.
-          : params.configSnapshot.sourceConfig,
-      }
-    : undefined;
+  const preUpdateConfig = capturePreUpdateSourceConfig(params.configSnapshot);
 
   const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
   assertCurrent?.();
@@ -167,6 +161,7 @@ export async function convergeUpdatePlugins(params: {
         }
         const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
           root: postUpdateRoot,
+          sourceRuntimePrepared: params.result.sourceRuntimePrepared,
           channel: params.channel,
           requestedChannel: params.requestedChannel,
           opts: params.opts,
@@ -217,15 +212,13 @@ export async function convergeUpdatePlugins(params: {
       const runtimeStartedAt = Date.now();
       const runtime = targetRuntimeConverged
         ? { changed: false }
-        : await withPluginLifecycleLease({ assertCurrent }, (lease) =>
-            completeSourceUpdateRuntime({
-              root: postUpdateRoot,
-              timeoutMs: params.updateStepTimeoutMs,
-              lease,
-              beforePersistentEffect: assertCurrent,
-              beforePublication: params.beforeRuntimePublication,
-            }),
-          );
+        : await completeSourceUpdateRuntime({
+            root: postUpdateRoot,
+            sourceRuntimePrepared: params.result.sourceRuntimePrepared,
+            timeoutMs: params.updateStepTimeoutMs,
+            assertCurrent,
+            beforePublication: params.beforeRuntimePublication,
+          });
       const runtimeDurationMs = Math.max(0, Date.now() - runtimeStartedAt);
       assertCurrent?.();
       if (!targetRuntimeConverged) {
@@ -255,17 +248,18 @@ export async function convergeUpdatePlugins(params: {
         postCorePluginUpdate &&
         (!params.coreAlreadyCurrent ||
           postCorePluginUpdate.changed ||
-          hasDeferredUpdateModelRetirement())
+          hasDeferredUpdateModelRetirement(params.opts.run?.env, params.opts.run?.runId))
       ) {
         // Release the plugin lease before fresh Doctor. The finalizer either
         // retains its stopped interval or parks an already-current core here.
         const producedPluginUpdate = postCorePluginUpdate;
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
+          databaseBackup: params.databaseBackup,
+          onDoctorStep: (step) => params.result.steps.push(step),
           opts: params.opts,
           ...(params.candidateRuntime ? { doctorConfigWrites: true as const } : {}),
           pluginUpdate: producedPluginUpdate,
-          freshDoctorRequired: producedPluginUpdate.changed,
           beforeDoctor: params.beforeDoctor,
           assertCurrent,
           yes: params.opts.yes === true,

@@ -63,7 +63,7 @@ function resolveStoredNumericProfileModelDirective(params: { raw: string; agentD
 }
 
 /** Resolves the requested model/profile override from parsed inline directives. */
-export function resolveModelSelectionFromDirective(params: {
+export async function resolveModelSelectionFromDirective(params: {
   directives: InlineDirectives;
   cfg: OpenClawConfig;
   agentDir: string;
@@ -73,17 +73,15 @@ export function resolveModelSelectionFromDirective(params: {
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
-  provider: string;
   agentId?: string;
   requesterProfileId?: string;
-}): {
+}): Promise<{
   modelSelection?: ModelDirectiveSelection;
   profileOverride?: string;
   errorText?: string;
   validateAuthProfileSelection?: () => string | undefined;
   validateModelSelection?: () => string | undefined;
-} {
+}> {
   if (!params.directives.hasModelDirective || !params.directives.rawModelDirective) {
     if (params.directives.rawModelProfile) {
       return { errorText: "Auth profile override requires a model selection." };
@@ -157,9 +155,6 @@ export function resolveModelSelectionFromDirective(params: {
         config: params.cfg,
         storedCredential: true,
       });
-  const modelRaw =
-    useStoredNumericProfile && storedNumericProfile ? storedNumericProfile.modelRaw : raw;
-
   if (/^[0-9]+$/.test(raw)) {
     return {
       errorText: [
@@ -171,7 +166,10 @@ export function resolveModelSelectionFromDirective(params: {
     };
   }
 
-  const resolved = resolveSelection(modelRaw);
+  const resolved =
+    useStoredNumericProfile && storedNumericProfileSelection
+      ? storedNumericProfileSelection
+      : resolveSelection(raw);
   if (resolved.error) {
     return { errorText: resolved.error };
   }
@@ -189,10 +187,9 @@ export function resolveModelSelectionFromDirective(params: {
     params.directives.rawModelProfile ??
     (useStoredNumericProfile ? storedNumericProfile?.profileId : undefined);
   if (modelSelection && rawProfile) {
-    const profileResolved = resolveProfileOverride({
+    const profileResolved = await resolveProfileOverride({
       rawProfile,
       provider: modelSelection.provider,
-      cfg: params.cfg,
       agentDir: params.agentDir,
       requesterProfileId: params.requesterProfileId,
     });

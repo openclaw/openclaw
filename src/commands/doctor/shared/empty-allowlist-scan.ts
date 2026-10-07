@@ -1,6 +1,4 @@
-// Doctor scanner for empty allowlist policies across configured channels and accounts.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   getDoctorChannelCapabilities,
@@ -8,21 +6,18 @@ import {
 } from "../channel-capabilities.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { hasAllowFromEntries } from "./allowlist.js";
-import { collectEmptyAllowlistPolicyWarningsForAccount } from "./empty-allowlist-policy.js";
+import type { ChannelDoctorEmptyAllowlistPolicyHooks } from "./channel-doctor.js";
+import {
+  collectEmptyAllowlistPolicyWarningsForAccount,
+  resolveDoctorAccountDmAccess,
+} from "./empty-allowlist-policy.js";
 
-type ScanEmptyAllowlistPolicyWarningsParams = {
+type ScanEmptyAllowlistPolicyWarningsParams = Partial<ChannelDoctorEmptyAllowlistPolicyHooks> & {
   doctorFixCommand: string;
-  extraWarningsForAccount?: (params: ChannelDoctorEmptyAllowlistAccountContext) => string[];
-  shouldSkipDefaultEmptyGroupAllowlistWarning?: (
-    params: ChannelDoctorEmptyAllowlistAccountContext,
-  ) => boolean;
 };
 
 function isDisabledRecord(value: unknown): boolean {
-  return (
-    Boolean(value && typeof value === "object" && !Array.isArray(value)) &&
-    (value as { enabled?: unknown }).enabled === false
-  );
+  return asNullableRecord(value)?.enabled === false;
 }
 
 /** Scan all configured channels/accounts for empty allowlist policy warnings. */
@@ -44,46 +39,25 @@ export async function scanEmptyAllowlistPolicyWarnings(
     parent?: DoctorAccountRecord,
     options: { suppressGroupAllowlistWarning?: boolean } = {},
   ) => {
-    const accountDm = asNullableRecord(account.dm);
-    const parentDm = asNullableRecord(parent?.dm);
-    const dmPolicy =
-      (account.dmPolicy as string | undefined) ??
-      (accountDm?.policy as string | undefined) ??
-      (parent?.dmPolicy as string | undefined) ??
-      (parentDm?.policy as string | undefined) ??
-      undefined;
-    const effectiveAllowFrom =
-      (account.allowFrom as DoctorAllowFromList | undefined) ??
-      (parent?.allowFrom as DoctorAllowFromList | undefined) ??
-      (accountDm?.allowFrom as DoctorAllowFromList | undefined) ??
-      (parentDm?.allowFrom as DoctorAllowFromList | undefined) ??
-      undefined;
-
+    const { dmPolicy, effectiveAllowFrom } = resolveDoctorAccountDmAccess(account, parent);
+    const context = {
+      account,
+      channelName,
+      dmPolicy,
+      effectiveAllowFrom: effectiveAllowFrom ?? undefined,
+      parent,
+      prefix,
+    };
     warnings.push(
       ...collectEmptyAllowlistPolicyWarningsForAccount({
-        account,
-        channelName,
-        cfg,
+        ...context,
         doctorFixCommand: params.doctorFixCommand,
-        parent,
-        prefix,
-        shouldSkipDefaultEmptyGroupAllowlistWarning: (context) =>
+        shouldSkipDefaultEmptyGroupAllowlistWarning: (accountContext) =>
           options.suppressGroupAllowlistWarning ||
-          Boolean(params.shouldSkipDefaultEmptyGroupAllowlistWarning?.(context)),
+          Boolean(params.shouldSkipDefaultEmptyGroupAllowlistWarning?.(accountContext)),
       }),
     );
-    if (params.extraWarningsForAccount) {
-      warnings.push(
-        ...params.extraWarningsForAccount({
-          account,
-          channelName,
-          dmPolicy,
-          effectiveAllowFrom,
-          parent,
-          prefix,
-        }),
-      );
-    }
+    warnings.push(...(params.extraWarningsForAccount?.(context) ?? []));
   };
 
   for (const [channelName, channelConfig] of Object.entries(
@@ -118,23 +92,13 @@ export async function scanEmptyAllowlistPolicyWarnings(
         const rawGroupAllowFrom =
           (account.groupAllowFrom as DoctorAllowFromList | undefined) ??
           (channelConfig.groupAllowFrom as DoctorAllowFromList | undefined);
-        const groupAllowFrom = hasAllowFromEntries(rawGroupAllowFrom)
-          ? rawGroupAllowFrom
-          : undefined;
-        if (hasAllowFromEntries(groupAllowFrom)) {
+        if (hasAllowFromEntries(rawGroupAllowFrom)) {
           return true;
         }
         if (!getDoctorChannelCapabilities(channelName).groupAllowFromFallbackToAllowFrom) {
           return false;
         }
-        const accountDm = asNullableRecord(account.dm);
-        const parentDm = asNullableRecord(channelConfig.dm);
-        const effectiveAllowFrom =
-          (account.allowFrom as DoctorAllowFromList | undefined) ??
-          (channelConfig.allowFrom as DoctorAllowFromList | undefined) ??
-          (accountDm?.allowFrom as DoctorAllowFromList | undefined) ??
-          (parentDm?.allowFrom as DoctorAllowFromList | undefined) ??
-          undefined;
+        const { effectiveAllowFrom } = resolveDoctorAccountDmAccess(account, channelConfig);
         return hasAllowFromEntries(effectiveAllowFrom);
       });
 

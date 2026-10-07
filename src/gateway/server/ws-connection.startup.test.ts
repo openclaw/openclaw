@@ -2,6 +2,7 @@
  * WebSocket connection startup regression tests.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildDeviceAuthPayload } from "../../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -22,6 +23,7 @@ import {
   readDevicePairSetupCompletion,
   verifyDeviceBootstrapToken,
 } from "../../infra/device-bootstrap.js";
+import type { CloudWorkerSetupMutationAdmission } from "../../infra/device-bootstrap.worker-types.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -48,20 +50,22 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN,
-  createAuthRateLimiter,
+  createGatewayAuthRateLimiter,
 } from "../auth-rate-limit.js";
 import * as gatewayAuth from "../auth.js";
-import { buildDeviceAuthPayload } from "../device-auth.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../server-constants.js";
+import { createWorkerNodeEnrollmentManager } from "../worker-environments/node-enrollment.js";
 import { publishWorkerEnvironmentFixture } from "../worker-environments/placement-test-fixtures.js";
 import { createWorkerEnvironmentStore } from "../worker-environments/store.js";
+import { createWorkerBootstrapArtifactTransferService } from "../worker-environments/worker-bootstrap-artifact-transfer-service.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import {
@@ -161,7 +165,8 @@ async function attachStartupNodeConnect(params: {
   gatewayToken?: string;
   identityPath: string;
   isPendingWorkerNodeSetup: (setupId: string, deviceId: string) => boolean;
-  rateLimiter?: ReturnType<typeof createAuthRateLimiter>;
+  admitsNodeSetupCompletion?: (fact: CloudWorkerSetupMutationAdmission) => boolean;
+  rateLimiter?: ReturnType<typeof createGatewayAuthRateLimiter>;
   onNodeRegistered?: () => void;
 }) {
   const identityPath = params.identityPath;
@@ -239,6 +244,7 @@ async function attachStartupNodeConnect(params: {
           : { mode: "none", allowTailscale: false },
       isStartupPending: () => true,
       isPendingWorkerNodeSetup: pendingSetup,
+      admitsNodeSetupCompletion: params.admitsNodeSetupCompletion,
       rateLimiter: params.rateLimiter,
       buildRequestContext: () => requestContext as never,
     },
@@ -324,7 +330,7 @@ async function seedProvisioningNodeSetup() {
     profileSnapshot: { settings: {} },
     provisionOperationId: "provision:startup-worker-environment",
   });
-  await store.transition({
+  const provisioning = await store.transition({
     environmentId: intent.environmentId,
     from: intent.state,
     to: "provisioning",
@@ -333,7 +339,33 @@ async function seedProvisioningNodeSetup() {
   if (!setupId) {
     throw new Error("startup worker setup id was not persisted");
   }
-  return { store, setupId };
+  const manager = createWorkerNodeEnrollmentManager({
+    store,
+    getConfig: () => ({
+      gateway: {
+        publicOrigin: "https://gateway.example.test",
+        auth: { mode: "token", token: "gateway-token" },
+      },
+    }),
+    resolveAvailability: async () => ({ available: false }),
+    prepareArtifact: async () => ({
+      tarballPath: "/synthetic-node-runtime.tgz",
+      tarballSha256: "a".repeat(64),
+      tarballBytes: 1,
+      openclawVersion: "2026.8.1",
+      buildId: "gateway-source-build",
+      enabledPluginIds: [],
+    }),
+    transfer: createWorkerBootstrapArtifactTransferService(),
+  });
+  ownStartupCleanup(connectionCleanups, async () => manager.stop());
+  return {
+    store,
+    setupId,
+    beginEnrollment: () => manager.begin(provisioning),
+    closeEnrollment: manager.close,
+    admitsNodeSetupCompletion: manager.admitsNodeSetupCompletion,
+  };
 }
 
 describe("attachGatewayWsConnectionHandler startup readiness", () => {
@@ -519,7 +551,8 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
     await withStartupTestState(
       { label: "gateway-startup-cloud-worker", layout: "state-only" },
       async (state) => {
-        const { store, setupId } = await seedProvisioningNodeSetup();
+        const { store, setupId, beginEnrollment, admitsNodeSetupCompletion } =
+          await seedProvisioningNodeSetup();
         const issued = await ensureDevicePairSetupBootstrapToken({
           setupId,
           profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -527,8 +560,10 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         if (issued.status !== "pending") {
           throw new Error("expected pending cloud-worker setup token");
         }
+        await beginEnrollment();
         const harness = await attachStartupNodeConnect({
           bootstrapToken: issued.token,
+          admitsNodeSetupCompletion,
           identityPath: state.path("startup-node.sqlite"),
           isPendingWorkerNodeSetup: (candidateSetupId, deviceId) =>
             store.hasPendingNodeEnrollmentSetup(candidateSetupId, deviceId),
@@ -570,7 +605,8 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       await withStartupTestState(
         { label: "gateway-startup-cloud-worker-uncertain-retry", layout: "state-only" },
         async (state) => {
-          const { store, setupId } = await seedProvisioningNodeSetup();
+          const { store, setupId, beginEnrollment, closeEnrollment, admitsNodeSetupCompletion } =
+            await seedProvisioningNodeSetup();
           const issued = await ensureDevicePairSetupBootstrapToken({
             setupId,
             profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -578,6 +614,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
           if (issued.status !== "pending") {
             throw new Error("expected pending cloud-worker setup token");
           }
+          const enrollment = await beginEnrollment();
           const identityPath = state.path("startup-retrying-node.sqlite");
           const identity = loadOrCreateDeviceIdentity({ path: identityPath });
           const verification = {
@@ -593,8 +630,10 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
               token: issued.token,
               deviceId: identity.deviceId,
               completedAtMs: Date.now(),
+              admitsCloudWorkerSetup: admitsNodeSetupCompletion,
             }),
           ).resolves.toMatchObject({ completion: { deliveryState: "uncertain" } });
+          closeEnrollment(enrollment);
           if (environmentState !== "provisioning") {
             runOpenClawStateWriteTransaction((database) => {
               database.db
@@ -666,13 +705,17 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       await withStartupTestState(
         { label: "gateway-startup-cloud-worker-drain-race", layout: "state-only" },
         async (state) => {
-          const { store, setupId } = await seedProvisioningNodeSetup();
+          const { store, setupId, beginEnrollment, admitsNodeSetupCompletion } =
+            await seedProvisioningNodeSetup();
           const issued = await ensureDevicePairSetupBootstrapToken({
             setupId,
             profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
           });
           if (issued.status !== "pending") {
             throw new Error("expected pending cloud-worker setup token");
+          }
+          if (connectionKind === "cloud bootstrap") {
+            await beginEnrollment();
           }
           const identityPath = state.path("startup-drain-race-node.sqlite");
           if (connectionKind === "paired shared-token") {
@@ -729,6 +772,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
                 ? { bootstrapToken: issued.token }
                 : { sharedToken: "startup-shared-token" }),
               identityPath,
+              admitsNodeSetupCompletion,
               isPendingWorkerNodeSetup: (candidateSetupId, deviceId) =>
                 store.hasPendingNodeEnrollmentSetup(candidateSetupId, deviceId),
               onNodeRegistered: () => registeredRootCounts.push(getActiveGatewayRootWorkCount()),
@@ -833,12 +877,15 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         { label: "gateway-startup-cloud-worker-invalid", layout: "state-only" },
         async (state) => {
           const { store } = await seedProvisioningNodeSetup();
-          const rateLimiter = createAuthRateLimiter({
-            maxAttempts: 1,
-            windowMs: 60_000,
-            lockoutMs: 60_000,
-            exemptLoopback: false,
-          });
+          const rateLimiter = createGatewayAuthRateLimiter(
+            {
+              maxAttempts: 1,
+              windowMs: 60_000,
+              lockoutMs: 60_000,
+              exemptLoopback: false,
+            },
+            { scheduler: createTestGatewayScheduler() },
+          );
           try {
             const harness = await attachStartupNodeConnect({
               bootstrapToken: "invalid-startup-token",

@@ -1,4 +1,4 @@
-export const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
+const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
   opus: "claude-opus-5-5",
   "opus-5": "claude-opus-5",
   "opus-5.5": "claude-opus-5-5",
@@ -9,7 +9,9 @@ export const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
   "opus-4-7": "claude-opus-4-7",
   "opus-4.6": "claude-opus-4-6",
   "opus-4-6": "claude-opus-4-6",
-  sonnet: "claude-sonnet-5",
+  sonnet: "claude-sonnet-5-5",
+  "sonnet-5.5": "claude-sonnet-5-5",
+  "sonnet-5-5": "claude-sonnet-5-5",
   "sonnet-5": "claude-sonnet-5",
   "sonnet-4.6": "claude-sonnet-4-6",
   "sonnet-4-6": "claude-sonnet-4-6",
@@ -18,6 +20,11 @@ export const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
   "fable-5.1": "claude-fable-5-1",
   "fable-5-1": "claude-fable-5-1",
 };
+
+export function resolveClaudeCliContextModelId(modelId: string): string {
+  const trimmed = modelId.trim();
+  return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[trimmed.toLowerCase()] ?? trimmed;
+}
 
 export function detectNodeClaudePlacement(params: {
   backendId: string;

@@ -26,6 +26,8 @@ export {
   UsersLinkAuthProfileResultSchema,
   UsersLinkEmailParamsSchema,
   UsersLinkEmailResultSchema,
+  UsersMergeParamsSchema,
+  UsersMergeResultSchema,
   UserChannelIdentitySchema,
   UserChannelIdentityLinkSchema,
   UsersLinkChannelIdentityParamsSchema,

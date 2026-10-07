@@ -1,6 +1,9 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  toAgentEntriesRecord,
+  tryResolveAmbientOwnerAgentId,
+} from "../agents/agent-scope.js";
 import { resolveMemorySearchSourcePolicy } from "../agents/memory-search-source-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -8,6 +11,7 @@ import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
+import { digestClawValue } from "./digest.js";
 import {
   resolveClawProfileCapabilities,
   resolveClawToolProfileSnapshot,
@@ -37,7 +41,7 @@ function capabilityValue(
 ): ClawUpdateCapabilityValue {
   return {
     summary,
-    digest: `sha256:${createHash("sha256").update(stableStringify(digestSource)).digest("hex")}`,
+    digest: digestClawValue(digestSource),
   };
 }
 
@@ -269,33 +273,20 @@ function pushAgentCapabilityChanges(params: {
     ["heartbeat", "timeoutSeconds"],
   ] as const;
   for (const field of fields) {
-    const sandboxField = field[0] === "sandbox" ? field.slice(1) : undefined;
-    const heartbeatField = field[0] === "heartbeat" ? field.slice(1) : undefined;
-    const memorySearchField =
-      field[0] === "memory" && field[1] === "search" ? field.slice(2) : undefined;
-    const effectiveToolField =
-      field[0] === "tools" &&
-      (field[1] === "profile" || field[1] === "alsoAllow" || field[1] === "fs")
-        ? field.slice(1)
-        : undefined;
-    const currentValue = sandboxField
-      ? getPath(params.currentSandbox, sandboxField)
-      : heartbeatField
-        ? getPath(params.currentHeartbeat, heartbeatField)
-        : memorySearchField
-          ? getPath(params.currentMemorySearch, memorySearchField)
-          : effectiveToolField
-            ? getPath(params.currentTools, effectiveToolField)
-            : getPath(params.currentAgent, field);
-    const desiredValue = sandboxField
-      ? getPath(params.desiredSandbox, sandboxField)
-      : heartbeatField
-        ? getPath(params.desiredHeartbeat, heartbeatField)
-        : memorySearchField
-          ? getPath(params.desiredMemorySearch, memorySearchField)
-          : effectiveToolField
-            ? getPath(params.desiredTools, effectiveToolField)
-            : getPath(params.desiredAgent, field);
+    const [currentRoot, desiredRoot, offset]: [unknown, unknown, number] =
+      field[0] === "sandbox"
+        ? [params.currentSandbox, params.desiredSandbox, 1]
+        : field[0] === "heartbeat"
+          ? [params.currentHeartbeat, params.desiredHeartbeat, 1]
+          : field[0] === "memory" && field[1] === "search"
+            ? [params.currentMemorySearch, params.desiredMemorySearch, 2]
+            : field[0] === "tools" &&
+                (field[1] === "profile" || field[1] === "alsoAllow" || field[1] === "fs")
+              ? [params.currentTools, params.desiredTools, 1]
+              : [params.currentAgent, params.desiredAgent, 0];
+    const valuePath = field.slice(offset);
+    const currentValue = getPath(currentRoot, valuePath);
+    const desiredValue = getPath(desiredRoot, valuePath);
     const profileField = field[0] === "tools" && field[1] === "profile";
     const current = profileField ? resolveClawProfileCapabilities(currentValue) : currentValue;
     const desired = profileField ? resolveClawProfileCapabilities(desiredValue) : desiredValue;
@@ -421,16 +412,24 @@ function prepareCapabilityComparisonConfig(
   entries: AgentConfig[],
   preferredDefaultAgentId: string,
 ): OpenClawConfig {
-  const hasDefault = entries.some((entry) => entry.default === true);
-  const comparisonEntries = hasDefault
-    ? entries
-    : entries.map((entry) =>
-        entry.id === preferredDefaultAgentId ? { ...entry, default: true } : entry,
-      );
-  const { list: _legacyList, ...agents } = config.agents ?? {};
+  const agents = config.agents ?? {};
+  const systemAgentId =
+    agents.ownership !== "explicit" && entries.some((entry) => entry.id === preferredDefaultAgentId)
+      ? (tryResolveAmbientOwnerAgentId(config) ?? preferredDefaultAgentId)
+      : undefined;
   return {
     ...config,
-    agents: { ...agents, entries: toAgentEntriesRecord(comparisonEntries) },
+    agents: {
+      ...agents,
+      ownership: entries.length > 1 ? "explicit" : agents.ownership,
+      entries: toAgentEntriesRecord(entries),
+      defaults: systemAgentId
+        ? {
+            ...agents.defaults,
+            systemAgent: { ...agents.defaults?.systemAgent, agentId: systemAgentId },
+          }
+        : agents.defaults,
+    },
   };
 }
 export function pushResolvedAgentCapabilityChanges(params: {

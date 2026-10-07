@@ -7,12 +7,15 @@ import type {
 import {
   COMPUTER_ACT_V1_ACTION_NAMES,
   COMPUTER_CONTRACT_MISMATCH,
+  COMPUTER_ESCALATION_REASONS,
+  COMPUTER_SCROLL_DIRECTIONS,
   COMPUTER_STALE_OBSERVATION,
   COMPUTER_USE_V2_ACTION_NAMES,
 } from "../../plugins/computer-use-contract.js";
+import { isStringOption } from "../../utils/string-readers.js";
 import { readFiniteNumberParam, readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import type { ComputerObservationState, ComputerToolAction } from "./computer-tool-shared.js";
-import { COMPUTER_REF_WIDTH, MAX_HOLD_SECONDS } from "./computer-tool-shared.js";
+import { MAX_HOLD_SECONDS } from "./computer-tool-shared.js";
 
 const LOCAL_ACTIONS = new Set<ComputerUseV2ActionName>(["screenshot", "wait"]);
 const INPUT_ACTIONS = new Set<ComputerUseV2ActionName>(
@@ -47,21 +50,9 @@ const MODIFIER_TEXT_ACTIONS = new Set<ComputerToolAction>([
 ]);
 
 const POINTER_OR_KEYBOARD_ACTIONS = new Set<ComputerToolAction>(COMPUTER_ACT_V1_ACTION_NAMES);
-const ESCALATION_REASONS = new Set([
-  "ax_tree_pixel_mismatch",
-  "background_delivery_failed",
-  "foreground_ineffective",
-  "no_window_target",
-  "other",
-]);
-const SCROLL_DIRECTIONS = ["up", "down", "left", "right"] as const;
-
-function isScrollDirection(value: string): value is (typeof SCROLL_DIRECTIONS)[number] {
-  return SCROLL_DIRECTIONS.some((direction) => direction === value);
-}
 
 export function isComputerActAction(action: ComputerToolAction): boolean {
-  return INPUT_ACTIONS.has(action);
+  return action !== "take_control" && INPUT_ACTIONS.has(action);
 }
 
 export function computerActionNeedsFrame(
@@ -87,43 +78,23 @@ function readCoordinate(
   if (
     !Array.isArray(raw) ||
     raw.length !== 2 ||
-    raw.some(
-      (entry) =>
-        typeof entry !== "number" ||
-        !Number.isFinite(entry) ||
-        !Number.isInteger(entry) ||
-        entry < 0,
-    )
+    raw.some((entry) => typeof entry !== "number" || !Number.isInteger(entry) || entry < 0)
   ) {
     throw new Error(`${key} must be a pair of non-negative integers`);
   }
   return [raw[0] as number, raw[1] as number];
 }
 
-function requireCoordinate(params: Record<string, unknown>, action: string): [number, number] {
-  const coordinate = readCoordinate(params, "coordinate");
-  if (!coordinate) {
-    throw new Error(`coordinate [x, y] required for ${action}`);
-  }
-  return coordinate;
-}
-
-function readModifiers(params: Record<string, unknown>, action: ComputerToolAction) {
-  if (!MODIFIER_TEXT_ACTIONS.has(action)) {
-    return undefined;
-  }
-  const text = typeof params.text === "string" ? params.text.trim() : "";
-  return text ? text : undefined;
-}
-
-function copyOptionalStringParam(
+function copyOptionalStringParams(
   target: Record<string, unknown>,
   input: Record<string, unknown>,
-  key: string,
+  ...keys: string[]
 ): void {
-  const value = readToolStringParam(input, key);
-  if (value !== undefined) {
-    target[key] = value;
+  for (const key of keys) {
+    const value = readToolStringParam(input, key);
+    if (value !== undefined) {
+      target[key] = value;
+    }
   }
 }
 
@@ -188,29 +159,31 @@ const REQUIRED_STRING_PARAMS: Partial<Record<ComputerToolAction, readonly string
   browser_pointer: [...BROWSER_REFS, "observationId", "pointerAction"],
 };
 
-/** Builds the computer.act wire params for one tool input action. */
 export function buildComputerActParams(params: {
   action: ComputerToolAction;
   input: Record<string, unknown>;
   executionId: string;
   screenIndex: number;
   displayFrameId?: string;
-  refWidth?: number;
+  refWidth: number;
 }): ComputerActParams {
   const { action, input } = params;
   const wire: Record<string, unknown> = { action, executionId: params.executionId };
   if (POINTER_OR_KEYBOARD_ACTIONS.has(action)) {
     wire.screenIndex = params.screenIndex;
-    wire.refWidth = params.refWidth ?? COMPUTER_REF_WIDTH;
+    wire.refWidth = params.refWidth;
   }
   const elementRef = readToolStringParam(input, "elementRef");
   if (
     COORDINATE_REQUIRED_ACTIONS.has(action) &&
     !(elementRef && ELEMENT_TARGETABLE_CLICK_ACTIONS.has(action))
   ) {
-    const [x, y] = requireCoordinate(input, action);
-    wire.x = x;
-    wire.y = y;
+    const coordinate = readCoordinate(input, "coordinate");
+    if (!coordinate) {
+      throw new Error(`coordinate [x, y] required for ${action}`);
+    }
+    wire.x = coordinate[0];
+    wire.y = coordinate[1];
   } else if (COORDINATE_OPTIONAL_ACTIONS.has(action)) {
     const coordinate = readCoordinate(input, "coordinate");
     if (coordinate) {
@@ -221,7 +194,8 @@ export function buildComputerActParams(params: {
   if ((wire.x !== undefined || wire.fromX !== undefined) && params.displayFrameId) {
     wire.displayFrameId = params.displayFrameId;
   }
-  const modifiers = readModifiers(input, action);
+  const modifiers =
+    MODIFIER_TEXT_ACTIONS.has(action) && typeof input.text === "string" ? input.text.trim() : "";
   if (modifiers) {
     wire.modifiers = modifiers;
   }
@@ -240,7 +214,7 @@ export function buildComputerActParams(params: {
     }
     case "scroll": {
       const direction = normalizeOptionalLowercaseString(input.scrollDirection);
-      if (!direction || !isScrollDirection(direction)) {
+      if (!isStringOption(direction, COMPUTER_SCROLL_DIRECTIONS)) {
         throw new Error("scrollDirection up|down|left|right required for scroll");
       }
       wire.scrollDirection = direction;
@@ -258,8 +232,7 @@ export function buildComputerActParams(params: {
     }
     case "key":
     case "hold_key": {
-      const keys = readToolStringParam(input, "text", { required: true });
-      wire.keys = keys;
+      wire.keys = readToolStringParam(input, "text", { required: true });
       if (action === "hold_key") {
         const seconds =
           readFiniteNumberParam(input, "duration", {
@@ -287,7 +260,7 @@ export function buildComputerActParams(params: {
           delete wire.includeScreenshot;
         }
       }
-      copyOptionalStringParam(wire, input, "query");
+      copyOptionalStringParams(wire, input, "query");
       copyOptionalIntegerParam(wire, input, "depth", { min: 0, max: 64 });
       copyOptionalIntegerParam(wire, input, "maxElements", { min: 1, max: 2_000 });
       break;
@@ -330,26 +303,24 @@ export function buildComputerActParams(params: {
       for (const key of BROWSER_REFS) {
         wire[key] = readToolStringParam(input, key, { required: true });
       }
-      for (const key of [
+      copyOptionalStringParams(
+        wire,
+        input,
         "snapshotFormat",
         "elementRef",
         "observationId",
         "query",
         "continuation",
-      ] as const) {
-        copyOptionalStringParam(wire, input, key);
-      }
+      );
       copyOptionalBooleanParam(wire, input, "includeScreenshot");
       break;
     }
     case "browser_prepare": {
-      copyOptionalStringParam(wire, input, "profile");
-      copyOptionalStringParam(wire, input, "profileName");
+      copyOptionalStringParams(wire, input, "profile", "profileName");
       break;
     }
     case "browser_click": {
-      copyOptionalStringParam(wire, input, "elementRef");
-      copyOptionalStringParam(wire, input, "inputRoute");
+      copyOptionalStringParams(wire, input, "elementRef", "inputRoute");
       const coordinate = readCoordinate(input, "coordinate");
       if (coordinate) {
         wire.x = coordinate[0];
@@ -359,13 +330,12 @@ export function buildComputerActParams(params: {
     }
     case "browser_type": {
       wire.text = readToolStringParam(input, "text", { required: true, allowEmpty: true });
-      copyOptionalStringParam(wire, input, "mode");
+      copyOptionalStringParams(wire, input, "mode");
       copyOptionalBooleanParam(wire, input, "replace");
       break;
     }
     case "browser_dialog": {
-      copyOptionalStringParam(wire, input, "dialogRef");
-      copyOptionalStringParam(wire, input, "promptText");
+      copyOptionalStringParams(wire, input, "dialogRef", "promptText");
       copyDeliveryMode(wire, input);
       break;
     }
@@ -383,9 +353,7 @@ export function buildComputerActParams(params: {
       break;
     }
     case "browser_pointer": {
-      for (const key of ["inputRoute", "elementRef", "destinationElementRef"] as const) {
-        copyOptionalStringParam(wire, input, key);
-      }
+      copyOptionalStringParams(wire, input, "inputRoute", "elementRef", "destinationElementRef");
       const coordinate = readCoordinate(input, "coordinate");
       if (coordinate) {
         wire.x = coordinate[0];
@@ -413,7 +381,7 @@ export function buildComputerActParams(params: {
     }
     case "escalate_scope": {
       const reason = readToolStringParam(input, "reason", { required: true });
-      if (!ESCALATION_REASONS.has(reason)) {
+      if (!isStringOption(reason, COMPUTER_ESCALATION_REASONS)) {
         throw new Error("reason must be a supported escalation reason");
       }
       wire.reason = reason;
@@ -433,9 +401,7 @@ export function buildComputerActParams(params: {
       break;
   }
   if (POINTER_OR_KEYBOARD_ACTIONS.has(action)) {
-    for (const key of ["windowRef", "elementRef", "observationId"] as const) {
-      copyOptionalStringParam(wire, input, key);
-    }
+    copyOptionalStringParams(wire, input, "windowRef", "elementRef", "observationId");
     copyDeliveryMode(wire, input);
   }
   return wire as ComputerActParams;
@@ -469,20 +435,16 @@ export function validateCapabilityBoundInput(params: {
           : ""),
     );
   }
-  if (windowRef && !capabilities?.targets.includes("window")) {
-    throw new Error(
-      `${COMPUTER_CONTRACT_MISMATCH}: selected computer has no window target support`,
-    );
-  }
-  if (elementRef && !capabilities?.targets.includes("element")) {
-    throw new Error(
-      `${COMPUTER_CONTRACT_MISMATCH}: selected computer has no element target support`,
-    );
-  }
-  if ((browserRef || pageRef) && !capabilities?.targets.includes("browser")) {
-    throw new Error(
-      `${COMPUTER_CONTRACT_MISMATCH}: selected computer has no browser target support`,
-    );
+  for (const [target, reference] of [
+    ["window", windowRef],
+    ["element", elementRef],
+    ["browser", browserRef || pageRef],
+  ] as const) {
+    if (reference && !capabilities?.targets.includes(target)) {
+      throw new Error(
+        `${COMPUTER_CONTRACT_MISMATCH}: selected computer has no ${target} target support`,
+      );
+    }
   }
   if (deliveryMode && !capabilities?.deliveryModes.some((mode) => mode === deliveryMode)) {
     throw new Error(

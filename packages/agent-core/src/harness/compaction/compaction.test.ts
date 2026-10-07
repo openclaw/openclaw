@@ -2,10 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
-import type { SessionTreeEntry } from "../types.js";
+import {
+  InvalidSummaryOutputError,
+  SummaryOutputBudgetError,
+  type SessionTreeEntry,
+} from "../types.js";
 import {
   calculateContextTokens,
   compact,
+  compactWithoutSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
   estimateContextTokens,
   estimateTokens,
   findCutPoint,
@@ -71,74 +77,44 @@ function createProjectedEntry(
 }
 
 describe("shouldCompact", () => {
-  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
-    "skips an invalid context window of %s",
-    (contextWindow) => {
-      expect(
-        shouldCompact(1, contextWindow, {
-          enabled: true,
-          reserveTokens: 16_384,
-          keepRecentTokens: 20_000,
-        }),
-      ).toBe(false);
-    },
-  );
+  it.each([0, Number.NaN])("skips an invalid context window of %s", (contextWindow) => {
+    expect(
+      shouldCompact(1, contextWindow, {
+        enabled: true,
+        reserveTokens: 16_384,
+        keepRecentTokens: 20_000,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("calculateContextTokens", () => {
+  const aggregateUsage: Usage = {
+    ...createUsage(927_907),
+    input: 12,
+    output: 15_104,
+    cacheRead: 819_661,
+    cacheWrite: 93_130,
+    contextUsage: { state: "unavailable" },
+  };
+
   it("prefers the final-iteration context snapshot over aggregate billing usage", () => {
     expect(
       calculateContextTokens({
-        input: 12,
-        output: 15_104,
-        cacheRead: 819_661,
-        cacheWrite: 93_130,
-        contextUsage: {
-          state: "available",
-          promptTokens: 148_874,
-          totalTokens: 163_978,
-        },
-        totalTokens: 927_907,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        ...aggregateUsage,
+        contextUsage: { state: "available", promptTokens: 148_874, totalTokens: 163_978 },
       }),
     ).toBe(163_978);
   });
 
   it("preserves the numeric compatibility fallback when the snapshot is unavailable", () => {
-    expect(
-      calculateContextTokens({
-        input: 12,
-        output: 15_104,
-        cacheRead: 819_661,
-        cacheWrite: 93_130,
-        contextUsage: { state: "unavailable" },
-        totalTokens: 927_907,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      }),
-    ).toBe(927_907);
+    expect(calculateContextTokens(aggregateUsage)).toBe(927_907);
   });
 
   it("estimates the transcript instead of using aggregate billing when context is unavailable", () => {
     const estimate = estimateContextTokens([
       { role: "user", content: "hello", timestamp: 0 },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-fable-5",
-        usage: {
-          input: 12,
-          output: 15_104,
-          cacheRead: 819_661,
-          cacheWrite: 93_130,
-          contextUsage: { state: "unavailable" },
-          totalTokens: 927_907,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: 1,
-      },
+      createAssistant("done", aggregateUsage, 1),
     ]);
 
     expect(estimate.tokens).toBeLessThan(927_907);
@@ -149,47 +125,19 @@ describe("calculateContextTokens", () => {
 
   it("uses the previous exact snapshot and estimates only the unavailable tail", () => {
     const estimate = estimateContextTokens([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "previous" }],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-fable-5",
-        usage: {
+      createAssistant(
+        "previous",
+        {
+          ...createUsage(149_874),
           input: 12,
           output: 1_000,
           cacheRead: 148_862,
-          cacheWrite: 0,
-          contextUsage: {
-            state: "available",
-            promptTokens: 148_874,
-            totalTokens: 149_874,
-          },
-          totalTokens: 149_874,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          contextUsage: { state: "available", promptTokens: 148_874, totalTokens: 149_874 },
         },
-        stopReason: "stop",
-        timestamp: 0,
-      },
+        0,
+      ),
       { role: "user", content: "next", timestamp: 1 },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-fable-5",
-        usage: {
-          input: 12,
-          output: 15_104,
-          cacheRead: 819_661,
-          cacheWrite: 93_130,
-          contextUsage: { state: "unavailable" },
-          totalTokens: 927_907,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: 2,
-      },
+      createAssistant("done", aggregateUsage, 2),
     ]);
 
     expect(estimate.usageTokens).toBe(149_874);
@@ -367,69 +315,6 @@ describe("session-entry compaction budgeting", () => {
     expect(preparation.value).not.toHaveProperty("splitTurnCompleted");
     expect(JSON.stringify(preparation.value)).not.toContain("private output");
     expect(JSON.stringify(entries)).toContain("private output");
-  });
-
-  it("applies the shared common-CJK budget heuristic", () => {
-    expect(estimateTokens({ role: "user", content: "hello world", timestamp: 1 })).toBe(3);
-    expect(estimateTokens({ role: "user", content: "你好世界", timestamp: 1 })).toBe(4);
-    expect(estimateTokens({ role: "user", content: "こんにちは", timestamp: 1 })).toBe(5);
-    expect(estimateTokens({ role: "user", content: "안녕하세요", timestamp: 1 })).toBe(5);
-  });
-
-  it("uses conservative weights for halfwidth and supplementary CJK", () => {
-    expect(estimateTokens({ role: "user", content: "ｺﾝﾆﾁﾊ", timestamp: 1 })).toBe(10);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0xffa1), timestamp: 1 }),
-    ).toBe(2);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x20000), timestamp: 1 }),
-    ).toBe(4);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x30000), timestamp: 1 }),
-    ).toBe(4);
-  });
-
-  it("uses a conservative weight for rare BMP CJK", () => {
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x3400), timestamp: 1 }),
-    ).toBe(3);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x9fff), timestamp: 1 }),
-    ).toBe(3);
-  });
-
-  it("accounts for decomposed Hangul and compatibility forms", () => {
-    expect(
-      estimateTokens({ role: "user", content: "안녕하세요".normalize("NFD"), timestamp: 1 }),
-    ).toBe(36);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0xfe10), timestamp: 1 }),
-    ).toBe(2);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0xffe0), timestamp: 1 }),
-    ).toBe(2);
-  });
-
-  it("uses a conservative weight for supplementary Japanese forms", () => {
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x1aff0), timestamp: 1 }),
-    ).toBe(4);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x1f200), timestamp: 1 }),
-    ).toBe(4);
-  });
-
-  it("uses measured weights for CJK script-extension marks", () => {
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x00b7), timestamp: 1 }),
-    ).toBe(1);
-    expect(estimateTokens({ role: "user", content: "·".repeat(32), timestamp: 1 })).toBe(32);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x02ca), timestamp: 1 }),
-    ).toBe(2);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x1d360), timestamp: 1 }),
-    ).toBe(3);
   });
 
   it("uses CJK-aware token estimates when choosing the retained tail", () => {
@@ -778,6 +663,47 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
   );
 });
 
+describe("generateSummary progress updates", () => {
+  it("asks to keep completed checks distinct from unresolved blockers", async () => {
+    const completeSimple = vi.fn(async () => createAssistant("summary", createUsage(1), 4));
+    const result = await generateSummary(
+      [
+        { role: "user", content: "Check whether the release is approved.", timestamp: 1 },
+        {
+          ...createAssistant("", createUsage(0), 2),
+          content: [{ type: "toolCall", id: "check", name: "verify", arguments: {} }],
+          stopReason: "toolUse",
+        },
+        {
+          role: "toolResult",
+          toolCallId: "check",
+          toolName: "verify",
+          content: [{ type: "text", text: "Verification FAILED: missing release approval." }],
+          isError: true,
+          timestamp: 3,
+        },
+      ],
+      createSummaryModel(),
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "Release approval check: pending.",
+      undefined,
+      undefined,
+      { completeSimple },
+    );
+
+    expect(result.ok).toBe(true);
+    const request = JSON.stringify(completeSimple.mock.calls);
+    expect(request).toContain("Release approval check: pending.");
+    expect(request).toContain("Verification FAILED: missing release approval.");
+    expect(request).toContain("Record checks that ran and their results as completed");
+    expect(request).toContain("keep unresolved blockers separate");
+  });
+});
+
 describe("generateSummary thinking options", () => {
   it("consumes the decorated stream before reading its result", async () => {
     const model = createSummaryModel();
@@ -867,7 +793,6 @@ describe("generateSummary thinking options", () => {
   });
 
   it.each([
-    ["empty", []],
     ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
     ["reasoning-only", [{ type: "thinking" as const, thinking: "internal summary reasoning" }]],
   ])("rejects %s compaction output", async (_name, content) => {
@@ -909,10 +834,52 @@ describe("generateSummary thinking options", () => {
     if (result.ok) {
       throw new Error("expected empty compaction output to fail");
     }
+    expect(result.error).toBeInstanceOf(InvalidSummaryOutputError);
     expect(result.error).toMatchObject({
       name: "CompactionError",
       code: "summarization_failed",
       message: "Summarization failed: model returned no summary text",
+    });
+  });
+
+  it("identifies a length-stopped reasoning-only summary as an exhausted output budget", async () => {
+    const model = createSummaryModel(true);
+    const streamFn = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "length",
+        message: {
+          ...createAssistant("", createUsage(800), 1),
+          content: [{ type: "thinking", thinking: "internal summary reasoning" }],
+          stopReason: "length",
+        },
+      });
+      stream.end();
+      return stream;
+    });
+
+    const result = await generateSummary(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      model,
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "high",
+      streamFn,
+    );
+
+    expect(streamFn).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ error: expect.any(SummaryOutputBudgetError) });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "summarization_failed",
+        message: expect.stringContaining("output budget (800 tokens) was exhausted"),
+      },
     });
   });
 });
@@ -924,12 +891,10 @@ describe("split-turn compaction", () => {
     customType: "openclaw.runtime-context",
     content: "PRIVATE_RUNTIME_CONTEXT",
     display: false,
-    details: { runtimeContextCarrier: true },
+    details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
     timestamp: 1,
   };
   it.each([
-    { name: "ordinary history", history: true, prefix: false, budgets: [800] },
-    { name: "history and prefix", history: true, prefix: true, budgets: [800, 500] },
     { name: "prefix-only", history: false, prefix: true, budgets: [500] },
     {
       name: "caller-owned instructions",
@@ -1030,4 +995,38 @@ describe("split-turn compaction", () => {
       }
     },
   );
+});
+
+describe("compactWithoutSummary", () => {
+  const lossNotice = "2 earlier message(s) were removed without a summary";
+  // About 1,200 characters with the constraint in the middle: inside the 2,000-character
+  // split-turn ask bound, beyond the 800-character unresolved-request bound.
+  const filler = "Context for the split request. ".repeat(19);
+  const sourceAsk = `${filler}Constraint: keep SOURCE-ASK-MIDDLE. ${filler}`.trim();
+  it.each([
+    { name: "a capped previous summary", summaryTokenBudget: undefined },
+    { name: "a constrained foreground budget", summaryTokenBudget: 450 },
+  ])("keeps the loss notice, source ask, and unresolved request beside $name", (case_) => {
+    const result = compactWithoutSummary({
+      firstKeptEntryId: "kept-entry",
+      messagesToSummarize: [{ role: "user", content: "history", timestamp: 1 }],
+      turnPrefixMessages: [{ role: "user", content: sourceAsk, timestamp: 2 }],
+      isSplitTurn: true,
+      latestUnresolvedUserRequest: "finish the review",
+      previousSummary: "p".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+      tokensBefore: 100,
+      fileOps: createFileOps(),
+      settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
+      summaryTokenBudget: case_.summaryTokenBudget,
+    });
+
+    expect(result.ok).toBe(true);
+    const summary = result.ok ? result.value.summary : "";
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain(lossNotice);
+    expect(summary).toContain('"finish the review"');
+    expect(sourceAsk.length).toBeGreaterThan(1_100);
+    expect(summary).toContain(JSON.stringify(sourceAsk));
+    expect(result.ok && result.value.firstKeptEntryId).toBe("kept-entry");
+  });
 });

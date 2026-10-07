@@ -12,6 +12,7 @@ import {
   type TransformConfigFileWithRetryParams,
 } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigReplaceInput } from "../config/mutate.js";
 import {
   copyPluginInstallRecordMap,
@@ -46,8 +47,16 @@ import {
   resolveRetainedManagedNpmInstallMarkerPath,
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
 import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
 import { planPluginUninstall } from "./uninstall.js";
+
+const retainedPublications = new WeakMap<Error, Readonly<{ current: boolean }>>();
+
+/** Recorded disposition of this failure, not authority to activate or overwrite a newer index. */
+export function getRetainedPluginInstallPublication(error: unknown) {
+  return error instanceof Error ? retainedPublications.get(error) : undefined;
+}
 
 function mergeUnsetPaths(
   left?: ConfigWriteOptions["unsetPaths"],
@@ -220,9 +229,6 @@ function resolveRetainedManagedNpmInstallMarkerTarget(params: {
   if (!plan.ok || !plan.directoryRemoval || plan.directoryRemoval.cleanup?.kind !== "npm") {
     return null;
   }
-  if (nextInstallPath && installPathsOverlap(previousInstallPath, nextInstallPath)) {
-    return null;
-  }
   return previousInstallPath;
 }
 
@@ -255,7 +261,6 @@ async function markRetiredManagedNpmInstallRecords(params: {
   createdMarkerPaths: string[];
   assertCurrent: () => void;
 }): Promise<void> {
-  const markedPreviousPluginIds = new Set<string>();
   const activeInstallPaths = Object.values(params.nextInstallRecords).flatMap((record) => {
     const installPath = record.installPath?.trim();
     return installPath ? [installPath] : [];
@@ -299,7 +304,6 @@ async function markRetiredManagedNpmInstallRecords(params: {
       // Record each marker immediately so a later filesystem failure can roll it back.
       params.createdMarkerPaths.push(markerPath);
     }
-    markedPreviousPluginIds.add(pluginId);
   };
 
   for (const [pluginId, nextRecord] of Object.entries(params.nextInstallRecords)) {
@@ -310,10 +314,7 @@ async function markRetiredManagedNpmInstallRecords(params: {
     );
   }
   for (const [pluginId, previousRecord] of Object.entries(params.previousInstallRecords)) {
-    if (
-      markedPreviousPluginIds.has(pluginId) ||
-      getPluginInstallRecordMapEntry(params.nextInstallRecords, pluginId)
-    ) {
+    if (getPluginInstallRecordMapEntry(params.nextInstallRecords, pluginId)) {
       continue;
     }
     await markRetiredInstall(
@@ -418,7 +419,6 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
   commit: ConfigCommit<T>;
 }): Promise<{
   committed: T;
-  nextInstallRecords: Record<string, PluginInstallRecord>;
   indexWrite: InstalledPluginIndexWriteReceipt;
 }> {
   return await withPluginLifecycleLease({}, async (lease) => {
@@ -489,10 +489,34 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
       const committed = await params.commit(params.nextConfig, writeOptions);
       return {
         committed,
-        nextInstallRecords: prepared.nextInstallRecords,
         indexWrite: tentativeWrite,
       };
     } catch (error) {
+      if (
+        tentativeWrite &&
+        error instanceof ConfigWritePostCommitError &&
+        error.rollbackStatus !== "restored"
+      ) {
+        try {
+          assertOwned();
+          const row = await readPluginMetadataStateRow("installed-index", {
+            path: lease.databasePath,
+          });
+          assertOwned();
+          retainedPublications.set(error, {
+            current: row?.value_json === tentativeWrite.mutation.after.value_json,
+          });
+        } catch (inspectionError) {
+          const failure = new AggregateError(
+            [error, inspectionError],
+            "Config publication could not be rolled back and its package records could not be inspected.",
+            { cause: inspectionError },
+          );
+          retainedPublications.set(failure, { current: false });
+          throw failure;
+        }
+        throw error;
+      }
       // Revoked invokers cannot authorize new effects, but the lease still owns compensation.
       assertOwned();
       const failures: unknown[] = [error];
@@ -587,7 +611,6 @@ export async function commitPluginInstallRecordsOnly(params: {
 }
 
 type PluginConfigCommit = ConfigReplaceResult & {
-  installRecords: Record<string, PluginInstallRecord>;
   movedInstallRecords: boolean;
 };
 
@@ -621,7 +644,6 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
     });
     return {
       ...committed,
-      installRecords: {},
       movedInstallRecords: false,
     };
   }
@@ -649,7 +671,6 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
   });
   return {
     ...result.committed,
-    installRecords: result.nextInstallRecords,
     movedInstallRecords: true,
   };
 }

@@ -35,18 +35,25 @@ export function renderSkillLibraryToolbar(
       >
         ${t("skillLibrary.create")}
       </button>
-      <button
-        type="button"
-        class="btn"
-        ?disabled=${!library.canCreate || library.busy}
-        @click=${() => {
-          library.importOpen = true;
-          library.importSource = null;
-          library.changed();
-        }}
-      >
-        ${t("skillLibrary.import")}
-      </button>
+      ${
+        library.uploadsEnabled
+          ? html`<button
+              type="button"
+              class="btn"
+              ?disabled=${!library.canCreate || library.busy}
+              @click=${() => {
+                if (!library.uploadsEnabled) {
+                  return;
+                }
+                library.importOpen = true;
+                library.importSource = null;
+                library.changed();
+              }}
+            >
+              ${t("skillLibrary.import")}
+            </button>`
+          : nothing
+      }
     </div>
     ${
       options.length > 0 || !library.showWorkspace

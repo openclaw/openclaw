@@ -6,8 +6,12 @@ import {
   sanitizeToolResult,
 } from "../../agents/embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import type { WorkerTurnTranscriptSource } from "./placement-turn-claim-events.js";
+
+const log = createSubsystemLogger("gateway/worker-trajectory");
 
 export type WorkerLiveTrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 
@@ -50,13 +54,17 @@ export function createWorkerLiveTrajectoryRecorder(params: {
     sessionKey: target.sessionKey,
     sessionTarget: target,
     assertCommitAllowed: params.source.receiptAuthority,
+  }).catch((error: unknown) => {
+    log.warn(`Trajectory preparation failed for run ${params.runId}: ${formatErrorMessage(error)}`);
+    return null;
   });
 }
 
-export function recordWorkerLiveTrajectoryEvent(
-  recorder: WorkerLiveTrajectoryRecorder,
+export async function recordWorkerLiveTrajectoryEvent(
+  preparingRecorder: WorkerLiveTrajectoryRecorder,
   event: WorkerLiveEventParams["event"],
-): Promise<void> | undefined {
+): Promise<void> {
+  const recorder = await preparingRecorder;
   if (!recorder) {
     return undefined;
   }
@@ -81,10 +89,8 @@ export function recordWorkerLiveTrajectoryEvent(
         ...prepareWorkerLiveEventData(event),
         backend: "cloud-worker",
       });
-    } else if (event.payload.phase === "fallback_step") {
-      recorder.recordEvent("model.fallback_step", prepareWorkerLiveEventData(event));
-    } else if (event.payload.phase === "finishing") {
-      recorder.recordEvent("model.finishing", prepareWorkerLiveEventData(event));
+    } else if (event.payload.phase === "fallback_step" || event.payload.phase === "finishing") {
+      recorder.recordEvent(`model.${event.payload.phase}`, prepareWorkerLiveEventData(event));
     } else if (
       (event.payload.phase === "end" || event.payload.phase === "error") &&
       isDefinitiveWorkerTerminalEvent(event)
@@ -94,7 +100,7 @@ export function recordWorkerLiveTrajectoryEvent(
       const interrupted = event.payload.aborted === true;
       recorder.recordEvent("model.completed", {
         ...data,
-        ...(failed ? { promptError: event.payload.error } : {}),
+        ...(event.payload.phase === "error" ? { promptError: event.payload.error } : {}),
       });
       recorder.recordEvent("session.ended", {
         ...data,

@@ -3,29 +3,31 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import pMap from "p-map";
-import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
-import { selectDeterministicTranslation } from "./android-app-i18n.ts";
+import { decodeXml } from "../src/shared/xml.ts";
+import {
+  collectToolDisplaySources,
+  findClosingDelimiter,
+  lineNumber,
+  selectDeterministicTranslation,
+} from "./android-app-i18n.ts";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
+import { compareAscii as compareCodePoints } from "./lib/canonical-json.mjs";
+import type { GlossaryEntry } from "./lib/control-ui-i18n-sync-plan.ts";
+import {
+  type NativeI18nInventoryEntry,
+  type NativeI18nSite,
+  type NativeI18nSurface,
+  serializeNativeI18nInventory,
+} from "./native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
-
-type NativeI18nSurface = "android" | "apple";
 
 export { NATIVE_I18N_LOCALES };
 
-export type NativeI18nEntry = {
-  id: string;
-  source: string;
-  surface: NativeI18nSurface;
-  sites: NativeI18nSite[];
+export type NativeI18nEntry = NativeI18nInventoryEntry & {
   /** Request-only owner excerpt; never persisted in the source inventory. */
   sourceContext?: string;
-};
-
-export type NativeI18nSite = {
-  kind: string;
-  path: string;
 };
 
 type NativeInterpolation = {
@@ -34,12 +36,10 @@ type NativeInterpolation = {
   value: string;
 };
 
-type Candidate = NativeI18nSite & {
-  line: number;
-  source: string;
-  surface: NativeI18nSurface;
-  sourceContext?: string;
-};
+type Candidate = NativeI18nSite &
+  Pick<NativeI18nEntry, "source" | "surface" | "sourceContext"> & {
+    line: number;
+  };
 type NativeTranslationArtifactV1 = {
   entries: Array<{ id: string; source: string; translated: string }>;
   glossaryHash: string;
@@ -65,12 +65,11 @@ export type NativeI18nQualityFinding = {
   translated: string;
   words?: string[];
 };
-type NativeTranslator = typeof translateNativeEntries;
 type NativeLocaleSyncOptions = {
   force?: boolean;
   refreshIds?: string[];
-  glossary?: Array<{ source: string; target: string }>;
-  translate?: NativeTranslator;
+  glossary?: GlossaryEntry[];
+  translate?: typeof translateNativeEntries;
   translationsDir?: string;
 };
 type NativeI18nCommand = {
@@ -85,6 +84,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const OUTPUT_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");
 const TRANSLATIONS_DIR = path.join(ROOT, "apps", ".i18n", "native");
+const TOOL_DISPLAY_SOURCE =
+  "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json";
 const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
   android: [
     path.join(ROOT, "apps", "android", "app", "src", "main"),
@@ -177,6 +178,7 @@ const APPLE_VIEW_FUNCTION =
 const APPLE_ALERT_FUNCTION = /\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)[^{]*\{[^{}]{0,600}\bNSAlert\s*\(/gu;
 const APPLE_BUILTIN_UI_CALLS = new Set([
   "Alert",
+  "AuthProblemDefaults",
   "Button",
   "ControlGroup",
   "DatePicker",
@@ -261,15 +263,6 @@ function isAsciiAlphaNumeric(character: string): boolean {
     isAsciiUppercaseLetter(character) ||
     (character >= "0" && character <= "9")
   );
-}
-
-function decodeXml(value: string): string {
-  return value
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&amp;", "&");
 }
 
 function isLocalizableApplePlistKey(key: string): boolean {
@@ -401,144 +394,6 @@ function extractKotlinInterpolations(source: string): NativeInterpolation[] | nu
   return values;
 }
 
-function compareCodePoints(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function lineNumber(source: string, offset: number): number {
-  return source.slice(0, offset).split("\n").length;
-}
-
-function findClosingDelimiter(
-  source: string,
-  openingIndex: number,
-  opening: string,
-  closing: string,
-): number | null {
-  let depth = 0;
-  let quoted = false;
-  let escaped = false;
-  for (let index = openingIndex; index < source.length; index += 1) {
-    const character = source[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (quoted && character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (quoted) {
-      continue;
-    }
-    if (character === opening) {
-      depth += 1;
-    } else if (character === closing) {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-  }
-  return null;
-}
-
-function readSwiftStringLiteral(
-  source: string,
-  openingQuote: number,
-): { end: number; value: string } | null {
-  if (source[openingQuote] !== '"' || source.startsWith('"""', openingQuote)) {
-    return null;
-  }
-  let raw = "";
-  for (let index = openingQuote + 1; index < source.length; index += 1) {
-    const character = source[index];
-    if (character === "\\") {
-      const next = source[index + 1];
-      if (next === undefined) {
-        return null;
-      }
-      if (next === "(") {
-        const end = findClosingDelimiter(source, index + 1, "(", ")");
-        if (end === null) {
-          return null;
-        }
-        raw += source.slice(index, end + 1);
-        index = end;
-        continue;
-      }
-      if (next === "n") {
-        raw += "\n";
-      } else if (next === "r") {
-        raw += "\r";
-      } else if (next === "t") {
-        raw += "\t";
-      } else if (next === '"' || next === "\\") {
-        raw += next;
-      } else {
-        raw += character + next;
-      }
-      index += 1;
-      continue;
-    }
-    if (character === '"') {
-      return { end: index + 1, value: raw };
-    }
-    raw += character;
-  }
-  return null;
-}
-
-function readKotlinStringLiteral(
-  source: string,
-  openingQuote: number,
-): { end: number; value: string } | null {
-  if (source[openingQuote] !== '"' || source.startsWith('"""', openingQuote)) {
-    return null;
-  }
-  let raw = "";
-  for (let index = openingQuote + 1; index < source.length; index += 1) {
-    const character = source[index];
-    if (character === "$" && source[index + 1] === "{") {
-      const end = findClosingDelimiter(source, index + 1, "{", "}");
-      if (end === null) {
-        return null;
-      }
-      raw += source.slice(index, end + 1);
-      index = end;
-      continue;
-    }
-    if (character === "\\") {
-      const next = source[index + 1];
-      if (next === undefined) {
-        return null;
-      }
-      if (next === "n") {
-        raw += "\n";
-      } else if (next === "r") {
-        raw += "\r";
-      } else if (next === "t") {
-        raw += "\t";
-      } else if (next === '"' || next === "\\" || next === "$") {
-        raw += next;
-      } else {
-        raw += character + next;
-      }
-      index += 1;
-      continue;
-    }
-    if (character === '"') {
-      return { end: index + 1, value: raw };
-    }
-    raw += character;
-  }
-  return null;
-}
-
 function readMultilineStringLiteral(
   source: string,
   openingQuote: number,
@@ -561,12 +416,54 @@ function readNativeStringLiteral(
   source: string,
   openingQuote: number,
 ): { end: number; value: string } | null {
-  return (
-    readMultilineStringLiteral(source, openingQuote) ??
-    (surface === "apple"
-      ? readSwiftStringLiteral(source, openingQuote)
-      : readKotlinStringLiteral(source, openingQuote))
-  );
+  const multiline = readMultilineStringLiteral(source, openingQuote);
+  if (multiline || source[openingQuote] !== '"' || source.startsWith('"""', openingQuote)) {
+    return multiline;
+  }
+  const interpolationStart = surface === "apple" ? "\\(" : "${";
+  const interpolationEnd = surface === "apple" ? ")" : "}";
+  let raw = "";
+  for (let index = openingQuote + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (source.startsWith(interpolationStart, index)) {
+      const end = findClosingDelimiter(
+        source,
+        index + 1,
+        surface === "apple" ? "(" : "{",
+        interpolationEnd,
+      );
+      if (end === null) {
+        return null;
+      }
+      raw += source.slice(index, end + 1);
+      index = end;
+      continue;
+    }
+    if (character === "\\") {
+      const next = source[index + 1];
+      if (next === undefined) {
+        return null;
+      }
+      if (next === "n") {
+        raw += "\n";
+      } else if (next === "r") {
+        raw += "\r";
+      } else if (next === "t") {
+        raw += "\t";
+      } else if (next === '"' || next === "\\" || (surface === "android" && next === "$")) {
+        raw += next;
+      } else {
+        raw += character + next;
+      }
+      index += 1;
+      continue;
+    }
+    if (character === '"') {
+      return { end: index + 1, value: raw };
+    }
+    raw += character;
+  }
+  return null;
 }
 
 function readAdjacentStringLiterals(
@@ -654,10 +551,6 @@ function decodeLiteral(raw: string, kind: string): string {
   }
 }
 
-function normalizeSource(source: string): string {
-  return source;
-}
-
 function identifierBefore(source: string, offset: number): string | null {
   let cursor = offset - 1;
   while (cursor >= 0 && source.charCodeAt(cursor) <= 32) {
@@ -737,7 +630,7 @@ function addCandidate(
   kind: string,
   line: number,
 ) {
-  const normalized = normalizeSource(decodeLiteral(source, kind));
+  const normalized = decodeLiteral(source, kind);
   if (normalized.length > 500 || !normalized.trim() || !/\p{L}/u.test(normalized)) {
     return;
   }
@@ -1192,23 +1085,22 @@ function nativeEntryIdentity(entry: Pick<NativeI18nEntry, "source" | "surface">)
 }
 
 export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEntry[] {
-  const sitesByIdentity = new Map<string, Map<string, Candidate>>();
-  const entryByIdentity = new Map<string, Pick<NativeI18nEntry, "source" | "surface">>();
+  const entriesByIdentity = new Map<
+    string,
+    { source: string; surface: NativeI18nSurface; sites: Map<string, Candidate> }
+  >();
   for (const candidate of entries) {
     const identity = nativeEntryIdentity(candidate);
-    entryByIdentity.set(identity, { source: candidate.source, surface: candidate.surface });
-    const sites = sitesByIdentity.get(identity) ?? new Map<string, Candidate>();
-    sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
-    sitesByIdentity.set(identity, sites);
+    let entry = entriesByIdentity.get(identity);
+    if (!entry) {
+      entry = { source: candidate.source, surface: candidate.surface, sites: new Map() };
+      entriesByIdentity.set(identity, entry);
+    }
+    entry.sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
   }
-  return [...entryByIdentity]
+  return [...entriesByIdentity]
     .map(([identity, entry]) => {
-      const sites = [
-        ...expectDefined(
-          sitesByIdentity.get(identity),
-          `native i18n sites for ${identity}`,
-        ).values(),
-      ].toSorted(
+      const sites = [...entry.sites.values()].toSorted(
         (left, right) =>
           compareCodePoints(left.path, right.path) || compareCodePoints(left.kind, right.kind),
       );
@@ -1228,27 +1120,15 @@ export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEn
     );
 }
 
-async function readNativeI18nInventory(): Promise<{
-  raw: string;
-}> {
-  let raw: string;
+async function readNativeI18nInventory(): Promise<string> {
   try {
-    raw = await readFile(OUTPUT_PATH, "utf8");
+    return await readFile(OUTPUT_PATH, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { raw: "" };
+      return "";
     }
     throw error;
   }
-
-  const parsed: unknown = JSON.parse(raw);
-  if (!isRecord(parsed)) {
-    throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
-  }
-  if ((parsed.version !== 1 && parsed.version !== 2) || !Array.isArray(parsed.entries)) {
-    throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
-  }
-  return { raw };
 }
 
 export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
@@ -1262,7 +1142,12 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
     })),
   );
   const sources = await pMap(
-    filesByRoot.flatMap(({ files, surface }) => files.map((filePath) => ({ filePath, surface }))),
+    [
+      ...filesByRoot.flatMap(({ files, surface }) =>
+        files.map((filePath) => ({ filePath, surface })),
+      ),
+      { filePath: path.join(ROOT, TOOL_DISPLAY_SOURCE), surface: "android" as const },
+    ],
     async ({ filePath, surface }) => ({
       repoPath: path.relative(ROOT, filePath).split(path.sep).join("/"),
       source: await readFile(filePath, "utf8"),
@@ -1307,24 +1192,17 @@ export function collectNativeI18nEntriesFromSources(
     }
   }
   const entries = sources.flatMap(({ repoPath, source, surface }) =>
-    extractNativeI18nCandidates(surface, repoPath, source, uiCallNames[surface]),
+    repoPath === TOOL_DISPLAY_SOURCE
+      ? [...collectToolDisplaySources(JSON.parse(source))].map((text) => ({
+          source: text,
+          surface,
+          path: repoPath,
+          kind: "tool-display",
+          line: 1,
+        }))
+      : extractNativeI18nCandidates(surface, repoPath, source, uiCallNames[surface]),
   );
   return assignNativeI18nIds(entries);
-}
-
-export function serializeNativeI18nInventory(entries: readonly NativeI18nEntry[]): string {
-  return [
-    "{",
-    '  "version": 2,',
-    '  "entries": [',
-    ...entries.map(
-      ({ id, source, surface, sites }, index) =>
-        `    ${JSON.stringify({ id, source, surface, sites })}${index === entries.length - 1 ? "" : ","}`,
-    ),
-    "  ]",
-    "}",
-    "",
-  ].join("\n");
 }
 
 async function syncNativeI18n(options: {
@@ -1333,10 +1211,9 @@ async function syncNativeI18n(options: {
   reportObsolete?: (message: string) => void;
   write: boolean;
 }): Promise<NativeI18nEntry[]> {
-  const currentInventory = await readNativeI18nInventory();
+  const current = await readNativeI18nInventory();
   const entries = await collectNativeI18nEntries();
   const expected = serializeNativeI18nInventory(entries);
-  const current = currentInventory.raw;
   if (options.checkInventory && current !== expected) {
     throw new Error(
       "native app i18n inventory drift detected. Run `pnpm native:i18n:baseline` and commit apps/.i18n/native-source.json.",
@@ -1359,42 +1236,42 @@ async function syncNativeI18n(options: {
     await mkdir(path.dirname(OUTPUT_PATH), { recursive: true });
     await writeFile(OUTPUT_PATH, expected, "utf8");
   }
-  const count = JSON.parse(expected).entries.length as number;
-  process.stdout.write(`native-app-i18n: entries=${count} changed=${current !== expected}\n`);
+  process.stdout.write(
+    `native-app-i18n: entries=${entries.length} changed=${current !== expected}\n`,
+  );
   return entries;
 }
 
-async function loadGlossary(locale: string): Promise<Array<{ source: string; target: string }>> {
+async function loadGlossary(locale: string): Promise<GlossaryEntry[]> {
   try {
     return JSON.parse(
       await readFile(
         path.join(ROOT, "ui", "src", "i18n", ".i18n", `glossary.${locale}.json`),
         "utf8",
       ),
-    ) as Array<{ source: string; target: string }>;
+    ) as GlossaryEntry[];
   } catch {
     return [];
   }
 }
 
-function glossaryHash(glossary: readonly { source: string; target: string }[]): string {
+function glossaryHash(glossary: readonly GlossaryEntry[]): string {
   return createHash("sha256").update(JSON.stringify(glossary)).digest("hex");
 }
 
 function adjacentDuplicateWords(value: string, locale: string): string[] {
   const words = [...value.matchAll(/[\p{L}\p{M}\p{N}]+/gu)].map((match) => match[0]);
   const duplicates = new Set<string>();
-  for (let index = 1; index < words.length; index += 1) {
+  let previous: string | undefined;
+  for (const word of words) {
     if (
-      expectDefined(words[index - 1], `native i18n word before index ${index}`)
-        .normalize("NFKC")
-        .toLocaleLowerCase(locale) ===
-      expectDefined(words[index], `native i18n word at index ${index}`)
-        .normalize("NFKC")
-        .toLocaleLowerCase(locale)
+      previous !== undefined &&
+      previous.normalize("NFKC").toLocaleLowerCase(locale) ===
+        word.normalize("NFKC").toLocaleLowerCase(locale)
     ) {
-      duplicates.add(expectDefined(words[index], `duplicate native i18n word at index ${index}`));
+      duplicates.add(word);
     }
+    previous = word;
   }
   return [...duplicates].toSorted(compareCodePoints);
 }
@@ -1478,20 +1355,15 @@ export function validateNativeLocaleArtifact(
   locale: string,
   inventory: readonly NativeI18nEntry[],
   artifactValue: unknown,
-  glossary: readonly { source: string; target: string }[] = [],
+  glossary: readonly GlossaryEntry[] = [],
   reportObsolete?: (message: string) => void,
 ): NativeI18nQualityFinding[] {
   const errors: string[] = [];
   const obsolete: string[] = [];
-  if (!artifactValue || typeof artifactValue !== "object" || Array.isArray(artifactValue)) {
+  if (!isRecord(artifactValue)) {
     throw new Error(`invalid native locale artifact ${locale}: expected an object`);
   }
-  const artifact = artifactValue as {
-    glossaryHash?: unknown;
-    locale?: unknown;
-    translations?: unknown;
-    version?: unknown;
-  };
+  const artifact = artifactValue;
   if (artifact.version !== 2) {
     errors.push(`version must be 2, got ${JSON.stringify(artifact.version)}`);
   }
@@ -1823,7 +1695,7 @@ async function main() {
       await android.verifyAndroidAppI18n();
       await apple.verifyAppleAppI18n();
     } else {
-      await android.checkAndroidAppI18n({ reportObsolete });
+      await android.checkAndroidAppI18n();
       await apple.checkAppleAppI18n({ reportObsolete });
     }
   }

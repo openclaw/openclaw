@@ -36,6 +36,10 @@ that supervise the Gateway as a child process, see
 
 - WebSocket, text frames, JSON payloads.
 - First frame **must** be a `connect` request.
+- The default budget allows 128 outstanding unauthenticated connections per
+  resolved client IP. Successful authentication or closure releases the slot.
+  See [pre-auth connection limits](/gateway/security/rate-limiting#unauthenticated-websocket-connections)
+  for shared-NAT behavior and the environment override.
 - Pre-connect frames are capped at 64 KiB (`MAX_PREAUTH_PAYLOAD_BYTES`). After
   handshake, follow `hello-ok.policy.maxPayload` and
   `hello-ok.policy.maxBufferedBytes`. With diagnostics enabled, oversized
@@ -55,6 +59,23 @@ Frame shapes:
 - Response: `{type:"res", id, ok, payload|error}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?, recipientProfileId?}`
 
+Live text uses append deltas after an initial recipient snapshot. An outer event
+sequence gap means a client may have lost part of that baseline: retire the
+connection and reconnect before applying more deltas. If the frame revealing the
+gap is a `chat` final, aborted, or error event, deliver its authoritative terminal
+outcome and supplied complete snapshot before gap callbacks retire the connection.
+This lets completed runs settle even when there will be no more live text to replay.
+Renew session subscriptions
+after reconnect; the Gateway sends a complete snapshot with the next text frame
+for each observed run. Run-local payload sequences can skip numbers because text
+is paced and coalesced; they are not the outer connection sequence.
+
+Clients that share one connection among several views must keep reconstruction
+with their local stream owner. A new local listener may join after the wire
+snapshot was delivered to another view. Seed it from that owner's current state,
+or deliver reconstructed local snapshots, and clear that state when its connection
+or run retires. Durable history alone is not an ordered live-text baseline.
+
 After authentication, a client may include a W3C `traceparent` string on each
 request frame. The Gateway continues a valid value as a child trace context for
 that request. Missing or syntactically malformed values within the
@@ -66,9 +87,37 @@ the WebSocket itself as one trace.
 
 Response errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
 Authenticated operator requests share a bounded queue for starting RPC handlers.
+Ordinary requests have both aggregate and per-connection waiting limits, so
+concurrent Control UI setup can queue without giving one connection the entire
+request allowance. The aggregate serialized-byte bound still applies.
+Small `sessions.messages.subscribe` requests without approval replay and
+`sessions.messages.unsubscribe` requests have separate bounded waiting capacity,
+including a per-connection limit. All requests share the same yielding budget.
+Roster subscriptions, catalog reads, and message subscriptions with approval
+replay share four preparation slots. A slot remains occupied until its request
+settles, and each start yields to ready socket I/O. A request waiting for a
+preparation slot stays in the bounded queue while eligible requests start:
+`chat.history` and `sessions.list` reads can pass waiting preparations, as can
+ordinary requests on other connections. Other starts preserve FIFO order within
+each connection, including subscriptions and their later unsubscribe requests.
+WebSocket handshakes bypass the request queue, so reconnecting tabs cannot start
+an unbounded replay wave ahead of other clients' handshakes.
 When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
-before the method runs; retry within the request's budget. Started requests
-complete concurrently, so responses can arrive out of order.
+before the method runs; retry within the request's budget. Starts still waiting
+after 30 seconds also return retryable `UNAVAILABLE`, with
+`details.reason: "request-start-timeout"`. The deadline runs when the event loop
+can next make progress; it does not interrupt an already-started handler.
+Gateway RPC queue-wait diagnostics include the entire wait, including preparation
+capacity and timed-out starts. Started requests complete concurrently, so
+responses can arrive out of order.
+
+During cooperative suspension, identity reads (`agent.identity.get`) wait in the
+shared browser/CLI client for `gateway.suspension` with phase `accepting`. A
+retryable `UNAVAILABLE` with `details.reason: "gateway-suspending"` also parks the
+read, using `retryAfterMs` (60 seconds) as a fallback if the resume event is missed.
+The original request deadline and cancellation still apply. Disconnects settle
+pending reads normally and use the existing reconnect backoff. Writes are neither
+parked nor replayed by this identity-read policy.
 
 Ordinary UI/SDK requests may outlive a socket disconnect, but cannot start a
 handler in a retiring Gateway instance. Shutdown fences new request entry and

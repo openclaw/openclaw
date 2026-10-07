@@ -1,5 +1,4 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Discord plugin module implements agent components.handlers behavior.
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
   resolveDiscordComponentEntryWithPersistence,
@@ -64,12 +63,11 @@ async function handleDiscordComponentEvent(params: {
     componentLabel: params.componentLabel,
     unauthorizedReply,
     allowedUsers: entry.allowedUsers,
-    defer: false,
   });
   if (!authorized) {
     return;
   }
-  const { ctx, interactionCtx, channelCtx, guildInfo, commandAuthorized, replyOpts } = authorized;
+  const { ctx, interactionCtx, channelCtx, guildInfo, commandAuthorized } = authorized;
 
   const consumed = await resolveDiscordComponentEntryWithPersistence({
     id: parsed.componentId,
@@ -135,7 +133,6 @@ async function handleDiscordComponentEvent(params: {
 
   await ackComponentInteraction({
     interaction: params.interaction,
-    replyOpts,
     label: params.label,
   });
 
@@ -203,7 +200,6 @@ async function handleDiscordModalTrigger(params: {
     componentLabel: "form",
     unauthorizedReply,
     allowedUsers: entry.allowedUsers,
-    defer: false,
   });
   if (!authorized) {
     return;

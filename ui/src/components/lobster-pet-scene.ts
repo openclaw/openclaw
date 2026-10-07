@@ -121,7 +121,7 @@ export class LobsterComposerGeometry implements ReactiveController {
   private resize: ResizeObserver | null = null;
   private mutation: MutationObserver | null = null;
   private active = false;
-  private queued = false;
+  private frame: number | null = null;
   private observed: Element[] = [];
 
   constructor(
@@ -187,7 +187,8 @@ export class LobsterComposerGeometry implements ReactiveController {
   hostConnected() {
     this.active = true;
     if (typeof ResizeObserver !== "undefined") {
-      this.resize = new ResizeObserver(this.scheduleMeasure);
+      // ResizeObserver runs after layout; keep collision lanes current for this paint.
+      this.resize = new ResizeObserver(() => this.measure());
     } else {
       window.addEventListener("resize", this.scheduleMeasure);
     }
@@ -215,6 +216,10 @@ export class LobsterComposerGeometry implements ReactiveController {
 
   hostDisconnected() {
     this.active = false;
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
     this.resize?.disconnect();
     this.resize = null;
     this.mutation?.disconnect();
@@ -224,19 +229,22 @@ export class LobsterComposerGeometry implements ReactiveController {
   }
 
   readonly scheduleMeasure = () => {
-    if (!this.active || this.queued) {
+    if (!this.active || this.frame !== null) {
       return;
     }
-    this.queued = true;
-    queueMicrotask(() => {
-      this.queued = false;
-      if (this.active && this.host.isConnected) {
-        this.measure();
-      }
-    });
+    // Menu insertion schedules more custom-element updates. A microtask read
+    // flushes their unfinished styles, then the same rows need layout again.
+    this.frame = requestAnimationFrame(() => this.measure());
   };
 
   private measure() {
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
+    if (!this.active || !this.host.isConnected) {
+      return;
+    }
     const composer = this.host.parentElement;
     if (!composer?.matches(".agent-chat__input")) {
       return;

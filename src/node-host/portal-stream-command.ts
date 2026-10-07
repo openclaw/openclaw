@@ -6,11 +6,7 @@ import { runNodeStreamTransport } from "./node-stream-transport.js";
 const REQUEST_MAX_BYTES = 16 * 1024;
 const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
 
-function parseNodeWorkerPortalStreamInput(raw?: string | null): {
-  ticket: string;
-  attachPath: string;
-  port: number;
-} {
+function parseNodeWorkerPortalStreamInput(raw?: string | null) {
   if (!raw || Buffer.byteLength(raw, "utf8") > REQUEST_MAX_BYTES) {
     throw new Error("INVALID_REQUEST: invalid node worker portal stream request");
   }

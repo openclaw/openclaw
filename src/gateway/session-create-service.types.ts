@@ -20,6 +20,7 @@ import type {
   UserModelAccountSelection,
 } from "./model-account-authority.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+import type { SessionCreatePhase } from "./session-create-diagnostics.js";
 
 type TrustedCatalogSessionTarget = {
   model: string;
@@ -93,6 +94,7 @@ export type CreateGatewaySessionResult =
   | Extract<GatewaySessionCommitResult, { ok: false }>;
 
 export type CreateGatewaySessionParams = {
+  onPhase?: (phase: SessionCreatePhase) => void;
   cfg: OpenClawConfig;
   operatorAuthority?: Promise<
     | {
@@ -121,6 +123,8 @@ export type CreateGatewaySessionParams = {
   pendingWorktree?: InternalSessionEntry["pendingWorktree"];
   incognito?: boolean;
   visibility?: SessionVisibility;
+  /** Trusted creation default; existing keyed sessions retain their current visibility. */
+  defaultVisibility?: SessionVisibility;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;
@@ -188,14 +192,19 @@ export type CreateGatewaySessionParams = {
   /** Trusted in-process creation provenance; never populated from public Gateway params. */
   creation?: {
     via: SessionCreatedVia;
+    surface?: SessionEntry["createdSurface"];
     actor?: SessionCreatedActor;
     /** Host-verified human requester for matching spawn-owner inheritance. */
     requesterProfileId?: string;
+    /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
+    requesterSenderIsOwner?: boolean;
     sandbox?: "required";
     skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     /** Trusted config-resolved spawn model provenance for the `model` field. */
     spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;
   };
+  /** Creation-only publication, committed with the exact new row before its initial turn. */
+  childSessionPublication?: import("../channels/message-access/child-session-publication.js").ChildSessionPublication;
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */

@@ -72,7 +72,7 @@ function profileSource(profile: ProviderProfile): string | undefined {
   }
 }
 
-function apiKeySource(card: ModelProviderCard): string | undefined {
+export function apiKeySource(card: ModelProviderCard): string | undefined {
   if (card.apiKey?.source === "config") {
     return t("modelProviders.credentials.configKey");
   }
@@ -145,45 +145,23 @@ function profileStatus(profile: ProviderProfile, providerAuthRejected: boolean) 
   }
 }
 
-function profilesForProvider(card: ModelProviderCard, provider: string): ProviderProfile[] {
-  return card.profiles.filter(
-    (profile) => (card.profileProviderIds[profile.profileId] ?? card.id) === provider,
-  );
-}
-
-function logoutProviderForProfile(card: ModelProviderCard, profileId: string): string | undefined {
-  return card.logoutTargets.find((target) => target.profileIds.includes(profileId))?.provider;
-}
-
-function completeOrder(profiles: readonly ProviderProfile[], order: readonly string[]): string[] {
-  const members = new Set(profiles.map((profile) => profile.profileId));
-  return [
-    ...order.filter((profileId) => members.delete(profileId)),
-    ...profiles.flatMap((profile) =>
-      members.delete(profile.profileId) ? [profile.profileId] : [],
-    ),
-  ];
-}
-
-function hasExactProfileOrder(profiles: readonly ProviderProfile[], order: readonly string[]) {
-  if (profiles.length !== order.length) {
-    return false;
-  }
-  const remaining = new Set(profiles.map((profile) => profile.profileId));
-  return (
-    remaining.size === profiles.length && order.every((profileId) => remaining.delete(profileId))
-  );
-}
-
 function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>) {
   const providers = new Set(
     card.profiles.map((profile) => card.profileProviderIds[profile.profileId] ?? card.id),
   );
   return [...providers].map((provider) => {
-    const profiles = profilesForProvider(card, provider);
+    const profiles = card.profiles.filter(
+      (profile) => (card.profileProviderIds[profile.profileId] ?? card.id) === provider,
+    );
     const order = drafts[provider] ?? card.profileOrders[provider] ?? [];
+    const remaining = new Map(profiles.map((profile) => [profile.profileId, profile]));
+    const ordered = order.flatMap((profileId) => {
+      const profile = remaining.get(profileId);
+      remaining.delete(profileId);
+      return profile ? [profile] : [];
+    });
+    const complete = order.length === profiles.length && ordered.length === profiles.length;
     const lock = card.profileOrderLocks[provider];
-    const complete = hasExactProfileOrder(profiles, order);
     const stored = card.profileOrderStoredProviders.includes(provider);
     const explicit =
       drafts[provider] !== undefined || card.profileOrderExplicitProviders.includes(provider);
@@ -196,7 +174,6 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
               : "modelProviders.profiles.partialOrder",
           )
         : undefined;
-    const profileById = new Map(profiles.map((profile) => [profile.profileId, profile]));
     return {
       provider,
       order,
@@ -205,21 +182,14 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
       stored,
       explicit,
       explanation,
-      profiles: completeOrder(profiles, order).flatMap((profileId) => {
-        const profile = profileById.get(profileId);
-        return profile ? [profile] : [];
-      }),
+      profiles: [...ordered, ...remaining.values()],
     };
   });
 }
 
-function rowsIn(section: HTMLElement, selector: string): HTMLElement[] {
-  return [...section.querySelectorAll<HTMLElement>(selector)];
-}
-
 function clearDragState(section: HTMLElement): void {
   section.classList.remove(SORTING_CLASS);
-  for (const row of rowsIn(section, ".model-providers__profile")) {
+  for (const row of section.querySelectorAll<HTMLElement>(".model-providers__profile")) {
     row.classList.remove(DRAGGING_CLASS);
     row.style.removeProperty("translate");
   }
@@ -246,7 +216,7 @@ function startPointerDrag(params: {
   const sectionTop = section.getBoundingClientRect().top;
   // Use the original slots for hit testing. Measuring animated neighbors would
   // make the insertion point oscillate as they move out from under the pointer.
-  const slots = rowsIn(section, ".model-providers__profile")
+  const slots = [...section.querySelectorAll<HTMLElement>(".model-providers__profile")]
     .filter((candidate) => candidate.dataset.profileProvider === params.provider)
     .map((element) => ({ element, bounds: element.getBoundingClientRect() }));
   const source = slots.find((slot) => slot.element === row);
@@ -315,7 +285,7 @@ function startPointerDrag(params: {
     update(event);
     const targetId = target?.element.dataset.profileId;
     clearDragState(section);
-    grip.removeEventListener("pointermove", handleMove);
+    grip.removeEventListener("pointermove", update);
     grip.removeEventListener("pointerup", handleUp);
     grip.removeEventListener("pointercancel", handleCancel);
     grip.removeEventListener("lostpointercapture", handleCancel);
@@ -329,7 +299,6 @@ function startPointerDrag(params: {
       params.move(targetId, position);
     }
   };
-  const handleMove = (event: PointerEvent) => update(event);
   const handleUp = (event: PointerEvent) => finish(event, true);
   const handleCancel = (event: PointerEvent) => finish(event, false);
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -339,7 +308,7 @@ function startPointerDrag(params: {
       finish(params.event, false);
     }
   };
-  grip.addEventListener("pointermove", handleMove);
+  grip.addEventListener("pointermove", update);
   grip.addEventListener("pointerup", handleUp);
   grip.addEventListener("pointercancel", handleCancel);
   grip.addEventListener("lostpointercapture", handleCancel);
@@ -516,7 +485,9 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
             const canMove = props.canMutate && !lock && complete && order.length > 1 && index >= 0;
             const showMoves = !lock && (complete || stored) && order.length > 1;
             const identity = identities.get(profile.profileId)!;
-            const logoutProvider = logoutProviderForProfile(card, profile.profileId);
+            const logoutProvider = card.logoutTargets.find((target) =>
+              target.profileIds.includes(profile.profileId),
+            )?.provider;
             const logoutLabel = t("modelProviders.logout.actionFor", { account: identity });
             const logoutBlocked = !props.canMutate
               ? (props.mutationBlockedReason ?? "")

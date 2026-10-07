@@ -175,13 +175,7 @@ public final class OpenClawChatSpeechController: ChatMediaPlaybackOwner {
     }
 
     private func run(messageID: UUID, text: String, generation: UInt64) async {
-        let clip: OpenClawChatSpeechClip? = await {
-            do {
-                return try await self.synthesize(text)
-            } catch {
-                return nil
-            }
-        }()
+        let clip = try? await self.synthesize(text)
         guard self.generation == generation, !Task.isCancelled else { return }
 
         self.activateAudioSession()

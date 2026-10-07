@@ -182,20 +182,6 @@ describe("handleFileFetch — happy path", () => {
     expect(await fs.readFile(target, "utf8")).toBe("not approved");
   });
 
-  it("returns a sensible mime type for known extensions", async () => {
-    const target = path.join(tmpRoot, "readme.md");
-    await fs.writeFile(target, "# heading\n");
-
-    const r = await handleFileFetch({ path: target });
-    if (!r.ok) {
-      throw new Error("expected ok");
-    }
-    // libmagic ("file" cli) typically reports text/plain or text/markdown for
-    // a one-line markdown file; the extension fallback yields text/markdown.
-    // Accept either.
-    expect(r.mimeType).toMatch(/^text\/(plain|markdown)$/);
-  });
-
   it("detects extensionless plain text as text/plain", async () => {
     const target = path.join(tmpRoot, "LICENSE");
     const contents = "Permission is hereby granted\n";

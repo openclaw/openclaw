@@ -1,6 +1,9 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionWorkStartInvalidatedError } from "../config/sessions/lifecycle.js";
 import {
   deleteSessionEntryLifecycle,
@@ -8,33 +11,28 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
+import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 
 type CaptureSessionDiffBaseline =
   (typeof import("./session-diff.js"))["captureSessionDiffBaseline"];
 type PatchSessionEntryCore =
   (typeof import("../config/sessions/session-accessor.js"))["patchSessionEntryCore"];
-type LoadSessionEntryReadOnly =
-  (typeof import("../config/sessions/session-accessor.js"))["loadSessionEntryReadOnly"];
-
 const captureMocks = vi.hoisted(() => ({
   capture: vi.fn<CaptureSessionDiffBaseline>(),
 }));
 const persistenceMocks = vi.hoisted(() => ({
-  actualRead: undefined as LoadSessionEntryReadOnly | undefined,
   actualPatch: undefined as PatchSessionEntryCore | undefined,
-  read: vi.fn<LoadSessionEntryReadOnly>(),
   patch: vi.fn<PatchSessionEntryCore>(),
 }));
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
-  persistenceMocks.actualRead = actual.loadSessionEntryReadOnly;
   persistenceMocks.actualPatch = actual.patchSessionEntryCore;
   return {
     ...actual,
-    loadSessionEntryReadOnly: persistenceMocks.read,
     patchSessionEntryCore: persistenceMocks.patch,
   };
 });
@@ -46,7 +44,7 @@ vi.mock("./session-diff.js", async (importOriginal) => ({
 
 import { ensureSessionDiffBaseline } from "./session-diff-baseline.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-diff-owner-");
 
 function baseline(sessionId: string): SessionDiffBaseline {
   return {
@@ -55,6 +53,13 @@ function baseline(sessionId: string): SessionDiffBaseline {
     root: "/workspace",
     files: [],
   };
+}
+
+function makeEntry(
+  sessionId: string,
+  fields: Partial<InternalSessionEntry> = {},
+): InternalSessionEntry {
+  return { createdVia: "operator", sessionId, updatedAt: Date.now(), ...fields };
 }
 
 async function seedEntry(params: {
@@ -67,12 +72,16 @@ async function seedEntry(params: {
   sessionKey: string;
   storePath: string;
 }> {
-  const dir = tempDirs.make("openclaw-session-diff-owner-");
+  const dir = sessionDirs.make();
   const storePath = path.join(dir, "sessions.json");
   const agentId = params.agentId ?? "main";
   const sessionKey = params.sessionKey ?? "agent:main:diff-owner";
   await replaceSessionEntry({ agentId, sessionKey, storePath }, params.entry);
   return { agentId, entry: params.entry, sessionKey, storePath };
+}
+
+function ensure(target: Awaited<ReturnType<typeof seedEntry>>, isNewSession = false) {
+  return ensureSessionDiffBaseline({ ...target, cwd: "/workspace", isNewSession });
 }
 
 function loadInternal(sessionKey: string, storePath: string): InternalSessionEntry | undefined {
@@ -91,46 +100,25 @@ function expectWorkStartError(
   }
 }
 
+function deferCapture() {
+  const started = createDeferredCore();
+  const capture = createDeferredCore<SessionDiffBaseline>();
+  captureMocks.capture.mockImplementation(() => {
+    started.resolve();
+    return capture.promise;
+  });
+  return { started: started.promise, resolve: capture.resolve };
+}
+
 describe("ensureSessionDiffBaseline", () => {
   beforeEach(() => {
     captureMocks.capture.mockReset();
-    persistenceMocks.read.mockReset();
     persistenceMocks.patch.mockReset();
-    persistenceMocks.read.mockImplementation((...args) => {
-      if (!persistenceMocks.actualRead) {
-        throw new Error("missing actual session entry loader");
-      }
-      return persistenceMocks.actualRead(...args);
-    });
     persistenceMocks.patch.mockImplementation((...args) => {
       if (!persistenceMocks.actualPatch) {
         throw new Error("missing actual session entry patcher");
       }
       return persistenceMocks.actualPatch(...args);
-    });
-  });
-
-  it("settles a Gateway-precreated pending claim for an existing session", async () => {
-    const sessionId = "precreated-session";
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
-      sessionId,
-      sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
-      updatedAt: Date.now(),
-    };
-    const target = await seedEntry({ entry });
-    captureMocks.capture.mockResolvedValue(baseline(sessionId));
-
-    const settled = await ensureSessionDiffBaseline({
-      ...target,
-      cwd: "/workspace",
-      isNewSession: false,
-    });
-
-    expect(settled.sessionDiffBaseline).toEqual(baseline(sessionId));
-    expect(settled.sessionDiffBaselineCapture).toBeUndefined();
-    expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
-      sessionDiffBaseline: baseline(sessionId),
     });
   });
 
@@ -151,12 +139,14 @@ describe("ensureSessionDiffBaseline", () => {
       const mainBefore = loadSessionEntry(mainScope);
       captureMocks.capture.mockResolvedValue(baseline(entry.sessionId));
 
+      const sql = observeHostDataSql();
       const settled = await ensureSessionDiffBaseline({
         ...target,
         cwd: "/workspace",
         isNewSession,
-      });
+      }).finally(sql.restore);
 
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
       expect(settled.sessionDiffBaseline).toEqual(baseline(entry.sessionId));
       const persisted = loadSessionEntry(target);
       expect(persisted).toMatchObject({
@@ -170,84 +160,59 @@ describe("ensureSessionDiffBaseline", () => {
 
   it("shares one capture across concurrent first-turn ensures", async () => {
     const sessionId = "concurrent-session";
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
-      sessionId,
-      updatedAt: Date.now(),
-    };
+    const entry = makeEntry(sessionId);
     const target = await seedEntry({ entry });
-    const capture = createDeferredCore<SessionDiffBaseline>();
-    captureMocks.capture.mockReturnValue(capture.promise);
+    const capture = deferCapture();
 
-    const first = ensureSessionDiffBaseline({
-      ...target,
-      cwd: "/workspace",
-      isNewSession: true,
-    });
-    const second = ensureSessionDiffBaseline({
-      ...target,
-      cwd: "/workspace",
-      isNewSession: true,
-    });
-    await vi.waitFor(() => expect(captureMocks.capture).toHaveBeenCalledTimes(1));
-    capture.resolve(baseline(sessionId));
+    const first = ensure(target, true);
+    const second = ensure(target, true);
+    try {
+      await capture.started;
+      expect(captureMocks.capture).toHaveBeenCalledTimes(1);
+      capture.resolve(baseline(sessionId));
 
-    const [firstResult, secondResult] = await Promise.all([first, second]);
-    expect(firstResult.sessionDiffBaseline).toEqual(baseline(sessionId));
-    expect(secondResult.sessionDiffBaseline).toEqual(baseline(sessionId));
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      expect(captureMocks.capture).toHaveBeenCalledTimes(1);
+      expect(firstResult.sessionDiffBaseline).toEqual(baseline(sessionId));
+      expect(secondResult.sessionDiffBaseline).toEqual(baseline(sessionId));
+    } finally {
+      capture.resolve(baseline(sessionId));
+      await Promise.allSettled([first, second]);
+    }
   });
 
-  it.each([
-    ["settled baseline", true],
-    ["legacy no-baseline state", false],
-  ] as const)(
-    "rejects stale cached %s after the authoritative generation rotates",
-    async (_label, withCachedBaseline) => {
-      const sessionId = `stale-cached-${withCachedBaseline ? "settled" : "legacy"}`;
-      const cachedEntry: InternalSessionEntry = {
-        createdVia: "operator",
-        lifecycleRevision: "cached-generation",
-        sessionId,
-        ...(withCachedBaseline ? { sessionDiffBaseline: baseline(sessionId) } : {}),
-        updatedAt: Date.now(),
-      };
-      const target = await seedEntry({ entry: cachedEntry });
-      const freshClaim = createSessionDiffBaselineCaptureClaim();
-      await replaceSessionEntry(
-        { sessionKey: target.sessionKey, storePath: target.storePath },
-        {
-          ...cachedEntry,
-          lifecycleRevision: "fresh-generation",
-          sessionDiffBaseline: undefined,
-          sessionDiffBaselineCapture: freshClaim,
-        },
-      );
-
-      await expect(
-        ensureSessionDiffBaseline({
-          ...target,
-          cwd: "/workspace",
-          entry: cachedEntry,
-          isNewSession: false,
-        }),
-      ).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-      expect(captureMocks.capture).not.toHaveBeenCalled();
-      expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
+  it("rejects a stale cached baseline after the authoritative generation rotates", async () => {
+    const sessionId = "stale-cached-settled";
+    const cachedEntry = makeEntry(sessionId, {
+      lifecycleRevision: "cached-generation",
+      sessionDiffBaseline: baseline(sessionId),
+    });
+    const target = await seedEntry({ entry: cachedEntry });
+    const freshClaim = createSessionDiffBaselineCaptureClaim();
+    await replaceSessionEntry(
+      { sessionKey: target.sessionKey, storePath: target.storePath },
+      {
+        ...cachedEntry,
         lifecycleRevision: "fresh-generation",
+        sessionDiffBaseline: undefined,
         sessionDiffBaselineCapture: freshClaim,
-      });
-    },
-  );
+      },
+    );
+
+    await expect(ensure(target)).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+    expect(captureMocks.capture).not.toHaveBeenCalled();
+    expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
+      lifecycleRevision: "fresh-generation",
+      sessionDiffBaselineCapture: freshClaim,
+    });
+  });
 
   it("settles an authoritative pending claim instead of returning a stale cached baseline", async () => {
     const sessionId = "same-generation-stale-settled";
-    const cachedEntry: InternalSessionEntry = {
-      createdVia: "operator",
+    const cachedEntry = makeEntry(sessionId, {
       lifecycleRevision: "shared-generation",
-      sessionId,
       sessionDiffBaseline: baseline(sessionId),
-      updatedAt: Date.now(),
-    };
+    });
     const target = await seedEntry({ entry: cachedEntry });
     const pendingClaim = createSessionDiffBaselineCaptureClaim();
     await replaceSessionEntry(
@@ -261,61 +226,46 @@ describe("ensureSessionDiffBaseline", () => {
     const authoritativeBaseline = { ...baseline(sessionId), root: "/authoritative" };
     captureMocks.capture.mockResolvedValue(authoritativeBaseline);
 
-    await expect(
-      ensureSessionDiffBaseline({
-        ...target,
-        cwd: "/workspace",
-        entry: cachedEntry,
-        isNewSession: false,
-      }),
-    ).resolves.toMatchObject({ sessionDiffBaseline: authoritativeBaseline });
+    const settled = await ensure(target);
+    expect(settled.sessionDiffBaseline).toEqual(authoritativeBaseline);
+    expect(settled.sessionDiffBaselineCapture).toBeUndefined();
     expect(captureMocks.capture).toHaveBeenCalledOnce();
     expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
       lifecycleRevision: "shared-generation",
       sessionDiffBaseline: authoritativeBaseline,
     });
+    expect(
+      loadInternal(target.sessionKey, target.storePath)?.sessionDiffBaselineCapture,
+    ).toBeUndefined();
   });
 
   it("fails closed when the authoritative generation read fails", async () => {
     const sessionId = "settled-read-failure";
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
+    const entry = makeEntry(sessionId, {
       lifecycleRevision: "read-failure-generation",
-      sessionId,
       sessionDiffBaseline: baseline(sessionId),
-      updatedAt: Date.now(),
-    };
-    const target = await seedEntry({ entry });
-    persistenceMocks.read.mockImplementationOnce(() => {
-      throw new Error("authoritative read failed");
     });
-
-    await expect(
-      ensureSessionDiffBaseline({
-        ...target,
-        cwd: "/workspace",
-        isNewSession: false,
-      }),
-    ).rejects.toMatchObject({ code: "SESSION_WORK_START_INVALIDATED" });
-    expect(captureMocks.capture).not.toHaveBeenCalled();
+    const target = await seedEntry({ entry });
+    const read = vi
+      .spyOn(historyLane.pool, "run")
+      .mockRejectedValueOnce(new Error("authoritative read failed"));
+    try {
+      await expect(ensure(target)).rejects.toBeInstanceOf(SessionWorkStartInvalidatedError);
+      expect(captureMocks.capture).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("returns a terminal unavailable entry after capture failure and never retries it", async () => {
     const sessionId = "failed-session";
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
-      sessionId,
+    const entry = makeEntry(sessionId, {
       sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
-      updatedAt: Date.now(),
-    };
+    });
     const target = await seedEntry({ entry });
     captureMocks.capture.mockRejectedValue(new Error("capture failed"));
 
-    const settled = await ensureSessionDiffBaseline({
-      ...target,
-      cwd: "/workspace",
-      isNewSession: false,
-    });
+    const settled = await ensure(target);
     expect(settled.sessionDiffBaselineCapture).toMatchObject({ status: "unavailable" });
     const unavailable = loadInternal(target.sessionKey, target.storePath);
     expect(unavailable?.sessionDiffBaselineCapture).toMatchObject({
@@ -325,14 +275,7 @@ describe("ensureSessionDiffBaseline", () => {
       throw new Error("expected unavailable capture marker");
     }
 
-    await expect(
-      ensureSessionDiffBaseline({
-        ...target,
-        entry: unavailable,
-        cwd: "/workspace",
-        isNewSession: false,
-      }),
-    ).resolves.toEqual(unavailable);
+    await expect(ensure({ ...target, entry: unavailable })).resolves.toEqual(unavailable);
     expect(captureMocks.capture).toHaveBeenCalledTimes(1);
   });
 
@@ -342,12 +285,9 @@ describe("ensureSessionDiffBaseline", () => {
   ] as const)("fails closed when persisting %s fails", async (_label, captureFails) => {
     const sessionId = `settlement-failure-${captureFails ? "unavailable" : "baseline"}`;
     const claim = createSessionDiffBaselineCaptureClaim();
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
-      sessionId,
+    const entry = makeEntry(sessionId, {
       sessionDiffBaselineCapture: claim,
-      updatedAt: Date.now(),
-    };
+    });
     const target = await seedEntry({ entry });
     if (captureFails) {
       captureMocks.capture.mockRejectedValueOnce(new Error("capture failed"));
@@ -356,13 +296,7 @@ describe("ensureSessionDiffBaseline", () => {
     }
     persistenceMocks.patch.mockRejectedValueOnce(new Error("settlement write failed"));
 
-    const [settled] = await Promise.allSettled([
-      ensureSessionDiffBaseline({
-        ...target,
-        cwd: "/workspace",
-        isNewSession: false,
-      }),
-    ]);
+    const [settled] = await Promise.allSettled([ensure(target)]);
     if (!settled) {
       throw new Error("expected capture settlement");
     }
@@ -378,12 +312,9 @@ describe("ensureSessionDiffBaseline", () => {
 
   it("preserves an existing work-start invalidation from settlement persistence", async () => {
     const sessionId = "settlement-invalidation";
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
-      sessionId,
+    const entry = makeEntry(sessionId, {
       sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
-      updatedAt: Date.now(),
-    };
+    });
     const target = await seedEntry({ entry });
     const invalidation = new SessionWorkStartInvalidatedError(
       "session reset while persisting baseline",
@@ -391,34 +322,18 @@ describe("ensureSessionDiffBaseline", () => {
     captureMocks.capture.mockResolvedValueOnce(baseline(sessionId));
     persistenceMocks.patch.mockRejectedValueOnce(invalidation);
 
-    await expect(
-      ensureSessionDiffBaseline({
-        ...target,
-        cwd: "/workspace",
-        isNewSession: false,
-      }),
-    ).rejects.toBe(invalidation);
+    await expect(ensure(target)).rejects.toBe(invalidation);
     expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
       sessionDiffBaselineCapture: entry.sessionDiffBaselineCapture,
     });
   });
 
   it("does not retroactively capture a legacy existing session", async () => {
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
-      sessionId: "legacy-session",
-      updatedAt: Date.now(),
-    };
+    const entry = makeEntry("legacy-session");
     const target = await seedEntry({ entry });
 
     const authoritative = loadInternal(target.sessionKey, target.storePath);
-    await expect(
-      ensureSessionDiffBaseline({
-        ...target,
-        cwd: "/workspace",
-        isNewSession: false,
-      }),
-    ).resolves.toEqual(authoritative);
+    await expect(ensure(target)).resolves.toEqual(authoritative);
     expect(captureMocks.capture).not.toHaveBeenCalled();
     expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject(entry);
     expect(loadInternal(target.sessionKey, target.storePath)).not.toHaveProperty(
@@ -426,34 +341,11 @@ describe("ensureSessionDiffBaseline", () => {
     );
   });
 
-  it("arms an ordinary new operator rollover before capture", async () => {
-    const sessionId = "operator-rollover";
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
-      sessionId,
-      updatedAt: Date.now(),
-    };
-    const target = await seedEntry({ entry });
-    captureMocks.capture.mockResolvedValue(baseline(sessionId));
-
-    const settled = await ensureSessionDiffBaseline({
-      ...target,
-      cwd: "/workspace",
-      isNewSession: true,
-    });
-
-    expect(settled.sessionDiffBaseline).toEqual(baseline(sessionId));
-    expect(captureMocks.capture).toHaveBeenCalledTimes(1);
-  });
-
   it("rejects claim arming before mutating a replacement lifecycle generation", async () => {
     const sessionId = "replacement-before-arm";
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
+    const entry = makeEntry(sessionId, {
       lifecycleRevision: "old-generation",
-      sessionId,
-      updatedAt: Date.now(),
-    };
+    });
     const target = await seedEntry({ entry });
     persistenceMocks.patch.mockImplementationOnce(async (...args) => {
       await replaceSessionEntry(
@@ -466,13 +358,9 @@ describe("ensureSessionDiffBaseline", () => {
       return await persistenceMocks.actualPatch(...args);
     });
 
-    await expect(
-      ensureSessionDiffBaseline({
-        ...target,
-        cwd: "/workspace",
-        isNewSession: true,
-      }),
-    ).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+    await expect(ensure(target, true)).rejects.toMatchObject({
+      code: "SESSION_WORK_START_CHANGED",
+    });
     expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
       lifecycleRevision: "replacement-generation",
       sessionId,
@@ -484,22 +372,14 @@ describe("ensureSessionDiffBaseline", () => {
   });
 
   it("invalidates claim arming when the authoritative row is missing", async () => {
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
-      sessionId: "deleted-before-arm",
-      updatedAt: Date.now(),
-    };
-    const storePath = path.join(tempDirs.make("openclaw-session-diff-missing-"), "sessions.json");
+    const entry = makeEntry("deleted-before-arm");
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
 
     const result = await Promise.allSettled([
-      ensureSessionDiffBaseline({
-        agentId: "main",
-        cwd: "/workspace",
-        entry,
-        isNewSession: true,
-        sessionKey: "agent:main:missing-before-arm",
-        storePath,
-      }),
+      ensure(
+        { agentId: "main", entry, sessionKey: "agent:main:missing-before-arm", storePath },
+        true,
+      ),
     ]);
 
     const [settled] = result;
@@ -512,22 +392,15 @@ describe("ensureSessionDiffBaseline", () => {
 
   it("invalidates capture completion after the authoritative row is deleted", async () => {
     const sessionId = "deleted-during-capture";
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
-      sessionId,
+    const entry = makeEntry(sessionId, {
       sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
-      updatedAt: Date.now(),
-    };
-    const target = await seedEntry({ entry });
-    const capture = createDeferredCore<SessionDiffBaseline>();
-    captureMocks.capture.mockReturnValue(capture.promise);
-    const completion = ensureSessionDiffBaseline({
-      ...target,
-      cwd: "/workspace",
-      isNewSession: false,
     });
+    const target = await seedEntry({ entry });
+    const capture = deferCapture();
+    const completion = ensure(target);
     const outcome = Promise.allSettled([completion]);
-    await vi.waitFor(() => expect(captureMocks.capture).toHaveBeenCalledOnce());
+    await capture.started;
+    expect(captureMocks.capture).toHaveBeenCalledOnce();
     await deleteSessionEntryLifecycle({
       archiveTranscript: false,
       storePath: target.storePath,
@@ -546,29 +419,15 @@ describe("ensureSessionDiffBaseline", () => {
   it("rejects an old completion after the same session id receives a fresh claim", async () => {
     const sessionId = "same-session-id";
     const oldClaim = createSessionDiffBaselineCaptureClaim();
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
-      sessionId,
+    const entry = makeEntry(sessionId, {
       sessionDiffBaselineCapture: oldClaim,
-      updatedAt: Date.now(),
-    };
+    });
     const target = await seedEntry({ entry });
-    const capture = createDeferredCore<SessionDiffBaseline>();
-    captureMocks.capture.mockReturnValue(capture.promise);
-    const oldCompletions = [
-      ensureSessionDiffBaseline({
-        ...target,
-        cwd: "/workspace",
-        isNewSession: false,
-      }),
-      ensureSessionDiffBaseline({
-        ...target,
-        cwd: "/workspace",
-        isNewSession: false,
-      }),
-    ];
+    const capture = deferCapture();
+    const oldCompletions = [ensure(target), ensure(target)];
     const outcomes = Promise.allSettled(oldCompletions);
-    await vi.waitFor(() => expect(captureMocks.capture).toHaveBeenCalledTimes(1));
+    await capture.started;
+    expect(captureMocks.capture).toHaveBeenCalledTimes(1);
 
     const freshClaim = createSessionDiffBaselineCaptureClaim();
     await replaceSessionEntry(
@@ -590,23 +449,16 @@ describe("ensureSessionDiffBaseline", () => {
   it("rejects an old completion before mutating a same-claim replacement generation", async () => {
     const sessionId = "same-claim-replacement";
     const claim = createSessionDiffBaselineCaptureClaim();
-    const entry: InternalSessionEntry = {
-      createdVia: "operator",
+    const entry = makeEntry(sessionId, {
       lifecycleRevision: "old-generation",
-      sessionId,
       sessionDiffBaselineCapture: claim,
-      updatedAt: Date.now(),
-    };
-    const target = await seedEntry({ entry });
-    const capture = createDeferredCore<SessionDiffBaseline>();
-    captureMocks.capture.mockReturnValue(capture.promise);
-    const completion = ensureSessionDiffBaseline({
-      ...target,
-      cwd: "/workspace",
-      isNewSession: false,
     });
+    const target = await seedEntry({ entry });
+    const capture = deferCapture();
+    const completion = ensure(target);
     const outcome = Promise.allSettled([completion]);
-    await vi.waitFor(() => expect(captureMocks.capture).toHaveBeenCalledOnce());
+    await capture.started;
+    expect(captureMocks.capture).toHaveBeenCalledOnce();
 
     await replaceSessionEntry(
       { sessionKey: target.sessionKey, storePath: target.storePath },

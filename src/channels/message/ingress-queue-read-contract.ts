@@ -7,29 +7,43 @@ export type ChannelIngressFailedHealth = {
   oldestFailedAt?: number;
 };
 
-type ChannelIngressReadOperations = {
-  "channelIngress.failedHealth": { input: undefined; output: ChannelIngressFailedHealth[] };
+export type ChannelIngressPressureHealth = {
+  channelId: string;
+  accountId: string;
+  laneCount: number;
+  pendingCount: number;
+  claimedCount: number;
+  blockedCount: number;
+  oldestReceivedAt: number;
 };
 
-export type ChannelIngressReadCommand = {
-  [Kind in keyof ChannelIngressReadOperations]: {
-    type: Kind;
-  } & (ChannelIngressReadOperations[Kind]["input"] extends undefined
-    ? { input?: undefined }
-    : { input: ChannelIngressReadOperations[Kind]["input"] });
-}[keyof ChannelIngressReadOperations];
+export type ChannelIngressReadCommand =
+  | { type: "channelIngress.accounts"; input: { channelId: string } }
+  | { type: "channelIngress.failedHealth"; input?: undefined }
+  | { type: "channelIngress.pressureHealth"; input: { now: number } };
 
 export function isChannelIngressReadCommand(value: unknown): value is ChannelIngressReadCommand {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.type === "channelIngress.failedHealth") {
+    return value.input === undefined;
+  }
+  if (value.type === "channelIngress.accounts") {
+    return isRecord(value.input) && typeof value.input.channelId === "string";
+  }
   return (
-    isRecord(value) && value.type === "channelIngress.failedHealth" && value.input === undefined
+    value.type === "channelIngress.pressureHealth" &&
+    isRecord(value.input) &&
+    typeof value.input.now === "number"
   );
 }
 
 export type ChannelIngressReadReply = {
-  [Kind in keyof ChannelIngressReadOperations]: {
-    ok: true;
-    type: Kind;
-    sourceAdmitted: true;
-    result: ChannelIngressReadOperations[Kind]["output"];
-  };
-}[keyof ChannelIngressReadOperations];
+  ok: true;
+  sourceAdmitted: true;
+} & (
+  | { type: "channelIngress.accounts"; result: string[] }
+  | { type: "channelIngress.failedHealth"; result: ChannelIngressFailedHealth[] }
+  | { type: "channelIngress.pressureHealth"; result: ChannelIngressPressureHealth[] }
+);

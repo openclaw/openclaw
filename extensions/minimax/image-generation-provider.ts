@@ -1,4 +1,3 @@
-// Minimax provider module implements model/runtime integration.
 import {
   resolveInlineImageJsonResponseMaxBytes,
   type ImageGenerationProvider,
@@ -52,12 +51,8 @@ function isMinimaxCnHost(value: string | undefined): boolean {
     return false;
   }
   const candidate = /^[a-z][a-z\d+.-]*:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
-  try {
-    const hostname = new URL(candidate).hostname.toLowerCase();
-    return hostname === "minimaxi.com" || hostname.endsWith(".minimaxi.com");
-  } catch {
-    return false;
-  }
+  const hostname = URL.parse(candidate)?.hostname.toLowerCase();
+  return hostname === "minimaxi.com" || (hostname?.endsWith(".minimaxi.com") ?? false);
 }
 
 function resolveMinimaxImageBaseUrl(
@@ -148,7 +143,6 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         body.aspect_ratio = req.aspectRatio.trim();
       }
 
-      // Map input images to subject_reference for image-to-image generation
       const ref = req.inputImages?.at(0);
       if (ref) {
         const mime = ref.mimeType || "image/jpeg";

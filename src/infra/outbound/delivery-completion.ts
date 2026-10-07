@@ -1,5 +1,4 @@
-import type { CommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
-import type { SessionWriterDeliveryAuthority } from "../../auto-reply/reply-payload.js";
+import { getOwedHarnessCompletionTask } from "../../agents/agent-harness-completion-recovery.js";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
   ConversationDeliveryMissingError,
@@ -10,13 +9,11 @@ import {
   markConversationDeliveryUnknown,
   type ConversationDeliveryRecord,
 } from "../../config/sessions/conversation-delivery-store.js";
-import {
-  runConversationDatabaseWrite,
-  type ConversationRegistryScope,
-  type PreparedConversationRegistryScope,
+import type {
+  ConversationRegistryScope,
+  PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { mergeRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
-import type { HarnessCompletionRecovery } from "../../config/sessions/restart-recovery-types.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
@@ -31,13 +28,13 @@ import {
 } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
 import { isGatewayExternallySupervised } from "../gateway-supervision.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
+import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 
 /** In-process locator captured before delivery preparation; never queue payload data. */
 export type ConversationDeliveryTarget = Pick<
@@ -61,30 +58,6 @@ export function captureConversationDeliveryTarget(
     ...(isGatewayExternallySupervised(scope.env) ? { supervisorMode: "external" as const } : {}),
   };
 }
-
-/** Serializable owner callback for a durable queue entry. */
-export type DurableDeliveryCompletion =
-  | {
-      kind: "conversation";
-      agentId: string;
-      operationId: string;
-      storePath?: string;
-      /** Present on Gateway-owned conversation intents created with route authorization. */
-      routeFingerprint?: string;
-    }
-  | {
-      kind: "pending-final";
-      /** Null means an owner was admitted without recoverable authority; fail closed. */
-      commandOwnerReference?: CommandOwnerAssertion["recoveryReference"];
-      /** Older queue records retain the canonical locator's original owner selection. */
-      agentId?: string;
-      deliveryId: string;
-      intentId: string;
-      sessionId: string;
-      sessionKey: string;
-      storePath: string;
-      sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
-    };
 
 type DurableDeliveryCompletionResult = {
   state: "prepared" | "queued" | "delivered" | "suppressed" | "rejected" | "unknown" | "stale";
@@ -119,16 +92,15 @@ export function resolveConversationDeliveryScope(
 
 async function conversationResult(
   completion: Extract<DurableDeliveryCompletion, { kind: "conversation" }>,
-  update: (scope: PreparedConversationRegistryScope) => ConversationDeliveryRecord,
+  update: (scope: ConversationRegistryScope) => Promise<ConversationDeliveryRecord>,
   stateDir?: string,
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
   let record: ConversationDeliveryRecord;
   try {
-    record = await runConversationDatabaseWrite(
+    record = await update(
       resolveConversationDeliveryScope(completion, stateDir, stateContext, target),
-      update,
     );
   } catch (error) {
     // Full session deletion can retire the owner before its shared queue settles.
@@ -168,7 +140,6 @@ export async function settlePendingFinalDelivery(
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
   let wakeRecovery = false;
-  let deliveredHarnessClaim: HarnessCompletionRecovery | undefined;
   await patchSessionEntryCore(
     {
       agentId: completion.agentId,
@@ -251,9 +222,8 @@ export async function settlePendingFinalDelivery(
       const result = options.identifiedResult;
       const platformMessageId = result ? readPlatformMessageId(result) : undefined;
       const context = pending.context;
-      // Persist the receipt in the same transaction as pending-final completion,
-      // before queue acknowledgement. A crash before the separate task-store
-      // commit leaves this exact claim replayable by startup reconciliation.
+      // Commit the receipt with pending-final completion before queue acknowledgement
+      // so recovery can recognize this exact claim without another announcement.
       const terminalEvidence =
         claim &&
         result &&
@@ -282,7 +252,6 @@ export async function settlePendingFinalDelivery(
               ],
             )
           : undefined;
-      deliveredHarnessClaim = terminalEvidence ? claim : undefined;
       const clearsNotice =
         existingNotice?.state !== "acknowledged" &&
         !updatedDeliveries.some((delivery) => delivery.state === "unknown") &&
@@ -294,10 +263,7 @@ export async function settlePendingFinalDelivery(
       if (settled === current && !owedNotice && !clearsNotice && !terminalEvidence) {
         return null;
       }
-      wakeRecovery =
-        settled !== "queued" &&
-        internalEntry.status === "running" &&
-        internalEntry.abortedLastRun === true;
+      wakeRecovery = settled !== "queued" && internalEntry.abortedLastRun === true;
       return {
         ...(internalEntry.mainRestartRecovery
           ? {
@@ -315,20 +281,13 @@ export async function settlePendingFinalDelivery(
         ...(terminalEvidence ? { restartRecoveryTerminalDeliveryEvidence: terminalEvidence } : {}),
       };
     },
-    { skipMaintenance: true, takeCacheOwnership: true, preserveActivity: options.preserveActivity },
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      preserveActivity: options.preserveActivity,
+      workerGuard: {},
+    },
   );
-  if (deliveredHarnessClaim) {
-    const claim = deliveredHarnessClaim;
-    const { reconcileHarnessCompletionDelivery } =
-      await import("../../agents/agent-harness-completion-delivery.js");
-    reconcileHarnessCompletionDelivery({
-      agentId: claim.requesterAgentId,
-      sessionKey: completion.sessionKey,
-      storePath: completion.storePath,
-      sourceRunId: claim.sourceRunId,
-      taskRunId: claim.taskRunId,
-    });
-  }
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
       await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");
@@ -403,27 +362,6 @@ export async function completeDurableDelivery(
       );
 }
 
-/** Finalizes a policy-suppressed send before its durable intent is acknowledged. */
-async function suppressDurableDelivery(
-  completion: DurableDeliveryCompletion,
-  stateDir?: string,
-  stateContext?: DeliveryQueueStateContext,
-  target?: ConversationDeliveryTarget,
-): Promise<DurableDeliveryCompletionResult> {
-  return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, {
-        stateDir,
-        stateContext,
-      })
-    : conversationResult(
-        completion,
-        (scope) => markConversationDeliverySuppressed(scope, completion.operationId),
-        stateDir,
-        stateContext,
-        target,
-      );
-}
-
 /** Finalizes a permanent provider rejection that provably preceded platform I/O. */
 export async function rejectDurableDelivery(
   completion: DurableDeliveryCompletion,
@@ -478,9 +416,23 @@ export async function settleDurableDelivery(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
-  return "result" in evidence
-    ? completeDurableDelivery(completion, evidence.result, stateDir, stateContext, target)
-    : evidence.platformSendStarted
-      ? failDurableDelivery(completion, stateDir, stateContext, target)
-      : suppressDurableDelivery(completion, stateDir, stateContext, target);
+  if ("result" in evidence) {
+    return completeDurableDelivery(completion, evidence.result, stateDir, stateContext, target);
+  }
+  if (evidence.platformSendStarted) {
+    return failDurableDelivery(completion, stateDir, stateContext, target);
+  }
+  // Finalize policy suppression before the durable intent is acknowledged.
+  return completion.kind === "pending-final"
+    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, {
+        stateDir,
+        stateContext,
+      })
+    : conversationResult(
+        completion,
+        (scope) => markConversationDeliverySuppressed(scope, completion.operationId),
+        stateDir,
+        stateContext,
+        target,
+      );
 }

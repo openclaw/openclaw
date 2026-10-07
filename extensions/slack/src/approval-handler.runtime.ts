@@ -63,6 +63,7 @@ type SlackApprovalHandlerContext = {
   app: App;
   config: SlackExecApprovalConfig;
   resolveClient?: (teamId?: string) => WebClient | undefined;
+  workspaceTeamId?: string;
   enterprise?: {
     enterpriseId: string;
   };
@@ -116,17 +117,10 @@ function buildSlackMetadataContextElements(metadata: readonly SlackMetadataItem[
   const lines = buildSlackMetadataLines(metadata);
   const visibleLineCount =
     lines.length > SLACK_CONTEXT_ELEMENTS_MAX ? SLACK_CONTEXT_ELEMENTS_MAX - 1 : lines.length;
-  const elements: Array<{ type: "mrkdwn"; text: string }> = [];
-  for (let index = 0; index < visibleLineCount; index += 1) {
-    const line = lines[index];
-    if (line === undefined) {
-      continue;
-    }
-    elements.push({
-      type: "mrkdwn",
-      text: truncateSlackMrkdwn(line, SLACK_TEXT_OBJECT_MAX),
-    });
-  }
+  const elements = lines.slice(0, visibleLineCount).map((line) => ({
+    type: "mrkdwn" as const,
+    text: truncateSlackMrkdwn(line, SLACK_TEXT_OBJECT_MAX),
+  }));
   if (lines.length > SLACK_CONTEXT_ELEMENTS_MAX) {
     elements.push({
       type: "mrkdwn",
@@ -390,7 +384,16 @@ function resolveApprovalClient(context: SlackApprovalHandlerContext, teamId?: st
   if (!teamId) {
     return context.app.client;
   }
-  if (!context.enterprise || !context.resolveClient) {
+  if (!context.enterprise) {
+    if (
+      !context.workspaceTeamId ||
+      context.workspaceTeamId.toUpperCase() !== teamId.toUpperCase()
+    ) {
+      throw new Error("Slack approval workspace does not match the authenticated installation");
+    }
+    return context.app.client;
+  }
+  if (!context.resolveClient) {
     throw new Error("Slack Enterprise Grid approval client is unavailable");
   }
   const client = context.resolveClient(teamId);
@@ -414,7 +417,7 @@ async function resolveApprovalChannel(client: WebClient, target: string, teamId?
   const opened = await client.conversations.open({ users: parsed.id, return_im: true });
   const channelId = normalizeOptionalString(opened.channel?.id);
   if (!channelId) {
-    throw new Error("Slack Enterprise Grid approval DM did not return a channel id");
+    throw new Error("Slack approval DM did not return a channel id");
   }
   return `channel:${channelId}`;
 }

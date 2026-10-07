@@ -1,5 +1,5 @@
 // Covers bound delivery routing for active bindings, requester matching,
-// ambiguous bindings, and fail-closed fallback reasons.
+// ambiguous bindings, and fail-closed requester matching.
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -8,7 +8,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { createAccountScopedConversationBindingManager } from "./account-scoped-conversation-bindings.js";
-import { createBoundDeliveryRouter } from "./bound-delivery-router.js";
+import { resolveBoundDeliveryDestination } from "./bound-delivery-router.js";
 import {
   testing,
   getSessionBindingService,
@@ -61,7 +61,6 @@ describe("bound delivery router", () => {
     targetSessionKey?: string;
     bindings?: SessionBindingRecord[];
     requesterConversationId?: string;
-    failClosed?: boolean;
   }) => {
     if (params.bindings) {
       registerRuntimeSessionBindings(
@@ -69,8 +68,7 @@ describe("bound delivery router", () => {
         params.bindings,
       );
     }
-    return createBoundDeliveryRouter().resolveDestination({
-      eventKind: "task_completion",
+    return resolveBoundDeliveryDestination({
       targetSessionKey: params.targetSessionKey ?? TARGET_SESSION_KEY,
       ...(params.requesterConversationId !== undefined
         ? {
@@ -81,7 +79,6 @@ describe("bound delivery router", () => {
             },
           }
         : {}),
-      failClosed: params.failClosed ?? false,
     });
   };
 
@@ -90,57 +87,18 @@ describe("bound delivery router", () => {
       name: "resolves to a bound destination when a single active binding exists",
       bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1, "parent-1")],
       requesterConversationId: "parent-1",
-      expected: {
-        mode: "bound",
-      },
       expectedConversationId: "thread-1",
     },
     {
       name: "falls back when no active binding exists",
       targetSessionKey: "agent:main:subagent:missing",
       requesterConversationId: "parent-1",
-      expected: {
-        binding: null,
-        mode: "fallback",
-        reason: "no-active-binding",
-      },
-    },
-    {
-      name: "fails closed when multiple bindings exist without requester signal",
-      bindings: [
-        createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1),
-        createRuntimeBinding(TARGET_SESSION_KEY, "thread-2", 2),
-      ],
-      failClosed: true,
-      expected: {
-        binding: null,
-        mode: "fallback",
-        reason: "missing-requester",
-      },
+      expectedConversationId: undefined,
     },
     {
       name: "fails closed when requester signal is missing even with a single binding",
       bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1)],
-      failClosed: true,
-      expected: {
-        binding: null,
-        mode: "fallback",
-        reason: "missing-requester",
-      },
-    },
-    {
-      name: "selects requester-matching conversation when multiple bindings exist",
-      bindings: [
-        createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1),
-        createRuntimeBinding(TARGET_SESSION_KEY, "thread-2", 2),
-      ],
-      requesterConversationId: "thread-2",
-      failClosed: true,
-      expected: {
-        mode: "bound",
-        reason: "requester-match",
-      },
-      expectedConversationId: "thread-2",
+      expectedConversationId: undefined,
     },
     {
       name: "normalizes adapter binding conversations before requester matching",
@@ -163,46 +121,27 @@ describe("bound delivery router", () => {
         },
       ],
       requesterConversationId: "thread-2",
-      failClosed: true,
-      expected: {
-        mode: "bound",
-        reason: "requester-match",
-      },
       expectedConversationId: " thread-2 ",
     },
     {
       name: "falls back for invalid requester conversation values",
       bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1)],
       requesterConversationId: " ",
-      failClosed: true,
-      expected: {
-        binding: null,
-        mode: "fallback",
-        reason: "invalid-requester",
-      },
+      expectedConversationId: undefined,
     },
   ])(
     "$name",
-    async ({
-      targetSessionKey,
-      bindings,
-      requesterConversationId,
-      failClosed,
-      expected,
-      expectedConversationId,
-    }) => {
+    async ({ targetSessionKey, bindings, requesterConversationId, expectedConversationId }) => {
       const route = await resolveDestination({
         targetSessionKey,
         bindings,
         requesterConversationId,
-        failClosed,
       });
 
-      for (const [key, value] of Object.entries(expected)) {
-        expect((route as Record<string, unknown>)[key]).toEqual(value);
-      }
       if (expectedConversationId !== undefined) {
-        expect(route.binding?.conversation.conversationId).toBe(expectedConversationId);
+        expect(route?.conversation.conversationId).toBe(expectedConversationId);
+      } else {
+        expect(route).toBeNull();
       }
     },
   );
@@ -253,16 +192,12 @@ it("lists account and generic destinations and prunes expiry without host SQL", 
       const genericBefore = row.get(generic.bindingId);
       const hostSql = observeHostDataSql();
       try {
-        const route = await createBoundDeliveryRouter().resolveDestination({
-          eventKind: "task_completion",
+        const route = await resolveBoundDeliveryDestination({
           targetSessionKey: TARGET_SESSION_KEY,
-          failClosed: true,
           requester: { channel: "fixture", accountId: "owner", conversationId: "owned-room" },
         });
         expect(route).toMatchObject({
-          mode: "bound",
-          reason: "requester-match",
-          binding: { bindingId: "owner:owned-room" },
+          bindingId: "owner:owned-room",
         });
         for (const call of hostSql.calls) {
           expect(call).not.toHaveBeenCalled();
@@ -286,12 +221,10 @@ it("creates the binding store on the first destination lookup without host SQL",
     const hostSql = observeHostDataSql();
     try {
       expect(
-        await createBoundDeliveryRouter().resolveDestination({
-          eventKind: "task_completion",
+        await resolveBoundDeliveryDestination({
           targetSessionKey: TARGET_SESSION_KEY,
-          failClosed: true,
         }),
-      ).toEqual({ binding: null, mode: "fallback", reason: "no-active-binding" });
+      ).toBeNull();
       for (const call of hostSql.calls) {
         expect(call).not.toHaveBeenCalled();
       }

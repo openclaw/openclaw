@@ -1,11 +1,13 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import { modelSelectionPoliciesMatch } from "./operator-model-presentation.js";
 import { onOperatorRolePolicyChanged } from "./operator-role-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -27,7 +29,6 @@ export function broadcastChatMetadataChanged(
 
 export async function createGatewayChatMetadataLifecycle(params: {
   getConfig: () => OpenClawConfig;
-  minimalTestGateway: boolean;
   log: GatewayLogger;
 }) {
   let context: GatewayRequestContext | undefined;
@@ -45,20 +46,6 @@ export async function createGatewayChatMetadataLifecycle(params: {
       }
       return context;
     },
-    ...(params.minimalTestGateway
-      ? {
-          beforeRefresh: async () => {
-            const { refreshPreparedModelRuntimeSnapshots } =
-              await import("../agents/prepared-model-runtime.js");
-            await refreshPreparedModelRuntimeSnapshots(params.getConfig(), {
-              gatewayLifecycle: true,
-              catalogMode: "static",
-              allowGatewaySubagentBinding: true,
-            });
-          },
-          refreshOnRead: true,
-        }
-      : {}),
     onChanged: (change) => {
       if (context) {
         broadcastChatMetadataChanged(context, change);
@@ -72,6 +59,9 @@ export async function createGatewayChatMetadataLifecycle(params: {
     });
   };
   const refreshForSubordinateChange = (notifyIfUnchanged = false) => {
+    if (context) {
+      invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
+    }
     // Auth and skill facts are subordinate to the prepared model owner. During replacement the
     // publication event owns the one catch-up refresh after every related fact is committed.
     if (preparedModelRuntimeState === "available") {
@@ -80,10 +70,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
       refreshLogged(notifyIfUnchanged);
     }
   };
-  const registerRefreshListeners = async (): Promise<(() => void) | undefined> => {
-    if (params.minimalTestGateway) {
-      return undefined;
-    }
+  const registerRefreshListeners = async (): Promise<() => void> => {
     const [
       { registerRuntimeAuthProfileStoreMutationListener },
       { registerPreparedModelRuntimePublicationListener },
@@ -95,18 +82,36 @@ export async function createGatewayChatMetadataLifecycle(params: {
     ]);
     const unregisterPreparedModelRuntimePublication =
       registerPreparedModelRuntimePublicationListener((event) => {
-        if (event.phase === "catalog-published" || event.phase === "catalog-failed") {
-          if (
-            event.phase === "catalog-published" &&
-            event.modelFactsChanged === false &&
-            !event.refreshStatusChanged
-          ) {
-            return;
+        if (event.phase === "catalog-observation") {
+          if (context) {
+            invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
+            broadcastChatMetadataChanged(context, {
+              agentId: event.agentId,
+              modelCatalogChanged: true,
+              authChanged: false,
+            });
           }
+          return;
+        }
+        if (
+          event.phase === "catalog-status" ||
+          (event.phase === "catalog-published" &&
+            event.modelFactsChanged === false &&
+            !event.refreshStatusChanged)
+        ) {
+          if (context) {
+            invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
+          }
+          return;
+        }
+        if (event.phase === "catalog-published" || event.phase === "catalog-failed") {
           refreshForSubordinateChange(
             event.phase === "catalog-published" && event.refreshStatusChanged === true,
           );
           return;
+        }
+        if (context) {
+          invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
         }
         preparedModelRuntimeEventVersion += 1;
         if (event.phase === "invalidated") {
@@ -135,7 +140,13 @@ export async function createGatewayChatMetadataLifecycle(params: {
       registerRuntimeAuthProfileStoreMutationListener(() => {
         refreshForSubordinateChange();
       });
+    const unregisterTopology = sessionChanges.subscribe((change) => {
+      if (isSessionStoreTopologyChange(change)) {
+        refreshForSubordinateChange();
+      }
+    });
     return () => {
+      unregisterTopology();
       unregisterRuntimeAuthProfileStoreMutation();
       unregisterPreparedModelRuntimePublication();
       unregisterSkillsChange();
@@ -167,43 +178,40 @@ export async function createGatewayChatMetadataLifecycle(params: {
           }
         }
       });
-      // Minimal Gateways still own read-triggered preparation. Every lifetime
-      // must join it before shutdown retires the config and model owners.
       publishSidecars({
         stop: async () => {
           unregisterUsage();
           unregisterRolePolicy();
-          unregister?.();
+          unregister();
           await runtime.stop();
         },
       });
-      if (unregister) {
-        // Publications that complete before listener registration would otherwise be missed.
-        // During ordinary startup the owner is published after attachment, so an unavailable
-        // snapshot here is expected and the publication listener performs the first refresh.
-        const eventVersion = preparedModelRuntimeEventVersion;
-        await runtime.refresh().then(
-          () => {
-            // A successful catch-up proves availability when publication completed before the
-            // listener was registered. Do not overwrite a newer invalidation or failure event.
+      // Publications that complete before listener registration would otherwise be missed.
+      // During ordinary startup the owner is published after attachment, so an unavailable
+      // snapshot here is expected and the publication listener performs the first refresh.
+      const eventVersion = preparedModelRuntimeEventVersion;
+      await runtime.refresh().then(
+        () => {
+          // A successful catch-up proves availability when publication completed before the
+          // listener was registered. Do not overwrite a newer invalidation or failure event.
+          if (preparedModelRuntimeEventVersion === eventVersion) {
+            preparedModelRuntimeState = "available";
+          }
+        },
+        (error: unknown) => {
+          if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
+            // Capture reached a published owner before this later metadata build failed. Keep
+            // stable auth/skill changes able to retry unless a newer owner event says otherwise.
             if (preparedModelRuntimeEventVersion === eventVersion) {
               preparedModelRuntimeState = "available";
             }
-          },
-          (error: unknown) => {
-            if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
-              // Capture reached a published owner before this later metadata build failed. Keep
-              // stable auth/skill changes able to retry unless a newer owner event says otherwise.
-              if (preparedModelRuntimeEventVersion === eventVersion) {
-                preparedModelRuntimeState = "available";
-              }
-              params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
-            }
-          },
-        );
-      }
+            params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
+          }
+        },
+      );
     },
     read: runtime.read,
+    readModelsList: runtime.readModelsList,
     readStartup: runtime.readStartup,
     refresh: runtime.refresh,
   };

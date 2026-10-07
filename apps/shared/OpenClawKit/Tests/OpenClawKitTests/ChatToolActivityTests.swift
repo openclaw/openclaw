@@ -1,3 +1,4 @@
+import Foundation
 import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
@@ -20,6 +21,26 @@ struct ChatToolActivityTests {
             title: "Read", name: "read", status: "blocked",
             hideFromChannelProgress: nil, suppressChannelProgress: nil)
         #expect(item.displayState == .blocked)
+        #expect(!item.isError)
+        #expect(!item.isPending)
+    }
+
+    @Test func `prepared skipped outcome stays neutral despite raw result error`() throws {
+        let items = ChatToolActivity.items(
+            calls: [self.content(type: "toolCall", id: "call-1", name: "read")],
+            results: [self.content(
+                type: "toolResult",
+                text: "Skipped to process an incoming message.",
+                id: "call-1",
+                name: "read",
+                isError: true)],
+            activity: [OpenClawAgentActivityItem(
+                itemId: "tool:call-1", toolCallId: "call-1", kind: "tool", phase: "end",
+                title: "Read", name: "read", status: "skipped",
+                hideFromChannelProgress: nil, suppressChannelProgress: nil)])
+
+        let item = try #require(items.first)
+        #expect(String(localized: item.displayState.title) == "Skipped")
         #expect(!item.isError)
         #expect(!item.isPending)
     }

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CliBackendToolPermissionResult } from "../../plugins/cli-backend.types.js";
 import {
@@ -6,6 +7,9 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import type { PluginHookHandlerMap } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { markPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
+import { withPluginRuntimeGenerationRegistryScope } from "../../plugins/runtime/generation-state.js";
 import * as beforeToolCall from "../agent-tools.before-tool-call.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { callGatewayTool } from "../tools/gateway.js";
@@ -48,6 +52,58 @@ afterEach(() => {
 });
 
 describe("plugin-owned CLI native tool policy", () => {
+  it("uses the admitted turn policy when a warm transport retains a retired generation", async () => {
+    const oldHook = vi.fn();
+    const previous = createMockPluginRegistry([
+      { hookName: "before_tool_call", pluginId: "guard", handler: oldHook },
+    ]);
+    const record = previous.plugins[0]!;
+    const instance = new PluginInstance(record.id, { record, registry: previous });
+    previous.typedHooks[0]!.handler = instance.wrap(oldHook);
+    const transportScope = withPluginRuntimeGenerationRegistryScope(previous, () =>
+      AsyncLocalStorage.snapshot(),
+    );
+    initializeGlobalHookRunner(previous);
+    const { context: first } = await createExecution({ nativeTools: ["Bash"] });
+    await transportScope(() =>
+      runPlugin(first, async function* (execution) {
+        await expect(requestNativeTool(execution)).resolves.toMatchObject({ behavior: "allow" });
+        yield SUCCESS_RESULT;
+      }),
+    );
+    expect(oldHook).toHaveBeenCalledOnce();
+
+    markPluginRegistryRetired(previous);
+    const currentHook = vi.fn((event: { params: Record<string, unknown> }) =>
+      event.params.command === "echo blocked"
+        ? { block: true, blockReason: "current policy blocked" }
+        : undefined,
+    );
+    const current = createMockPluginRegistry([
+      {
+        hookName: "before_tool_call",
+        pluginId: "guard",
+        handler: (...args) => Reflect.apply(currentHook, undefined, args),
+      },
+    ]);
+    initializeGlobalHookRunner(current);
+    const { context: next } = await createExecution({ nativeTools: ["Bash"] });
+    await withPluginRuntimeGenerationRegistryScope(current, () =>
+      runPlugin(next, async function* (execution) {
+        await expect(transportScope(() => requestNativeTool(execution))).resolves.toMatchObject({
+          behavior: "allow",
+        });
+        await expect(
+          transportScope(() => requestNativeTool(execution, "Bash", { command: "echo blocked" })),
+        ).resolves.toEqual({ behavior: "deny", message: "current policy blocked" });
+        yield SUCCESS_RESULT;
+      }),
+    );
+    expect(oldHook).toHaveBeenCalledOnce();
+    expect(currentHook).toHaveBeenCalledTimes(2);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("denies native tools when caller authority expires during policy or before a retained call", async () => {
     const { context } = await createExecution({ nativeTools: ["WebFetch"] });
     let callerCurrent = true;

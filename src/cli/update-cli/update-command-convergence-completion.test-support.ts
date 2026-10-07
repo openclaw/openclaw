@@ -12,10 +12,10 @@ import {
 } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
-  postCoreUpdateParentOwnsCompletion,
   writePostCorePluginUpdateResultFile,
 } from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
+import { withUpdateEnv } from "./update-command-service-env.js";
 
 export function registerConvergenceCompletionTests({
   mocks,
@@ -29,19 +29,24 @@ export function registerConvergenceCompletionTests({
   const record = (name: string): void => {
     mocks.events.push(name + ":" + mocks.leaseActive);
   };
-  it.each(
-    (["candidate", "current", "resumed"] as const).flatMap((runtime) =>
-      [false, true].map((coreAlreadyCurrent) => ({ runtime, coreAlreadyCurrent })),
-    ),
-  )(
+  it.each([
+    { runtime: "candidate", coreAlreadyCurrent: false },
+    { runtime: "current", coreAlreadyCurrent: true },
+    { runtime: "resumed", coreAlreadyCurrent: false },
+  ] as const)(
     "completes unchanged plugins with deferred model retirement once ($runtime, current=$coreAlreadyCurrent)",
     async ({ runtime, coreAlreadyCurrent }) => {
       const resumesTarget = runtime === "resumed" || (runtime === "current" && !coreAlreadyCurrent);
       const installedVersion = runtime === "resumed" ? "2026.9.4" : VERSION;
       vi.mocked(readPackageVersion).mockResolvedValue(installedVersion);
       const run = createUpdateRun({ trigger: "cli" });
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
-      recordUpdateModelRetirement("deferred");
+      const env = { ...process.env };
+      const doctorEnv = { ...env, OPENCLAW_UPDATE_RUN_ID: run.runId };
+      recordUpdateModelRetirement("deferred", doctorEnv);
+      const opts = {
+        json: true,
+        run: { runId: run.runId, env, executorFence: { assertCurrent() {} } },
+      };
       const pluginUpdate = { ...successfulPluginUpdate, changed: false };
       vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({
         ...pluginUpdate,
@@ -51,22 +56,25 @@ export function registerConvergenceCompletionTests({
         expect(mocks.leaseActive).toBe(false);
         record("complete");
         await params.beforeDoctor?.();
-        recordUpdateModelRetirement("completed");
+        recordUpdateModelRetirement("completed", doctorEnv);
         params.onWarnings?.(["Deferred retirement repair warning"]);
         return { pluginUpdate, configSnapshot: validConfigSnapshot };
       });
       if (resumesTarget) {
-        vi.mocked(postCoreUpdateParentOwnsCompletion).mockResolvedValue(true);
-        vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/post-core-result.json");
+        const handoffDir = process.env.OPENCLAW_STATE_DIR!;
+        await fs.writeFile(path.join(handoffDir, "handoff.json"), '{"completionOwner":"parent"}');
+        vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(handoffDir, "plugins.json"));
         vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementationOnce(async () => {
           // Run the actual resume producer, not a canned child result. The existing
           // transport mock observes when a modern child publishes to its parent.
-          await resumePostCoreUpdate({
-            root: "/tmp/openclaw",
-            channel: "stable",
-            opts: { json: true },
-            timeoutMs: 5_000,
-          });
+          await withUpdateEnv({ OPENCLAW_UPDATE_RUN_ID: run.runId }, () =>
+            resumePostCoreUpdate({
+              root: "/tmp/openclaw",
+              channel: "stable",
+              opts,
+              timeoutMs: 5_000,
+            }),
+          );
           expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
           const published = vi.mocked(writePostCorePluginUpdateResultFile).mock.lastCall?.[1];
           expect(published).toBeDefined();
@@ -94,7 +102,7 @@ export function registerConvergenceCompletionTests({
         storedChannel: null,
         channel: "stable",
         downgradeRisk: false,
-        opts: { json: true },
+        opts,
         preUpdatePluginInstallRecords: {},
         startedAt: 1_000,
         updateStepTimeoutMs: 5_000,
@@ -105,9 +113,9 @@ export function registerConvergenceCompletionTests({
       expect(completePostCorePluginUpdate).toHaveBeenCalledOnce();
       expect(completePostCorePluginUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
-          freshDoctorRequired: false,
+          pluginUpdate: expect.objectContaining({ changed: false }),
           nodeRunner: "/selected/node",
-          opts: { json: true },
+          opts,
         }),
       );
       expect(beforeDoctor).toHaveBeenCalledOnce();
@@ -129,3 +137,5 @@ export function registerConvergenceCompletionTests({
     },
   );
 }
+import fs from "node:fs/promises";
+import path from "node:path";

@@ -1,42 +1,27 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HookConfig } from "../config/types.hooks.js";
 import { createWorkspaceBootstrapFilePolicy } from "./workspace-bootstrap-policy.js";
 
-function policyFor(config: OpenClawConfig) {
-  return createWorkspaceBootstrapFilePolicy({ workspaceDir: "/workspace", config });
+function policyFor(extraFiles: HookConfig, enabled?: boolean) {
+  return createWorkspaceBootstrapFilePolicy({
+    workspaceDir: "/workspace",
+    config: { hooks: { internal: { enabled, entries: { "bootstrap-extra-files": extraFiles } } } },
+  });
 }
 
 describe("workspace bootstrap file policy", () => {
   it.runIf(process.platform !== "win32")(
     "keeps literal POSIX backslashes distinct from directories",
     () => {
-      const policy = policyFor({
-        hooks: {
-          internal: {
-            entries: { "bootstrap-extra-files": { paths: ["team\\notes/AGENTS.md"] } },
-          },
-        },
-      });
+      const policy = policyFor({ paths: ["team\\notes/AGENTS.md"] });
       expect(policy.canRead("team/notes/AGENTS.md")).toBe(false);
     },
   );
 
   it("permits glob discovery without granting unrelated bytes or additional owner writes", () => {
     const policy = policyFor({
-      hooks: {
-        internal: {
-          entries: {
-            "bootstrap-extra-files": {
-              paths: [
-                " ./team/{core,api}/**/AGENTS.md ",
-                "team[1]/SOUL.md",
-                "../private/AGENTS.md",
-              ],
-              patterns: ["private/AGENTS.md"],
-            },
-          },
-        },
-      },
+      paths: [" ./team/{core,api}/**/AGENTS.md ", "team[1]/SOUL.md", "../private/AGENTS.md"],
+      patterns: ["private/AGENTS.md"],
     });
     expect(policy.canList("team")).toBe(true);
     expect(policy.canList("team/core")).toBe(true);
@@ -65,15 +50,7 @@ describe("workspace bootstrap file policy", () => {
   it.each(["patterns", "files"])(
     "uses the existing %s config key and restricts wildcard reads to bootstrap names",
     (key) => {
-      const policy = policyFor({
-        hooks: {
-          internal: {
-            entries: {
-              "bootstrap-extra-files": { paths: [" "], [key]: ["**/*"] },
-            },
-          },
-        },
-      });
+      const policy = policyFor({ paths: [" "], [key]: ["**/*"] });
       expect(policy.canList(".")).toBe(true);
       expect(policy.canList("team/nested")).toBe(true);
       expect(policy.canRead("team/nested/AGENTS.md")).toBe(true);
@@ -85,19 +62,10 @@ describe("workspace bootstrap file policy", () => {
   it.each(["all-hooks", "extra-files"])(
     "does not grant extra access when %s is disabled",
     (disabled) => {
-      const policy = policyFor({
-        hooks: {
-          internal: {
-            enabled: disabled !== "all-hooks",
-            entries: {
-              "bootstrap-extra-files": {
-                enabled: disabled !== "extra-files",
-                paths: ["**/AGENTS.md"],
-              },
-            },
-          },
-        },
-      });
+      const policy = policyFor(
+        { enabled: disabled !== "extra-files", paths: ["**/AGENTS.md"] },
+        disabled !== "all-hooks",
+      );
       expect(policy.canRead("AGENTS.md")).toBe(true);
       expect(policy.canRead("team/AGENTS.md")).toBe(false);
       expect(policy.canList(".")).toBe(false);

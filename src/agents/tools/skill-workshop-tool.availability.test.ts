@@ -29,7 +29,6 @@ describe("Workshop construction and runtime allowlist", () => {
       agents: {
         entries: {
           main: {
-            default: true,
             workspace: state.workspaceDir,
             sandbox: { mode: sandboxed ? "all" : "off" },
             tools: { profile: "minimal", alsoAllow: ["skill_workshop"] },

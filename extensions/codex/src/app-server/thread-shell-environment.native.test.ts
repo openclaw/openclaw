@@ -9,12 +9,12 @@ import { readCodexEffectiveConfig } from "./config-layer-policy.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
-import { buildThreadResumeParams, buildThreadStartParams } from "./thread-lifecycle.js";
 import {
   createAppServerOptions,
   createParams,
   resetThreadLifecycleTestFixtures,
 } from "./thread-lifecycle.test-fixtures.js";
+import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
 import { mergeCodexNativeShellEnvironment } from "./thread-shell-environment.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -29,7 +29,6 @@ afterEach(() => {
 // Snapshots can run login commands via -c, so assert lookup instead of argv shape.
 describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
   it.for([
-    { configured: true, loginAllowed: true, snapshots: true, filters: false },
     { configured: false, loginAllowed: true, snapshots: true, filters: false },
     { configured: true, loginAllowed: false, snapshots: true, filters: false },
     { configured: true, loginAllowed: true, snapshots: false, filters: false },

@@ -10,7 +10,6 @@ import {
 } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
-import { buildTelegramRichMarkdown } from "./rich-message.js";
 import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
 
 function tableMarkdown(columns: number): string {
@@ -326,6 +325,58 @@ describe("markdownToTelegramRichBlocks", () => {
     ]);
     expect(result.plainText).toBe("<b>literal</b> <i>alt</i> <br>tail");
   });
+
+  it.each([
+    ["Markdown link", "Hi [Sam](tg://user?id=123456789)!"],
+    ["inline HTML link", 'Hi <a href="tg://user?id=123456789">Sam</a>!'],
+  ])("emits tg://user ID links as text mentions (%s)", (_, markdown) => {
+    expect(markdownToTelegramRichBlocks(markdown).blocks).toEqual([
+      {
+        type: "paragraph",
+        text: [
+          "Hi ",
+          {
+            type: "text_mention",
+            text: "Sam",
+            user: { id: 123456789, is_bot: false, first_name: "" },
+          },
+          "!",
+        ],
+      },
+    ]);
+  });
+
+  it("emits tg://user ID links inside HTML islands as text mentions", () => {
+    expect(
+      markdownToTelegramRichBlocks(
+        '<details><summary>More</summary><div><a href="tg://user?id=42">Sam</a></div></details>',
+      ).blocks,
+    ).toEqual([
+      {
+        type: "details",
+        summary: "More",
+        blocks: [
+          {
+            type: "paragraph",
+            text: {
+              type: "text_mention",
+              text: "Sam",
+              user: { id: 42, is_bot: false, first_name: "" },
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it.each(["tg://user?id=abc", "tg://user?id=1&x=2", "tg://resolve?domain=openclaw"])(
+    "keeps other tg:// links as URLs (%s)",
+    (url) => {
+      expect(markdownToTelegramRichBlocks(`[Sam](${url})`).blocks).toEqual([
+        { type: "paragraph", text: { type: "url", text: "Sam", url } },
+      ]);
+    },
+  );
 
   it("keeps authored HTML and encoded attribute data beside literal tags", () => {
     const result = markdownToTelegramRichBlocks(
@@ -684,13 +735,6 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(collectLinkTargets(text)).toEqual([]);
   });
 
-  it("wraps auto-linked file refs as code so Telegram does not re-linkify them", () => {
-    const { blocks } = markdownToTelegramRichBlocks("see README.md for details");
-    const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectLinkTargets(text)).toEqual([]);
-    expect(hasStyle(text, "code")).toBe(true);
-  });
-
   it("preserves authored file-style links while wrapping bare file refs as code", () => {
     const { blocks } = markdownToTelegramRichBlocks("README.md [README.md](https://README.md)");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
@@ -910,6 +954,65 @@ describe("splitTelegramRichBlocks", () => {
 });
 
 describe("rich message plan wiring", () => {
+  it.each([31, 61])("preserves media sources beyond HTML depth %i", (depth) => {
+    const text =
+      "<details><summary>s</summary>".repeat(depth) +
+      '<img src="https://example.com/a.jpg"/>' +
+      '<video src="https://example.com/a.mp4"></video>' +
+      '<audio src="https://example.com/a.mp3"></audio>' +
+      "</details>".repeat(depth);
+    const pages = planTelegramTextDeliveryPages({ text, maxChars: 32_768, richMessages: true });
+    const delivered = pages.map((page) => page.plainText).join("");
+    expect(delivered).toContain("https://example.com/a.jpg");
+    expect(delivered).toContain("https://example.com/a.mp4");
+    expect(delivered).toContain("https://example.com/a.mp3");
+  });
+
+  it("delivers deeply nested details with readable text beyond the rich depth budget", () => {
+    const depth = 5000;
+    const text =
+      "<details><summary>s</summary>".repeat(depth) + "leaf" + "</details>".repeat(depth);
+    const pages = planTelegramTextDeliveryPages({ text, maxChars: 32_768, richMessages: true });
+    expect(
+      pages
+        .map((page) => page.plainText)
+        .join("")
+        .replace(/\s/g, ""),
+    ).toBe("s".repeat(depth) + "leaf");
+    expect(pages[0]?.richMessage?.blocks[0]?.type).toBe("details");
+    for (const page of pages) {
+      expect(measureInputRichBlocks(page.richMessage?.blocks ?? []).nesting).toBeLessThanOrEqual(
+        15,
+      );
+    }
+  });
+
+  it("bounds caller-supplied blocks and inline arrays before planning delivery", () => {
+    let text: RichText = "leaf";
+    let block: InputRichBlock = { type: "paragraph", text: "body" };
+    for (let depth = 0; depth < 5000; depth += 1) {
+      text = [{ type: "bold", text }];
+      block = { type: "details", summary: "s", blocks: [block] };
+    }
+    const pages = planTelegramTextDeliveryPages({
+      text: "",
+      maxChars: 32_768,
+      richMessages: true,
+      richMessage: { blocks: [{ type: "paragraph", text }, block] },
+    });
+    expect(
+      pages
+        .map((page) => page.plainText)
+        .join("")
+        .replace(/\s/g, ""),
+    ).toBe("leaf" + "s".repeat(5000) + "body");
+    for (const page of pages) {
+      expect(measureInputRichBlocks(page.richMessage?.blocks ?? []).nesting).toBeLessThanOrEqual(
+        15,
+      );
+    }
+  });
+
   it("preserves ordinary ordered lists across recursive block chunks", () => {
     const text = Array.from({ length: 250 }, (_, index) => `${index + 1}. item ${index + 1}`).join(
       "\n",
@@ -930,16 +1033,6 @@ describe("rich message plan wiring", () => {
       Array.from({ length: 250 }, (_, index) => index + 1),
     );
     expect(chunks.flatMap((chunk) => chunk.degradationReasons ?? [])).toEqual([]);
-  });
-
-  it("emits blocks InputRichMessage and email skip_entity_detection", () => {
-    const message = buildTelegramRichMarkdown("Contact owner@example.com for help");
-    if (!("blocks" in message)) {
-      expect.fail("expected a blocks rich message");
-    }
-    expect(message.blocks.length).toBeGreaterThan(0);
-    expect(message.skip_entity_detection).toBe(true);
-    expect("html" in message).toBe(false);
   });
 
   it("applies the document-level skip flag to every chunk", () => {

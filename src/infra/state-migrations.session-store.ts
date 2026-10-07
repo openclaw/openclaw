@@ -1,16 +1,17 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { isWithinDir } from "@openclaw/fs-safe/path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
+import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
 import { resolvePersistedSessionStoreOwner } from "../config/sessions/session-store-owner.js";
-import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
+import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-session-store.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveAllAgentSessionStoreTargetsSync,
@@ -41,7 +42,6 @@ import {
   prepareDeferredPluginSessionImportReader,
   preserveDeferredPluginSessionSource,
 } from "./deferred-plugin-session-sources.js";
-import { readFirstLineSync } from "./first-line-read.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { importLegacyAcpSessionMetadata } from "./state-migrations.acp-session-metadata.js";
 import {
@@ -59,24 +59,27 @@ import {
 } from "./state-migrations.session-store-paths.js";
 import {
   isLegacyDefaultMainAliasKey,
-  isLegacyGroupKey,
   resolveCanonicalAgentSessionOwner,
-  isSurfaceGroupKey,
   type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
 import type { MigrationMessages, SessionStoreAliasPlan } from "./state-migrations.types.js";
 
-function canonicalizeSessionKeyForAgent(params: {
-  key: string;
+type SessionKeyCanonicalizationOptions = {
   agentId: string;
   mainKey: string;
   scope?: SessionScope;
-  skipCrossAgentRemap?: boolean;
-  preserveCanonicalAgentOwner?: boolean;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
   legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
-}): string {
+};
+
+function canonicalizeSessionKeyForAgent(
+  params: SessionKeyCanonicalizationOptions & {
+    key: string;
+    skipCrossAgentRemap?: boolean;
+    preserveCanonicalAgentOwner?: boolean;
+  },
+): string {
   const raw = params.key.trim();
   if (!raw) {
     return raw;
@@ -192,154 +195,61 @@ function canonicalizeSessionKeyForAgent(params: {
   if (rawLower.startsWith("group:") || rawLower.startsWith("channel:")) {
     return normalizeLowercaseStringOrEmpty(`agent:${agentId}:unknown:${raw}`);
   }
-  if (isSurfaceGroupKey(raw)) {
+  if (raw.includes(":group:") || raw.includes(":channel:")) {
     return `agent:${agentId}:${normalized}`;
   }
   return normalizeSessionKeyPreservingOpaquePeerIds(`agent:${agentId}:${raw}`);
-}
-
-export function pickLatestLegacyDirectEntry(
-  store: Record<string, SessionEntryLike>,
-  legacySessionSurfaces: PreparedLegacySessionSurfaces["surfaces"] = [],
-): SessionEntryLike | null {
-  let best: SessionEntryLike | null = null;
-  let bestUpdated = -1;
-  for (const [key, entry] of Object.entries(store)) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    const normalized = key.trim();
-    if (!normalized) {
-      continue;
-    }
-    const normalizedLower = normalizeLowercaseStringOrEmpty(normalized);
-    if (normalizedLower === "global") {
-      continue;
-    }
-    if (normalizedLower.startsWith("agent:")) {
-      continue;
-    }
-    if (normalizedLower.startsWith("subagent:")) {
-      continue;
-    }
-    if (isLegacyGroupKey(normalized, legacySessionSurfaces) || isSurfaceGroupKey(normalized)) {
-      continue;
-    }
-    const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : 0;
-    if (updatedAt > bestUpdated) {
-      bestUpdated = updatedAt;
-      best = entry;
-    }
-  }
-  return best;
 }
 
 export function normalizeSessionEntry(
   entry: SessionEntryLike,
   sessionKey?: string,
 ): SessionEntry | null {
-  const { room, ...entryWithoutRoom } = entry;
-  const shaped = normalizePersistedSessionEntryShape(entryWithoutRoom, { sessionKey });
+  assertSupportedSessionStoreEntry(entry);
+  const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey });
   if (!shaped) {
     return null;
   }
   const normalized = { ...shaped };
   if (typeof normalized.sessionId === "string") {
-    normalized.updatedAt =
-      typeof normalized.updatedAt === "number" && Number.isFinite(normalized.updatedAt)
-        ? normalized.updatedAt
-        : Date.now();
-  }
-  if (typeof normalized.groupChannel !== "string" && typeof room === "string") {
-    normalized.groupChannel = room;
+    normalized.updatedAt = asFiniteNumber(normalized.updatedAt) ?? Date.now();
   }
   return normalized;
 }
 
-function resolveUpdatedAt(entry: SessionEntryLike): number {
-  return typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
-    ? entry.updatedAt
-    : 0;
-}
-
-export function selectNewerSessionEntry(params: {
-  existing: SessionEntryLike | undefined;
-  incoming: SessionEntryLike;
-  preferIncomingOnTie?: boolean;
-}): SessionEntryLike {
-  if (!params.existing) {
-    return params.incoming;
-  }
-  const existingUpdated = resolveUpdatedAt(params.existing);
-  const incomingUpdated = resolveUpdatedAt(params.incoming);
-  if (incomingUpdated > existingUpdated) {
-    return params.incoming;
-  }
-  if (incomingUpdated < existingUpdated) {
-    return params.existing;
-  }
-  return params.preferIncomingOnTie ? params.incoming : params.existing;
-}
-
-export function canonicalizeSessionStore(params: {
+export function canonicalizeSessionStore({
+  store,
+  ...options
+}: SessionKeyCanonicalizationOptions & {
   store: Record<string, SessionEntryLike>;
-  agentId: string;
-  mainKey: string;
-  scope?: SessionScope;
-  skipCrossAgentRemap?: boolean;
-  preserveCanonicalAgentOwner?: boolean;
-  preserveAmbiguousKeys?: boolean;
-  preserveForeignMainAliases?: boolean;
-  legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 }): { store: Record<string, SessionEntryLike>; legacyKeys: string[] } {
   const canonical = Object.create(null) as Record<string, SessionEntryLike>;
   const meta = new Map<string, { isCanonical: boolean; updatedAt: number }>();
   const legacyKeys: string[] = [];
 
-  for (const [key, entry] of Object.entries(params.store)) {
+  for (const [key, entry] of Object.entries(store)) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
     const canonicalKey = canonicalizeSessionKeyForAgent({
+      ...options,
       key,
-      agentId: params.agentId,
-      mainKey: params.mainKey,
-      scope: params.scope,
-      skipCrossAgentRemap: params.skipCrossAgentRemap,
-      preserveCanonicalAgentOwner: params.preserveCanonicalAgentOwner,
-      preserveAmbiguousKeys: params.preserveAmbiguousKeys,
-      preserveForeignMainAliases: params.preserveForeignMainAliases,
-      legacySessionSurfaces: params.legacySessionSurfaces,
+      skipCrossAgentRemap: options.preserveAmbiguousKeys,
+      preserveCanonicalAgentOwner: true,
     });
     const isCanonical = canonicalKey === key;
     if (!isCanonical) {
       legacyKeys.push(key);
     }
-    const existing = canonical[canonicalKey];
-    if (!existing) {
-      canonical[canonicalKey] = entry;
-      meta.set(canonicalKey, { isCanonical, updatedAt: resolveUpdatedAt(entry) });
-      continue;
-    }
-
     const existingMeta = meta.get(canonicalKey);
-    const incomingUpdated = resolveUpdatedAt(entry);
-    const existingUpdated = existingMeta?.updatedAt ?? resolveUpdatedAt(existing);
-    if (incomingUpdated > existingUpdated) {
+    const incomingUpdated = asFiniteNumber(entry.updatedAt) ?? 0;
+    if (
+      !existingMeta ||
+      incomingUpdated > existingMeta.updatedAt ||
+      (incomingUpdated === existingMeta.updatedAt && isCanonical && !existingMeta.isCanonical)
+    ) {
       canonical[canonicalKey] = entry;
       meta.set(canonicalKey, { isCanonical, updatedAt: incomingUpdated });
-      continue;
-    }
-    if (incomingUpdated < existingUpdated) {
-      continue;
-    }
-    if (existingMeta?.isCanonical && !isCanonical) {
-      continue;
-    }
-    if (!existingMeta?.isCanonical && isCanonical) {
-      canonical[canonicalKey] = entry;
-      meta.set(canonicalKey, { isCanonical, updatedAt: incomingUpdated });
-      continue;
     }
   }
 
@@ -383,73 +293,6 @@ export function unresolvedSessionStoreIdentityWarning(subject: string, storePath
 
 export function distinctSessionStoreAliasWarning(subject: string, storePath: string): string {
   return `Deferred ${subject} in aliased store ${storePath}; atomic replacement cannot update distinct filesystem aliases as one operation. Remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`;
-}
-
-export function resolveStaleLegacySessionFile(params: {
-  entry: unknown;
-  legacyDir: string;
-  targetDir: string;
-}): string | undefined {
-  if (!params.entry || typeof params.entry !== "object" || Array.isArray(params.entry)) {
-    return undefined;
-  }
-  const entry = params.entry as SessionEntryLike;
-  const rawSessionFile = entry.sessionFile;
-  if (typeof rawSessionFile !== "string") {
-    return undefined;
-  }
-  const legacySessionFile = path.isAbsolute(rawSessionFile)
-    ? path.resolve(rawSessionFile)
-    : path.resolve(params.legacyDir, rawSessionFile);
-  const relative = path.relative(path.resolve(params.legacyDir), legacySessionFile);
-  if (
-    relative.startsWith("..") ||
-    path.isAbsolute(relative) ||
-    migrationFileExists(legacySessionFile)
-  ) {
-    return undefined;
-  }
-  const legacyBackupHasTranscript = safeReadDir(path.dirname(params.legacyDir)).some(
-    (dirent) =>
-      dirent.isDirectory() &&
-      dirent.name.startsWith(`${path.basename(params.legacyDir)}.legacy-`) &&
-      migrationFileExists(
-        path.join(path.dirname(params.legacyDir), dirent.name, path.basename(legacySessionFile)),
-      ),
-  );
-  if (legacyBackupHasTranscript) {
-    return undefined;
-  }
-  const parsed = path.parse(path.basename(legacySessionFile));
-  const hasCollisionRename = safeReadDir(params.targetDir).some(
-    (dirent) =>
-      dirent.isFile() &&
-      dirent.name.startsWith(`${parsed.name}.legacy-`) &&
-      dirent.name.endsWith(parsed.ext),
-  );
-  if (hasCollisionRename) {
-    return undefined;
-  }
-  const targetSessionFile = path.join(params.targetDir, path.basename(legacySessionFile));
-  if (!migrationFileExists(targetSessionFile) || typeof entry.sessionId !== "string") {
-    return undefined;
-  }
-  const readFirstLine = () => readFirstLineSync(targetSessionFile);
-  try {
-    const firstLine = readFirstLine();
-    const header = firstLine ? (JSON.parse(firstLine) as unknown) : undefined;
-    if (!header || typeof header !== "object" || Array.isArray(header)) {
-      return undefined;
-    }
-    if ((header as { type?: unknown }).type === "session") {
-      return (header as { id?: unknown }).id === entry.sessionId ? targetSessionFile : undefined;
-    }
-    const canonicalFileName =
-      path.basename(entry.sessionId) === entry.sessionId ? `${entry.sessionId}.jsonl` : undefined;
-    return canonicalFileName === path.basename(targetSessionFile) ? targetSessionFile : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function sessionStoreMayNeedCanonicalization(params: {
@@ -526,33 +369,21 @@ function sessionStoreMayNeedCanonicalization(params: {
   return false;
 }
 
-export function listLegacySessionKeys(params: {
+export function listLegacySessionKeys({
+  store,
+  ...options
+}: SessionKeyCanonicalizationOptions & {
   store: Record<string, SessionEntryLike>;
-  agentId: string;
-  mainKey: string;
-  scope?: SessionScope;
-  preserveAmbiguousKeys?: boolean;
-  preserveForeignMainAliases?: boolean;
-  legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 }): string[] {
-  const legacy: string[] = [];
-  for (const key of Object.keys(params.store)) {
-    const canonical = canonicalizeSessionKeyForAgent({
-      key,
-      agentId: params.agentId,
-      mainKey: params.mainKey,
-      scope: params.scope,
-      skipCrossAgentRemap: params.preserveAmbiguousKeys,
-      preserveCanonicalAgentOwner: params.preserveAmbiguousKeys,
-      preserveAmbiguousKeys: params.preserveAmbiguousKeys,
-      preserveForeignMainAliases: params.preserveForeignMainAliases,
-      legacySessionSurfaces: params.legacySessionSurfaces,
-    });
-    if (canonical !== key) {
-      legacy.push(key);
-    }
-  }
-  return legacy;
+  return Object.keys(store).filter(
+    (key) =>
+      canonicalizeSessionKeyForAgent({
+        ...options,
+        key,
+        skipCrossAgentRemap: options.preserveAmbiguousKeys,
+        preserveCanonicalAgentOwner: options.preserveAmbiguousKeys,
+      }) !== key,
+  );
 }
 
 export function removeDirIfEmpty(dir: string) {
@@ -634,18 +465,9 @@ export async function migrateOrphanedSessionKeys(params: {
     storeAliasCandidates.set(storePath, aliasCandidates);
     storeMap.set(storePath, (storeMap.get(storePath) ?? new Set<string>()).add(ownerId));
   };
-  // Configured ownership includes normal agents plus ACP runtime/default hints.
-  for (const configuredAgentId of listConfiguredSessionStoreAgentIds(params.cfg)) {
-    const id = normalizeAgentId(configuredAgentId);
-    const p = storeConfig
-      ? resolveStorePathFromTemplate(storeConfig, id, env)
-      : path.join(stateDir, "agents", id, "sessions", "sessions.json");
-    addToStoreMap(p, id);
-  }
-  // Plugins can route core sessions to agents that are not declared in
-  // agents.list. A templated path proves ownership for those stores too.
-  for (const pluginAgentId of pluginAgentIds) {
-    const id = normalizeAgentId(pluginAgentId);
+  // Plugin-owned agents can be absent from config; retain configured-owner order.
+  for (const agentId of [...listConfiguredSessionStoreAgentIds(params.cfg), ...pluginAgentIds]) {
+    const id = normalizeAgentId(agentId);
     const p = storeConfig
       ? resolveStorePathFromTemplate(storeConfig, id, env)
       : path.join(stateDir, "agents", id, "sessions", "sessions.json");
@@ -761,8 +583,6 @@ export async function migrateOrphanedSessionKeys(params: {
         agentId: storeAgentId,
         mainKey,
         scope,
-        skipCrossAgentRemap: preserveAmbiguousKeys,
-        preserveCanonicalAgentOwner: true,
         preserveAmbiguousKeys,
         preserveForeignMainAliases: pluginForeignMainAliasRisk,
         legacySessionSurfaces: legacySessionSurfaces.surfaces,
@@ -854,18 +674,18 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     configuredAgents.flatMap((entry) => (entry?.id ? [normalizeAgentId(entry.id)] : [])),
   );
   const discoveryCfg = [...declaredAgentIds].some((agentId) => !configuredAgentIds.has(agentId))
-    ? ({
+    ? {
         ...params.cfg,
         agents: {
           ...params.cfg.agents,
-          list: [
+          entries: toAgentEntriesRecord([
             ...configuredAgents,
             ...[...declaredAgentIds]
               .filter((agentId) => !configuredAgentIds.has(agentId))
               .map((id) => ({ id })),
-          ],
+          ]),
         },
-      } as OpenClawConfig)
+      }
     : params.cfg;
   // Reuse the validated resolver for every declared owner. Owner multiplicity
   // is restored below as metadata without re-adding rejected raw paths.
@@ -925,13 +745,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     const pluginForeignMainAliasRisk = pluginTargets.some((pluginTarget) =>
       sessionStorePathsMatch(storePath, pluginTarget.storePath),
     );
-    let parsed: ReturnType<typeof readSessionStoreJson5>;
-    try {
-      parsed = readSessionStoreJson5(storePath);
-    } catch (err) {
-      warnings.push(`Could not read ${storePath}: ${String(err)}`);
-      continue;
-    }
+    const parsed = readSessionStoreJson5(storePath);
     if (!parsed.ok) {
       continue;
     }
@@ -1122,14 +936,9 @@ function isManagedLegacySessionStorePathSafe(storePath: string): boolean {
 function resolveStorePathFromTemplate(
   template: string,
   agentId: string,
-  env?: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv,
 ): string {
-  const expand = (s: string) =>
-    s.startsWith("~") ? expandHomePrefix(s, { env: env ?? process.env, homedir: os.homedir }) : s;
-  if (template.includes("{agentId}")) {
-    return path.resolve(expand(template.replaceAll("{agentId}", agentId)));
-  }
-  return path.resolve(expand(template));
+  return path.resolve(expandHomePrefix(template.replaceAll("{agentId}", agentId), { env }));
 }
 
 export function mergeSessionStoreAliasPlans(
@@ -1151,7 +960,6 @@ export async function saveSessionStoreStrict(
   store: Record<string, SessionEntry>,
 ): Promise<void> {
   await saveLegacySessionStore(storePath, store, {
-    requireWriteSuccess: true,
     skipMaintenance: true,
   });
 }

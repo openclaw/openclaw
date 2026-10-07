@@ -60,38 +60,19 @@ export type DeliveryConversationsHost = {
   notify: (cronState: CronState) => void;
 };
 
-/**
- * Owns the Automations editor's recipient directory: the cached conversations,
- * the published error, and the request generation. This state is page-owned
- * rather than CronState-owned, so a continuation that outlived the editor it
- * started in must prove ownership before clearing the cache or reading again.
- *
- * The directory is a bounded read, so it is only ever a source of **target**
- * suggestions. Account and topic routing stay operator-authored; nothing here
- * infers them.
- */
+// The editor owns this bounded target directory; account and topic routing stay
+// operator-authored. Deferred completions must prove the editor still owns it.
 export class DeliveryConversationsController {
   conversations: ConversationListItem[] = [];
   error: string | null = null;
   private requestId = 0;
-  /**
-   * Identifies the editor session that owns the cache. A continuation captures
-   * it before awaiting and presents it back, which is the only way to tell "my
-   * editor exited" from "a replacement editor owns discovery now": the page,
-   * the connection, and the admin scope all survive an editor swap.
-   */
+  // Page, connection, and admin scope can survive an editor swap.
   private editorGeneration = 0;
-  /**
-   * The route the cache was last read against. Keeping it here rather than in
-   * the caller is what lets a continuation ask whether the editor still targets
-   * the channel and agent the cached rows describe, without having to snapshot
-   * the form itself before every await.
-   */
+  // Compare the published route with the current form after a save.
   private readRoute: DirectoryRoute | null = null;
 
   constructor(private readonly host: DeliveryConversationsHost) {}
 
-  /** Retire every in-flight read and drop the cached suggestions and error. */
   clear(cronState: CronState = this.host.currentCronState()) {
     this.requestId += 1;
     this.conversations = [];
@@ -100,29 +81,20 @@ export class DeliveryConversationsController {
     this.host.notify(cronState);
   }
 
-  /** The generation a deferred continuation must present back to own the cache. */
   get generation(): number {
     return this.editorGeneration;
   }
 
-  /** An editor session ended: retire its directory and stop answering for it. */
   retireEditor(cronState: CronState = this.host.currentCronState()) {
     this.editorGeneration += 1;
     this.clear(cronState);
   }
 
-  /** An editor session began: it owns discovery from here, so read for it. */
   openEditor() {
     this.editorGeneration += 1;
     void this.load();
   }
 
-  /**
-   * Retire the directory for a continuation whose own editor confirmed its
-   * exit. A continuation that no longer owns the cache — replaced page,
-   * dropped connection, lost admin access, or a replacement editor — leaves it
-   * alone rather than retiring someone else's in-flight read.
-   */
   retireExitedEditor(
     cronState: CronState,
     connectionScope: GatewayConnectionScope | null,
@@ -133,11 +105,7 @@ export class DeliveryConversationsController {
     }
   }
 
-  /**
-   * Resettle the directory after a save. A save that still owns discovery
-   * drops the cache it read against, then reads again only when its editor
-   * stayed open; a create hands off to the overview instead.
-   */
+  // Saving an edit reloads its directory; creating a job returns to overview.
   afterSave(
     cronState: CronState,
     connectionScope: GatewayConnectionScope | null,
@@ -168,10 +136,6 @@ export class DeliveryConversationsController {
     this.afterSave(cronState, connectionScope, editorGeneration, Boolean(cronState.cronEditingJob));
   }
 
-  /**
-   * A continuation owns the directory only while its page, its connection, its
-   * admin access, and the editor session it started in all survive.
-   */
   ownedBy(
     cronState: CronState,
     connectionScope: GatewayConnectionScope | null,

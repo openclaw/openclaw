@@ -37,6 +37,9 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 import type { GatewayHostLifecycle, GatewayServer } from "./server-public.js";
 import { createMaintenanceHandles } from "./server-runtime-services.test-harness.js";
 import { expectCoreAgentDatabaseReadiness } from "./server-startup-readiness.test-support.js";
+import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
 describe("createGatewayKernel", () => {
   it.each([false, true])(
@@ -45,18 +48,10 @@ describe("createGatewayKernel", () => {
       const port = await getFreePort();
       const state = await createOpenClawTestState({
         label: "gateway-kernel-breaker-recovery-close",
-        layout: "home",
         env: {
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          ...KERNEL_TEST_ENV,
           OPENCLAW_SKIP_CHANNELS: undefined,
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
           OPENCLAW_SKIP_PROVIDERS: undefined,
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          VITEST: "1",
         },
       });
       const originalPluginRegistry = captureActivePluginRegistrySnapshot();
@@ -131,7 +126,7 @@ describe("createGatewayKernel", () => {
         expect(startAccount).not.toHaveBeenCalled();
 
         if (closing) {
-          await kernel.beginClosePrelude();
+          await kernel.prepareClose();
         }
         kernel.releaseStartupAccountStarts();
         await (closing ? nextTurn() : started.promise);
@@ -155,19 +150,7 @@ describe("createGatewayKernel", () => {
       const port = await getFreePort();
       const state = await createOpenClawTestState({
         label: `gateway-kernel-${entry}-close-readiness`,
-        layout: "home",
-        env: {
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          VITEST: "1",
-        },
+        env: { ...KERNEL_TEST_ENV },
       });
       const token = "gateway-kernel-close-readiness-token";
       const bootId = `gateway-kernel-${entry}-close`;
@@ -177,6 +160,9 @@ describe("createGatewayKernel", () => {
       const periodicStopped = createDeferred();
       const nativePreparation = createDeferred();
       const preparationStarted = createDeferred();
+      const publicationPreparation = createDeferred();
+      const publicationStarted = createDeferred();
+      const publicationDrainEntered = createDeferred();
       const acceptRequest = vi.fn();
       const hostLifecycle: GatewayHostLifecycle = {
         externalRestart: { isCurrent: () => true },
@@ -201,13 +187,14 @@ describe("createGatewayKernel", () => {
         updateCheckStopped.resolve();
         periodicStopped.resolve();
         nativePreparation.resolve();
+        publicationPreparation.resolve();
       };
       signal.addEventListener("abort", release, { once: true });
       let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
       let server: GatewayServer | undefined;
       let closing: Promise<void> | undefined;
       let pendingStop: Promise<void> | undefined;
-      let maintenanceTimer: ReturnType<typeof setTimeout> | undefined;
+      let pendingPublication: Promise<void> | undefined;
       try {
         await state.writeConfig({
           gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
@@ -246,6 +233,35 @@ describe("createGatewayKernel", () => {
         if (!kernel) {
           throw new Error("Expected the real Gateway kernel to be captured");
         }
+        const projection = getSessionRowProjection(kernel.gatewayRequestContext);
+        if (!projection) {
+          throw new Error("Expected the real session row projection");
+        }
+        const projectionDispose = vi.spyOn(projection, "dispose");
+        const prepareRows = projection.withPreparedExactRows.bind(projection);
+        vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
+          async (queries, consume, prepareOptions) => {
+            publicationStarted.resolve();
+            await publicationPreparation.promise;
+            return prepareRows(queries, consume, prepareOptions);
+          },
+        );
+        const publish = vi.fn();
+        pendingPublication = withPreparedSessionEventRow(
+          projection,
+          "agent:main:shutdown-publication",
+          "main",
+          publish,
+        );
+        await publicationStarted.promise;
+        const drainPublications = kernel.shutdownRuntime.drainSessionEventPublications;
+        vi.spyOn(kernel.shutdownRuntime, "drainSessionEventPublications").mockImplementation(
+          async (owner) => {
+            const draining = drainPublications(owner);
+            publicationDrainEntered.resolve();
+            await draining;
+          },
+        );
         const { getStartup, getReadiness } = kernel.createHttpTransportOptions();
         expect(getStartup()).toMatchObject({ ok: true, status: "started" });
         expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
@@ -296,17 +312,19 @@ describe("createGatewayKernel", () => {
           .mockReturnValue(updateWork);
         const terminalDispose = vi.spyOn(kernel.terminalSessions, "disposeAll");
         const gatewayStop = vi.spyOn(kernel.shutdownRuntime, "runGlobalGatewayStopSafely");
-        const prepareShutdown = vi.spyOn(kernel.shutdownRuntime, "prepareGatewayClose");
         const maintenance = createMaintenanceHandles();
         maintenance.stopPeriodicTasks.mockReturnValue(periodicStopped.promise);
         kernel.kernel.setMaintenanceHandles(maintenance);
         const invalidateCron = vi.spyOn(kernel.cronReconciliation, "invalidate");
         const startMaintenance = vi.fn(() => {});
-        maintenanceTimer = setTimeout(startMaintenance, 0);
-        kernel.postReadyState.maintenanceTimer = maintenanceTimer;
+        kernel.scheduler.schedule({
+          id: "test:post-ready-maintenance",
+          delayMs: 0,
+          run: startMaintenance,
+        });
         closing = server
           ? server.close({ reason: "close ordering test" })
-          : kernel.prepareClose({ reason: "close ordering test" }).then((close) => close());
+          : kernel.closeOnStartupFailure();
 
         expect(getStartup()).toMatchObject({ ok: false, status: "draining" });
         expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });
@@ -318,9 +336,7 @@ describe("createGatewayKernel", () => {
         await pendingStop;
         await expect(boundHost.request("start", () => {})).rejects.toThrow("closed instance");
         expect(acceptRequest).not.toHaveBeenCalled();
-        expect(kernel.postReadyState.maintenanceTimer).toBeNull();
         expect(invalidateCron).toHaveBeenCalledOnce();
-        expect(stopRecovery).toHaveBeenCalledOnce();
         await nextTurn();
         expect(startMaintenance).not.toHaveBeenCalled();
         expect(reloadStop).toHaveBeenCalledOnce();
@@ -340,9 +356,16 @@ describe("createGatewayKernel", () => {
         expect(closeFirstStop).not.toHaveBeenCalled();
         updateCheckStopped.resolve();
         await nextTurn();
-        expect(prepareShutdown).not.toHaveBeenCalled();
         periodicStopped.resolve();
+        await Promise.race([publicationDrainEntered.promise, closing]);
+        expect(projectionDispose).not.toHaveBeenCalled();
+        expect(publish).not.toHaveBeenCalled();
+        publicationPreparation.resolve();
+        await pendingPublication;
         await closing;
+        expect(publish).toHaveBeenCalledOnce();
+        expect(publish).toHaveBeenCalledBefore(projectionDispose);
+        expect(projectionDispose).toHaveBeenCalledOnce();
         expect(closeFirstStop).toHaveBeenCalledOnce();
         expect(kernel.runtimeState.discovery).toBeNull();
         if (server) {
@@ -355,9 +378,8 @@ describe("createGatewayKernel", () => {
         }
       } finally {
         release();
-        clearTimeout(maintenanceTimer);
         try {
-          await Promise.all([closing, reloadWork, recoveryWork, updateWork]);
+          await Promise.all([closing, pendingPublication, reloadWork, recoveryWork, updateWork]);
         } finally {
           try {
             await (server?.close() ?? kernel?.closeOnStartupFailure());
@@ -378,18 +400,9 @@ describe("createGatewayKernel", () => {
       const port = await getFreePort();
       const state = await createOpenClawTestState({
         label: "gateway-kernel-reload-candidate",
-        layout: "home",
         env: {
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
+          ...KERNEL_TEST_ENV,
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-          VITEST: "1",
         },
       });
       const previousOverrides = getConfigOverrides();
@@ -542,18 +555,9 @@ describe("createGatewayKernel", () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-deferred-readiness",
-      layout: "home",
       env: {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
+        ...KERNEL_TEST_ENV,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        VITEST: "1",
       },
     });
     const token = "gateway-kernel-deferred-readiness-token";
@@ -572,7 +576,11 @@ describe("createGatewayKernel", () => {
           controlUi: { enabled: false },
           port,
         },
-        agents: { entries: { main: { default: true }, worker: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, worker: {} },
+        },
       });
       state.applyEnv();
       kernel = await openKernel();
@@ -777,20 +785,10 @@ describe("createGatewayKernel", () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-no-transport",
-      layout: "home",
       env: {
         OPENCLAW_DIAGNOSTICS: "1",
         OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
+        ...KERNEL_TEST_ENV,
       },
     });
     const originalPluginRegistry = captureActivePluginRegistrySnapshot();
@@ -929,7 +927,6 @@ describe("createGatewayKernel", () => {
         "config.auth.secrets-activate",
         "agents.github-profile-cleanup",
         "plugins.bootstrap-imports",
-        "startup.maintenance",
         "plugins.bootstrap",
         "gateway.kernel-state",
         "node-desktop.runtime-import",
@@ -952,9 +949,13 @@ describe("createGatewayKernel", () => {
         "runtime.early",
         "runtime.early.discovery",
         "gateway.request-runtime",
+        "gateway.chat-metadata-lifecycle",
         "gateway.config-revision-key",
         "gateway.request-context",
         "sessions.projection",
+        "sessions.materialize",
+        "gateway.lifetime-sidecars",
+        "gateway.instance-runtime-import",
       ]);
     } finally {
       try {
@@ -981,19 +982,7 @@ describe("createGatewayKernel", () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-tls-failure",
-      layout: "home",
-      env: {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
+      env: { ...KERNEL_TEST_ENV },
     });
     const token = "gateway-kernel-tls-failure-token";
     await state.writeConfig({

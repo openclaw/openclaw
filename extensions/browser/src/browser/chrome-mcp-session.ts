@@ -3,7 +3,7 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createChromeMcpSession,
   setChromeMcpSessionFactoryForTest,
-  waitForChromeMcpPendingSession,
+  waitForChromeMcpOperation,
   waitForChromeMcpReady,
 } from "./chrome-mcp-connect.js";
 import type {
@@ -14,14 +14,10 @@ import type {
 } from "./chrome-mcp-contracts.js";
 import { redactChromeMcpProfileLabelForDiagnostic } from "./chrome-mcp-diagnostics.js";
 import { buildChromeMcpSessionCacheKey } from "./chrome-mcp-options.js";
-import {
-  cleanupTarget,
-  closeChromeMcpSessionHandle,
-  setChromeMcpProcessCleanupDepsForTest,
-} from "./chrome-mcp-process.js";
+import { cleanupTarget, closeChromeMcpSessionHandle } from "./chrome-mcp-process.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 
-export { setChromeMcpProcessCleanupDepsForTest, setChromeMcpSessionFactoryForTest };
+export { setChromeMcpSessionFactoryForTest };
 
 const owners = new Map<string, ChromeMcpSessionOwner>();
 
@@ -231,7 +227,7 @@ class ChromeMcpSessionOwner {
       abort();
     }
     try {
-      const session = await waitForChromeMcpPendingSession(pending.promise, options.signal);
+      const session = await waitForChromeMcpOperation(pending.promise, options.signal);
       await waitForChromeMcpReady(session, this.profileName, options.timeoutMs, options.signal);
       return session;
     } catch (error) {
@@ -394,5 +390,4 @@ export async function closeChromeMcpSession(profileName: string): Promise<boolea
 export async function resetChromeMcpSessionsForTest(): Promise<void> {
   setChromeMcpSessionFactoryForTest(null);
   await stopOwners();
-  setChromeMcpProcessCleanupDepsForTest(null);
 }

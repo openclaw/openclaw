@@ -11,6 +11,7 @@ import {
   type QaScenarioCommandExecution,
 } from "./test-file-scenario-runner.js";
 import {
+  buildScriptProducerEvidence,
   QA_TEST_RUNNER_DEFAULTS,
   createScenarioRunnerTestHarness,
   makeTestFileScenario,
@@ -164,6 +165,35 @@ describe("qa test file scenario runner", () => {
       expect(result.evidence.entries[0]?.result.status).toBe("fail");
     },
   );
+
+  it("dispatches explicit checkout and external artifact roots to a real script", async () => {
+    const repoRoot = process.cwd();
+    const external = await makeTempDir("qa-relocated-script-");
+    const scriptPath = path.join(external, "roots.mjs");
+    await fs.writeFile(
+      scriptPath,
+      `import fs from 'node:fs/promises';
+await fs.mkdir(process.argv[3], {recursive:true});
+await fs.writeFile(process.argv[4], JSON.stringify({repo:process.argv[2], cwd:process.cwd(), out:process.argv[3]}));
+await fs.writeFile(process.argv[3] + '/qa-evidence.json', ${JSON.stringify(JSON.stringify(buildScriptProducerEvidence({ status: "pass" })))});`,
+    );
+    const scenario = makeTestFileScenario("script", scriptPath);
+    if (scenario.execution.kind !== "script") {
+      throw new Error("script expected");
+    }
+    scenario.execution.args = ["${repoRoot}", "${outputDir}", path.join(external, "roots.json")];
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(external, "evidence"),
+      ...QA_TEST_RUNNER_DEFAULTS,
+      scenarios: [scenario],
+    });
+    const roots = JSON.parse(await fs.readFile(path.join(external, "roots.json"), "utf8"));
+    expect(roots).toMatchObject({ repo: repoRoot, cwd: repoRoot });
+    expect(roots.out.startsWith(path.join(external, "evidence") + path.sep)).toBe(true);
+    expect(path.basename(roots.out)).toBe(scenario.id);
+    expect(result.results[0]?.status).toBe("pass");
+  });
 
   it("fails script scenarios that exit cleanly after timeout termination", async () => {
     const repoRoot = process.cwd();

@@ -387,7 +387,12 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("skills.proposals.reject", rejectedRecord);
       await page.getByText(H1.body, { exact: true }).waitFor();
-      await expect.poll(() => page.locator(".sw-action-toast").textContent()).toContain("Rejected");
+      await expect
+        .poll(async () => ({
+          notice: await page.locator(".sw-action-toast").textContent(),
+          disabledActions: await page.locator(".sw-action-bar button:disabled").count(),
+        }))
+        .toEqual({ notice: expect.stringContaining("Rejected"), disabledActions: 0 });
       expect(await page.locator(".sw-error").count()).toBe(0);
       expect(await page.locator(".sw-row").count()).toBe(1);
       for (const action of ["Apply", "Evaluate", "Revise", "Reject"]) {

@@ -1,5 +1,3 @@
-// Talk client methods create browser-owned realtime voice sessions and route
-// client tool calls back into OpenClaw agent consult/control flows.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -11,6 +9,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../../agents/agent-scope.js";
 import { createPluginRuntime } from "../../../plugins/runtime/index.js";
+import { withOpenClawAgentDatabaseRuntime } from "../../../state/openclaw-agent-db.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   parseRealtimeVoiceAgentConsultArgs,
@@ -31,7 +30,7 @@ import {
   resolveClientVoiceSessionOrigin,
   resolveOpenClientVoiceSessionId,
 } from "../../../talk/client-voice-session.js";
-import { resolveSandboxedSessionCreation } from "../../operator-role-policy.js";
+import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
 import { SessionMutationAuthorizationChangedError } from "../../session-mutation-authorization-error.js";
@@ -45,7 +44,7 @@ import {
 import {
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
-} from "../relay/index.js";
+} from "../relay/operations.js";
 import { resolveOwnedActiveTalkRunTarget } from "../run-ownership.js";
 import { prepareTalkSessionTarget, requirePreparedTalkSessionTarget } from "../session-target.js";
 import { unregisterTalkVoiceSession } from "../voice-selection.js";
@@ -56,12 +55,6 @@ import {
   rememberLegacyVoiceBinding,
 } from "./client-legacy-voice-bindings.js";
 
-/**
- * Gateway methods for browser-owned realtime Talk sessions.
- *
- * These handlers create provider browser sessions and bridge client-owned tool
- * calls back into OpenClaw agent consult runs.
- */
 export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.create": createTalkClient,
   "talk.client.toolCall": defineValidatedGatewayHandler(
@@ -98,14 +91,32 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       let confirmationGrant: ClientVoiceConfirmationGrant | undefined;
       let voiceSessionId: string;
       try {
+        await withOpenClawAgentDatabaseRuntime(
+          { agentId },
+          () => undefined,
+          () => request.sessionMutationAuthorization?.assertCurrent(),
+          request.signal,
+        );
+        request.sessionMutationAuthorization?.assertCurrent();
         // Shipped clients may consult without ever creating a voice session (old app,
         // restarted gateway, ambiguous open records). Implicitly create one instead of
         // erroring so confirmation and mutation evidence stay always-on.
-        voiceSessionId =
+        let selectedVoiceSessionId =
           explicitVoiceSessionId ??
           relaySessionId ??
-          (connId ? readLegacyVoiceBinding(connId, params.sessionKey) : undefined) ??
-          resolveOpenClientVoiceSessionId({ agentId, sessionKey: params.sessionKey }) ??
+          (connId ? readLegacyVoiceBinding(connId, params.sessionKey) : undefined);
+        if (selectedVoiceSessionId === undefined) {
+          const inferred = await resolveOpenClientVoiceSessionId({
+            agentId,
+            sessionKey: params.sessionKey,
+          });
+          // Another consult may have created and bound this connection during the read.
+          selectedVoiceSessionId =
+            (connId ? readLegacyVoiceBinding(connId, params.sessionKey) : undefined) ?? inferred;
+        }
+        request.sessionMutationAuthorization?.assertCurrent();
+        voiceSessionId =
+          selectedVoiceSessionId ??
           createOrResumeClientVoiceSession({
             agentId,
             sessionKey: params.sessionKey,
@@ -124,6 +135,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           });
           await flushTalkRealtimeRelayVoiceWrites({ relaySessionId, connId });
         }
+        request.sessionMutationAuthorization?.assertCurrent();
         const parsedArgs = parseRealtimeVoiceAgentConsultArgs(params.args ?? {});
         const origin = assertClientVoiceSessionOpen({
           agentId,

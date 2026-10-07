@@ -14,7 +14,7 @@ import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
-import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
+import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
@@ -89,7 +89,9 @@ it("admits a supported legacy registry without weakening runtime target validati
   try {
     expect(maintenance).toBeDefined();
     expect(fs.readFileSync(fixture.databasePath)).toEqual(before);
-    expect(resolveRuntimeTargets).toThrow("legacy agent database registry schema");
+    expect(() => maintenance?.run(resolveRuntimeTargets)).toThrow(
+      "legacy agent database registry schema",
+    );
   } finally {
     await maintenance?.release();
   }
@@ -256,6 +258,8 @@ it.each(["present", "missing"] as const)(
             })
           : undefined;
       const heldBytes = heldPath ? fs.readFileSync(heldPath) : undefined;
+      const resultPath = state.path("doctor-result.json");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", resultPath);
       const initial = openOpenClawStateDatabase({ env: state.env });
       if (history === "missing") {
         initial.db.exec("DROP TABLE agent_deletion_journal");
@@ -334,6 +338,15 @@ it.each(["present", "missing"] as const)(
       const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
       expect(runtime.exit, output).not.toHaveBeenCalled();
       expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+      expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
+        resultPath,
+        result: expect.objectContaining({
+          status: "ok",
+          ...(heldPath
+            ? { warnings: expect.arrayContaining([expect.stringContaining(heldPath)]) }
+            : {}),
+        }),
+      });
       expect(output).toContain(`Warning: Rebuilt corrupt shared-state SQLite indexes: ${index}`);
       const backupLine = runtime.log.mock.calls
         .flat()
@@ -370,6 +383,8 @@ it.each(["present", "missing"] as const)(
           reason: `row 1 missing from index ${index}`,
         }),
       ).toBe(true);
+      runtime.exit.mockClear();
+      runtime.error.mockClear();
       await runCommandWithRuntime(runtime, () =>
         runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
       );

@@ -49,14 +49,6 @@ export function resolveRuntimeNormalization(cfg: OpenClawConfig): RuntimeModelNo
   };
 }
 
-export function normalizeRuntimeRef(
-  provider: string,
-  model: string,
-  normalization: RuntimeModelNormalization = RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-) {
-  return normalizeModelRef(provider, model, normalization);
-}
-
 export function findSelectedCatalogEntry(params: {
   catalog?: readonly ModelCatalogEntry[];
   provider: string;
@@ -114,6 +106,7 @@ export async function prepareModelSelectionRuntime(params: {
   model: string;
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
+  hydrateThinkingCatalog?: boolean;
   profileOverride?: string;
   sessionEntry?: Pick<
     SessionEntry,
@@ -212,7 +205,10 @@ export async function prepareModelSelectionRuntime(params: {
           modelBaseUrl: selected?.baseUrl,
           sessionEntry: runtimeEntry,
         });
-  if (!needsThinkHydration(params.catalog, params.provider, params.model, agentRuntime)) {
+  if (
+    params.hydrateThinkingCatalog === false ||
+    !needsThinkHydration(params.catalog, params.provider, params.model, agentRuntime)
+  ) {
     return {
       status: "ready",
       runtime,

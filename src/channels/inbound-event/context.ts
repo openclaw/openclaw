@@ -75,7 +75,7 @@ type BuildChannelInboundEventAccess = {
     mentionedUserIds?: string[];
     mentionedSubteamIds?: string[];
     mentionSource?: MentionSource;
-    implicitMentionKinds?: InboundImplicitMentionKind[];
+    implicitMentionKinds?: readonly InboundImplicitMentionKind[];
     requireMention?: boolean;
     effectiveWasMentioned?: boolean;
   };
@@ -236,18 +236,7 @@ export function filterChannelInboundQuoteContext(
   contextVisibility: ContextVisibilityMode | undefined,
   quote: SupplementalContextFacts["quote"] | undefined,
 ): SupplementalContextFacts["quote"] | undefined {
-  return filterChannelInboundSupplementalContext({
-    contextVisibility,
-    supplemental: quote ? { quote } : undefined,
-  })?.quote;
-}
-
-function definedFields<T extends Record<string, unknown>>(fields: T): Partial<T> {
-  return Object.fromEntries(
-    Object.entries(fields).filter(
-      (entry): entry is [string, Exclude<unknown, undefined>] => entry[1] !== undefined,
-    ),
-  ) as Partial<T>;
+  return filterSupplementalContext({ mode: contextVisibility, kind: "quote", context: quote });
 }
 
 function resolveChannelInboundSupplementalForFinalizer(params: {
@@ -317,7 +306,11 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
   finalizeOptions?: FinalizeInboundContextOptions;
 }): FinalizeChannelInboundContextResult<T> {
   const mediaPayload = params.media
-    ? definedFields(buildChannelInboundMediaPayload([...params.media]))
+    ? Object.fromEntries(
+        Object.entries(buildChannelInboundMediaPayload(params.media)).filter(
+          ([, value]) => value !== undefined,
+        ),
+      )
     : {};
   const baseContext = {
     ...params.originalContext,
@@ -348,7 +341,17 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
   };
 }
 
-function finalizeChannelInboundContextValue<T extends Record<string, unknown>>(
+/**
+ * @deprecated Public compatibility for callers that already prepared legacy
+ * prompt fields. New channel code should use `buildChannelInboundEventContext`.
+ */
+export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
+  params: FinalizeChannelInboundContextAsyncParams<T>,
+): Promise<FinalizeChannelInboundContextResult<T>>;
+export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
+  params: FinalizeChannelInboundContextParams<T>,
+): FinalizeChannelInboundContextResult<T>;
+export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
   params: FinalizeChannelInboundContextParams<T> &
     Partial<ChannelInboundSupplementalResolutionOptions>,
 ): MaybePromise<FinalizeChannelInboundContextResult<T>> {
@@ -373,23 +376,6 @@ function finalizeChannelInboundContextValue<T extends Record<string, unknown>>(
     return Promise.resolve(prepared).then(finish);
   }
   return isPromiseLike(prepared) ? prepared.then(finish) : finish(prepared);
-}
-
-/**
- * @deprecated Public compatibility for callers that already prepared legacy
- * prompt fields. New channel code should use `buildChannelInboundEventContext`.
- */
-export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
-  params: FinalizeChannelInboundContextAsyncParams<T>,
-): Promise<FinalizeChannelInboundContextResult<T>>;
-export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
-  params: FinalizeChannelInboundContextParams<T>,
-): FinalizeChannelInboundContextResult<T>;
-export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
-  params: FinalizeChannelInboundContextParams<T> &
-    Partial<ChannelInboundSupplementalResolutionOptions>,
-): MaybePromise<FinalizeChannelInboundContextResult<T>> {
-  return finalizeChannelInboundContextValue(params);
 }
 
 function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
@@ -494,12 +480,7 @@ function buildChannelInboundEventContextValue(
     Partial<ChannelInboundSupplementalResolutionOptions>,
 ): MaybePromise<BuiltChannelInboundEventContext> {
   const body = params.message.body ?? params.message.rawBody;
-  const commandTurn = resolveChannelCommandContext({
-    command: params.command,
-    commandTurn: params.commandTurn,
-    message: params.message,
-    access: params.access,
-  });
+  const commandTurn = resolveChannelCommandContext(params);
 
   const context = {
     Body: body,
@@ -575,13 +556,13 @@ function buildChannelInboundEventContextValue(
     context,
   };
   const result = params.resolveSupplementalMedia
-    ? finalizeChannelInboundContextValue({
+    ? finalizeChannelInboundContext({
         ...finalizeParams,
         resolveSupplementalMedia: true,
         suppressSelfQuoteBody: params.suppressSelfQuoteBody,
         suppressSelfQuoteMedia: params.suppressSelfQuoteMedia,
       })
-    : finalizeChannelInboundContextValue(finalizeParams);
+    : finalizeChannelInboundContext(finalizeParams);
   const unwrap = (finalized: FinalizeChannelInboundContextResult<typeof context>) =>
     finalized.context as BuiltChannelInboundEventContext;
   return isPromiseLike(result) ? result.then(unwrap) : unwrap(result);

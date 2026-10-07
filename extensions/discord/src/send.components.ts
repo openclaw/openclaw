@@ -1,11 +1,8 @@
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType, Routes } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { hasNonEmptyString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
@@ -16,16 +13,13 @@ import {
   type DiscordComponentMessageSpec,
 } from "./components.js";
 import {
-  createChannelMessage,
   editChannelMessage,
   serializePayload,
   type MessagePayloadFile,
   type MessagePayloadObject,
-  type RequestClient,
 } from "./internal/discord.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
-import type { DiscordReplyReference } from "./reply-reference.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import {
@@ -35,7 +29,6 @@ import {
   resolveChannelId,
   resolveDiscordChannel,
   SUPPRESS_NOTIFICATIONS_FLAG,
-  type DiscordAllowedMentions,
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
 
@@ -105,30 +98,12 @@ function resolveClassicDiscordMessage(
   return { text: parts.join("\n\n"), filename };
 }
 
-type DiscordComponentSendOpts = {
-  cfg: OpenClawConfig;
-  accountId?: string;
-  token?: string;
-  rest?: RequestClient;
-  silent?: boolean;
-  reply?: DiscordReplyReference;
+type DiscordComponentSendOpts = Omit<
+  Parameters<typeof sendMessageDiscord>[2],
+  "verbose" | "retry" | "components" | "embeds" | "threadId"
+> & {
   sessionKey?: string;
   agentId?: string;
-  mediaUrl?: string;
-  mediaAccess?: OutboundMediaAccess;
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  filename?: string;
-  textLimit?: number;
-  maxLinesPerMessage?: number;
-  tableMode?: MarkdownTableMode;
-  chunkMode?: ChunkMode;
-  suppressEmbeds?: boolean;
-  allowedMentions?: DiscordAllowedMentions;
-  /** Persist the concrete platform send before component bookkeeping can fail. */
-  onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
-  onPlatformSendDispatch?: () => Promise<void>;
-  assertPlatformSendAuthorized?: () => void;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
@@ -235,25 +210,8 @@ export async function sendDiscordComponentMessage(
     const classicMessage = opts.mediaUrl ? resolveClassicDiscordMessage(spec) : undefined;
     if (classicMessage) {
       return await sendMessageDiscord(to, classicMessage.text, {
-        cfg: opts.cfg,
-        accountId: opts.accountId,
-        token: opts.token,
-        rest: opts.rest,
-        mediaUrl: opts.mediaUrl,
+        ...opts,
         filename: opts.filename?.trim() || classicMessage.filename,
-        mediaLocalRoots: opts.mediaLocalRoots,
-        mediaReadFile: opts.mediaReadFile,
-        mediaAccess: opts.mediaAccess,
-        reply: opts.reply,
-        silent: opts.silent,
-        textLimit: opts.textLimit,
-        maxLinesPerMessage: opts.maxLinesPerMessage,
-        tableMode: opts.tableMode,
-        chunkMode: opts.chunkMode,
-        onDeliveryResult: opts.onDeliveryResult,
-        onPlatformSendDispatch: opts.onPlatformSendDispatch,
-        assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
-        ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
       });
     }
     return await writeDiscordComponentMessage(to, spec, opts);
@@ -307,7 +265,11 @@ async function writeDiscordComponentMessage(
         }
         await opts.onPlatformSendDispatch?.();
         opts.assertPlatformSendAuthorized?.();
-        return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body });
+        // SAFETY: Discord's Create Message response includes its message and channel IDs.
+        return (await rest.post(Routes.channelMessages(channelId), { body })) as {
+          id: string;
+          channel_id: string;
+        };
       },
       "components",
       creating ? { safety: "nonce-protected-create" } : undefined,

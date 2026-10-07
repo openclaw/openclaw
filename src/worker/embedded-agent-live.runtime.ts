@@ -9,6 +9,7 @@ import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js"
 import { hasModelFallbackStop } from "../agents/failover-error.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveAssistantMessagePhase,
@@ -108,11 +109,6 @@ function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
         payload: { ...event.payload, result: boundLiveValue(event.payload.result) },
       };
     }
-  } else if (event.kind === "lifecycle" && event.payload.phase === "error") {
-    bounded = {
-      kind: "lifecycle",
-      payload: { ...event.payload, error: truncateLiveText(event.payload.error) },
-    };
   } else {
     throw new Error(`worker live ${event.kind} event exceeds the protocol payload limit`);
   }
@@ -158,13 +154,7 @@ export type WorkerLiveClient = {
   emitTerminal: (event: WorkerLiveEvent) => Promise<void>;
 };
 
-type WorkerLiveRuntime = {
-  handleSessionEvent: (event: AgentSessionEvent) => void;
-  enqueueRunFailure: (failure: { aborted: boolean; error: Error }) => void;
-  emitTerminal: () => Promise<void>;
-};
-
-export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRuntime {
+export function createWorkerLiveRuntime(client: WorkerLiveClient) {
   let previewEnabled = true;
   const enqueueLive = (event: WorkerLiveEvent) => {
     if (previewEnabled) {
@@ -205,9 +195,10 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
   let streamedPhase: AssistantPhase | undefined;
   let assistantMessageIndex = 0;
   let streamedThinking = "";
-  const emitAssistantSnapshot = (message: AgentMessage) => {
+  const emitAssistantSnapshot = (message: AgentMessage, complete = false) => {
     const { text, phase } = readAssistantSnapshot(message);
-    if (text === streamedText && phase === streamedPhase) {
+    const mediaUrls = complete ? parseReplyDirectives(text).mediaUrls : undefined;
+    if (text === streamedText && phase === streamedPhase && !mediaUrls?.length) {
       return;
     }
     // Commentary never contributed to the answer, even if a final repeats its prefix.
@@ -219,6 +210,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       payload: {
         text,
         delta: replace ? text : text.slice(previousText.length),
+        ...(mediaUrls?.length ? { mediaUrls } : {}),
         ...(replace ? { replace: true as const } : {}),
         ...(phase ? { phase } : {}),
         // Provider signatures can arrive only at text_end. Message lifecycle,
@@ -262,7 +254,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       return;
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
-      emitAssistantSnapshot(event.message);
+      emitAssistantSnapshot(event.message, true);
       const finalThinking = readAssistantThinking(event.message);
       if (finalThinking !== streamedThinking) {
         enqueueLive({

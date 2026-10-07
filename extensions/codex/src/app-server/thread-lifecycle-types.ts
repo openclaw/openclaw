@@ -1,29 +1,29 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import type {
   CodexAppServerLiveThreadOwnership,
   CodexEphemeralThreadPolicy,
 } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexAppServerRuntimeOptions } from "./config.js";
 import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexInferenceProviderRoutes } from "./inference-routing.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
-import type { CodexDynamicToolSpec, CodexTurnEnvironmentParams, JsonObject } from "./protocol.js";
+import type { CodexDynamicToolSpec, JsonObject } from "./protocol.js";
 import type {
+  CodexBindingAuthority,
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
   CodexAppServerContextEngineBinding,
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
 import type {
   CodexThreadLifecycleTimingTracker,
   CodexThreadLifecycleTimingOptions,
 } from "./thread-lifecycle-timing.js";
 import type { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
-import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed" | "forked";
@@ -64,15 +64,19 @@ export type CodexPluginThreadConfigProvider = {
   build: (options?: { threadId?: string }) => Promise<CodexPluginThreadConfig>;
 };
 
-export type CodexStartOrResumeThreadParams = {
+export type CodexStartOrResumeThreadParams = Omit<
+  CodexThreadConfigurationOptions,
+  "model" | "modelProvider" | "restrictedToolSurfaceInheritedMcpServerNames"
+> & {
   inferenceRoute?: CodexInferenceProxy;
   inferenceProviderRoutes?: CodexInferenceProviderRoutes;
   client: CodexAppServerClient;
   abandonClient?: () => Promise<void>;
   reserveResumeThread?: (threadId: string) => { release: () => void };
   bindingStore: CodexAppServerBindingStore;
-  params: EmbeddedRunAttemptParams;
-  /** Retained host-generation proof; the opaque host capability remains unchanged. */
+  params: AgentHarnessSessionRuntimeParamsV1;
+  authority?: CodexBindingAuthority;
+  /** Caller liveness; durable lineage is owned by authority. */
   assertCurrent?: () => void;
   /** Private execution identity resolved by this harness's catalog generation. */
   runtimeModelId?: string;
@@ -81,16 +85,7 @@ export type CodexStartOrResumeThreadParams = {
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
-  webSearchAllowed?: boolean;
-  appServer: CodexAppServerRuntimeOptions;
-  developerInstructions?: string;
-  /** Skill catalog carried with thread developer instructions; refreshable, never generic policy. */
-  skillsInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
-  config?: JsonObject;
-  shellEnvironment?: Readonly<Record<string, string>>;
-  shellPathPrepend?: readonly string[];
-  disableLoginShell?: boolean;
   finalConfigPatch?: JsonObject;
   buildFinalConfigPatch?: (
     decision: CodexThreadFinalConfigPatchDecision,
@@ -100,21 +95,16 @@ export type CodexStartOrResumeThreadParams = {
   nativeHookRelayRequired?: boolean;
   /** A retained operator source can keep legacy hooks off only while its model policy is absent. */
   nativeModelAdmission?: "required" | "optional" | "disabled";
-  nativeCodeModeEnabled?: boolean;
-  nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
-  nativeCodeModeOnlyEnabled?: boolean;
   userMcpServersEnabled?: boolean;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
   /** Versioned owner of configured MCP for scheduled dynamic-tool execution. */
   configuredMcpOwnershipVersion?: 1;
-  environmentSelection?: CodexTurnEnvironmentParams[];
   appServerRuntimeFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   signal?: AbortSignal;
   timing?: CodexThreadLifecycleTimingOptions;
-  hostSystemAgentActive?: boolean;
 };
 
 export type CodexThreadRequestContext = {
@@ -156,7 +146,7 @@ export type CodexThreadResumePreparation = {
 
 export type CodexResumeThreadContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
-  clearCurrentBinding: (operation: string) => Promise<void>;
+  stageBindingReplacement: (operation: string) => void;
   prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
   buildLoadedPluginThreadConfig?: (
     binding: CodexAppServerThreadBinding,

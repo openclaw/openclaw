@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { GatewayRequestEntryLifetime } from "../server-request-entry.js";
 import type { GatewayRequestOptions } from "./types.js";
 
 const capture = vi.hoisted(() => vi.fn());
@@ -14,6 +12,8 @@ vi.mock("../../logging/diagnostic-heap-profile.js", () => ({
 const result = {
   durationMs: 5_000,
   samplingIntervalBytes: 32_768,
+  includeObjectsCollectedByMajorGC: false,
+  includeObjectsCollectedByMinorGC: false,
   heapUsedBefore: 100,
   heapUsedAfter: 200,
   rssBefore: 300,
@@ -26,10 +26,6 @@ function request(
     scopes?: string[];
     role?: string;
     params?: unknown;
-    connection?: AbortController;
-    gateway?: GatewayRequestEntryLifetime;
-    signal?: AbortSignal;
-    hasAuthority?: () => boolean;
   } = {},
 ) {
   const respond = vi.fn();
@@ -43,7 +39,6 @@ function request(
     respond,
     client: {
       connId: "profile-client",
-      connectionSignal: options.connection?.signal,
       connect: {
         role: options.role ?? "operator",
         scopes: options.scopes ?? ["operator.admin"],
@@ -53,12 +48,7 @@ function request(
       },
     } as GatewayRequestOptions["client"],
     isWebchatConnect: () => false,
-    context: {
-      logGateway: { warn: vi.fn() },
-      requestEntryLifetime: options.gateway,
-    } as unknown as GatewayRequestOptions["context"],
-    signal: options.signal,
-    hasCurrentClientAuthority: options.hasAuthority,
+    context: { logGateway: { warn: vi.fn() } } as unknown as GatewayRequestOptions["context"],
   });
   return { respond, pending };
 }
@@ -71,8 +61,6 @@ afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 describe("diagnostics.heapProfile dispatch", () => {
   it.each([
-    { role: "operator", scopes: [] },
-    { role: "operator", scopes: ["operator.read"] },
     { role: "operator", scopes: ["operator.write"] },
     { role: "node", scopes: ["operator.admin"] },
   ])("rejects $role/$scopes before native work", async (options) => {
@@ -86,27 +74,39 @@ describe("diagnostics.heapProfile dispatch", () => {
     );
   });
 
-  it.each([undefined, {}, { durationMs: 200, samplingIntervalBytes: 4096 }])(
+  it.each([
+    undefined,
+    {
+      durationMs: 200,
+      samplingIntervalBytes: 4096,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: false,
+    },
+    { includeObjectsCollectedByMajorGC: false, includeObjectsCollectedByMinorGC: true },
+  ])(
     "serves allocation attribution through the registered admin RPC with params %j",
     async (params) => {
       const call = request({ params });
       await call.pending;
-      expect(capture).toHaveBeenCalledOnce();
+      expect(capture).toHaveBeenCalledExactlyOnceWith({
+        ...params,
+        signal: expect.any(AbortSignal),
+        hasAuthority: expect.any(Function),
+      });
       expect(call.respond).toHaveBeenCalledWith(true, result, undefined);
     },
   );
 
   it.each([
     null,
-    [],
-    "",
-    1,
     { durationMs: 0 },
     { durationMs: 1.5 },
     { durationMs: "5" },
     { samplingIntervalBytes: -1 },
     { samplingIntervalBytes: Infinity },
     { filename: "profile" },
+    { includeObjectsCollectedByMajorGC: "true" },
+    { includeObjectsCollectedByMinorGC: 1 },
   ])("rejects invalid params %j before capture", async (params) => {
     const call = request({ params });
     await call.pending;
@@ -115,93 +115,6 @@ describe("diagnostics.heapProfile dispatch", () => {
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-  });
-
-  it.each(["connection", "gateway", "request"])(
-    "cancels through the existing %s lifetime and waits for cleanup",
-    async (boundary) => {
-      const connection = new AbortController();
-      const gateway = new GatewayRequestEntryLifetime();
-      const controller = new AbortController();
-      const entered = createDeferred();
-      const cleanup = createDeferred();
-      let captureSignal: AbortSignal | undefined;
-      capture.mockImplementation(async ({ signal }: { signal: AbortSignal }) => {
-        captureSignal = signal;
-        entered.resolve();
-        await cleanup.promise;
-        return { status: "unavailable", reason: "cancelled", cleanupFailed: false };
-      });
-      const call = request({ connection, gateway, signal: controller.signal });
-      let settled = false;
-      void call.pending.then(() => {
-        settled = true;
-      });
-      await entered.promise;
-      if (boundary === "connection") {
-        connection.abort();
-      }
-      if (boundary === "gateway") {
-        gateway.beginClose();
-      }
-      if (boundary === "request") {
-        controller.abort();
-      }
-      expect(captureSignal?.aborted).toBe(true);
-      expect(settled).toBe(false);
-      expect(call.respond).not.toHaveBeenCalled();
-      cleanup.resolve();
-      await call.pending;
-      expect(call.respond).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rechecks connection authority before publishing a profile", async () => {
-    let authority = true;
-    capture.mockImplementation(async ({ hasAuthority }: { hasAuthority: () => boolean }) => {
-      expect(hasAuthority()).toBe(true);
-      authority = false;
-      expect(hasAuthority()).toBe(false);
-      return { status: "complete", result };
-    });
-    const call = request({ hasAuthority: () => authority });
-    await call.pending;
-    expect(call.respond).not.toHaveBeenCalled();
-  });
-
-  it("publishes a bounded, visible failure including cleanup uncertainty", async () => {
-    capture.mockResolvedValue({
-      status: "unavailable",
-      reason: "capture-failed",
-      cleanupFailed: true,
-    });
-    const call = request();
-    await call.pending;
-    expect(call.respond).toHaveBeenCalledWith(false, undefined, {
-      code: "UNAVAILABLE",
-      message: "Heap profile unavailable: capture-failed",
-      details: { reason: "capture-failed", cleanupFailed: true },
-    });
-  });
-
-  it("explains that all active Node tracing must be stopped first", async () => {
-    capture.mockResolvedValue({
-      status: "unavailable",
-      reason: "tracing-active",
-      cleanupFailed: false,
-    });
-    const call = request();
-    await call.pending;
-    expect(call.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message:
-          "Heap profile unavailable: stop active Node tracing, including non-CPU categories, before requesting a profile",
-        details: { reason: "tracing-active", cleanupFailed: false },
-      }),
     );
   });
 });

@@ -1,13 +1,13 @@
 ---
-summary: "Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Probe"
+summary: "Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Check"
 read_when:
   - You are dispatching CI or Full Release Validation by hand
-  - You need the Windows Testbox Probe inputs
+  - You need the Windows Testbox Check inputs
 title: "Manual dispatches"
 sidebarTitle: "Manual dispatches"
 ---
 
-Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Probe. Part of the [CI scope and routing](/ci/scope-and-routing) index.
+Manual CI dispatch behavior, release-gate fallbacks, and the Windows Testbox Check. Part of the [CI scope and routing](/ci/scope-and-routing) index.
 
 ## Manual dispatches
 
@@ -39,10 +39,11 @@ gh workflow run full-release-validation.yml --ref main \
   -f expected_sha="$VALIDATION_SHA"
 ```
 
-Gateway extended-stable shared publication requires complete exact-target Full
-Release Validation from the trusted main-pinned `release-ci/*` harness targeting
-the frozen `extended-stable/YYYY.M.33` tip. Direct canonical-branch and `main`
-producers do not satisfy the protected publisher. Current
+Gateway extended-stable shared publication requires complete candidate-owned
+Full Release Validation from an independently admitted `release-ci/*` harness
+at Q=C, targeting the frozen `extended-stable/YYYY.M.33` tip. The raw diagnostic
+example above and direct `main` producers do not satisfy that publication
+contract. Current
 manifests also supply qualified npm preflight artifacts. The shared
 `OpenClaw Release Publish` parent dispatches from a protected lightweight
 `release-publish/<sha12>-<epoch>` tag at the frozen trusted-main Tooling SHA and
@@ -52,17 +53,27 @@ advance; ClawHub, native-app, website, regular npm `latest`, and private
 dist-tag surfaces are excluded. Core-resume recovery verifies existing registry
 bytes before resuming evidence and finalization; Docker-only recovery leaves
 GitHub finalization untouched. See [Monthly Gateway extended-stable
-publication](/reference/RELEASING#monthly-gateway-extended-stable-publication)
+publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/extended-stable-publish.md)
 for commands and recovery.
 
-### Windows Testbox Probe
+<a id="windows-testbox-probe" />
 
-The manual `windows-testbox-probe.yml` workflow keeps Windows/WSL probing and
+### Windows Testbox Check
+
+The manual `windows-testbox-probe.yml` workflow keeps Windows/WSL checking and
 headless Windows CI on the selected `runner_label`. The `run_windows_ci` input
 (default `false`) requests both headless CI and a separate native Scheduled Task
-proof job on GitHub-hosted `windows-2025`. Neither job depends on the other, so
+proof job on GitHub-hosted `windows-2025` when no installed package binding is
+supplied. Neither job depends on the other, so
 their results remain independently visible; either requested proof failing fails
 the workflow.
+
+Set `skip_defender_exclusions=true` to leave Windows Defender policy unchanged
+throughout the workflow, including native and installed Scheduled Task proof jobs.
+This skips only the workspace and Node process exclusions; proof selection,
+isolation checks, native lifecycle tests, cleanup, and evidence upload remain
+unchanged. The default is `false`, preserving the existing best-effort exclusions
+for Windows CI and exact replay.
 
 For both proofs, set `target_ref` to an exact 40-character commit SHA. Both jobs
 check out that target, and native proof verifies checkout equality before running
@@ -72,6 +83,41 @@ skipping proof. Selecting `windows-2025` does not establish native qualification
 the unchanged lifecycle assertions and cleanup must pass on the actual runner.
 Cleanup and diagnostic upload still run after failure, and retained evidence is
 removed only after cleanup and upload succeed.
+
+#### Installed Scheduled Task upgrades
+
+Set `run_windows_ci=true` with one `installed_startup_package` binding from a
+successful Package Acceptance run, `runner_label=windows-2025`, and
+`keepalive_minutes=0`. Dispatch the reviewed workflow revision and use its exact
+SHA as `target_ref`; the binding independently pins the product package. Leave
+the other proof modes off. With an empty package binding, the independent
+source-only CI and native jobs above retain their behavior.
+
+The existing package resolver authenticates the candidate, then passes a verified
+artifact within the same workflow run to the native job. That job retains
+`contents: read` permissions. It runs a fresh installed candidate and the unchanged
+published 2026.9.3 and 2026.9.4 CLI updaters against the candidate. Each upgrade
+also preserves a separate running profile under its canonical Task name. Live
+status handshakes must match the verified package version and build ID; the
+updated Gateway must have a new PID, while the peer retains its PID and baseline
+identity. Candidate update preview and deep Doctor discovery inspect actual
+registered Task actions, including a disabled custom-named Gateway CMD task
+reported as an extra and an owned disabled task with a missing launcher. The fresh cell also inspects a disabled
+direct executable action and verifies that packaged update preview leaves its
+unsupported automatic service management unavailable. This proves read-only
+inspection and preservation, not direct-action execution or update mutation.
+
+Cells prepare their own normal npm installations in sequence. Actual Task and
+descendant cleanup and immutable proof upload must succeed before disposable
+prefixes and caches are retired or the next cell starts. A failed cell retains
+its evidence and stops the sequence; forced command cleanup cannot establish a
+passing natural-exit result. The final artifact requires all three cells.
+
+The fixture checks actual free space after tooling setup against provisional
+13 GiB fresh-install and 29 GiB published-pair allowances. These are planning
+allowances, not measured package bounds or runner capacity. It records space and
+owned allocations at lifecycle boundaries; transient peaks between observations
+remain unknown. Existing command, test, step, and job deadlines remain unchanged.
 
 #### Exact Windows test replay
 
@@ -120,7 +166,7 @@ The existing package owner installs and verifies the exact candidate artifact;
 the native admission gate requires a fresh hosted runner without credentials,
 operator mounts, Tailnet attachment, or managed identity.
 
-The probe authenticates and installs npm versions 2026.9.4 and 2026.9.5, then
+The check authenticates and installs npm versions 2026.9.4 and 2026.9.5, then
 calls their unchanged published repair controllers against the installed candidate
 worker. Version 2026.9.4 delegates its verifying phase; 2026.9.5 also delegates
 validation. Each must receive the deferred unavailable result without provider
@@ -138,7 +184,7 @@ assertion. Original 90-second worker,
 The `windows-installed-startup-<runId>-<attempt>` artifact retains
 `repair-results.json`, the failed or completed cells, native Job observations,
 PID/start identities, exact package/controller/runtime/tooling hashes, synthetic
-provider counts, state effects, and final cleanup. The probe stops after a failed
+provider counts, state effects, and final cleanup. The check stops after a failed
 cell and never substitutes successful runner teardown for worker qualification.
 
 #### Installed Gateway startup measurements
@@ -146,7 +192,7 @@ cell and never substitutes successful runner teardown for worker qualification.
 The same workflow can measure one immutable npm package on the selected Windows
 runner. Set `target_ref` to the full tooling commit, `run_windows_ci=false`,
 `keepalive_minutes=0`, and `startup_node_version` to an exact Node version
-(default `26.8.2`). Leave WSL and Defender inputs at their defaults. The optional
+(default `26.9.0`). Leave WSL and Defender inputs at their defaults. The optional
 `installed_startup_package` input is a JSON object with `runId`, `runAttempt`,
 `workflowSha`, `artifactId`, `artifactDigest`, `packageSha256`, and `sourceSha`.
 Use the immutable `package-under-test-<runId>-<runAttempt>` artifact from a
@@ -165,7 +211,7 @@ No synchronous process sampler or startup profiler runs during measurement.
 The `windows-installed-startup-<runId>-<runAttempt>` artifact retains all nine
 sample slots, errors, package/runtime/helper hashes, source and tooling commits,
 runner hardware, the raw installed npm lockfile, and cleanup evidence. A streamed
-`cohort.log` retains the active PID, phase, child output, and completed probe/RPC
+`cohort.log` retains the active PID, phase, child output, and completed check/RPC
 observations even if cancellation prevents the final sample checkpoint. Synthetic databases and compile caches
 stay in the runner's temporary directory. A failed or interrupted cohort has no
 established summary. “Fresh” means new state, not a cold filesystem; dedicated

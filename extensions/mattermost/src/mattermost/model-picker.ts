@@ -1,4 +1,3 @@
-// Mattermost plugin module implements model picker behavior.
 import { createHash } from "node:crypto";
 import {
   resolveStoredModelOverride,
@@ -60,46 +59,8 @@ function splitModelRef(modelRef?: string | null): { provider: string; model: str
   return { provider, model };
 }
 
-function readContextString(context: Record<string, unknown>, key: string, fallback = ""): string {
-  return readStringField(context, key) ?? fallback;
-}
-
-function readContextNumber(context: Record<string, unknown>, key: string): number | undefined {
-  const value = context[key];
-  return asFiniteNumber(value) ?? parseStrictInteger(value);
-}
-
 function normalizePage(value: number | undefined): number {
-  if (!Number.isFinite(value)) {
-    return 1;
-  }
-  return Math.max(1, Math.floor(value as number));
-}
-
-function paginateItems<T>(items: T[], page?: number, pageSize = MODELS_PAGE_SIZE) {
-  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
-  const safePage = Math.max(1, Math.min(normalizePage(page), totalPages));
-  const start = (safePage - 1) * pageSize;
-  return {
-    items: items.slice(start, start + pageSize),
-    page: safePage,
-    totalPages,
-    hasPrev: safePage > 1,
-    hasNext: safePage < totalPages,
-    totalItems: items.length,
-  };
-}
-
-function buildContext(state: MattermostModelPickerState): Record<string, unknown> {
-  return {
-    [MATTERMOST_MODEL_PICKER_CONTEXT_KEY]: true,
-    ...state,
-  };
-}
-
-function buildButtonId(state: MattermostModelPickerState): string {
-  const digest = createHash("sha256").update(JSON.stringify(state)).digest("hex").slice(0, 12);
-  return `${ACTION_IDS[state.action]}${digest}`;
+  return Math.max(1, Math.floor(asFiniteNumber(value) ?? 1));
 }
 
 function buildButton(params: {
@@ -111,38 +72,28 @@ function buildButton(params: {
   model?: string;
   style?: "default" | "primary" | "danger";
 }): MattermostInteractiveButtonInput {
-  const baseState =
-    params.action === "providers" || params.action === "back"
+  const baseState = {
+    action: params.action,
+    ownerUserId: params.ownerUserId,
+    ...(params.action === "list" || params.action === "select"
       ? {
-          action: params.action,
-          ownerUserId: params.ownerUserId,
+          provider: normalizeProviderId(params.provider ?? ""),
+          page: normalizePage(params.page),
         }
-      : params.action === "list"
-        ? {
-            action: "list" as const,
-            ownerUserId: params.ownerUserId,
-            provider: normalizeProviderId(params.provider ?? ""),
-            page: normalizePage(params.page),
-          }
-        : {
-            action: "select" as const,
-            ownerUserId: params.ownerUserId,
-            provider: normalizeProviderId(params.provider ?? ""),
-            page: normalizePage(params.page),
-            model: normalizeStringifiedOptionalString(params.model) ?? "",
-          };
+      : {}),
+    ...(params.action === "select"
+      ? { model: normalizeStringifiedOptionalString(params.model) ?? "" }
+      : {}),
+  };
 
+  const digest = createHash("sha256").update(JSON.stringify(baseState)).digest("hex").slice(0, 12);
   return {
     // Mattermost requires action IDs to be unique within a post.
-    id: buildButtonId(baseState),
+    id: `${ACTION_IDS[baseState.action]}${digest}`,
     text: params.text,
     ...(params.style ? { style: params.style } : {}),
-    context: buildContext(baseState),
+    context: { [MATTERMOST_MODEL_PICKER_CONTEXT_KEY]: true, ...baseState },
   };
-}
-
-function getProviderModels(data: ModelsProviderData, provider: string): string[] {
-  return [...(data.byProvider.get(normalizeProviderId(provider)) ?? new Set<string>())].toSorted();
 }
 
 function formatCurrentModelLine(currentModel?: string): string {
@@ -180,8 +131,8 @@ export function parseMattermostModelPickerContext(
     return null;
   }
 
-  const ownerUserId = normalizeOptionalString(readContextString(context, "ownerUserId")) ?? "";
-  const action = normalizeOptionalString(readContextString(context, "action")) ?? "";
+  const ownerUserId = normalizeOptionalString(context.ownerUserId) ?? "";
+  const action = normalizeOptionalString(context.action) ?? "";
   if (!ownerUserId) {
     return null;
   }
@@ -190,8 +141,8 @@ export function parseMattermostModelPickerContext(
     return { action, ownerUserId };
   }
 
-  const provider = normalizeProviderId(readContextString(context, "provider"));
-  const page = readContextNumber(context, "page");
+  const provider = normalizeProviderId(readStringField(context, "provider") ?? "");
+  const page = asFiniteNumber(context.page) ?? parseStrictInteger(context.page);
   if (!provider) {
     return null;
   }
@@ -206,7 +157,7 @@ export function parseMattermostModelPickerContext(
   }
 
   if (action === "select") {
-    const model = normalizeOptionalString(readContextString(context, "model")) ?? "";
+    const model = normalizeOptionalString(context.model) ?? "";
     if (!model) {
       return null;
     }
@@ -243,19 +194,16 @@ export function resolveMattermostModelPickerCurrentModel(params: {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
-    const sessionEntry = getSessionEntry({
-      storePath,
-      sessionKey: params.route.sessionKey,
-      ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
-    });
+    const loadSessionEntry = (sessionKey: string) =>
+      getSessionEntry({
+        storePath,
+        sessionKey,
+        ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
+      });
+    const sessionEntry = loadSessionEntry(params.route.sessionKey);
     const override = resolveStoredModelOverride({
       sessionEntry,
-      loadSessionEntry: (sessionKey) =>
-        getSessionEntry({
-          storePath,
-          sessionKey,
-          ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
-        }),
+      loadSessionEntry,
       sessionKey: params.route.sessionKey,
       parentSessionKey: sessionEntry?.parentSessionKey,
       defaultProvider: params.data.resolvedDefault.provider,
@@ -327,7 +275,7 @@ export function renderMattermostModelsPickerView(params: {
   currentModel?: string;
 }): MattermostModelPickerRenderedView {
   const provider = normalizeProviderId(params.provider);
-  const models = getProviderModels(params.data, provider);
+  const models = [...(params.data.byProvider.get(provider) ?? [])].toSorted();
   const current = splitModelRef(params.currentModel);
 
   if (models.length === 0) {
@@ -347,42 +295,46 @@ export function renderMattermostModelsPickerView(params: {
     };
   }
 
-  const page = paginateItems(models, params.page);
-  const rows: MattermostInteractiveButtonInput[][] = page.items.map((model) => {
-    const isCurrent = current?.provider === provider && current?.model === model;
-    return [
-      buildButton({
-        action: "select",
-        ownerUserId: params.ownerUserId,
-        text: isCurrent ? `${model} [current]` : model,
-        provider,
-        model,
-        page: page.page,
-        style: isCurrent ? "primary" : "default",
-      }),
-    ];
-  });
+  const totalPages = Math.ceil(models.length / MODELS_PAGE_SIZE);
+  const page = Math.min(normalizePage(params.page), totalPages);
+  const start = (page - 1) * MODELS_PAGE_SIZE;
+  const rows: MattermostInteractiveButtonInput[][] = models
+    .slice(start, start + MODELS_PAGE_SIZE)
+    .map((model) => {
+      const isCurrent = current?.provider === provider && current?.model === model;
+      return [
+        buildButton({
+          action: "select",
+          ownerUserId: params.ownerUserId,
+          text: isCurrent ? `${model} [current]` : model,
+          provider,
+          model,
+          page,
+          style: isCurrent ? "primary" : "default",
+        }),
+      ];
+    });
 
   const navRow: MattermostInteractiveButtonInput[] = [];
-  if (page.hasPrev) {
+  if (page > 1) {
     navRow.push(
       buildButton({
         action: "list",
         ownerUserId: params.ownerUserId,
         text: "Prev",
         provider,
-        page: page.page - 1,
+        page: page - 1,
       }),
     );
   }
-  if (page.hasNext) {
+  if (page < totalPages) {
     navRow.push(
       buildButton({
         action: "list",
         ownerUserId: params.ownerUserId,
         text: "Next",
         provider,
-        page: page.page + 1,
+        page: page + 1,
       }),
     );
   }
@@ -400,9 +352,9 @@ export function renderMattermostModelsPickerView(params: {
 
   return {
     text: [
-      `Models (${provider}) - ${page.totalItems} available`,
+      `Models (${provider}) - ${models.length} available`,
       formatCurrentModelLine(params.currentModel),
-      `Page ${page.page}/${page.totalPages}`,
+      `Page ${page}/${totalPages}`,
       "Select a model to switch immediately.",
     ].join("\n"),
     buttons: rows,

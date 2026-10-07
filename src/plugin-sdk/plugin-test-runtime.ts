@@ -1,6 +1,74 @@
 // Focused public test helpers for plugin runtime, registry, and setup fixtures.
 
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
+
+/** Builds a bundled-plugin Gateway runtime backed by the real session projection and handlers. */
+export async function createTestPluginGatewayRuntime(params: {
+  pluginId: string;
+  config: OpenClawConfig;
+}): Promise<{ gateway: PluginRuntime["gateway"]; close: () => Promise<void> }> {
+  const [
+    runtimeModule,
+    requestScope,
+    serverPlugins,
+    projectionModule,
+    projectionAccess,
+    dispatchTestSupport,
+  ] = await Promise.all([
+    import("../plugins/runtime/index.js"),
+    import("../plugins/runtime/gateway-request-scope.js"),
+    import("../gateway/server-plugins.js"),
+    import("../gateway/session-row-projection.js"),
+    import("../gateway/session-row-projection-access.js"),
+    import("../gateway/server-plugin-in-process-dispatch.test-support.js"),
+  ]);
+  const gatewayContext: GatewayRequestContext = {
+    ...dispatchTestSupport.createContext(),
+    getRuntimeConfig: () => params.config,
+    getCommittedRuntimeConfig: () => params.config,
+  };
+  const projection = await projectionModule.createSessionRowProjection({
+    cfg: params.config,
+    modelCatalog: [],
+  });
+  projectionAccess.bindSessionRowProjection(gatewayContext, () => projection);
+  await projection.ensureMaterialized();
+  const base = runtimeModule.createPluginRuntime().gateway;
+  const resolveGatewayContext = () => gatewayContext;
+  let closed = false;
+  return {
+    gateway: {
+      ...base,
+      isAvailable: async () => !closed,
+      request: <T>(
+        method: string,
+        requestParams?: Record<string, unknown>,
+        options?: Parameters<PluginRuntime["gateway"]["request"]>[2],
+      ) =>
+        requestScope.withPluginRuntimePluginScope(
+          { pluginId: params.pluginId, pluginOrigin: "bundled" },
+          () =>
+            serverPlugins.dispatchTrustedPluginGatewayMethod<T>(
+              method,
+              requestParams,
+              options,
+              resolveGatewayContext,
+            ),
+        ),
+    },
+    async close() {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      await projection.ensureMaterialized();
+      projection.dispose();
+    },
+  };
+}
 
 type AgentHarnessHostTestAttempt = Omit<
   Parameters<
@@ -84,6 +152,7 @@ export {
 export { addTestHook } from "../plugins/hooks.test-helpers.js";
 export { createPluginRecord } from "../plugins/status.test-helpers.js";
 export { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+export { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 export { useProviderCatalogMetadata } from "./test-helpers/provider-catalog.js";
 export { useProviderToolSchemaRuntimeForTest } from "./test-helpers/provider-tool-schemas.test-support.js";
 export { useBundledProviderPolicyArtifactsForTest } from "./test-helpers/provider-policy-artifacts.test-support.js";
@@ -151,7 +220,16 @@ export {
   type WizardPrompter,
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
-export { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
+type AdmittedHostCapabilityTestFixtureFactory =
+  typeof import("../agents/harness/host-capability.test-support.js").createAdmittedHostCapabilityTestFixture;
+
+// Keep unrelated consumers of this test barrel out of the host capability runtime.
+export async function createAdmittedHostCapabilityTestFixture(
+  ...args: Parameters<AdmittedHostCapabilityTestFixtureFactory>
+): ReturnType<AdmittedHostCapabilityTestFixtureFactory> {
+  const fixture = await import("../agents/harness/host-capability.test-support.js");
+  return fixture.createAdmittedHostCapabilityTestFixture(...args);
+}
 export async function loadWebFetchToolFactoryForTest() {
   return (await import("../agents/tools/web-fetch.js")).createWebFetchTool;
 }
@@ -163,7 +241,6 @@ export {
   createCapturedPluginRegistration,
   type CapturedPluginRegistration,
 } from "../plugins/captured-registration.js";
-export { createRuntimeTaskFlow } from "../plugins/runtime/runtime-taskflow.js";
 export {
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,

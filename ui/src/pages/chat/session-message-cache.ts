@@ -3,8 +3,7 @@ import {
   readSessionMessageSequence,
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
-import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
-import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
@@ -43,15 +42,40 @@ export type ChatCacheObserver = {
 
 const chatCacheObservers = new WeakMap<ChatMessageCache, ChatCacheObserver>();
 
-type ChatMessageCacheTarget = {
+type ChatMessageCacheHost = Parameters<typeof resolveChatSnapshotKey>[0];
+type ChatMessageCacheTarget = Parameters<typeof resolveChatSnapshotKey>[1];
+
+type ChatHistoryCursorHost = ChatMessageCacheHost & {
   sessionKey: string;
-  agentId?: string | null;
+  currentSessionId?: string | null;
+  chatHistoryCursor?: ChatHistoryCursor;
 };
 
-type ChatMessageCacheHost = Pick<
-  UiSessionDefaultsHost,
-  "assistantAgentId" | "agentsList" | "hello"
->;
+export function readChatHistoryCursor(state: ChatHistoryCursorHost): string | undefined {
+  const receipt = state.chatHistoryCursor;
+  if (
+    receipt?.snapshotKey === resolveChatSnapshotKey(state, { sessionKey: state.sessionKey }) &&
+    receipt.sessionId === (state.currentSessionId ?? null)
+  ) {
+    return receipt.cursor;
+  }
+  delete state.chatHistoryCursor;
+  return undefined;
+}
+
+export function setChatHistoryCursor(
+  state: ChatHistoryCursorHost,
+  cursor: string | undefined,
+): void {
+  state.chatHistoryCursor =
+    cursor === undefined
+      ? undefined
+      : {
+          cursor,
+          snapshotKey: resolveChatSnapshotKey(state, { sessionKey: state.sessionKey }),
+          sessionId: state.currentSessionId ?? null,
+        };
+}
 
 export function observeChatCache(cache: ChatMessageCache, observer: ChatCacheObserver): void {
   chatCacheObservers.set(cache, observer);
@@ -67,8 +91,7 @@ function deleteChatSnapshot(
 }
 
 export function applyChatCacheSnapshot(
-  state: {
-    sessionKey: string;
+  state: ChatHistoryCursorHost & {
     chatDisplayedLeafEntryId?: string | null;
     chatHistoryPagination: ChatHistoryPagination;
     chatMessages: unknown[];
@@ -91,6 +114,7 @@ export function applyChatCacheSnapshot(
   state.chatHistoryPagination = snapshot.pagination;
   state.currentSessionId = snapshot.sessionId;
   state.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
+  setChatHistoryCursor(state, snapshot.deltaCursor);
 }
 
 export function appendChatMessageToCache(
@@ -161,8 +185,9 @@ export function clearChatMessagesFromCache(
   cache: ChatMessageCache,
   host: ChatMessageCacheHost,
   target: ChatMessageCacheTarget,
+  reason?: SessionSnapshotInvalidationReason,
 ): void {
-  deleteChatSnapshot(cache, resolveChatSnapshotKey(host, target));
+  deleteChatSnapshot(cache, resolveChatSnapshotKey(host, target), reason);
 }
 
 export function cacheChatSessionSnapshot(
@@ -208,19 +233,6 @@ export function readChatSessionSnapshot(
   target: ChatMessageCacheTarget,
 ): ChatSessionSnapshot | null {
   return getSessionCacheValue(cache, resolveChatSnapshotKey(host, target))?.snapshot ?? null;
-}
-
-export function measureChatSnapshotWeight(snapshot: ChatSessionSnapshot): number | null {
-  const messageWeights = measureMessageWeights(snapshot.messages);
-  if (!messageWeights) {
-    return null;
-  }
-  return measuredSnapshotWeight(
-    snapshot,
-    snapshot.pagination,
-    messageWeights.reduce((sum, weight) => sum + weight, 0),
-    messageWeights.length,
-  );
 }
 
 function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSessionSnapshot | null {

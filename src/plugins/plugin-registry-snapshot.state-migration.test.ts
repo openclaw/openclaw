@@ -13,9 +13,10 @@ import { autoMigrateLegacyPluginDoctorState } from "../infra/state-migrations.pl
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   loadPluginMetadataSnapshot,
@@ -134,13 +135,18 @@ describe("persisted plugin registry Doctor contract freshness", () => {
 
     const lease = await acquireStartupMigrationLeaseWithWait({ env, timeoutMs: 0 });
     try {
-      const { snapshotRead: persisted } = await persistRefreshedPluginIndex({
-        env,
-        lease,
-        measure: async (_name, run) => await run(),
-        snapshotRead: derived,
-        readPersistedSnapshot: readSnapshot,
-      });
+      const { snapshotRead: persisted } = await withPluginLifecycleLease(
+        { env },
+        async (pluginLease) =>
+          persistRefreshedPluginIndex({
+            env,
+            lease,
+            pluginLease,
+            measure: async (_name, run) => await run(),
+            snapshotRead: await readSnapshot(),
+            readPersistedSnapshot: readSnapshot,
+          }),
+      );
       expect(persisted.pluginMetadataSnapshot?.registrySource).toBe("persisted");
       expect(persisted.pluginMetadataSnapshot?.index.plugins).toEqual(
         derived.pluginMetadataSnapshot?.index.plugins,
@@ -183,7 +189,7 @@ describe("persisted plugin registry Doctor contract freshness", () => {
 
     const derived = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
     expect(derived.registrySource).toBe("derived");
-    writePersistedInstalledPluginIndexSync(derived.index, { stateDir });
+    await writePersistedInstalledPluginIndex(derived.index, { stateDir });
 
     const persisted = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
     const persistedPlugin = requirePlugin(persisted, pluginId);

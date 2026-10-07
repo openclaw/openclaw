@@ -16,28 +16,7 @@ import {
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
-const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "json"]);
-
-type SetupRoute = "onboarding" | "system-agent";
-
-export function resolveSetupCommandRoute(input: {
-  hasOnboardingFlag: boolean;
-  hasSystemAgentRequest: boolean;
-  configured: boolean;
-  interactive: boolean;
-  json: boolean;
-}): SetupRoute {
-  if (input.hasOnboardingFlag) {
-    return "onboarding";
-  }
-  if (input.hasSystemAgentRequest) {
-    return "system-agent";
-  }
-  if (input.configured && (input.interactive || input.json)) {
-    return "system-agent";
-  }
-  return "onboarding";
-}
+const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "skipBootstrap", "json"]);
 
 async function runSystemAgentEntry(
   options: Record<string, unknown>,
@@ -70,7 +49,11 @@ async function runOnboardingEntry(
     }
     const { setupCommand } = await import("../../commands/setup.js");
     await setupCommand(
-      { workspace: readStringValue(options.workspace), json: Boolean(options.json) },
+      {
+        workspace: readStringValue(options.workspace),
+        skipBootstrap: options.skipBootstrap === true,
+        json: Boolean(options.json),
+      },
       runtime,
     );
     return;
@@ -152,14 +135,11 @@ export function registerSetupCommand(program: Command): void {
         const { readConfigFileSnapshot } = await import("../../config/config.js");
         configured = !(await shouldStartLocalOnboarding(await readConfigFileSnapshot()));
       }
-      const route = resolveSetupCommandRoute({
-        hasOnboardingFlag,
-        hasSystemAgentRequest,
-        configured,
-        interactive: process.stdin.isTTY && process.stdout.isTTY,
-        json: Boolean(options.json),
-      });
-      if (route === "system-agent") {
+      if (
+        !hasOnboardingFlag &&
+        (hasSystemAgentRequest ||
+          (configured && ((process.stdin.isTTY && process.stdout.isTTY) || Boolean(options.json))))
+      ) {
         await runSystemAgentEntry(options, defaultRuntime);
         return;
       }

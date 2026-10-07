@@ -2,22 +2,28 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { deserialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
-  attachManagedImageRecordToMessage,
+  attachManagedImageRecordsToMessage,
   claimManagedImageRecordCleanupIfCurrent,
   deleteClaimedManagedImageRecord,
   insertManagedImageRecord,
@@ -62,6 +68,7 @@ describe("managed image record SQLite store", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -86,10 +93,11 @@ describe("managed image record SQLite store", () => {
         sessionKey: "agent:other:main",
         original: { ...first.original, mediaId: "older.png" },
       });
-      insertManagedImageRecord(claimed, stateDir);
-      insertManagedImageRecord(older, stateDir);
-      insertManagedImageRecord(first, stateDir);
-      expect(claimManagedImageRecordCleanupIfCurrent(claimed, stateDir)).toBe(true);
+      await insertManagedImageRecord(claimed, stateDir);
+      await insertManagedImageRecord(older, stateDir);
+      await insertManagedImageRecord(first, stateDir);
+      expect(await claimManagedImageRecordCleanupIfCurrent(claimed, stateDir)).toBe(true);
+      counters.expectIdle();
       await closeOpenClawStateDatabaseAsync();
       counters.clear();
       expect(await readManagedImageRecord(first.attachmentId, stateDir)).toEqual(first);
@@ -119,21 +127,16 @@ describe("managed image record SQLite store", () => {
     }
   });
 
-  it("round-trips every typed field", async () => {
+  it("round-trips every typed field even when the debug JSON copy is corrupt", async () => {
     const expected = record({
       messageId: "message-1",
       updatedAt: "2026-07-15T00:01:00.000Z",
       retentionClass: "history",
     });
 
-    insertManagedImageRecord(expected, stateDir);
+    await insertManagedImageRecord(expected, stateDir);
 
     expect(await readManagedImageRecord(expected.attachmentId, stateDir)).toEqual(expected);
-  });
-
-  it("uses typed columns when the debug JSON copy is corrupt", async () => {
-    const expected = record();
-    insertManagedImageRecord(expected, stateDir);
     const database = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
@@ -148,66 +151,15 @@ describe("managed image record SQLite store", () => {
     expect(await readManagedImageRecord(expected.attachmentId, stateDir)).toEqual(expected);
   });
 
-  it("atomically promotes a transient row and refreshes its debug copy", async () => {
-    const initial = record();
-    insertManagedImageRecord(initial, stateDir);
-
-    expect(
-      attachManagedImageRecordToMessage({
-        attachmentId: initial.attachmentId,
-        sessionKey: initial.sessionKey,
-        messageId: "message-committed",
-        updatedAt: "2026-07-15T00:02:00.000Z",
-        stateDir,
-      }),
-    ).toBe(true);
-
-    const current = await readManagedImageRecord(initial.attachmentId, stateDir);
-    expect(current).toMatchObject({
-      messageId: "message-committed",
-      retentionClass: "history",
-      updatedAt: "2026-07-15T00:02:00.000Z",
-    });
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
-        .selectFrom("managed_outgoing_image_records")
-        .select("record_json")
-        .where("attachment_id", "=", initial.attachmentId),
-    );
-    expect(JSON.parse(row?.record_json ?? "{}")).toEqual(current);
-  });
-
-  it("keeps a row changed after cleanup planning", async () => {
-    const planned = record();
-    insertManagedImageRecord(planned, stateDir);
-    attachManagedImageRecordToMessage({
-      attachmentId: planned.attachmentId,
-      sessionKey: planned.sessionKey,
-      messageId: "message-committed",
-      updatedAt: "2026-07-15T00:02:00.000Z",
-      stateDir,
-    });
-
-    expect(claimManagedImageRecordCleanupIfCurrent(planned, stateDir)).toBe(false);
-    expect((await readManagedImageRecord(planned.attachmentId, stateDir))?.messageId).toBe(
-      "message-committed",
-    );
-  });
-
   it("keeps a cleanup claim durable until the file deletion completes", async () => {
     const planned = record();
-    insertManagedImageRecord(planned, stateDir);
+    await insertManagedImageRecord(planned, stateDir);
 
-    expect(claimManagedImageRecordCleanupIfCurrent(planned, stateDir)).toBe(true);
+    expect(await claimManagedImageRecordCleanupIfCurrent(planned, stateDir)).toBe(true);
     expect(await readManagedImageRecord(planned.attachmentId, stateDir)).toBeNull();
     expect(
-      attachManagedImageRecordToMessage({
-        attachmentId: planned.attachmentId,
-        sessionKey: planned.sessionKey,
+      await attachManagedImageRecordsToMessage({
+        attachments: [planned],
         messageId: "too-late",
         updatedAt: "2026-07-15T00:02:00.000Z",
         stateDir,
@@ -217,7 +169,109 @@ describe("managed image record SQLite store", () => {
       { record: planned, cleanupPending: true },
     ]);
 
-    expect(deleteClaimedManagedImageRecord(planned, stateDir)).toBe(true);
+    expect(await deleteClaimedManagedImageRecord(planned, stateDir)).toBe(true);
     expect(await listManagedImageRecordEntries({ stateDir })).toEqual([]);
+  });
+
+  it("reserves promotion before an awaited worker entry so cleanup cannot overtake it", async (test) => {
+    const initial = record();
+    await insertManagedImageRecord(initial, stateDir);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const run = stateWorker.runOpenClawStateWorkerOperation;
+    const held = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return await run(...args);
+      });
+    const attaching = attachManagedImageRecordsToMessage({
+      attachments: [initial],
+      messageId: "message-committed",
+      updatedAt: "2026-07-15T00:02:00.000Z",
+      stateDir,
+    });
+    let claiming: Promise<boolean> | undefined;
+    void attaching.catch(() => {});
+    try {
+      await racePromiseWithAbortSignal(entered.promise, test.signal);
+      claiming = claimManagedImageRecordCleanupIfCurrent(initial, stateDir);
+      // An actual independent reader completes while the accepted mutation still waits.
+      expect(await readManagedImageRecord(initial.attachmentId, stateDir)).toEqual(initial);
+      expect(held).toHaveBeenCalledTimes(1);
+      release.resolve();
+      expect(await attaching).toBe(true);
+      expect(await claiming).toBe(false);
+      const current = await readManagedImageRecord(initial.attachmentId, stateDir);
+      expect(current).toMatchObject({
+        messageId: "message-committed",
+        retentionClass: "history",
+        updatedAt: "2026-07-15T00:02:00.000Z",
+      });
+      const database = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      const row = executeSqliteQueryTakeFirstSync(
+        database.db,
+        getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
+          .selectFrom("managed_outgoing_image_records")
+          .select("record_json")
+          .where("attachment_id", "=", initial.attachmentId),
+      );
+      expect(JSON.parse(row?.record_json ?? "{}")).toEqual(current);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([attaching, claiming]);
+      held.mockRestore();
+    }
+  });
+
+  it("recovers exact native mutation receipts after ordinary replies are lost", async () => {
+    const initial = record();
+    const receive = brokerReply.receiveSqliteWorkerReply;
+    const corrupted: string[] = [];
+    vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
+      if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
+        const command: unknown = deserialize(slot.current.request.input);
+        if (
+          isRecord(command) &&
+          typeof command.type === "string" &&
+          [
+            "managedImages.insert",
+            "managedImages.attach",
+            "managedImages.claimCleanup",
+            "managedImages.deleteClaimed",
+          ].includes(command.type)
+        ) {
+          corrupted.push(command.type);
+          return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
+        }
+      }
+      return receive(slot, reply, owner);
+    });
+    await insertManagedImageRecord(initial, stateDir);
+    expect(
+      await attachManagedImageRecordsToMessage({
+        attachments: [initial],
+        messageId: "committed",
+        updatedAt: initial.createdAt,
+        stateDir,
+      }),
+    ).toBe(true);
+    const promoted = await readManagedImageRecord(initial.attachmentId, stateDir);
+    if (!promoted) {
+      throw new Error("Expected native promotion after lost reply");
+    }
+    expect(promoted.messageId).toBe("committed");
+    expect(await claimManagedImageRecordCleanupIfCurrent(promoted, stateDir)).toBe(true);
+    expect(await deleteClaimedManagedImageRecord(promoted, stateDir)).toBe(true);
+    expect(await listManagedImageRecordEntries({ stateDir })).toEqual([]);
+    expect(corrupted).toEqual([
+      "managedImages.insert",
+      "managedImages.attach",
+      "managedImages.claimCleanup",
+      "managedImages.deleteClaimed",
+    ]);
   });
 });

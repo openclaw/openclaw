@@ -15,8 +15,6 @@ struct VoiceWakeOverlayView: View {
                             get: { self.controller.model.text },
                             set: { self.controller.updateText($0) }),
                         attributed: self.controller.model.attributed,
-                        isFinal: self.controller.model.isFinal,
-                        isOverflowing: self.controller.model.isOverflowing,
                         onBeginEditing: {
                             self.controller.userBeganEditing()
                         },
@@ -133,11 +131,7 @@ private struct OverlayBackground: View {
     }
 }
 
-extension OverlayBackground: @MainActor Equatable {
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        true
-    }
-}
+extension OverlayBackground: @MainActor Equatable {}
 
 struct CloseButtonOverlay: View {
     var isVisible: Bool

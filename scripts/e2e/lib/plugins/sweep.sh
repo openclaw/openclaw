@@ -134,8 +134,8 @@ OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 
 demo_plugin_id="demo-plugin"
 demo_plugin_root="$OPENCLAW_PLUGIN_HOME/$demo_plugin_id"
-write_demo_fixture_plugin "$demo_plugin_root"
-record_fixture_plugin_trust "$demo_plugin_id" "$demo_plugin_root" 1
+node scripts/e2e/lib/fixture.mjs plugin-demo "$demo_plugin_root"
+node scripts/e2e/lib/plugins/assertions.mjs record-fixture-plugin-trust "$demo_plugin_id" "$demo_plugin_root" 1
 
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins.json" plugins list --json
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-inspect.json" plugins inspect demo-plugin --runtime --json
@@ -158,7 +158,7 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-tgz-removed
 
 echo "Testing install from local folder (plugins.load.paths)..."
 dir_plugin="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-dir.XXXXXX")"
-write_fixture_plugin "$dir_plugin" demo-plugin-dir 0.0.1 demo.dir "Demo Plugin DIR"
+node scripts/e2e/lib/fixture.mjs plugin "$dir_plugin" demo-plugin-dir 0.0.1 demo.dir "Demo Plugin DIR"
 
 run_plugins_fixture_logged install-dir plugins install "$dir_plugin" --force
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins3.json" plugins list --json
@@ -175,7 +175,7 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-dir-removed
 
 echo "Testing install from local folder with preinstalled dependencies..."
 dir_deps_plugin="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-dir-deps.XXXXXX")"
-write_fixture_plugin_with_vendored_dependency "$dir_deps_plugin" demo-plugin-dir-deps 0.0.1 demo.dir.deps "Demo Plugin DIR Deps"
+node scripts/e2e/lib/fixture.mjs plugin-vendored-dep "$dir_deps_plugin" demo-plugin-dir-deps 0.0.1 demo.dir.deps "Demo Plugin DIR Deps"
 
 run_plugins_fixture_logged install-dir-deps plugins install "$dir_deps_plugin" --force
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-dir-deps.json" plugins list --json
@@ -189,7 +189,7 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-dir-deps-removed
 
 echo "Testing install from npm spec (file:)..."
 file_pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-filepack.XXXXXX")"
-write_fixture_plugin "$file_pack_dir/package" demo-plugin-file 0.0.1 demo.file "Demo Plugin FILE"
+node scripts/e2e/lib/fixture.mjs plugin "$file_pack_dir/package" demo-plugin-file 0.0.1 demo.file "Demo Plugin FILE"
 
 run_plugins_fixture_logged install-file plugins install "file:$file_pack_dir/package" --force
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins4.json" plugins list --json
@@ -252,7 +252,7 @@ echo "Testing install from git repo and plugin CLI execution..."
 git_fixture_root="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-git.XXXXXX")"
 git_repo="$git_fixture_root/repo"
 git_repo_url="file://$git_repo"
-write_fixture_plugin_with_cli "$git_repo" demo-plugin-git 0.0.1 demo.git "Demo Plugin Git" demo-git "demo-plugin-git:pong"
+node scripts/e2e/lib/fixture.mjs plugin-cli "$git_repo" demo-plugin-git 0.0.1 demo.git "Demo Plugin Git" demo-git "demo-plugin-git:pong"
 git -C "$git_repo" init -q
 git -C "$git_repo" config user.email "docker-e2e@openclaw.local"
 git -C "$git_repo" config user.name "OpenClaw Docker E2E"
@@ -275,7 +275,7 @@ echo "Testing git plugin update from moving ref..."
 git_update_fixture_root="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-git-update.XXXXXX")"
 git_update_repo="$git_update_fixture_root/repo"
 git_update_repo_url="file://$git_update_repo"
-write_fixture_plugin_with_cli "$git_update_repo" demo-plugin-git-update 0.0.1 demo.git.update.v1 "Demo Plugin Git Update" demo-git-update "demo-plugin-git-update:pong-v1"
+node scripts/e2e/lib/fixture.mjs plugin-cli "$git_update_repo" demo-plugin-git-update 0.0.1 demo.git.update.v1 "Demo Plugin Git Update" demo-git-update "demo-plugin-git-update:pong-v1"
 git -C "$git_update_repo" init -q
 git -C "$git_update_repo" config user.email "docker-e2e@openclaw.local"
 git -C "$git_update_repo" config user.name "OpenClaw Docker E2E"
@@ -285,7 +285,7 @@ git -C "$git_update_repo" commit -qm "test fixture v1"
 git_update_ref_v1="$(git -C "$git_update_repo" rev-parse HEAD)"
 
 run_plugins_fixture_logged install-git-update plugins install "git:$git_update_repo_url@main" --force
-write_fixture_plugin_with_cli "$git_update_repo" demo-plugin-git-update 0.0.2 demo.git.update.v2 "Demo Plugin Git Update" demo-git-update "demo-plugin-git-update:pong-v2"
+node scripts/e2e/lib/fixture.mjs plugin-cli "$git_update_repo" demo-plugin-git-update 0.0.2 demo.git.update.v2 "Demo Plugin Git Update" demo-git-update "demo-plugin-git-update:pong-v2"
 git -C "$git_update_repo" add -A
 git -C "$git_update_repo" commit -qm "test fixture v2"
 
@@ -299,8 +299,8 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-git-updated "$git_update_ref_
 echo "Testing Claude bundle enable and inspect flow..."
 bundle_plugin_id="claude-bundle-e2e"
 bundle_root="$OPENCLAW_PLUGIN_HOME/$bundle_plugin_id"
-write_claude_bundle_fixture "$bundle_root"
-record_fixture_plugin_trust "$bundle_plugin_id" "$bundle_root" 0
+node scripts/e2e/lib/fixture.mjs claude-bundle "$bundle_root"
+node scripts/e2e/lib/plugins/assertions.mjs record-fixture-plugin-trust "$bundle_plugin_id" "$bundle_root" 0
 
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-bundle-disabled.json" plugins list --json
 node scripts/e2e/lib/plugins/assertions.mjs bundle-disabled
@@ -311,7 +311,7 @@ node scripts/e2e/lib/plugins/assertions.mjs bundle-inspect
 
 echo "Testing plugin install visible after explicit restart..."
 slash_install_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-slash-install.XXXXXX")"
-write_fixture_plugin "$slash_install_dir" slash-install-plugin 0.0.1 demo.slash.install "Slash Install Plugin"
+node scripts/e2e/lib/fixture.mjs plugin "$slash_install_dir" slash-install-plugin 0.0.1 demo.slash.install "Slash Install Plugin"
 
 run_plugins_fixture_logged install-slash-plugin plugins install "$slash_install_dir" --force
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugin-command-install-show.json" plugins inspect slash-install-plugin --runtime --json

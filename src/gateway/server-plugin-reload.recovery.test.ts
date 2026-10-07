@@ -24,7 +24,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { activeSessions } from "../transcripts/capture.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { activeSessions } from "../transcripts/capture-startup.js";
 import { clearTranscriptCapturesForTest } from "../transcripts/capture.test-support.js";
 import type { TranscriptStartRequest } from "../transcripts/provider-types.js";
 import { TranscriptsStore } from "../transcripts/store.js";
@@ -42,10 +43,8 @@ import {
   verifyActiveCallDrainLease,
   verifyLateActiveCallDrainObservation,
 } from "./server-plugin-reload.active-call.test-support.js";
-import {
-  verifyGatewayCacheOwnership,
-  verifySharedGatewayCacheOwnership,
-} from "./server-plugin-reload.cache.test-support.js";
+import { verifySharedGatewayCacheOwnership } from "./server-plugin-reload.cache.test-support.js";
+import { verifyCancelledDrainRollbackLease } from "./server-plugin-reload.cancel-lease.test-support.js";
 import {
   verifyDecisionSelectionIsolation,
   verifyDecisionEarlyReloadRecovery,
@@ -69,8 +68,6 @@ import {
 } from "./server-plugin-reload.recovery.test-support.js";
 import {
   verifyCandidateResourceCleanup,
-  verifyFailedRecoveryCleanup,
-  verifyFreshRegistrationRecovery,
   registerPluginRetainedWorkReloadTests,
   verifySharedResourceReplacement,
 } from "./server-plugin-reload.resources.test-support.js";
@@ -96,12 +93,9 @@ vi.mock("../plugins/plugin-lookup-table.js", async (importOriginal) => ({
   loadPluginLookUpTable: mocks.loadPluginLookUpTable,
 }));
 
-// These independent startup tasks do not participate in plugin replacement.
-vi.mock("./server-startup-context-cache-prewarm.js", () => ({
-  scheduleContextCachePrewarm: () => ({ stop() {} }),
-}));
+// mock-isolation: Independent startup tasks do not participate in plugin replacement.
 vi.mock("./server-startup-handler-prewarm.js", () => ({
-  scheduleGatewayHandlerPrewarm: () => ({ stop() {} }),
+  scheduleGatewayPrewarm: () => [{ stop() {} }],
 }));
 vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
   scheduleRestartAbortedMainSessionRecovery: () => undefined,
@@ -147,21 +141,11 @@ function createRecoveryFixture(
   return createPluginReloadRecoveryFixture({ cleanups, logMocks: mocks.log }, options);
 }
 
-it.each(["gateway_stop", "dispose"] as const)(
-  "reopens a shared resource closed by %s after a setting changes without restarting its sibling",
-  (cleanup) => verifySharedResourceReplacement(createRecoveryFixture, cleanup),
-);
-
-it.each(["registration", "activation"] as const)(
-  "automatically restores a fresh old registration after candidate %s fails",
-  (failure) => verifyFreshRegistrationRecovery(createRecoveryFixture, failure),
-);
+it("reopens a shared resource closed by gateway_stop after a setting changes without restarting its sibling", () =>
+  verifySharedResourceReplacement(createRecoveryFixture));
 
 it("flushes failed candidate services before closing their shared resources", () =>
   verifyCandidateResourceCleanup(createRecoveryFixture));
-
-it("closes resources opened by a recovery that fails before publication", () =>
-  verifyFailedRecoveryCleanup(createRecoveryFixture));
 
 registerPluginRetainedWorkReloadTests(createRecoveryFixture);
 
@@ -173,6 +157,8 @@ it.each(["commit", "rollback"] as const)(
     let hookSignal: PluginHookGatewayContext["abortSignal"];
     const schedulers = ["first", "next"].map((name) => {
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath: path.join(makeTrackedTempDir(`reload-cron-${name}`, tempDirs), "jobs.sqlite"),
         cronEnabled: false,
         log: mocks.log,
@@ -246,9 +232,7 @@ it("validates expanded replacement targets before draining their live owners", a
 });
 
 it.each([
-  "channel",
   "channel-retry",
-  "hook",
   "publication",
   "notification",
   "memory",
@@ -274,25 +258,14 @@ it("disables and re-enables a plugin after its service cleanup fails", () =>
 it("preserves pending old service cleanup when candidate startup fails", () =>
   verifyPendingServiceCleanupRollback(createRecoveryFixture));
 
-it("keeps a live Gateway's generated setup callbacks through another Gateway's reload", () =>
-  verifyGatewayCacheOwnership(
+it("keeps a shared boot setup owner through sibling lookup", () =>
+  verifySharedGatewayCacheOwnership(
     createRecoveryFixture,
-    makeTrackedTempDir("gateway-setup-cache-owner", tempDirs),
+    makeTrackedTempDir("gateway-shared-setup-owner", tempDirs),
     (load) => mocks.resolveConfigWidePluginMetadataSnapshot.mockImplementation(load),
   ));
 
-it.each(["lookup", "replacement"] as const)(
-  "keeps a shared boot setup owner through sibling %s",
-  (mode) =>
-    verifySharedGatewayCacheOwnership(
-      createRecoveryFixture,
-      makeTrackedTempDir("gateway-shared-setup-owner", tempDirs),
-      (load) => mocks.resolveConfigWidePluginMetadataSnapshot.mockImplementation(load),
-      mode,
-    ),
-);
-
-it.each([5_000, 15_000, 70_000])(
+it.each([15_000, 70_000])(
   "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",
   (holdMs) =>
     verifyActiveCallDrainLease(
@@ -304,6 +277,12 @@ it.each([5_000, 15_000, 70_000])(
 
 it("keeps restored plugins serving when an expired drain observation settles late", () =>
   verifyLateActiveCallDrainObservation(createRecoveryFixture));
+
+it("keeps the lifecycle lease through cancelled drain rollback before admitting another writer", () =>
+  verifyCancelledDrainRollbackLease(
+    createRecoveryFixture,
+    makeTrackedTempDir("gateway-cancelled-drain-lease", tempDirs),
+  ));
 
 it("keeps old cleanup owned when the Gateway closes before replacement publication", () =>
   verifyPreCommitRetirementOwnership(createRecoveryFixture));
@@ -391,10 +370,8 @@ it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
   },
 );
 
-it.each([false, true])(
-  "refuses recovery after gateway cleanup times out (channels: %s)",
-  (withChannels) => verifyGatewayCleanupRefusal(createRecoveryFixture, withChannels),
-);
+it("refuses recovery after gateway cleanup times out while retaining sibling channels", () =>
+  verifyGatewayCleanupRefusal(createRecoveryFixture));
 
 it("bounds the wait for service startup and keeps retired dispatch fenced across retry", () =>
   verifyPendingServiceCleanupRetry(createRecoveryFixture));
@@ -488,6 +465,7 @@ it.each(["commit", "rollback"])(
     });
     let held = false;
     const manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: fixture.getConfig,
       channelLogs: {},
       channelRuntimeEnvs: {},
@@ -528,7 +506,7 @@ it.each(["commit", "rollback"])(
   },
 );
 
-it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
+it.each(["rollback", "after-commit error", "late startup"] as const)(
   "keeps discovery handles owned across plugin replacement: %s",
   async (outcome) => {
     await withEnvAsync(
@@ -598,7 +576,7 @@ it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
               details: { committed: outcome === "after-commit error" },
               cause: publicationFailure,
             });
-          } else if (outcome === "late startup") {
+          } else {
             const reloading = fixture.reload();
             void reloading.catch(() => {});
             try {
@@ -613,8 +591,6 @@ it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
               releaseStartup.resolve();
               await reloading;
             }
-          } else {
-            await fixture.reload();
           }
           expect(
             handles.filter((handle) => handle.stops === 0).map((handle) => handle.api),

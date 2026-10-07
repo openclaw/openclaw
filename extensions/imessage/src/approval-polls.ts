@@ -71,7 +71,9 @@ function readPersistedTarget(value: unknown): IMessageApprovalPollTarget | null 
   if (
     !target ||
     typeof target.approvalId !== "string" ||
-    (target.approvalKind !== "exec" && target.approvalKind !== "plugin") ||
+    (target.approvalKind !== "exec" &&
+      target.approvalKind !== "plugin" &&
+      target.approvalKind !== "system-agent") ||
     !Array.isArray(target.optionDecisions)
   ) {
     return null;
@@ -312,8 +314,8 @@ function readPollVoteEvent(message: IMessagePayload): ApprovalPollVoteEvent | nu
   // received row when those identities are equal: its remote actor is
   // indistinguishable from the local-account fallback. Paired-device self-sends
   // may use destination_caller_id only when is_from_me is authoritative.
-  const sender = normalizeIMessageHandle((message.sender ?? "").trim());
-  const destinationCallerId = normalizeIMessageHandle((message.destination_caller_id ?? "").trim());
+  const sender = normalizeIMessageHandle(message.sender ?? "");
+  const destinationCallerId = normalizeIMessageHandle(message.destination_caller_id ?? "");
   const receivedSenderIsLocalFallback =
     message.is_from_me !== true &&
     Boolean(sender) &&

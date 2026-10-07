@@ -1,4 +1,3 @@
-// Local media access helpers validate workspace-local media path access.
 import type { ReadOptions, ReadOptionsWithBuffer, ReadPosition } from "node:fs";
 import fs, { type FileReadResult } from "node:fs/promises";
 import path from "node:path";
@@ -43,10 +42,13 @@ export class HostReadMediaTypeError extends LocalMediaAccessError {
   }
 }
 
-/** Returns the default root allowlist for local media reads. */
-export function getDefaultLocalRootsCore(): readonly string[] {
-  return getDefaultMediaLocalRoots();
-}
+export { getDefaultMediaLocalRoots as getDefaultLocalRootsCore };
+
+type LocalMediaBoundaryOptions = {
+  inboundRoots?: readonly string[];
+  resolvedRoots?: readonly string[];
+  resolveRoots?: () => Promise<readonly string[]>;
+};
 
 async function resolveCanonicalBoundaryPath(root: string): Promise<string> {
   const resolved = path.resolve(root);
@@ -61,7 +63,7 @@ async function resolveCanonicalBoundaryPath(root: string): Promise<string> {
 export async function resolveLocalMediaRoots(
   localRoots?: readonly string[],
 ): Promise<readonly string[]> {
-  const roots = localRoots ?? getDefaultLocalRootsCore();
+  const roots = localRoots ?? getDefaultMediaLocalRoots();
   return await Promise.all(
     roots.map(async (root) => {
       const resolvedRoot = await resolveCanonicalBoundaryPath(root);
@@ -101,11 +103,7 @@ async function resolveLocalMediaBoundary(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
   managedReferenceErrors: ManagedReferenceErrorPolicy,
-  options?: {
-    inboundRoots?: readonly string[];
-    resolvedRoots?: readonly string[];
-    resolveRoots?: () => Promise<readonly string[]>;
-  },
+  options?: LocalMediaBoundaryOptions,
 ): Promise<ResolvedLocalMediaBoundary> {
   if (localRoots === "any") {
     return { rejectHardlinks: false, roots: "any" };
@@ -154,7 +152,7 @@ async function resolveLocalMediaBoundary(
       roots: [resolvedRoot],
     };
   }
-  const roots = localRoots ?? getDefaultLocalRootsCore();
+  const roots = localRoots ?? getDefaultMediaLocalRoots();
   const resolved = await resolveLocalMediaPathForContainment(mediaPath);
   const resolvedRoots =
     options?.resolvedRoots ??
@@ -205,28 +203,21 @@ async function resolveLocalMediaBoundary(
 export async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
-  options?: {
-    inboundRoots?: readonly string[];
-    resolvedRoots?: readonly string[];
-    resolveRoots?: () => Promise<readonly string[]>;
-  },
+  options?: LocalMediaBoundaryOptions,
 ): Promise<void> {
   await resolveLocalMediaBoundary(mediaPath, localRoots, "ignore", options);
 }
 
-/** Opens, revalidates, and bounded-reads local media against one frozen root boundary. */
-export async function readLocalMediaFile(
+/** Opens local media against one frozen root boundary without buffering its contents. */
+export async function openLocalMediaFile(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
-  options: {
-    inboundRoots?: readonly string[];
+  options: LocalMediaBoundaryOptions & {
     maxBytes: number;
-    resolvedRoots?: readonly string[];
-    resolveRoots?: () => Promise<readonly string[]>;
     /** Local copies of remotely owned roots must not be read through ancestor aliases. */
     excludedRoots?: readonly string[];
   },
-): Promise<Buffer> {
+) {
   const readScope = captureChannelReadScope();
   readScope?.assertCurrent();
   const boundary = await resolveLocalMediaBoundary(mediaPath, localRoots, "reject", options);
@@ -234,31 +225,48 @@ export async function readLocalMediaFile(
     ? await resolveLocalMediaRoots(options.excludedRoots)
     : [];
   readScope?.assertCurrent();
-  await using opened = await openLocalFileSafely({ filePath: mediaPath });
-  if (excludedRoots.some((root) => isPathInside(root, opened.realPath))) {
-    throw new LocalMediaAccessError(
-      "path-not-allowed",
-      `Local media path belongs to a remote workspace: ${mediaPath}`,
-    );
+  const opened = await openLocalFileSafely({ filePath: mediaPath });
+  try {
+    if (excludedRoots.some((root) => isPathInside(root, opened.realPath))) {
+      throw new LocalMediaAccessError(
+        "path-not-allowed",
+        `Local media path belongs to a remote workspace: ${mediaPath}`,
+      );
+    }
+    if (
+      boundary.roots !== "any" &&
+      !boundary.roots.some((resolvedRoot) => isPathInside(resolvedRoot, opened.realPath))
+    ) {
+      throw new LocalMediaAccessError(
+        "path-not-allowed",
+        `Local media path is not under an allowed directory: ${mediaPath}`,
+      );
+    }
+    if (boundary.rejectHardlinks && opened.stat.nlink > 1) {
+      throw new FsSafeError("hardlink", "hardlinked path not allowed");
+    }
+    if (opened.stat.size > options.maxBytes) {
+      throw new FsSafeError(
+        "too-large",
+        `file exceeds limit of ${options.maxBytes} bytes (got ${opened.stat.size})`,
+      );
+    }
+    readScope?.assertCurrent();
+    return opened;
+  } catch (error) {
+    await opened[Symbol.asyncDispose]();
+    throw error;
   }
-  if (
-    boundary.roots !== "any" &&
-    !boundary.roots.some((resolvedRoot) => isPathInside(resolvedRoot, opened.realPath))
-  ) {
-    throw new LocalMediaAccessError(
-      "path-not-allowed",
-      `Local media path is not under an allowed directory: ${mediaPath}`,
-    );
-  }
-  if (boundary.rejectHardlinks && opened.stat.nlink > 1) {
-    throw new FsSafeError("hardlink", "hardlinked path not allowed");
-  }
-  if (opened.stat.size > options.maxBytes) {
-    throw new FsSafeError(
-      "too-large",
-      `file exceeds limit of ${options.maxBytes} bytes (got ${opened.stat.size})`,
-    );
-  }
+}
+
+/** Opens, revalidates, and bounded-reads local media against one frozen root boundary. */
+export async function readLocalMediaFile(
+  mediaPath: string,
+  localRoots: readonly string[] | "any" | undefined,
+  options: Parameters<typeof openLocalMediaFile>[2],
+): Promise<Buffer> {
+  const readScope = captureChannelReadScope();
+  await using opened = await openLocalMediaFile(mediaPath, localRoots, options);
   if (!readScope) {
     return await readFileHandleBounded(opened.handle, options.maxBytes);
   }

@@ -1,4 +1,4 @@
-import { parseCustomId } from "./components.js";
+import { parseCustomId } from "./components.base.js";
 
 export class ComponentRegistry<
   T extends { customId: string; customIdParser?: typeof parseCustomId; type?: number },
@@ -7,7 +7,7 @@ export class ComponentRegistry<
   private wildcardEntries: T[] = [];
 
   register(entry: T): void {
-    const key = parseRegistryKey(entry.customId, entry.customIdParser);
+    const key = (entry.customIdParser ?? parseCustomId)(entry.customId).key;
     if (key === "*") {
       if (!this.wildcardEntries.includes(entry)) {
         this.wildcardEntries.push(entry);
@@ -28,21 +28,14 @@ export class ComponentRegistry<
           return false;
         }
         const parser = entry.customIdParser ?? parseCustomId;
-        return parseRegistryKey(entry.customId, parser) === parseRegistryKey(customId, parser);
+        return parser(entry.customId).key === parser(customId).key;
       });
       if (match) {
         return match;
       }
     }
-    return this.wildcardEntries.find((entry) => {
-      if (options?.componentType !== undefined && entry.type !== options.componentType) {
-        return false;
-      }
-      return true;
-    });
+    return this.wildcardEntries.find(
+      (entry) => options?.componentType === undefined || entry.type === options.componentType,
+    );
   }
-}
-
-function parseRegistryKey(customId: string, parser: typeof parseCustomId = parseCustomId): string {
-  return parser(customId).key;
 }

@@ -68,13 +68,13 @@ export async function handleCanvasDocumentHttpRequest(
       lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
         ? "text/html"
         : ((await detectMime({ filePath: opened.realPath })) ?? "application/octet-stream");
+    // Measure the decoded representation: UTF-8 replacement characters can
+    // make an HTML response longer than the bytes stored on disk.
+    const body = mime === "text/html" ? opened.buffer.toString("utf8") : opened.buffer;
     res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Type", mime === "text/html" ? "text/html; charset=utf-8" : mime);
+    res.setHeader("Content-Length", String(Buffer.byteLength(body)));
     if (mime === "text/html") {
-      // Measure the decoded representation: toString("utf8") expands invalid
-      // bytes to U+FFFD, so the raw file length can differ from the body sent.
-      const body = opened.buffer.toString("utf8");
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.setHeader("Content-Length", String(Buffer.byteLength(body)));
       if ((await resolveDocumentSandbox(root, relativePath)) === "scripts") {
         // Registered documents allow local renderer scripts in their own CSP;
         // the response policy must preserve that permission because policies intersect.
@@ -87,20 +87,12 @@ export async function handleCanvasDocumentHttpRequest(
         );
         res.setHeader("Referrer-Policy", "no-referrer");
       }
-      if (req.method === "HEAD") {
-        res.end();
-        return true;
-      }
-      res.end(body);
-      return true;
     }
-    res.setHeader("Content-Type", mime);
-    res.setHeader("Content-Length", String(opened.buffer.byteLength));
     if (req.method === "HEAD") {
       res.end();
       return true;
     }
-    res.end(opened.buffer);
+    res.end(body);
     return true;
   } catch (error) {
     res.statusCode = error instanceof FsSafeError ? 404 : 500;

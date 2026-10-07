@@ -1,4 +1,3 @@
-// Application-owned native draft delivery.
 type WebView2Bridge = {
   postMessage(message: unknown): void;
   addEventListener(type: "message", listener: (event: MessageEvent) => void): void;
@@ -12,11 +11,6 @@ export type NativeChatDrafts = {
 
 function getWebview(): WebView2Bridge | undefined {
   return (window as Window & { chrome?: { webview?: WebView2Bridge } }).chrome?.webview;
-}
-
-// WebView2's one-argument host API is distinct from Window.postMessage.
-function sendToNative(message: unknown): void {
-  getWebview()?.postMessage(message);
 }
 
 function readNativeDraft(raw: unknown): string | null {
@@ -60,7 +54,8 @@ export function createNativeChatDrafts(): NativeChatDrafts {
   };
 
   bridge.addEventListener("message", handler);
-  sendToNative({ type: "ready" });
+  // WebView2's one-argument host API is distinct from Window.postMessage.
+  getWebview()?.postMessage({ type: "ready" });
 
   return {
     subscribe(listener) {

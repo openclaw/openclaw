@@ -388,7 +388,11 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     // Approvals require a user decision; intermediate tool failures belong to the tool log.
     const shouldStoreLine =
       !quietProgress || (typeof progressLine === "object" && progressLine.kind === "approval");
-    const needsAttention = shouldStoreLine && isChannelProgressPriorityLine(progressLine);
+    // Failure visibility does not grant protected capacity in the rolling tool log.
+    const needsAttention =
+      shouldStoreLine &&
+      (isChannelProgressPriorityLine(progressLine) ||
+        (typeof progressLine === "object" && progressLine.status?.toLowerCase() === "failed"));
     const shouldStartImmediately = shouldStoreLine && isChannelProgressAttentionLine(progressLine);
     const nextLines = shouldStoreLine ? mergeLine(progressLine) : lines;
     const lineChanged = nextLines !== lines;
@@ -591,11 +595,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         return await renderAfterRetraction();
       }
       const isNewPreambleItem = Boolean(itemId && itemId !== preambleItemId);
-      if (isNewPreambleItem) {
-        preambleItemId = itemId;
-      } else if (!itemId) {
-        preambleItemId = undefined;
-      }
+      preambleItemId = itemId;
       if (normalized === preambleText && !isNewPreambleItem) {
         return false;
       }
@@ -702,7 +702,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       }
       const line: ChannelProgressDraftLine = {
         id: lineId,
-        // The lane marker (💬, matching 🧠 thinking / 🛠️ tools) is a per-channel
+        // The lane marker (such as 💬 for commentary) is a per-channel
         // presentation choice supplied via commentaryLinePrefix; default none.
         text: `${commentaryLinePrefix}${commentaryItalics ? normalized : bareNormalized}`,
         kind: "item",

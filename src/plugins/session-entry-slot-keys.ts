@@ -22,6 +22,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "archivedBy",
   "archiveReason",
   "pinnedAt",
+  "snoozedUntil",
+  "snoozedAt",
   "lastReadAt",
   "agentStatus",
   "observerDigest",
@@ -31,6 +33,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "sessionFile",
   "transcriptPath",
   "spawnedBy",
+  "spawnedBySenderIsOwner",
+  "spawnedBySessionId",
   "completionOwnerSessionKey",
   "spawnedWorkspaceDir",
   "spawnedCwd",
@@ -45,7 +49,9 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pendingWorktree",
   "parentSessionKey",
   "parentSessionId",
+  "parentSessionLifecycleRevision",
   "createdVia",
+  "createdSurface",
   "createdActor",
   "inheritedGitContributorProfileIds",
   "sandbox",
@@ -65,6 +71,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "subagentRole",
   "subagentControlScope",
   "inheritedToolPolicyVersion",
+  "inheritedToolPolicySource",
   "inheritedToolDeny",
   "inheritedToolAllow",
   "lifecycleRunId",
@@ -214,6 +221,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValu
 );
 const RETIRED_SESSION_SLOT_KEYS = new Set<string>([
   // retired session fields; reserved so plugin slots can never collide with historical data
+  "conversationLink",
   "compactionCheckpoints",
   "execSecurity",
   "execAsk",

@@ -69,6 +69,11 @@ The personal file supplements, rather than replaces, the shared file, overriding
 conflicting shared user preferences, not project rules or security policy. The
 workspace-root `USER.md` remains shared regardless of the workspace directory's name.
 
+Codex connections without a managed inference relay use shared workspace
+preferences only: they omit the selected personal overlay because native thread
+instructions can be inherited by child agents. Managed relay connections retain
+parent-only personal-profile delivery. See [Codex workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files#skills-persona-and-memory-without-a-managed-relay).
+
 Files are refreshed on later turns. Reassigning the session changes personal
 context on the next new turn, not the running turn. Another participant can steer
 under the normal permission and queue rules without switching personal context.
@@ -108,6 +113,8 @@ conversation history. Do not store secrets in these files.
 
 Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified. The Profile header follows your live user identity, including names cleared from another browser, even when several agents are configured. Unidentified connections retain the default-agent preview.
 
+Authenticated users can read their own profile with `operator.read`, `operator.sessions.read`, or their implied write/admin scopes, even when the shared People roster is unavailable. Refresh and reconnect read the current authenticated profile. Editing the name, avatar, or credit preference still requires `operator.write`; session access does not grant profile editing or access to other profiles. Profile image downloads retain their separate read permission and may display initials for session-only access.
+
 A single-user Gateway gives unidentified operator connections one durable local owner profile, shared across devices and tabs, including device-token reconnects. The Gateway host account's full name fills an unset display name. A saved name is never overwritten. If no full name is available, the sidebar and Profile header show **Owner** until you set a name. Login names are not used. The owner profile has no email and does not change permissions or identity scopes. It cannot be merged with a personal profile or assigned an operator role. Sign in with a personal identity for those operations. If a build older than v2026.9.2 merged the owner profile into a person, connections stay unidentified and log a repair hint. Run `openclaw doctor --fix`, then reconnect to restore the owner identity. The person keeps their emails, role, and GitHub identities.
 
 When `gateway.roles` is configured, unidentified operators receive the owner profile only with token or password authentication. Other connections need a profile-backed sign-in for personal identity. Node, ephemeral, and synthetic connections do not receive an owner profile.
@@ -126,13 +133,13 @@ The **GitHub account** row is read-only. Generic trusted proxies, token, passwor
 
 Cloudflare Access account lookups automatically share a bounded, in-memory GitHub metadata cache for 15 minutes, keyed by immutable account ID and API credential. Concurrent lookups share one GitHub request. Expired entries use ETags for conditional refresh when available. An authenticated `304 Not Modified` response does not consume GitHub's primary quota. Each new connection or authenticated HTTP request still checks Cloudflare Access, and local profile permissions use the current operator role. The cache does not store Access assertions or role decisions. Tailscale username lookups stay fresh because usernames can be renamed or reassigned.
 
-When [operator roles](/gateway/operator-scopes#named-operator-roles) are configured, identity verification completes before the WebSocket connection is admitted. If verification is unavailable, the connection returns a retryable profile-verification error with recovery guidance. GitHub rate limits are identified explicitly. A verified Cloudflare email and immutable account ID can reuse their existing profile during a retryable GitHub outage. First-time users must complete verification before receiving role-based access.
+When [operator roles](/gateway/operator-scopes#named-operator-roles) are configured, identity verification completes before the WebSocket connection is admitted. If verification is unavailable, the connection returns a retryable profile-verification error with recovery guidance. GitHub rate limits are identified explicitly. During a retryable GitHub outage, a verified Cloudflare email and immutable account ID can reuse their existing profile. A Tailscale GitHub login can reuse its existing profile only while that profile's verified GitHub account still has that exact login. First-time users must complete verification before receiving role-based access.
 
 On GitHub rate limits, the Gateway shares a cooldown across requests using the affected credential and quota bucket. Exhausting search quota does not block profile lookups. Secondary limits can pause its other GitHub REST reads using that credential. Further API requests pause until GitHub's `Retry-After` deadline, or its primary reset deadline when remaining quota is zero. Secondary limits without `Retry-After` pause for 60 seconds. Control UI reconnects honor that delay and retain their normal backoff, so opening another tab does not restart GitHub requests against an exhausted bucket. If verification remains unavailable after the cooldown, ask an administrator to check the configured service credential and other workloads sharing its quota.
 
-Without operator roles, identity lookup runs after WebSocket sign-in, so connection status and other identity-independent reads remain available. Profile and session work waits for the lookup. A Cloudflare or GitHub rate limit, or a network failure, returns retryable unavailability. It does not expose a mutable alias or remove a previously verified account. A later request, connection, or Profile refresh retries the lookup. GitHub login renames are reconciled by numeric account id so profile history and preferences stay attached to one person.
+Without operator roles, identity lookup runs after WebSocket sign-in, so connection status and other identity-independent reads remain available. Profile and session work waits for the lookup. The same verified bindings keep working during a retryable GitHub outage. Otherwise, a Cloudflare or GitHub rate limit, or a network failure, returns retryable unavailability; a GitHub rate limit names its cause and carries GitHub's reset deadline. It does not expose a mutable alias or remove a previously verified account. A later request, connection, or Profile refresh retries the lookup. GitHub login renames are reconciled by numeric account id so profile history and preferences stay attached to one person.
 
-An administrator can explicitly link profiles belonging to the same person through `users.linkEmail`. A completed profile merge retains all verified GitHub accounts and their sign-in aliases. Either account resolves the same person, avatar, preferences, and mention Inbox. The target profile keeps its primary GitHub account for public identity and Git credit; an unverified target inherits the source primary. Signing in through a secondary account does not change that choice or its credit preference. People are never merged automatically by matching names.
+An administrator can explicitly link profiles belonging to the same person through `users.linkEmail` or `users.merge`. A completed profile merge retains all verified GitHub accounts and their sign-in aliases. Either account resolves the same person, avatar, preferences, and mention Inbox. The target profile keeps its primary GitHub account for public identity and Git credit; an unverified target inherits the source primary. Signing in through a secondary account does not change that choice or its credit preference. People are never merged automatically by matching names.
 
 The primary account uses a nullable field in the existing profile table without advancing the database schema version. **Downgrade risk:** no schema-version bump blocks older builds from using this state. Their single-account writers can discard secondary account links or split the person again. Re-upgrading does not reconstruct discarded links; an administrator must explicitly relink the profiles. Keep a backup before downgrading.
 
@@ -149,6 +156,56 @@ The snapshot survives session resets and disappears with the child session. Inco
 When a session has someone to credit, its system prompt lists the exact trailers once. It tells the agent to add them to commits it makes from the session. The Codex runtime receives the same block in its developer instructions. Nothing is added when there is nobody to credit, and incognito sessions never carry credit. The Gateway publication broker applies the same credit directly in its generated commits and pull requests. When the Gateway exposes an external HTTPS session URL, pull requests end with a link to that exact team session. The trailers are not exported through the process or shell environment. Direct Git commands remain ordinary shell execution. OpenClaw does not replace `git` or install repository hooks. The agent following that system-prompt instruction is therefore the enforcement boundary.
 
 Turning **Git co-author credit** off stops attribution for future runs. Gateway-managed publication also checks contributor identity and consent before each pending commit, push, or pull request write. If eligibility changes during publication, it stops before the next write and asks you to review recorded effects before requesting publication again. It does not rewrite commits that already contain the public trailer.
+
+## Merging duplicate profiles
+
+The Gateway directory method `users.list` requires `operator.read`. Its optional
+`githubAccountIds` filter accepts up to 500 unique positive safe integers. The
+response retains `profiles` and adds `githubProfiles` containing only requested
+verified account IDs and their canonical, non-merged `profileId` matches. Missing
+IDs have no match; other linked accounts are not returned. Omitting the filter
+preserves the ordinary directory response. This lookup reads existing identity
+bindings; it does not link accounts or grant access.
+
+Use [`openclaw users`](/cli/users) to list profile IDs and merge duplicate profiles
+belonging to the same person. Both linking and merging require `operator.admin`.
+
+```bash
+openclaw users list
+openclaw users merge <duplicate-profile-id> --into <surviving-profile-id>
+```
+
+Use `openclaw users link-email <email> --to <profile-id>` when you want to move one
+email alias. It merges the previous profile only when that profile loses its last
+email. Use `users merge` when you want to merge the entire duplicate, including a
+profile with no email aliases. The Gateway method is `users.merge` with
+`sourceProfileId` and `targetProfileId`.
+
+The survivor keeps its role, display name, and primary identity; a target without
+a verified primary GitHub account inherits the source primary. Email aliases,
+provider identities, and channel links follow the survivor. Saved preference
+keys on the survivor win; source-only keys transfer up to the existing profile
+limit. Personal model accounts transfer while the survivor's existing provider
+choices, including explicit disconnects, win. The survivor's saved GitHub
+connection state also wins; if absent, it inherits the source connection. A saved
+avatar transfers only when the survivor has none. Personal `USER.md` files are
+not combined; move their contents to the surviving profile's directory yourself.
+
+The retired profile remains an alias pointing directly to the survivor. Earlier
+profiles merged into the duplicate also point directly to the survivor. Both
+IDs must exist and differ, and the target must be a current, unmerged profile.
+Neither profile may be the shared **Owner**. Repeating the same merge succeeds
+without moving anything again. If the source now points to a different profile,
+the request fails and identifies that current survivor.
+
+Historical records retain their original profile IDs: transcripts, creators,
+assigners, contributors, audit contexts, approval provenance, publication
+receipts, and session participants are not rewritten. Readers that resolve
+profile aliases can still show the surviving person. This does not transfer
+previously captured authority: privileged work bound to the retired profile
+fails closed and requires a fresh authorized request. Connected identity,
+presence, and permissions refresh after the merge; affected connections may
+need to reconnect.
 
 ## Channel identity links
 
@@ -189,6 +246,34 @@ Channel policies and explicit command allowlists still apply, including to nativ
 
 These records use the existing shared-state identity table without changing its schema version. Older builds ignore the channel binding namespace; downgrading disables this recognition without converting the links into login accounts. Upgrading does not guess or backfill channel identities. Administrators can inspect and remove the links through the same methods after upgrading again.
 
+### Assign to me from a channel
+
+Link the sender to their existing profile with `users.linkChannelIdentity`. For
+Slack, use `channelId: "slack"`, the configured account ID, and the exact
+native user ID (for example, `senderId: "U0123456789"`). Direct Socket Mode and
+signature-verified HTTP delivery authenticate that sender; relay delivery does
+not. Discord's verified native senders use the same profile resolution.
+
+The next verified message turn includes the canonical profile ID and current display
+label as host-generated fields in the per-turn conversation info. The system
+prompt stays stable across requesters. For example, a linked person
+whose effective role includes `operator.admin` can ask, "Assign this session to
+me." The agent can call `sessions` with `action: "assign_owner"`,
+`ownerType: "human"`, and `ownerId` set to that trusted profile ID. Names, emails,
+and IDs pasted into messages do not establish the requester.
+
+A linked nonadmin sender also receives requester metadata. During a live admitted
+agent turn, the `sessions` tool exposes `assign_owner` for these senders;
+settings, reset/delete, and global group controls still require owner authority.
+Operators with `operator.write` also retain the separate archive, restore, and
+stop controls for sessions they created or are assigned to, subject to session access checks.
+When a newly spawned visible session starts agent-owned, the agent can assign it
+to the trusted requester profile and verify the stored owner with `sessions_list`.
+This changes responsibility, not creator attribution or access. Unlinked or
+asserted senders receive no requester profile: link the verified sender first
+rather than guessing from a name or pasted ID. Unlinking takes effect on
+subsequent turns without a restart.
+
 ## GitHub connections
 
 Open **Settings → Profile → GitHub connections** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Viewing these connections does not require selecting an agent or configuring a default agent. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
@@ -201,9 +286,9 @@ My GitHub requires an authenticated, durable Gateway profile, including the loca
 
 ### Publish with your account
 
-Open the compact account arrow beside **Publish PR** to inspect the publisher and account help. This is available for an idle session with a reconciled worktree or accepted repository checkpoint. The effective shared account remains the default. When only a shared account is available, the popover is informational, with no redundant selector. When multiple accounts are available, choose the publisher in the popover. **My GitHub** always requires explicit selection, even when it is the only available account. If the agent has its own override, the shared account is labeled as an override rather than System.
+The account arrow beside **Publish PR** appears only when both shared and personal accounts are available. Its compact menu shows account names and the selected account; the effective shared account remains the default. With only a shared account, use **Publish PR** directly. With only **My GitHub**, the **Publish as @account** button explicitly selects that account and requests publication in one click; discovery alone never selects personal credentials. If the same account is connected through both routes, the menu labels them separately. Personal publication requires an idle session with a reconciled worktree or accepted repository checkpoint. Setup help appears only when no account is available, and workspace guidance appears only for personal publication.
 
-The composer shows either unpublished branch changes or PR rows. New changes replace earlier PR history, including changes made after merging on the same branch. The account arrow appears only while publication is idle and the account selection is unlocked. Pending status, retry actions, confirmation details, and errors stay inside the current row. Successful publication shows a compact PR link until GitHub metadata supplies the normal PR row; it does not add a separate publication card.
+The composer shows either unpublished branch changes or PR rows. New changes replace earlier PR history, including changes made after merging on the same branch. The account arrow appears only while publication is idle and the account selection is unlocked. Publication recovery stays inside an unpublished branch row. When PR rows are visible, recovery appears separately because a session publication attempt does not necessarily belong to any listed PR. Failed attempts use a collapsed **Publication attempt failed** disclosure; expand it to inspect the original account, error, and recovery actions. When OpenClaw verifies that a failed shared attempt’s accepted changes are already published in the matching PR, it stops offering that obsolete failure as recovery—even after reloading or starting later work. The historical receipt remains unchanged and can still be read explicitly. Unpublished or unverified changes retain their failure; refreshing a receipt never retries publication. Pending status and confirmation details remain expanded. Successful publication shows a compact PR link until GitHub metadata supplies the normal PR row; it does not add a separate publication card.
 
 If the Gateway rejects the selected account before accepting the first publication request, choose **Refresh publication**, review the current account, then explicitly publish again. An unknown outcome keeps the original account and request locked. For shared publication, **Refresh publication** looks up the receipt using the original invocation key; finding no receipt does not prove that the request never ran. **Retry publication** is an explicit replay of that same idempotent request, not a switch of account or a new publication.
 
@@ -219,13 +304,17 @@ Older unfinished shared requests without this requester binding require a new au
 
 Pending session deletion blocks publication actions without discarding the original request. A failed deletion restores its retry. Confirmed deletion retires the attempt. The page clears this memory on reload or connection changes. Profile, session access, and workspace changes also retire affected browser state; they never retarget an existing Gateway request.
 
-Publication requires `operator.write` and current access to change the session. Connecting your account alone does not grant either permission.
+Shared publication also supports `operator.sessions.write` for the session creator. When the Gateway identifies a supported GitHub target in an owned session's managed worktree or repository workspace, session-only callers can use **Publish PR** without access to the broader PR list. A plain conversation or project folder alone does not make publication available. The Gateway rechecks the workspace, unpublished work, current access, and workflow restrictions before publishing. Shared results remain visible after refresh or reconnect.
+
+Personal publication and confirmation require `operator.write` and current access to change the session. Connecting your account alone does not grant either permission.
 
 Personal GitHub is a Gateway-brokered publication connection, not a session-wide shell identity. Ordinary agent `git`/`gh` commands, model-initiated publication, and repository previews and discovery keep their existing credential behavior. OpenClaw cloud workers use the shared execution identity, never your personal connection. For a repository-only session, finish the current turn and wait for its accepted Git-normalized checkpoint. Personal publication is available while the worker is idle or after Stop, without a Gateway checkout. Remote sessions sourced from a Gateway worktree still require **Stop cloud worker…** before personal publication. See [`tools.github`](/gateway/config-tools#tools-github) for shared agent execution.
 
 The Gateway binds personal publication to your authenticated profile, the selected account, and the accepted worktree snapshot or repository checkpoint. Another participant's message cannot switch that account or authorize later work using your connection. If the account becomes unavailable or the workspace changes, publication stops with a recovery action instead of falling back to System or native credentials.
 
 After a Gateway restart, unfinished personal publication requires your explicit confirmation before it continues. Confirmation reuses the original request. It checks for an already-created commit, pushed branch, or pull request, so a lost response does not blindly repeat the action. A changed connection or incompatible workspace requires a new, explicitly selected action. For a repository-only session, confirmation retains the original checkpoint even if later turns have completed. It never silently publishes those later changes.
+
+Archived sessions do not offer personal-publication confirmation. Unarchive the session to restore an otherwise valid pending confirmation; recorded publication results remain visible.
 
 If confirmation cannot access its state store, the Gateway reports a retryable unavailable result with the storage cause. If the workspace exclusion is held, the response names its recorded holder and lease epoch. Caller cancellation is reported separately and does not trigger an automatic retry. Retry uses the original request and accepted checkpoint.
 

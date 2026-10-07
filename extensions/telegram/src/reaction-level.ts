@@ -9,9 +9,6 @@ import { inspectTelegramAccount } from "./account-inspect.js";
 export type TelegramReactionLevel = ReactionLevel;
 export type ResolvedReactionLevel = BaseResolvedReactionLevel;
 
-/**
- * Resolve the effective reaction level and its implications.
- */
 export function resolveTelegramReactionLevel(params: {
   cfg: OpenClawConfig;
   accountId?: string;

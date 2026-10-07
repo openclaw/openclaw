@@ -5,10 +5,11 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-
-let sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;
-let editMessageTelegram: typeof import("./send.js").editMessageTelegram;
-let resetTelegramClientOptionsCacheForTests: typeof import("./send.js").resetTelegramClientOptionsCacheForTests;
+import {
+  editMessageTelegram,
+  resetTelegramClientOptionsCacheForTests,
+  sendMessageTelegram,
+} from "./send.js";
 
 describe("telegram transport cache eviction over real sockets", () => {
   let server: Server;
@@ -76,8 +77,6 @@ describe("telegram transport cache eviction over real sockets", () => {
       server.listen(0, "127.0.0.1", resolve);
     });
     apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    ({ sendMessageTelegram, editMessageTelegram, resetTelegramClientOptionsCacheForTests } =
-      await import("./send.js"));
   });
 
   afterAll(async () => {

@@ -1,4 +1,3 @@
-// Normalizes MCP server config for runtime launch and validation.
 import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { isRecord } from "../utils.js";
@@ -30,8 +29,16 @@ type ConfigMcpSuccess = {
   config: OpenClawConfig;
   mcpServers: ConfigMcpServers;
 };
+type ConfigMcpReadSuccess = ConfigMcpSuccess & {
+  runtimeConfig: Awaited<ReturnType<typeof readSourceConfigSnapshot>>["runtimeConfig"];
+  sourceConfigBeforeMigrations?: Awaited<
+    ReturnType<typeof readSourceConfigSnapshot>
+  >["sourceConfigBeforeMigrations"];
+};
 type ConfigMcpFailure = { ok: false; path: string; error: string };
-type ConfigMcpReadResult = (ConfigMcpSuccess & { ok: true; baseHash?: string }) | ConfigMcpFailure;
+type ConfigMcpReadResult =
+  | (ConfigMcpReadSuccess & { ok: true; baseHash?: string })
+  | ConfigMcpFailure;
 type ConfigMcpWriteResult =
   | (ConfigMcpSuccess & { ok: true; removed?: boolean; updated?: boolean })
   | ConfigMcpFailure;
@@ -107,12 +114,16 @@ function resolveConfiguredMcpServers(
       error: "Config file is invalid; fix it before using MCP config commands.",
     };
   }
-  const sourceConfig = snapshot.sourceConfig ?? snapshot.resolved;
+  const sourceConfig = snapshot.sourceConfig;
   return {
     ok: true,
     path: snapshot.path,
     config: structuredClone(sourceConfig),
     mcpServers: normalizeConfiguredMcpServers(sourceConfig.mcp?.servers),
+    runtimeConfig: snapshot.runtimeConfig,
+    ...(snapshot.sourceConfigBeforeMigrations
+      ? { sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations }
+      : {}),
     baseHash: snapshot.hash,
   };
 }
@@ -205,7 +216,7 @@ async function updateConfiguredMcpServerConfig(params: {
     return { ...unchanged, updated: false };
   }
 
-  const servers = normalizeConfiguredMcpServers(loaded.config.mcp?.servers);
+  const servers = structuredClone(loaded.mcpServers);
   servers[name] = params.update({ ...servers[name] });
   return commitConfiguredMcpServers({
     loaded,
@@ -349,7 +360,7 @@ async function setConfiguredMcpServer(
     return { ok: false, path: loaded.path, error: "MCP server config must be a JSON object." };
   }
 
-  const servers = normalizeConfiguredMcpServers(loaded.config.mcp?.servers);
+  const servers = structuredClone(loaded.mcpServers);
   servers[name] = canonicalizeConfiguredMcpServer(restoredServer);
   return commitConfiguredMcpServers({
     loaded,
@@ -398,7 +409,7 @@ async function unsetConfiguredMcpServer(
     };
   }
 
-  const servers = normalizeConfiguredMcpServers(loaded.config.mcp?.servers);
+  const servers = structuredClone(loaded.mcpServers);
   delete servers[name];
   return commitConfiguredMcpServers({
     loaded,

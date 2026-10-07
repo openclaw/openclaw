@@ -7,7 +7,7 @@ import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import {
   getChatAttachmentDataUrl,
-  releaseChatAttachmentPayloads,
+  releaseDisplacedChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
@@ -17,12 +17,7 @@ import {
 } from "./chat-queue.ts";
 import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 
-/**
- * The edited row stays in the queue, holding its own place, so the operator can
- * see where the message will land. This records the row-local draft, the outbox
- * scope that owns the row, the payloads that row still owns, and the position
- * the replacement inherits.
- */
+/** The queued row retains its position and payloads while this token owns the draft. */
 export type QueuedMessageEdit = {
   readonly agentId?: string;
   readonly gatewayOwner: string;
@@ -90,12 +85,7 @@ export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMess
   return edit;
 }
 
-/**
- * True while any pane is editing the row. The composer that owns an edit is
- * pane-local, but the outbox and the drain are shared and either pane can own the
- * drain lane, so a hold that only its own pane could see would let the other one
- * deliver the text an operator is visibly rewriting.
- */
+/** Every pane must observe the edit hold because any pane can drain the shared outbox. */
 export function isQueuedMessageBeingEdited(
   host: ChatQueueScopedSessionHost & Pick<QueuedMessageEditHost, "chatQueuedEdit">,
   id: string,
@@ -133,10 +123,7 @@ export function beginQueuedMessageEdit(
   ) {
     return "unavailable";
   }
-  // The row is left in storage on purpose: it keeps its place visibly, and the
-  // drain refuses it while this edit owns it (see chat-outbox-drain). The draft
-  // belongs to this token rather than the global composer, so editing a queued
-  // row never overwrites text the operator is composing for a different send.
+  // Keep the queued row held while its correction stays separate from the main composer.
   host.chatQueuedEdit = {
     ...owner,
     attachments: item.attachments ?? [],
@@ -167,29 +154,17 @@ export function updateQueuedMessageEdit(
   return true;
 }
 
-/** Cancel touches storage not at all: the row never left the queue. */
 export function cancelQueuedMessageEdit(host: QueuedMessageEditHost): boolean {
   const edit = activeQueuedMessageEdit(host);
   if (!edit) {
     return false;
   }
-  // The durable row still owns its original payloads. The row-local draft has
-  // no separate attachment owner, so cancellation has nothing to release or
-  // copy and leaves the main composer exactly as it was.
+  // The durable row still owns its payloads; cancellation releases no attachments.
   host.chatQueuedEdit = null;
   return true;
 }
 
-/**
- * A send that resumes an edit inherits the row's position, which is what puts the
- * corrected message back in the same slot, and the durable admission retires the
- * source in the same store write (see `admitQueuedMessageForSession`). This
- * clears what that write left behind: the projection row and the payloads the
- * replacement dropped. A rejected write retires nothing, so the original stays
- * queued with its edit still open — what cancel already promises — and the caller
- * must not fall back to a memory-only send that would strand it. A source with no
- * stored copy has nothing to lose to a reload, so it retires with the memory row.
- */
+/** Retire the projection only after durable replacement, or while the source is still volatile. */
 export function retireEditedQueuedMessageSource(
   host: QueuedMessageEditHost,
   admittedDurably: boolean,
@@ -216,12 +191,6 @@ export function retireEditedQueuedMessageSource(
   }
   host.chatQueuedEdit = null;
   chatOutboxOwner(host).remove(host, edit.id);
-  // Images the operator dropped during the edit lose their last owner here; the
-  // ones the replacement still carries must survive, so release only the rest.
-  // The payloads come from the token: a successful write already retired the row
-  // and told every pane, so re-reading it here would find nothing to release.
-  const retainedIds = new Set(nextAttachments.map((attachment) => attachment.id));
-  releaseChatAttachmentPayloads(
-    edit.attachments.filter((attachment) => !retainedIds.has(attachment.id)),
-  );
+  // Read payloads from the token: durable admission already retired the stored row.
+  releaseDisplacedChatAttachmentPayloads(edit.attachments, [nextAttachments]);
 }

@@ -55,25 +55,8 @@ function resolveDiscordThreadReplyTarget(args: Record<string, unknown>): string 
   return target ? normalizeDiscordMessagingTarget(target) : undefined;
 }
 
-function matchesCurrentDiscordThread(params: {
-  args: Record<string, unknown>;
-  toolContext: {
-    currentChannelId?: string;
-    currentMessagingTarget?: string;
-  };
-}): boolean {
-  const requestedTarget = resolveDiscordThreadReplyTarget(params.args);
-  if (!requestedTarget) {
-    return false;
-  }
-  return matchesDiscordToolContextTarget({
-    target: requestedTarget,
-    toolContext: params.toolContext,
-  });
-}
-
 const loadDiscordChannelActionsRuntime = createLazyRuntimeModule(
-  () => import("./channel-actions.runtime.js"),
+  () => import("./actions/handle-action.js"),
 );
 
 const discordActionGroups: ReadonlyArray<{
@@ -153,40 +136,38 @@ function describeDiscordMessageTool({
       },
     });
   }
-  if (actions.has("send")) {
-    schema.push({
-      actions: ["send"],
-      visibility: "all-configured",
-      properties: {
-        components: Type.Optional(
-          Type.Object(
-            {
-              blocks: Type.Optional(
-                Type.Array(Type.Unknown(), {
-                  description:
-                    "Discord Components V2 blocks such as text, buttons, selects, media, containers, and separators.",
-                }),
+  schema.push({
+    actions: ["send"],
+    visibility: "all-configured",
+    properties: {
+      components: Type.Optional(
+        Type.Object(
+          {
+            blocks: Type.Optional(
+              Type.Array(Type.Unknown(), {
+                description:
+                  "Discord Components V2 blocks such as text, buttons, selects, media, containers, and separators.",
+              }),
+            ),
+            modal: Type.Optional(
+              Type.Object(
+                {},
+                {
+                  additionalProperties: true,
+                  description: "Optional Discord modal triggered by generated components.",
+                },
               ),
-              modal: Type.Optional(
-                Type.Object(
-                  {},
-                  {
-                    additionalProperties: true,
-                    description: "Optional Discord modal triggered by generated components.",
-                  },
-                ),
-              ),
-            },
-            {
-              additionalProperties: true,
-              description:
-                "Discord Components V2 payload for send actions. Accepts the same object consumed by the Discord components adapter.",
-            },
-          ),
+            ),
+          },
+          {
+            additionalProperties: true,
+            description:
+              "Discord Components V2 payload for send actions. Accepts the same object consumed by the Discord components adapter.",
+          },
         ),
-      },
-    });
-  }
+      ),
+    },
+  });
   return {
     actions: Array.from(actions),
     capabilities: ["presentation"],
@@ -223,8 +204,10 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       aliases: ["threadId"],
       deliveryTargetAliases: ["threadId"],
       resolveDeliveryTarget: ({ args }) => resolveDiscordThreadReplyDeliveryAlias(args),
-      matchesCurrentConversation: ({ args, toolContext }) =>
-        matchesCurrentDiscordThread({ args, toolContext }),
+      matchesCurrentConversation: ({ args, toolContext }) => {
+        const target = resolveDiscordThreadReplyTarget(args);
+        return target ? matchesDiscordToolContextTarget({ target, toolContext }) : false;
+      },
     },
   },
   requiresTrustedRequesterSender: ({ action, toolContext }) =>
@@ -285,45 +268,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       },
     };
   },
-  handleAction: async ({
-    action,
-    params,
-    cfg,
-    accountId,
-    requesterAccountId,
-    requesterSenderId,
-    senderIsOwner,
-    toolContext,
-    mediaAccess,
-    mediaLocalRoots,
-    mediaReadFile,
-    sessionKey,
-    inboundEventKind,
-    conversationReadOrigin,
-    reply,
-    progressSnapshot,
-    assertDirectAdapterHandoff,
-  }) => {
-    return await (
-      await loadDiscordChannelActionsRuntime()
-    ).handleDiscordMessageAction({
-      action,
-      params,
-      cfg,
-      accountId,
-      requesterSenderId,
-      senderIsOwner,
-      toolContext,
-      mediaAccess,
-      mediaLocalRoots,
-      mediaReadFile,
+  handleAction: async ({ channel: _channel, sessionKey, ...ctx }) =>
+    (await loadDiscordChannelActionsRuntime()).handleDiscordMessageAction({
+      ...ctx,
       ...(sessionKey ? { sessionKey } : {}),
-      ...(inboundEventKind ? { inboundEventKind } : {}),
-      ...(requesterAccountId ? { requesterAccountId } : {}),
-      ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
-      ...(reply ? { reply } : {}),
-      ...(progressSnapshot ? { progressSnapshot } : {}),
-      ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
-    });
-  },
+    }),
 };

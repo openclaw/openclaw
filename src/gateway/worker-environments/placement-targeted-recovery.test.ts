@@ -55,7 +55,7 @@ function createDispatch(
       resolveMoveDestination: async () => undefined,
       runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
       runReclaimBarrier: async ({ begin, reclaim }) =>
-        await reclaim({ kind: "local", path: support.testState.root }, begin()),
+        await reclaim({ kind: "local", path: support.testState.root }, await begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       ...createWorkerWorkspaceRecoveryFixture({
         resolveWorkspace: async () => ({ kind: "local", path: support.testState.root }),
@@ -83,7 +83,7 @@ describe("targeted worker placement recovery", () => {
     const identity = await seedAttached(targetId);
     await support.seedReady(siblingId);
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    seedActivePlacement(placements, {
+    await seedActivePlacement(placements, {
       environmentId: targetId,
       ownerEpoch: identity.ownerEpoch,
       executionMode: "remote-exec",
@@ -191,7 +191,7 @@ describe("targeted worker placement recovery", () => {
       const destinationId = "worker-move-destination";
       const sourceIdentity = await seedAttached(sourceId);
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const active = seedActivePlacement(placements, {
+      const active = await seedActivePlacement(placements, {
         environmentId: sourceId,
         ownerEpoch: sourceIdentity.ownerEpoch,
         executionMode: "remote-exec",
@@ -205,7 +205,7 @@ describe("targeted worker placement recovery", () => {
         },
         target: { kind: "profile", profileId: "development" },
       });
-      const reconciling = placements.startReconcile({
+      const reconciling = await placements.startReconcile({
         sessionId: active.sessionId,
         environmentId: sourceId,
         ownerEpoch: sourceIdentity.ownerEpoch,
@@ -220,7 +220,7 @@ describe("targeted worker placement recovery", () => {
       await environments.destroy(sourceId);
       if (match === "destination") {
         const destination = await seedAttached(destinationId);
-        seedActivePlacement(placements, {
+        await seedActivePlacement(placements, {
           environmentId: destinationId,
           ownerEpoch: destination.ownerEpoch,
           executionMode: "remote-exec",

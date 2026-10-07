@@ -2,6 +2,7 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import {
@@ -18,6 +19,7 @@ import {
   type CodexUnifiedComputerUseRuntime,
 } from "./computer-use-unified.js";
 import {
+  resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
   resolveMacOSDesktopCodexAppPathCandidates,
   type MacOSDesktopCodexAppPathCandidate,
 } from "./desktop-app-paths.js";
@@ -148,7 +150,7 @@ async function publishManagedWrapper(params: {
     assertCurrent?.();
     await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
     const existing = await fs.lstat(physicalTargetPath).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
+      if (extractErrorCode(error) === "ENOENT") {
         return undefined;
       }
       throw error;
@@ -334,10 +336,6 @@ async function wrapperMatchesAnySource(
   return false;
 }
 
-function hasNodeErrorCode(error: unknown, code: string): error is NodeJS.ErrnoException {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
-}
-
 export async function resolveClientManagedBundledMarketplacePath(
   codexHome: string | undefined,
   agentDir: string | undefined,
@@ -354,4 +352,21 @@ export async function resolveClientManagedBundledMarketplacePath(
   }
   const managedPath = resolveCodexManagedBundledMarketplacePath(codexHome);
   return existsSync(managedPath) ? managedPath : undefined;
+}
+
+export function resolveBundledComputerUseMarketplacePath(params: {
+  defaultBundledMarketplacePath?: string;
+  defaultBundledMarketplacePathCandidates?: readonly string[];
+}): string | undefined {
+  if (params.defaultBundledMarketplacePath) {
+    return existsSync(params.defaultBundledMarketplacePath)
+      ? params.defaultBundledMarketplacePath
+      : undefined;
+  }
+  if (!params.defaultBundledMarketplacePathCandidates) {
+    return undefined;
+  }
+  return resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath({
+    candidates: params.defaultBundledMarketplacePathCandidates,
+  });
 }

@@ -1,21 +1,17 @@
-/**
- * Feishu Streaming Card - Card Kit streaming API for real-time text output
- */
-
 import type { Client } from "@larksuiteoapi/node-sdk";
 import {
   asDateTimestampMs,
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
-import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { readFeishuJsonResponse } from "./json-response.js";
-import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
-import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
+import { resolveFeishuCardTemplate } from "./native-card.js";
+import type { CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = {
@@ -31,15 +27,6 @@ type CardState = {
   currentText: string;
   sentText: string;
   hasNote: boolean;
-};
-
-type FeishuStreamingFetch = typeof fetch;
-
-type FeishuStreamingDeps = {
-  /** Override fetch for tests while preserving the real SSRF guard path. */
-  fetchImpl?: FeishuStreamingFetch;
-  /** Override hostname lookup for hermetic SSRF-guard tests. */
-  lookupFn?: LookupFn;
 };
 
 type CardKitResponse = { code?: number; msg?: string };
@@ -61,26 +48,18 @@ export class FeishuStreamingFinalizationError extends Error {
   }
 }
 
-/** Options for customising the initial streaming card appearance. */
-type StreamingCardOptions = {
-  /** Optional header with title and color template. */
-  header?: CardHeaderConfig;
-  /** Optional grey note footer text. */
-  note?: string;
-};
-
 type StreamingStartOptions = {
   replyToMessageId?: string;
   replyInThread?: boolean;
   rootId?: string;
   header?: CardHeaderConfig;
+  note?: string;
 };
 
 const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
 const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 
-// Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
@@ -145,7 +124,7 @@ async function assertSuccessfulCardKitResponse(
   }
 }
 
-async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise<string> {
+async function getToken(creds: Credentials): Promise<string> {
   const key = `${creds.domain ?? "feishu"}|${creds.appId}`;
   const cached = tokenCache.get(key);
   const rawNow = Date.now();
@@ -163,8 +142,6 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
       headers: { "Content-Type": "application/json", "User-Agent": getFeishuUserAgent() },
       body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
     },
-    fetchImpl: deps?.fetchImpl,
-    lookupFn: deps?.lookupFn,
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
     auditContext: "feishu.streaming-card.token",
     timeoutMs: creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
@@ -195,9 +172,6 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
 }
 
 function truncateSummary(text: string, max = 50): string {
-  if (!text) {
-    return "";
-  }
   const clean = text.replace(/\n/g, " ").trim();
   // Slice on a code-point boundary so CardKit never receives a lone surrogate at the limit.
   return clean.length <= max ? clean : sliceUtf16Safe(clean, 0, max - 3) + "...";
@@ -224,10 +198,10 @@ export function mergeStreamingText(
   if (!previous || next === previous) {
     return next;
   }
-  if (next.startsWith(previous) || next.includes(previous)) {
+  if (next.includes(previous)) {
     return next;
   }
-  if (previous.startsWith(next) || previous.includes(next)) {
+  if (previous.includes(next)) {
     return previous;
   }
   const maxOverlap = Math.min(previous.length, next.length);
@@ -239,7 +213,6 @@ export function mergeStreamingText(
   return `${previous}${next}`;
 }
 
-/** Streaming card session manager */
 export class FeishuStreamingSession {
   private client: Client;
   private creds: Credentials;
@@ -251,20 +224,11 @@ export class FeishuStreamingSession {
   private pendingText: string | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private updateThrottleMs = STREAMING_UPDATE_THROTTLE_MS;
-  private fetchImpl?: FeishuStreamingFetch;
-  private lookupFn?: LookupFn;
 
-  constructor(
-    client: Client,
-    creds: Credentials,
-    log?: (msg: string) => void,
-    deps?: FeishuStreamingDeps,
-  ) {
+  constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
     this.client = client;
     this.creds = creds;
     this.log = log;
-    this.fetchImpl = deps?.fetchImpl;
-    this.lookupFn = deps?.lookupFn;
   }
 
   private async requestCardKit<T>(
@@ -281,13 +245,7 @@ export class FeishuStreamingSession {
       init: {
         method,
         headers: {
-          Authorization: `Bearer ${
-            token ??
-            (await getToken(this.creds, {
-              fetchImpl: this.fetchImpl,
-              lookupFn: this.lookupFn,
-            }))
-          }`,
+          Authorization: `Bearer ${token ?? (await getToken(this.creds))}`,
           "Content-Type":
             method === "PATCH" ? "application/json; charset=utf-8" : "application/json",
           "User-Agent": getFeishuUserAgent(),
@@ -295,8 +253,6 @@ export class FeishuStreamingSession {
         // Token renewal can await; read the current sequence only at dispatch.
         body: JSON.stringify(body()),
       },
-      fetchImpl: this.fetchImpl,
-      lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext,
       timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
@@ -311,7 +267,7 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
-    options?: StreamingCardOptions & StreamingStartOptions,
+    options?: StreamingStartOptions,
   ): Promise<void> {
     if (this.state) {
       return;
@@ -371,38 +327,30 @@ export class FeishuStreamingSession {
     // reliably routes streaming cards into Feishu topics, whereas
     // message.create with root_id may silently ignore root_id for card
     // references (card_id format).
-    let sendRes;
     const sendOptions = options ?? {};
-    const sendMode = resolveStreamingCardSendMode(sendOptions);
-    if (sendMode === "reply") {
-      sendRes = await requestFeishuApi(
-        () =>
-          this.client.im.message.reply({
-            path: { message_id: sendOptions.replyToMessageId! },
-            data: {
-              msg_type: "interactive",
-              content: cardContent,
-              ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
-            },
-          }),
-        "Send card failed",
-      );
-    } else {
-      sendRes = await requestFeishuApi(
-        () =>
-          this.client.im.message.create({
-            params: { receive_id_type: receiveIdType },
-            data: {
-              receive_id: receiveId,
-              msg_type: "interactive",
-              content: cardContent,
-              // The SDK omits root_id from its types, but Feishu accepts it at runtime.
-              ...(sendMode === "root_create" ? { root_id: sendOptions.rootId } : {}),
-            },
-          }),
-        "Send card failed",
-      );
-    }
+    const sendRes = await requestFeishuApi(
+      () =>
+        sendOptions.replyToMessageId
+          ? this.client.im.message.reply({
+              path: { message_id: sendOptions.replyToMessageId },
+              data: {
+                msg_type: "interactive",
+                content: cardContent,
+                ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
+              },
+            })
+          : this.client.im.message.create({
+              params: { receive_id_type: receiveIdType },
+              data: {
+                receive_id: receiveId,
+                msg_type: "interactive",
+                content: cardContent,
+                // The SDK omits root_id from its types, but Feishu accepts it at runtime.
+                ...(sendOptions.rootId ? { root_id: sendOptions.rootId } : {}),
+              },
+            }),
+      "Send card failed",
+    );
     if (sendRes.code !== 0) {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }
@@ -528,10 +476,7 @@ export class FeishuStreamingSession {
     this.state.sequence += 1;
     const path = `/${this.state.cardId}/elements/note/content`;
     // Token failures propagate; only the note request itself is best effort.
-    const token = await getToken(this.creds, {
-      fetchImpl: this.fetchImpl,
-      lookupFn: this.lookupFn,
-    });
+    const token = await getToken(this.creds);
     await this.requestCardKit(
       path,
       "note-update",
@@ -567,15 +512,11 @@ export class FeishuStreamingSession {
     // Only send final update if content differs from what's already displayed.
     // An explicit empty final text clears a transient preview before closeout.
     if ((text || finalText !== undefined) && text !== this.state.sentText) {
-      const sent = text.startsWith(this.state.sentText)
-        ? await this.writeCardContent(text, false, (e) => {
-            finalWriteError = e;
-            this.log?.(`Final update failed: ${String(e)}`);
-          })
-        : await this.writeCardContent(text, true, (e) => {
-            finalWriteError = e;
-            this.log?.(`Final replace failed: ${String(e)}`);
-          });
+      const replace = !text.startsWith(this.state.sentText);
+      const sent = await this.writeCardContent(text, replace, (e) => {
+        finalWriteError = e;
+        this.log?.(`Final ${replace ? "replace" : "update"} failed: ${String(e)}`);
+      });
       this.state.currentText = text;
       if (sent) {
         this.state.sentText = text;
@@ -583,12 +524,10 @@ export class FeishuStreamingSession {
       }
     }
 
-    // Update note with final model/provider info
     if (options?.note) {
       await this.updateNoteContent(options.note);
     }
 
-    // Close streaming mode
     // A rejected final write must not advertise content that CardKit never accepted.
     const acceptedText = this.state.sentText;
     this.state.sequence += 1;

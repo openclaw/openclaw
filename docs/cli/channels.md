@@ -30,11 +30,13 @@ openclaw channels logs --channel all
 openclaw channels dead-letters list --channel telegram --account default
 ```
 
-`channels status` keeps configured channels visible when their plugin fails to load or register. Affected accounts report `running: false`, `lifecycle: "blocked"`, and the plugin error instead of stale probe success. Run `openclaw doctor`, repair or update the plugin, and restart the Gateway before checking again.
+`channels status` keeps configured channels visible when their plugin fails to load or register. Affected accounts report `running: false`, `lifecycle: "blocked"`, and the plugin error instead of a stale successful check. Run `openclaw doctor`, repair or update the plugin, and restart the Gateway before checking again.
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account (`--json` for machine output). Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Provider auth and model usage live elsewhere: `openclaw models auth list` for provider auth profiles, `openclaw status` or `openclaw models list` for usage/quota.
 
 `--json` returns a local account inventory from plugin metadata without contacting the Gateway or executing channel setup/runtime code. Configured accounts remain visible even when their plugin has a setup entry. Use `channels status --probe` for live checks.
+
+Disabling a plugin does not uninstall it. Its channels remain `installed: true` in the inventory; with `--all`, an installed channel without configured accounts has `origin: "available"` even when its plugin is disabled.
 
 In an explicit multi-agent setup, workspace-scoped channel plugins come from
 `agents.defaults.systemAgent.agentId`. Without that owner, `channels list`
@@ -70,21 +72,24 @@ do not pass an empty shell variable to request that scope.
 
 `channels logs --lines` requires a positive integer. Omit `--lines` to use the default of `200`; explicitly empty values are rejected.
 
-`channels logs --channel <name>` matches subsystem or module names rooted at `<name>`
-or `gateway/channels/<name>`, including slash-separated descendants. Similar names
+`channels logs --channel <name>` matches subsystem or module names rooted at `<name>`,
+`channels/<name>`, or `gateway/channels/<name>`, including slash-separated descendants. Similar names
 such as `discord-archive` do not match `discord`.
 
 `channels status --probe` is the live path: on a reachable gateway it runs per-account
 `probeAccount` and optional `auditAccount` checks, so output can include transport
-state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit failed`.
+state plus successful or failed account checks and audits.
 If the gateway is unreachable, `channels status` falls back to config-only summaries
-instead of live probe output.
+instead of live check output.
 
-Before probing channels, the command waits for local Gateway startup using the shared readiness budget and reports its observed phase. Startup still in progress at the deadline is a non-failing result, not an unreachable Gateway. In that case `--json` returns `{ "status": "starting", "startupPhase": "…" }`; rerun after startup to collect channel results.
+If the Gateway answers with an error, such as an unknown `--channel`, the command
+reports that error and exits nonzero instead of showing an unreachable fallback.
+
+Before checking channels, the command waits for local Gateway startup using the shared readiness budget and reports its observed phase. Startup still in progress at the deadline is a non-failing result, not an unreachable Gateway. In that case `--json` returns `{ "status": "starting", "startupPhase": "…" }`; rerun after startup to collect channel results.
 
 The command reads existing local device authentication without creating an identity or persisting tokens returned by the Gateway, including when `--probe` is enabled.
 
-`channels status` does not support `--deep`; use `openclaw channels status --probe` for channel checks. The separate top-level `openclaw status --deep` command provides a broader status probe.
+`channels status` does not support `--deep`; use `openclaw channels status --probe` for channel checks. The separate top-level `openclaw status --deep` command provides a broader status check.
 
 ## Inbound dead letters
 
@@ -247,11 +252,13 @@ Unlike this recovery path, `openclaw channels logout` clears the account's crede
 
 ## Troubleshooting
 
-- Run `openclaw status --deep` for a broad probe.
+- Run `openclaw status --deep` for a broad check.
 - Use `openclaw doctor` for guided fixes.
 - `openclaw channels status` falls back to config-only summaries when the gateway is unreachable. If a supported channel credential is configured via SecretRef but unavailable in the current command path, it reports that account as configured with degraded notes instead of showing it as not configured.
 
-## Capabilities probe
+<a id="capabilities-probe" />
+
+## Capabilities check
 
 Fetch provider capability hints (intents/scopes where available) plus static feature support:
 
@@ -264,9 +271,9 @@ Notes:
 
 - `--channel` is optional; omit it to list every channel (including plugin-provided channels).
 - `--account` is only valid with `--channel`.
-- Each account probe and diagnostics step has its own timeout. A stalled step is reported in both text and JSON output, and the command continues with the remaining accounts.
+- Each account check and diagnostics step has its own timeout. A stalled step is reported in both text and JSON output, and the command continues with the remaining accounts.
 - `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord. For Discord voice channels, the permission check flags missing `ViewChannel`, `Connect`, `Speak`, `SendMessages`, and `ReadMessageHistory`.
-- Probes are provider-specific: Discord bot identity + intents plus optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without probes report `Probe: unavailable`.
+- Checks are provider-specific: Discord bot identity + intents plus optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without checks report that the live check is unavailable.
 
 ## Resolve names to IDs
 

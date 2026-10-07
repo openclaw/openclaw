@@ -6,6 +6,7 @@ import type {
   APIVoiceState,
   RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
+import { Routes } from "discord-api-types/v10";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveExpiresAtMsFromDurationMs,
@@ -14,20 +15,11 @@ import {
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import {
-  addGuildMemberRole,
-  createGuildBan,
-  createGuildScheduledEvent,
   getChannel,
   getGuild,
   getGuildMember,
   getGuildVoiceState,
   isUnknownDiscordVoiceStateError,
-  listGuildChannels,
-  listGuildRoles,
-  listGuildScheduledEvents,
-  removeGuildMember,
-  removeGuildMemberRole,
-  timeoutGuildMember,
   type APIChannel,
 } from "./internal/discord.js";
 import { resolveDiscordRest } from "./send.shared.js";
@@ -62,18 +54,19 @@ export async function fetchRoleInfoDiscord(
   opts: DiscordReactOpts,
 ): Promise<APIRole[]> {
   const rest = resolveDiscordRest(opts);
-  return await listGuildRoles(rest, guildId);
+  // SAFETY: Discord's Get Guild Roles route returns an array of API roles.
+  return (await rest.get(Routes.guildRoles(guildId))) as APIRole[];
 }
 
 export async function addRoleDiscord(payload: DiscordRoleChange, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
-  await addGuildMemberRole(rest, payload.guildId, payload.userId, payload.roleId);
+  await rest.put(Routes.guildMemberRole(payload.guildId, payload.userId, payload.roleId));
   return { ok: true };
 }
 
 export async function removeRoleDiscord(payload: DiscordRoleChange, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
-  await removeGuildMemberRole(rest, payload.guildId, payload.userId, payload.roleId);
+  await rest.delete(Routes.guildMemberRole(payload.guildId, payload.userId, payload.roleId));
   return { ok: true };
 }
 
@@ -98,7 +91,8 @@ export async function listGuildChannelsDiscord(
   opts: DiscordReactOpts,
 ): Promise<APIChannel[]> {
   const rest = resolveDiscordRest(opts);
-  return await listGuildChannels(rest, guildId);
+  // SAFETY: Discord's Get Guild Channels route returns an array of API channels.
+  return (await rest.get(Routes.guildChannels(guildId))) as APIChannel[];
 }
 
 export async function fetchVoiceStatusDiscord(
@@ -129,12 +123,12 @@ export async function listScheduledEventsDiscord(
   opts: DiscordReactOpts,
 ): Promise<APIGuildScheduledEvent[]> {
   const rest = resolveDiscordRest(opts);
-  return await listGuildScheduledEvents(rest, guildId);
+  // SAFETY: Discord's List Scheduled Events route returns API scheduled events.
+  return (await rest.get(Routes.guildScheduledEvents(guildId))) as APIGuildScheduledEvent[];
 }
 
 const ALLOWED_EVENT_COVER_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif"]);
 
-// Loads an image from a URL or path and returns a data URI suitable for the Discord API.
 export async function resolveEventCoverImage(
   imageUrl: string,
   opts?: DiscordOutboundMediaOpts,
@@ -164,7 +158,11 @@ export async function createScheduledEventDiscord(
   opts: DiscordReactOpts,
 ): Promise<APIGuildScheduledEvent> {
   const rest = resolveDiscordRest(opts);
-  return await createGuildScheduledEvent(rest, guildId, payload);
+  const event = await rest.post(Routes.guildScheduledEvents(guildId), {
+    body: payload,
+  });
+  // SAFETY: Discord's Create Scheduled Event route returns the created API event.
+  return event as APIGuildScheduledEvent;
 }
 
 export async function timeoutMemberDiscord(
@@ -180,17 +178,19 @@ export async function timeoutMemberDiscord(
       throw new Error("Discord timeout duration is outside the supported Date range");
     }
   }
-  return await timeoutGuildMember(rest, payload.guildId, payload.userId, {
+  const member = await rest.patch(Routes.guildMember(payload.guildId, payload.userId), {
     body: { communication_disabled_until: until ?? null },
     headers: payload.reason
       ? { "X-Audit-Log-Reason": encodeURIComponent(payload.reason) }
       : undefined,
   });
+  // SAFETY: Discord's Modify Guild Member route returns the updated API member.
+  return member as APIGuildMember;
 }
 
 export async function kickMemberDiscord(payload: DiscordModerationTarget, opts: DiscordReactOpts) {
   const rest = resolveDiscordRest(opts);
-  await removeGuildMember(rest, payload.guildId, payload.userId, {
+  await rest.delete(Routes.guildMember(payload.guildId, payload.userId), {
     headers: payload.reason
       ? { "X-Audit-Log-Reason": encodeURIComponent(payload.reason) }
       : undefined,
@@ -207,7 +207,7 @@ export async function banMemberDiscord(
     typeof payload.deleteMessageDays === "number" && Number.isFinite(payload.deleteMessageDays)
       ? Math.min(Math.max(Math.floor(payload.deleteMessageDays), 0), 7)
       : undefined;
-  await createGuildBan(rest, payload.guildId, payload.userId, {
+  await rest.put(Routes.guildBan(payload.guildId, payload.userId), {
     body: deleteMessageDays !== undefined ? { delete_message_days: deleteMessageDays } : undefined,
     headers: payload.reason
       ? { "X-Audit-Log-Reason": encodeURIComponent(payload.reason) }
@@ -215,5 +215,3 @@ export async function banMemberDiscord(
   });
   return { ok: true };
 }
-
-// Channel management functions

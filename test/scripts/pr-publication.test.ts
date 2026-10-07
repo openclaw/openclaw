@@ -1,14 +1,13 @@
 import { existsSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import {
-  makePublisherRepo as createPublisherRepo,
-  runPublisher,
-} from "./pr-prepare.test-support.js";
+import { createPublisherRepoFactory, runPublisher } from "./pr-prepare.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const makePublisherRepo = () => createPublisherRepo(tempDirs);
+const makePublisherRepo = createPublisherRepoFactory({
+  cases: useAutoCleanupTempDirTracker(afterEach),
+  templates: useAutoCleanupTempDirTracker(afterAll),
+});
 const graphql = [
   "PR_HEAD_OWNER=fixture",
   "PR_HEAD_REPO_NAME=repo",

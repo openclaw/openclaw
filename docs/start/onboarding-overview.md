@@ -130,7 +130,7 @@ Platform and remote-access details: [Linux app](/platforms/linux) and
 If your provider is not listed, run `openclaw onboard` in a terminal on the
 Gateway host, choose **Custom Provider** (under **More…** when shown), and enter:
 
-- Endpoint compatibility: OpenAI-compatible (`/chat/completions`), OpenAI Responses-compatible (`/responses`), Anthropic-compatible (`/messages`), or unknown (probes all three and auto-detects)
+- Endpoint compatibility: OpenAI-compatible (`/chat/completions`), OpenAI Responses-compatible (`/responses`), Anthropic-compatible (`/messages`), or unknown (checks all three and auto-detects)
 - Base URL and API key (API key is optional if the endpoint does not require one)
 - Model ID and optional model alias
 
@@ -138,6 +138,11 @@ Multiple custom endpoints can coexist — each gets its own endpoint ID. Guided
 setup verifies a real model reply before saving the provider and activating its
 model. A failed or cancelled check preserves the previous configuration. The
 classic wizard also retains its custom-provider setup.
+
+If the endpoint refuses the connection or its hostname cannot be found, setup
+reports the failed connection immediately instead of waiting through normal
+chat retries. Start the server or correct the URL and network settings on the
+Gateway host, then retry. Ordinary agent sessions keep their connection retries.
 
 ## Related
 

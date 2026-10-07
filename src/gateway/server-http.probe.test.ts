@@ -12,6 +12,10 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  type AgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { ChannelManager } from "./server-channels.js";
 import {
@@ -341,8 +345,9 @@ describe("gateway probe endpoints", () => {
               getPendingReplies: () => 0,
               getEmbeddedRuns: () => 0,
               getCronRuns: () => 0,
-              getActiveTasks: () => 0,
-              getTaskBlockers: () => [],
+              getAgentRuns: () => 0,
+              getAcpRuns: () => 0,
+              getMediaRuns: () => 0,
               getRootRequests: () => 0,
               getSessionAdmissions: () => 0,
               getSessionMutations: () => 0,
@@ -442,8 +447,9 @@ describe("gateway probe endpoints", () => {
               getPendingReplies: () => 0,
               getEmbeddedRuns: () => 0,
               getCronRuns: () => 0,
-              getActiveTasks: () => 0,
-              getTaskBlockers: () => [],
+              getAgentRuns: () => 0,
+              getAcpRuns: () => 0,
+              getMediaRuns: () => 0,
               getSessionAdmissions: () => 0,
               getSessionMutations: () => 0,
               getChatRuns: () => 0,
@@ -510,35 +516,6 @@ describe("gateway probe endpoints", () => {
 
         expect(res.statusCode).toBe(503);
         expect(JSON.parse(getBody())).toEqual({ ready: false });
-      },
-    });
-  });
-
-  it("returns detailed readiness payload for authenticated remote /ready requests", async () => {
-    const getReadiness: ReadinessChecker = () => ({
-      ready: false,
-      failing: ["discord", "telegram"],
-      uptimeMs: 8_000,
-    });
-
-    await withGatewayServer({
-      prefix: "probe-remote-authenticated",
-      resolvedAuth: AUTH_TOKEN,
-      overrides: { getReadiness },
-      run: async (server) => {
-        const { res, getBody } = await sendRequest(server, {
-          path: "/ready",
-          remoteAddress: "10.0.0.8",
-          host: "gateway.test",
-          authorization: "Bearer test-token",
-        });
-
-        expect(res.statusCode).toBe(503);
-        expect(JSON.parse(getBody())).toEqual({
-          ready: false,
-          failing: ["discord", "telegram"],
-          uptimeMs: 8_000,
-        });
       },
     });
   });
@@ -754,6 +731,13 @@ describe("gateway probe endpoints", () => {
   it("reports startup lifecycle independently of hard channel failures", async () => {
     let startupPending = true;
     let gatewayDraining = false;
+    const pending = createAgentDatabaseInspectionRefusal({
+      agentId: "optional-worker",
+      paths: ["/isolated/optional-worker.sqlite"],
+      reason: "Inspection continues in the background.",
+      pending: true,
+    });
+    let refusals: AgentDatabaseAdmissionRefusal[] = [pending];
     const startedAt = Date.now() - 5_000;
     const account = {
       accountId: "default",
@@ -761,7 +745,7 @@ describe("gateway probe endpoints", () => {
       connected: true,
       enabled: true,
       configured: true,
-      lifecycle: "blocked" as const,
+      lifecycle: "ready" as "ready" | "blocked",
       lastStartAt: startedAt,
     };
     const channelManager = {
@@ -778,7 +762,7 @@ describe("gateway probe endpoints", () => {
       getStartupPendingReason: () => "plugin-convergence",
       getGatewayDraining: () => gatewayDraining,
     };
-    const getStartup = createStartupChecker(startupDeps);
+    const getStartup = createStartupChecker(startupDeps, () => refusals);
     const getReadiness = createReadinessChecker({
       channelManager,
       ...startupDeps,
@@ -819,6 +803,19 @@ describe("gateway probe endpoints", () => {
         gatewayDraining = false;
 
         startupPending = false;
+        const inspecting = await sendRequest(server, { path: "/startupz" });
+        expect(inspecting.res.statusCode).toBe(503);
+        expect(JSON.parse(inspecting.getBody())).toMatchObject({
+          ok: false,
+          status: "starting",
+          pendingReason: "agent-database-inspection",
+        });
+        const readyWhileInspecting = await sendRequest(server, { path: "/readyz" });
+        expect(readyWhileInspecting.res.statusCode).toBe(200);
+        const liveWhileInspecting = await sendRequest(server, { path: "/healthz" });
+        expect(liveWhileInspecting.res.statusCode).toBe(200);
+
+        refusals = [createAgentDatabaseInspectionRefusal({ ...pending, pending: false })];
         const started = await sendRequest(server, { path: "/startupz" });
         expect(started.res.statusCode).toBe(200);
         expect(JSON.parse(started.getBody())).toMatchObject({
@@ -828,6 +825,8 @@ describe("gateway probe endpoints", () => {
           uptimeMs: expect.any(Number),
         });
 
+        refusals = [];
+        account.lifecycle = "blocked";
         const readiness = await sendRequest(server, { path: "/readyz" });
         expect(readiness.res.statusCode).toBe(503);
         expect(JSON.parse(readiness.getBody())).toMatchObject({

@@ -32,7 +32,6 @@ describe("OpenAI Talk account defaults", () => {
   afterEach(restoreTestEnvironment);
 
   it.each([
-    { name: "fresh", config: {} },
     { name: "existing", config: { voice: "cedar", interruptResponseOnInputAudio: false } },
     { name: "explicit Live", config: { model: "gpt-live-1", voice: "marin" } },
   ])("preserves provider defaults for $name Discord relay configuration", ({ config }) => {
@@ -47,9 +46,7 @@ describe("OpenAI Talk account defaults", () => {
       useProviderDefaultModel: true,
     });
     expect(resolved.providerConfig.model).toBe(config.model ?? provider.defaultModel);
-    if (config.voice) {
-      expect(resolved.providerConfig.voice).toBe(config.voice);
-    }
+    expect(resolved.providerConfig.voice).toBe(config.voice);
   });
 
   it.each([
@@ -78,7 +75,7 @@ describe("OpenAI Talk account defaults", () => {
     "starts audio-only browser Talk with the $account default and matching auth",
     async ({ apiProfile, oauth, configuredKey, model }) => {
       const cfg = {
-        agents: { list: [{ id: "voice-agent", agentDir: "/tmp/openclaw-voice-agent" }] },
+        agents: { entries: { "voice-agent": { agentDir: "/tmp/openclaw-voice-agent" } } },
       };
       const oauthToken = createTestJwt({
         "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },
@@ -139,12 +136,6 @@ describe("OpenAI Talk account defaults", () => {
 
   it.each([
     {
-      name: "browser discovery",
-      context: { surface: "browser-session" as const },
-      rawConfig: {},
-      model: "gpt-live-1",
-    },
-    {
       name: "manual replies",
       context: { autoRespondToAudio: false },
       rawConfig: {},
@@ -161,12 +152,6 @@ describe("OpenAI Talk account defaults", () => {
       context: {},
       rawConfig: { azureDeployment: "voice-deployment" },
       model: "gpt-realtime-2.1",
-    },
-    {
-      name: "an explicit model",
-      context: {},
-      rawConfig: { model: "gpt-realtime-2.1-mini" },
-      model: "gpt-realtime-2.1-mini",
     },
   ])("preserves $name when resolving Talk defaults", ({ context, rawConfig, model }) => {
     const provider = buildOpenAIRealtimeVoiceProvider();

@@ -1,4 +1,3 @@
-/** Model selection state for reply runs, including catalog and override handling. */
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -18,8 +17,8 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
 import {
-  type ModelAliasIndex,
   normalizeProviderId,
+  normalizeModelRef,
   resolveModelAliasFromPair,
   resolveReasoningDefault,
   resolveThinkingDefault,
@@ -56,7 +55,6 @@ import type { ThinkLevel } from "../thinking.shared.js";
 import {
   findSelectedCatalogEntry,
   mergePreparedConfiguredCatalog,
-  normalizeRuntimeRef,
   resolveRuntimeNormalization,
 } from "./model-runtime-normalization.js";
 import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
@@ -84,7 +82,6 @@ type ModelSelectionState = {
   operatorModelOverride?: boolean;
   allowedModelKeys: Set<string>;
   allowedModelCatalog: ModelCatalog;
-  policyAliasIndex: ModelAliasIndex;
   resetModelOverride: boolean;
   resetModelOverrideRef?: string;
   resetModelOverrideReason?: "disallowed" | "stale" | "temporarily-unavailable";
@@ -108,7 +105,6 @@ const sessionPersistenceRuntimeLoader = createLazyImportLoader(
   () => import("./session-entry-persistence.js"),
 );
 
-/** Resolves provider/model, allowlist, catalog, and thinking defaults for a reply run. */
 export async function createModelSelectionState(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -125,7 +121,6 @@ export async function createModelSelectionState(params: {
   provider: string;
   model: string;
   hasModelDirective: boolean;
-  hasOneTurnModelOverride?: boolean;
   skipStoredModelOverride?: boolean;
   /** True when heartbeat.model was explicitly resolved for this run.
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
@@ -176,7 +171,6 @@ export async function createModelSelectionState(params: {
   let model = params.model;
   const primaryProvider = params.primaryProvider ?? defaultProvider;
   const primaryModel = params.primaryModel ?? defaultModel;
-  const hasOneTurnModelOverride = params.hasOneTurnModelOverride === true;
   const modelSelectionLocked = sessionEntry?.modelSelectionLocked === true;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
 
@@ -261,8 +255,8 @@ export async function createModelSelectionState(params: {
       normalizeProviderId(override.provider ?? "") === OPENAI_CODEX_PROVIDER_ID &&
       normalizeProviderId(primaryProvider) === OPENAI_PROVIDER_ID &&
       primaryHarnessPolicy.runtime === "codex" &&
-      normalizeRuntimeRef(OPENAI_PROVIDER_ID, override.model, runtimeModelNormalization).model ===
-        normalizeRuntimeRef(OPENAI_PROVIDER_ID, primaryModel, runtimeModelNormalization).model;
+      normalizeModelRef(OPENAI_PROVIDER_ID, override.model, runtimeModelNormalization).model ===
+        normalizeModelRef(OPENAI_PROVIDER_ID, primaryModel, runtimeModelNormalization).model;
     // Reapplying the current selection must not fight an explicit override.
     const staleLegacyAutoFallbackWithoutOrigin =
       override?.source === "session" &&
@@ -310,7 +304,6 @@ export async function createModelSelectionState(params: {
     storedOverrideRef &&
     (effectiveStoredModelOverride?.source === "session" ||
       (!params.skipStoredModelOverride && !params.hasResolvedHeartbeatModelOverride)) &&
-    !hasOneTurnModelOverride &&
     (!params.hasModelDirective || !operatorAuthority?.modelPolicy)
   ) {
     const key = buildModelCatalogRef(storedOverrideRef.provider, storedOverrideRef.model);
@@ -402,7 +395,6 @@ export async function createModelSelectionState(params: {
   // configured default.
   const skipStoredOverride =
     params.skipStoredModelOverride === true ||
-    hasOneTurnModelOverride ||
     params.hasResolvedHeartbeatModelOverride === true ||
     (resetModelOverride && staleDirectStoredOverride && storedOverride?.source === "session");
   const usesStoredAutomaticSelection =
@@ -447,10 +439,7 @@ export async function createModelSelectionState(params: {
   }
 
   const skipResolveSelection =
-    params.hasModelDirective ||
-    hasOneTurnModelOverride ||
-    modelSelectionLocked ||
-    usesStoredAutomaticSelection;
+    params.hasModelDirective || modelSelectionLocked || usesStoredAutomaticSelection;
   if (!skipResolveSelection) {
     const allowedInitialSelection = visibilityPolicy.resolveSelection({
       provider,
@@ -468,17 +457,16 @@ export async function createModelSelectionState(params: {
   }
   let operatorModelOverride = false;
   if (!params.hasModelDirective) {
-    const selection =
-      hasOneTurnModelOverride || modelSelectionLocked
-        ? { provider, model }
-        : resolveOperatorModelDefault({
-            cfg,
-            agentId: params.agentId,
-            manifestPlugins: runtimeModelNormalization.manifestPlugins,
-            policy: operatorAuthority?.modelPolicy,
-            model: { provider, model },
-            allows: visibilityPolicy.allows,
-          });
+    const selection = modelSelectionLocked
+      ? { provider, model }
+      : resolveOperatorModelDefault({
+          cfg,
+          agentId: params.agentId,
+          manifestPlugins: runtimeModelNormalization.manifestPlugins,
+          policy: operatorAuthority?.modelPolicy,
+          model: { provider, model },
+          allows: visibilityPolicy.allows,
+        });
     assertOperatorModelAllowed(operatorAuthority, selection);
     if (!selection) {
       throw new Error("No model is available for this operator role and agent.");
@@ -646,7 +634,6 @@ export async function createModelSelectionState(params: {
     ...(operatorModelOverride ? { operatorModelOverride } : {}),
     allowedModelKeys,
     allowedModelCatalog,
-    policyAliasIndex: visibilityPolicy.policyAliasIndex,
     resetModelOverride,
     resetModelOverrideRef,
     resetModelOverrideReason,

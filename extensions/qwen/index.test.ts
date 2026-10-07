@@ -1,8 +1,10 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
-// Qwen tests cover index plugin behavior.
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  createQueuedWizardPrompter,
+  createRuntimeEnv,
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -33,13 +35,13 @@ function requireCatalogProvider(result: ProviderCatalogResult): ModelProviderCon
   return result.provider;
 }
 
-async function registerQwenProvider() {
+async function registerQwenProviders() {
   const { providers } = await registerProviderPlugin({
     plugin: qwenPlugin,
     id: "qwen",
     name: "Qwen Provider",
   });
-  return requireRegisteredProvider(providers, "qwen");
+  return providers;
 }
 
 describe("qwen provider plugin", () => {
@@ -51,8 +53,79 @@ describe("qwen provider plugin", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each([
+    {
+      id: "standard-api-key-cn",
+      label: "Standard API Key for China (pay-as-you-go)",
+      prompt: "Enter Qwen Cloud API key (China standard endpoint)",
+      title: "Qwen Cloud Standard (China)",
+      endpoint: "dashscope.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    },
+    {
+      id: "standard-api-key",
+      label: "Standard API Key for Global/Intl (pay-as-you-go)",
+      prompt: "Enter Qwen Cloud API key (Global/Intl standard endpoint)",
+      title: "Qwen Cloud Standard (Global/Intl)",
+      endpoint: "dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    },
+    {
+      id: "api-key-cn",
+      label: "Coding Plan API Key for China (subscription)",
+      prompt: "Enter Qwen Cloud Coding Plan API key (China)",
+      title: "Qwen Cloud Coding Plan (China)",
+      endpoint: "coding.dashscope.aliyuncs.com",
+      baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+    },
+    {
+      id: "api-key",
+      label: "Coding Plan API Key for Global/Intl (subscription)",
+      prompt: "Enter Qwen Cloud Coding Plan API key (Global/Intl)",
+      title: "Qwen Cloud Coding Plan (Global/Intl)",
+      endpoint: "coding-intl.dashscope.aliyuncs.com",
+      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+    },
+  ])("preserves the $id setup flow and regional endpoint", async (fixture) => {
+    const provider = requireRegisteredProvider(await registerQwenProviders(), "qwen");
+    const method = provider.auth.find((entry) => entry.id === fixture.id);
+    if (!method) {
+      throw new Error(`missing Qwen auth method ${fixture.id}`);
+    }
+    const { prompter, text, note } = createQueuedWizardPrompter({
+      textValues: ["qwen-fixture-key"],
+    });
+    const result = await method.run({
+      config: {},
+      env: {},
+      workspaceDir: "/tmp/qwen-auth-fixture",
+      prompter,
+      runtime: createRuntimeEnv(),
+      secretInputMode: "plaintext",
+      isRemote: false,
+      openUrl: vi.fn<ProviderAuthContext["openUrl"]>(),
+      oauth: {
+        createVpsAwareHandlers: vi.fn<ProviderAuthContext["oauth"]["createVpsAwareHandlers"]>(),
+      },
+    });
+    expect(method.label).toBe(fixture.label);
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ message: fixture.prompt }));
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`Endpoint: ${fixture.endpoint}`),
+      fixture.title,
+    );
+    expect(result.configPatch?.models?.providers?.qwen?.baseUrl).toBe(fixture.baseUrl);
+    expect(result.defaultModel).toBe("qwen/qwen3.5-plus");
+    expect(result.profiles).toEqual([
+      {
+        profileId: "qwen:default",
+        credential: { type: "api_key", provider: "qwen", key: "qwen-fixture-key" },
+      },
+    ]);
+  });
+
   it("keeps Standard-only models out of Coding Plan normalized catalogs", async () => {
-    const provider = await registerQwenProvider();
+    const provider = requireRegisteredProvider(await registerQwenProviders(), "qwen");
 
     const normalized = provider.normalizeConfig?.({
       provider: "qwen",
@@ -78,17 +151,13 @@ describe("qwen provider plugin", () => {
   });
 
   it("does not expose runtime model suppression hooks", async () => {
-    const provider = await registerQwenProvider();
+    const provider = requireRegisteredProvider(await registerQwenProviders(), "qwen");
 
     expect(provider.suppressBuiltInModel).toBeUndefined();
   });
 
   it("does not register retired Qwen Portal providers", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: qwenPlugin,
-      id: "qwen",
-      name: "Qwen Provider",
-    });
+    const providers = await registerQwenProviders();
     const retiredProviderIds = ["qwen-oauth", "qwen-portal", "qwen-cli"];
 
     expect(providers.map((provider) => provider.id)).not.toEqual(
@@ -99,11 +168,7 @@ describe("qwen provider plugin", () => {
   });
 
   it("registers canonical and legacy Token Plan owners without catalog aliasing", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: qwenPlugin,
-      id: "qwen",
-      name: "Qwen Provider",
-    });
+    const providers = await registerQwenProviders();
     const provider = requireRegisteredProvider(providers, "qwen-token-plan");
 
     expect(provider.aliases).toBeUndefined();
@@ -141,11 +206,7 @@ describe("qwen provider plugin", () => {
   });
 
   it("does not reinterpret exact legacy Anthropic config as canonical configuration", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: qwenPlugin,
-      id: "qwen",
-      name: "Qwen Provider",
-    });
+    const providers = await registerQwenProviders();
     const provider = requireRegisteredProvider(providers, QWEN_TOKEN_PLAN_PROVIDER_ID);
 
     const result = await provider.catalog?.run({
@@ -190,11 +251,7 @@ describe("qwen provider plugin", () => {
       },
     },
   ])("uses canonical Token Plan config regardless of provider insertion order", async (entries) => {
-    const { providers } = await registerProviderPlugin({
-      plugin: qwenPlugin,
-      id: "qwen",
-      name: "Qwen Provider",
-    });
+    const providers = await registerQwenProviders();
     const provider = requireRegisteredProvider(providers, QWEN_TOKEN_PLAN_PROVIDER_ID);
     const resolveProviderApiKey = vi.fn((providerId: string) =>
       providerId === QWEN_TOKEN_PLAN_PROVIDER_ID ? { apiKey: "canonical-key" } : {},
@@ -220,11 +277,7 @@ describe("qwen provider plugin", () => {
   });
 
   it("preserves thinking controls for catalog and uncataloged Token Plan refs", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: qwenPlugin,
-      id: "qwen",
-      name: "Qwen Provider",
-    });
+    const providers = await registerQwenProviders();
     const provider = requireRegisteredProvider(providers, QWEN_TOKEN_PLAN_PROVIDER_ID);
     for (const ownerId of ["qwen", QWEN_TOKEN_PLAN_PROVIDER_ID]) {
       const owner = requireRegisteredProvider(providers, ownerId);
@@ -319,19 +372,17 @@ describe("qwen provider plugin", () => {
   );
 
   it("switches Token Plan regions without replacing custom catalog rows", () => {
-    const initialGlobal = applyQwenTokenPlanConfig({ models: { mode: "replace" } }, "global");
-    const globalProvider = initialGlobal.models?.providers?.[QWEN_TOKEN_PLAN_PROVIDER_ID];
+    const global = applyQwenTokenPlanConfig({ models: { mode: "replace" } }, "global");
+    const globalProvider = global.models?.providers?.[QWEN_TOKEN_PLAN_PROVIDER_ID];
     if (!globalProvider) {
       throw new Error("Token Plan provider missing after onboarding");
     }
-    const globalModels = [...(globalProvider.models ?? [])];
-    const qwenIndex = globalModels.findIndex((model) => model.id === "qwen3.7-plus");
-    const qwenModel = globalModels[qwenIndex];
+    const qwenModel = globalProvider.models.find((model) => model.id === "qwen3.7-plus");
     if (!qwenModel) {
       throw new Error("Qwen3.7-Plus missing from Token Plan catalog");
     }
-    globalModels[qwenIndex] = { ...qwenModel, name: "Custom Qwen3.7-Plus" };
-    globalModels.push({
+    qwenModel.name = "Custom Qwen3.7-Plus";
+    globalProvider.models.push({
       id: "custom-model",
       name: "Custom model",
       reasoning: false,
@@ -340,21 +391,10 @@ describe("qwen provider plugin", () => {
       contextWindow: 8192,
       maxTokens: 2048,
     });
-    const global: OpenClawConfig = {
-      ...initialGlobal,
-      models: {
-        ...initialGlobal.models,
-        mode: "merge",
-        providers: {
-          ...initialGlobal.models?.providers,
-          [QWEN_TOKEN_PLAN_PROVIDER_ID]: {
-            ...globalProvider,
-            models: globalModels,
-          },
-        },
-      },
-    };
-    const cnFromGlobal = applyQwenTokenPlanConfig(global, "cn");
+    const cnFromGlobal = applyQwenTokenPlanConfig(
+      { ...global, models: { ...global.models, mode: "merge" } },
+      "cn",
+    );
     const globalAgain = applyQwenTokenPlanConfig(cnFromGlobal, "global");
 
     const tokenPlanProvider = (config: OpenClawConfig) =>

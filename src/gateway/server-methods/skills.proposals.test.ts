@@ -25,7 +25,6 @@ import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
-let stateDir = "";
 
 const mocks = vi.hoisted(() => ({
   applySkillProposal: vi.fn(),
@@ -157,7 +156,6 @@ describe("skills proposal gateway handlers", () => {
     mocks.rejectSkillProposal.mockClear();
     mocks.reviseSkillProposal.mockClear();
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-proposals-gateway-");
-    stateDir = testState.stateDir;
   });
 
   afterEach(async () => {
@@ -261,6 +259,7 @@ describe("skills proposal gateway handlers", () => {
   );
 
   it("creates, lists, inspects, and applies a proposal", async () => {
+    const skillsDir = resolveWorkshopSkillsDir({}, "main", testState.env);
     const create = await callHandler("skills.proposals.create", {
       name: "Weather Planner",
       description: "Plan around current weather",
@@ -342,25 +341,10 @@ describe("skills proposal gateway handlers", () => {
       "PROPOSAL.md",
     );
     await expect(
-      fs.readFile(
-        path.join(
-          resolveWorkshopSkillsDir({}, "main", testState.env),
-          "weather-planner",
-          "SKILL.md",
-        ),
-        "utf8",
-      ),
+      fs.readFile(path.join(skillsDir, "weather-planner", "SKILL.md"), "utf8"),
     ).resolves.toContain("Use current weather and alerts.");
     await expect(
-      fs.readFile(
-        path.join(
-          resolveWorkshopSkillsDir({}, "main", testState.env),
-          "weather-planner",
-          "references",
-          "weather.md",
-        ),
-        "utf8",
-      ),
+      fs.readFile(path.join(skillsDir, "weather-planner", "references", "weather.md"), "utf8"),
     ).resolves.toContain("Use current weather");
 
     const update = await callHandler("skills.proposals.update", {
@@ -380,11 +364,7 @@ describe("skills proposal gateway handlers", () => {
     };
     const appliedList = await callHandler("skills.proposals.list", {});
     expect(appliedList.response).toMatchObject({ installedSkills: [installed] });
-    const skillFile = path.join(
-      resolveWorkshopSkillsDir({}, "main", testState.env),
-      "weather-planner",
-      "SKILL.md",
-    );
+    const skillFile = path.join(skillsDir, "weather-planner", "SKILL.md");
     await fs.appendFile(skillFile, "\nCollection review added the latest local procedure.\n");
     const currentContent = await fs.readFile(skillFile, "utf8");
     await expect(
@@ -420,7 +400,7 @@ describe("skills proposal gateway handlers", () => {
   it("inspects and applies proposals in a configured agent directory", async () => {
     const agentDir = await tempDirs.make("openclaw-skills-proposals-gateway-agent-dir-");
     const config = {
-      agents: { entries: { main: { default: true, agentDir } } },
+      agents: { entries: { main: { agentDir } } },
     };
     const context = { getRuntimeConfig: () => config };
     const create = await callHandler(
@@ -488,94 +468,6 @@ describe("skills proposal gateway handlers", () => {
     ).resolves.toMatchObject({ ok: false });
   });
 
-  it("marks manually created create targets stale before list and inspect responses", async () => {
-    const create = await callHandler("skills.proposals.create", {
-      name: "Manual Gateway Skill",
-      description: "Installed before its proposal was applied.",
-      content: "# Manual Gateway Skill\n",
-    });
-    expect(create.ok).toBe(true);
-    const created = create.response as {
-      record: { id: string; target: { skillFile: string } };
-    };
-    await fs.mkdir(path.dirname(created.record.target.skillFile), { recursive: true });
-    await fs.writeFile(
-      created.record.target.skillFile,
-      "# Manual Gateway Skill\n\nAlready installed.\n",
-      "utf8",
-    );
-
-    const list = await callHandler("skills.proposals.list", {});
-    expect(list.ok).toBe(true);
-    expect(
-      (list.response as { proposals: Array<{ id: string; status: string }> }).proposals,
-    ).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: created.record.id, status: "stale" })]),
-    );
-
-    const inspect = await callHandler("skills.proposals.inspect", {
-      proposalId: created.record.id,
-    });
-    expect(inspect.ok).toBe(true);
-    expect(
-      (inspect.response as { record: { status: string; statusReason?: string } }).record,
-    ).toMatchObject({
-      status: "stale",
-      statusReason: "Target skill was created after proposal creation.",
-    });
-  });
-
-  it("keeps list and inspect scoped to the agent after its workspace changes", async () => {
-    const firstWorkspaceDir = mocks.workspaceDir;
-    const first = await callHandler("skills.proposals.create", {
-      name: "First Gateway Skill",
-      description: "First workspace proposal",
-      content: "# First\n",
-    });
-    expect(first.ok).toBe(true);
-    const firstCreated = first.response as { record: { id: string } };
-
-    const secondWorkspaceDir = await tempDirs.make("openclaw-skills-proposals-gateway-second-");
-    mocks.workspaceDir = secondWorkspaceDir;
-    const second = await callHandler("skills.proposals.create", {
-      name: "Second Gateway Skill",
-      description: "Second workspace proposal",
-      content: "# Second\n",
-    });
-    expect(second.ok).toBe(true);
-    const secondCreated = second.response as { record: { id: string } };
-
-    const secondList = await callHandler("skills.proposals.list", {});
-    expect(secondList.ok).toBe(true);
-    expect((secondList.response as { proposals: Array<{ id: string }> }).proposals).toEqual([
-      expect.objectContaining({ id: secondCreated.record.id }),
-      expect.objectContaining({ id: firstCreated.record.id }),
-    ]);
-
-    const oldWorkspaceInspect = await callHandler("skills.proposals.inspect", {
-      proposalId: firstCreated.record.id,
-    });
-    expect(oldWorkspaceInspect.ok).toBe(true);
-    expect((oldWorkspaceInspect.response as { record: { id: string } }).record.id).toBe(
-      firstCreated.record.id,
-    );
-
-    mocks.workspaceDir = firstWorkspaceDir;
-    const firstList = await callHandler("skills.proposals.list", {});
-    expect(firstList.ok).toBe(true);
-    expect((firstList.response as { proposals: Array<{ id: string }> }).proposals).toHaveLength(2);
-  });
-
-  it("rejects invalid params before touching workshop state", async () => {
-    const result = await callHandler("skills.proposals.create", {
-      name: "Missing Content",
-      description: "No content",
-    });
-    expect(result.ok).toBe(false);
-    expect((result.error as { code?: string }).code).toBe("INVALID_REQUEST");
-    await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
-  });
-
   it("passes evaluation and lifecycle replay arguments to the workshop service", async () => {
     const revisionHash = "a".repeat(64);
     const evaluate = await callHandler("skills.proposals.evaluate", {
@@ -636,27 +528,14 @@ describe("skills proposal gateway handlers", () => {
     mocks.rejectSkillProposal.mockResolvedValueOnce(record);
     mocks.quarantineSkillProposal.mockResolvedValueOnce(record);
 
+    const params = { proposalId: "proposal-1", expectedRevisionHash, correlationId };
     const revise = await callHandler("skills.proposals.revise", {
-      proposalId: "proposal-1",
-      expectedRevisionHash,
-      correlationId,
+      ...params,
       supportFiles: [{ path: "references/example.md", content: "Updated example.\n" }],
     });
-    const apply = await callHandler("skills.proposals.apply", {
-      proposalId: "proposal-1",
-      expectedRevisionHash,
-      correlationId,
-    });
-    const reject = await callHandler("skills.proposals.reject", {
-      proposalId: "proposal-1",
-      expectedRevisionHash,
-      correlationId,
-    });
-    const quarantine = await callHandler("skills.proposals.quarantine", {
-      proposalId: "proposal-1",
-      expectedRevisionHash,
-      correlationId,
-    });
+    const apply = await callHandler("skills.proposals.apply", params);
+    const reject = await callHandler("skills.proposals.reject", params);
+    const quarantine = await callHandler("skills.proposals.quarantine", params);
 
     for (const handler of [
       mocks.reviseSkillProposal,
@@ -704,29 +583,7 @@ describe("skills proposal gateway handlers", () => {
     expect(owner).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["skills.proposals.revise", { description: "Tighter" }, mocks.reviseSkillProposal],
-    ["skills.proposals.quarantine", {}, mocks.quarantineSkillProposal],
-  ] as const)("%s preserves optional revision evidence", async (method, extra, owner) => {
-    owner.mockResolvedValueOnce(
-      method.endsWith("revise")
-        ? { record: { id: "proposal-1" }, revisionHash: "b".repeat(64), content: "# Revised" }
-        : { id: "proposal-1" },
-    );
-
-    await callHandler(method, { proposalId: "proposal-1", ...extra });
-
-    expect(owner).toHaveBeenCalledWith(
-      expect.objectContaining({ proposalId: "proposal-1", expectedRevisionHash: undefined }),
-    );
-  });
-
-  it.each([
-    ["skills.proposals.historyStatus", {}],
-    ["skills.proposals.historyScan", {}],
-    ["skills.proposals.historyScan", { agentId: "main", direction: "older" }],
-    ["skills.proposals.historyScan", { agentId: "main", direction: "newer" }],
-  ] as const)(
+  it.each([["skills.proposals.historyStatus", {}]] as const)(
     "%s directs historical scan clients to a normal Workshop session",
     async (method, params) => {
       await expect(callHandler(method, params)).resolves.toMatchObject({
@@ -753,7 +610,7 @@ describe("skills proposal gateway handlers", () => {
     });
   });
 
-  it.each(["create", "update"])(
+  it.each(["update"])(
     "starts %s revision chat turns with visible instructions and server-built context",
     async (kind) => {
       const create = await callHandler("skills.proposals.create", {

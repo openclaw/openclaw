@@ -23,14 +23,14 @@ import type {
   prepareCodexAttemptTurnRequest,
 } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
+import { assertCodexBindingMayBeReplaced, clearCodexBindingForClient } from "./session-binding.js";
 import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
-import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import {
   CodexUsageLimitPromptError,
   formatCodexTurnStartUsageLimitError,
   markCodexAuthProfileBlockedFromRateLimits,
 } from "./usage-limit-error.js";
+import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export async function startCodexAttemptTurn(
   resources: CodexAttemptResources,
@@ -108,10 +108,12 @@ export async function startCodexAttemptTurn(
           "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
           { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
         );
-        const clearedBinding = await bindingStore.mutate(bindingIdentity, {
-          kind: "clear",
-          threadId: resourceState.thread.threadId,
-        });
+        const clearedBinding = await clearCodexBindingForClient(
+          bindingStore,
+          bindingIdentity,
+          resourceState.thread,
+          connection.authority,
+        );
         if (!clearedBinding) {
           embeddedAgentLog.warn(
             "codex app-server preserved newer context-engine binding after resume overflow; skipping fresh retry",
@@ -119,27 +121,6 @@ export async function startCodexAttemptTurn(
           );
         } else {
           resourceState.thread = await resourceState.restartContextEngineCodexThread();
-          const retryBinding = bindingStore.read(bindingIdentity);
-          if (
-            retryBinding &&
-            retryBinding.threadId === resourceState.thread.threadId &&
-            retryBinding.contextEngine?.projection
-          ) {
-            await bindingStore.mutate(bindingIdentity, {
-              kind: "patch",
-              threadId: retryBinding.threadId,
-              patch: {
-                contextEngine: { ...retryBinding.contextEngine, projection: undefined },
-              },
-            });
-            embeddedAgentLog.info(
-              "codex app-server cleared stale context-engine projection after overflow retry",
-              {
-                threadId: resourceState.thread.threadId,
-                previousEpoch: retryBinding.contextEngine.projection.epoch,
-              },
-            );
-          }
           void emitCodexAppServerEvent(params, {
             stream: "codex_app_server.lifecycle",
             data: { phase: "thread_ready_retry", threadId: resourceState.thread.threadId },
@@ -168,7 +149,13 @@ export async function startCodexAttemptTurn(
         await clearCodexBindingAfterInvalidImagePayload(
           bindingStore,
           bindingIdentity,
-          { phase: "turn_start", threadId: resourceState.thread.threadId, error: message },
+          {
+            phase: "turn_start",
+            threadId: resourceState.thread.threadId,
+            clientId: resourceState.thread.clientId,
+            error: message,
+          },
+          connection.authority,
           params.expectedSessionRuntimeOwnership,
         );
       }

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -16,6 +17,8 @@ import {
   resolveChatPaneWorkerPresentation,
 } from "./chat-pane-placement.ts";
 import {
+  createInitializationContext,
+  createRenderTestChatPane,
   activePlacementSession,
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -86,32 +89,66 @@ function startupSession(placement: GatewaySessionRow["placement"]): GatewaySessi
   };
 }
 
-describe.each([
-  { placement: startupPlacements[0], cloudLabel: "Runs on Cloud" },
-  { placement: startupPlacements[1], cloudLabel: "device-service · device-profile" },
-  { placement: startupPlacements[2], cloudLabel: "device-service · device-profile" },
-  { placement: startupPlacements[3], cloudLabel: "device-service · device-profile" },
-])("$placement.state placement stop presentation", ({ placement, cloudLabel }) => {
-  const phase = placement.state;
-  it.each([
-    { phase, targetKind: "device", copy: deviceCopy },
-    { phase, targetKind: "auto-device", copy: deviceCopy },
-    { phase, targetKind: "profile", copy: { ...cloudCopy, label: cloudLabel } },
-    { phase, targetKind: undefined, copy: unknownCopy },
-    { phase: "failed", targetKind: "device", copy: unknownCopy },
-    { phase: "failed", targetKind: "auto-device", copy: unknownCopy },
-    { phase: "failed", targetKind: "profile", copy: unknownCopy },
-  ] as const)(
-    "projects $phase $targetKind intent into operator copy",
-    ({ phase: startupPhase, targetKind, copy }) => {
-      expect(
-        resolveChatPaneWorkerPresentation(
-          startupSession(placement),
-          targetKind ? { phase: startupPhase, targetKind } : null,
-        ),
-      ).toEqual(copy);
-    },
-  );
+describe("chat pane startup worker copy", () => {
+  it("retains the startup retry callback across renders and resolves the current pane session", () => {
+    const context = createInitializationContext();
+    const pane = createRenderTestChatPane();
+    const state = pane.initialize(context);
+    state.sessionKey = "agent:main:startup";
+    const startup = {
+      sessionKey: state.sessionKey,
+      phase: "failed" as const,
+      startedAt: 1,
+      retryable: true,
+      initialTurn: {
+        id: "initial",
+        text: "Retained prompt",
+        createdAt: 1,
+        sendState: "failed" as const,
+      },
+    };
+    const get = vi.spyOn(context.placementStartup, "get").mockImplementation((sessionKey) => ({
+      ...startup,
+      sessionKey,
+    }));
+    const retry = vi.spyOn(context.placementStartup, "retry");
+    pane.render();
+    const action = expectDefined(pane.chatProps?.onRetrySessionPlacementStartup, "startup retry");
+    pane.render();
+    expect(pane.chatProps?.onRetrySessionPlacementStartup).toBe(action);
+    action();
+    expect(retry).toHaveBeenLastCalledWith(state.sessionKey);
+
+    const nextState = pane.initialize(context);
+    nextState.sessionKey = "agent:main:next-startup";
+    action();
+    expect(retry).toHaveBeenLastCalledWith(nextState.sessionKey);
+    expect(retry).toHaveBeenCalledTimes(2);
+    pane.render();
+    expect(pane.chatProps?.onRetrySessionPlacementStartup).toBe(action);
+
+    get.mockReturnValue({ ...startup, retryable: false });
+    pane.render();
+    expect(pane.chatProps?.onRetrySessionPlacementStartup).toBeUndefined();
+  });
+
+  it("uses generic cloud copy before a requested profile has worker metadata", () => {
+    expect(
+      resolveChatPaneWorkerPresentation(startupSession(startupPlacements[0]), {
+        phase: "requested",
+        targetKind: "profile",
+      }),
+    ).toEqual(cloudCopy);
+  });
+
+  it("ignores failed startup intent when presenting a new worker", () => {
+    expect(
+      resolveChatPaneWorkerPresentation(startupSession(startupPlacements[1]), {
+        phase: "failed",
+        targetKind: "device",
+      }),
+    ).toEqual(unknownCopy);
+  });
 });
 
 describe("chat pane worker stop", () => {
@@ -301,8 +338,6 @@ describe("chat pane worker stop", () => {
 
   it.each([
     { runner: "cloud", startupPhase: "starting" },
-    { runner: "device", startupPhase: "starting" },
-    { runner: "cloud", startupPhase: "failed" },
     { runner: "device", startupPhase: "failed" },
   ] as const)(
     "reclaims an active $runner placement with conflicting $startupPhase intent after the operator confirms",

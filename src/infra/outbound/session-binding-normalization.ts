@@ -40,6 +40,17 @@ export function normalizeConversationRef<T extends ConversationRef>(ref: T): T {
   };
 }
 
+/** Capture only canonical identity fields; caller context must not cross IPC. */
+export function captureConversationRef(ref: ConversationRef): ConversationRef {
+  const { channel, accountId, conversationId, parentConversationId } = ref;
+  return normalizeConversationRef({
+    channel,
+    accountId,
+    conversationId,
+    ...(parentConversationId !== undefined ? { parentConversationId } : {}),
+  });
+}
+
 /**
  * Builds the adapter registry key shared by channel/account scoped bindings.
  */

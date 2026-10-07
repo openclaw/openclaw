@@ -94,7 +94,7 @@ module.exports = { stateMigrations: [{
       }
       const cfg: OpenClawConfig = {
         gateway: { mode: "local" },
-        agents: { list: [{ id: "main", default: true, workspace: path.join(home, "workspace") }] },
+        agents: { entries: { main: { workspace: path.join(home, "workspace") } } },
         plugins: {
           allow: ["acpx", "codex"],
           entries: { acpx: { enabled: true }, codex: { enabled: true } },
@@ -143,7 +143,7 @@ module.exports = { stateMigrations: [{
                 ]
               : [];
           if (pending.length > 0) {
-            recordDeferredPluginMigrations({ env, pending });
+            await recordDeferredPluginMigrations({ env, pending });
           }
           const admitted = caller === "deferred-doctor" ? actions.slice(0, 1) : actions;
           let receipt;
@@ -152,7 +152,7 @@ module.exports = { stateMigrations: [{
             expect(ctx.cfg.agents?.entries?.main).toMatchObject({
               workspace: path.join(home, "workspace"),
             });
-            expect(ctx.cfg.agents?.list).toBeUndefined();
+            expect(Object.getOwnPropertyDescriptor(ctx.cfg.agents, "list")).toBeUndefined();
             expect(ctx.configResult.postSessionPluginMigration?.plannedActions).toEqual(actions);
             assert.ok(ctx.runWithPluginMetadataSnapshot);
             await ctx.runWithPluginMetadataSnapshot({ config: ctx.cfg }, () =>

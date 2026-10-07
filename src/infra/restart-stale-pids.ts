@@ -10,6 +10,7 @@ import { readUnixProcessGroupMembers, signalProcessTree } from "../process/kill-
 import {
   collectProcessAncestorPids,
   getFileLockProcessStartTime,
+  isPidAlive,
   isPidDefinitelyDead,
   MAX_ANCESTOR_WALK_DEPTH,
 } from "../shared/pid-alive.js";
@@ -152,14 +153,14 @@ function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null
  * Include PID 1 for container Gateways. process.ppid is always available; transitive
  * ancestry is best effort through /proc, ps, or one Windows process snapshot.
  */
-export function getSelfAndAncestorPidsSync(
+export function inspectSelfAndAncestorPidsSync(
   spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
   options: { requireVerifiedParent?: boolean } = {},
-): Set<number> {
+): { pids: Set<number>; complete: boolean } {
   const pids = new Set<number>([process.pid]);
   const immediateParent = process.ppid;
   if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
-    return pids;
+    return { pids, complete: process.platform !== "win32" && pids.has(1) };
   }
   // Windows retains an inherited PID after parent exit. Cleanup can exclude it
   // conservatively, but callers granting authority need the creation-ordered snapshot.
@@ -167,14 +168,15 @@ export function getSelfAndAncestorPidsSync(
     pids.add(immediateParent);
   }
   if (process.platform === "win32") {
-    for (const pid of readWindowsProcessAncestorsSync(
+    const ancestry = readWindowsProcessAncestorsSync(
       process.pid,
       MAX_ANCESTOR_WALK_DEPTH,
       spawnTimeoutMs,
-    )) {
+    );
+    for (const pid of ancestry.pids) {
       pids.add(pid);
     }
-    return pids;
+    return { pids, complete: ancestry.complete };
   }
   const readTransitiveParent =
     process.platform === "linux"
@@ -183,9 +185,18 @@ export function getSelfAndAncestorPidsSync(
         ? (pid: number) => readParentPidFromPs(pid, spawnTimeoutMs)
         : null;
   if (!readTransitiveParent) {
-    return pids;
+    return { pids, complete: pids.has(1) };
   }
-  return collectProcessAncestorPids(immediateParent, readTransitiveParent);
+  const ancestors = collectProcessAncestorPids(immediateParent, readTransitiveParent);
+  return { pids: ancestors, complete: ancestors.has(1) };
+}
+
+/** Cleanup protects every observed ancestor, even when the remaining chain is unknown. */
+export function getSelfAndAncestorPidsSync(
+  spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
+  options: { requireVerifiedParent?: boolean } = {},
+): Set<number> {
+  return inspectSelfAndAncestorPidsSync(spawnTimeoutMs, options).pids;
 }
 
 function getExcludedGatewayPidsSync(spawnTimeoutMs: number, protectedPid?: number): Set<number> {
@@ -220,13 +231,6 @@ function readUnixProcessArgsSync(pid: number, spawnTimeoutMs: number): string[] 
   return parsePsCommandLine(res.stdout.trim());
 }
 
-function verifyGatewayPidByArgvSync(pid: number, spawnTimeoutMs: number): boolean {
-  const args = readUnixProcessArgsSync(pid, spawnTimeoutMs);
-  return (
-    args != null && classifyOpenClawArgv(args, { command: "gateway", pid }).kind === "openclaw"
-  );
-}
-
 function parsePidsFromLsofOutput(
   stdout: string,
   spawnTimeoutMs: number,
@@ -243,7 +247,11 @@ function parsePidsFromLsofOutput(
     if (!pid || excluded.has(pid)) {
       continue;
     }
-    if (verifyGatewayPidByArgvSync(pid, spawnTimeoutMs)) {
+    const args = readUnixProcessArgsSync(pid, spawnTimeoutMs);
+    if (
+      args != null &&
+      classifyOpenClawArgv(args, { command: "gateway", pid }).kind === "openclaw"
+    ) {
       pids.push(pid);
     }
   }
@@ -307,14 +315,6 @@ function resolveProtectedPidAfterEnumeration(
   return options?.resolveProtectedPid ? options.resolveProtectedPid() : options?.protectedPid;
 }
 
-function findVerifiedWindowsGatewayPidsOnPortSync(
-  port: number,
-  options?: CleanStaleGatewayProcessesOptions,
-): number[] {
-  const rawPids = readWindowsListeningPidsOnPortSync(port);
-  return filterVerifiedWindowsGatewayPids(rawPids, resolveProtectedPidAfterEnumeration(options));
-}
-
 function findVerifiedWindowsGatewayPidsOnPortResultSync(
   port: number,
   options?: CleanStaleGatewayProcessesOptions,
@@ -339,7 +339,8 @@ function findGatewayPidsOnPortWithProtectedPidSync(
   if (process.platform === "win32") {
     // Use the shared Windows port inspection (PowerShell / netstat) with
     // command-line verification to find only openclaw gateway processes.
-    return findVerifiedWindowsGatewayPidsOnPortSync(port, options);
+    const rawPids = readWindowsListeningPidsOnPortSync(port);
+    return filterVerifiedWindowsGatewayPids(rawPids, resolveProtectedPidAfterEnumeration(options));
   }
   const lsof = resolveLsofCommandSync();
   const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
@@ -354,12 +355,7 @@ function findGatewayPidsOnPortWithProtectedPidSync(
     if (code === "ENOENT") {
       return [];
     }
-    const detail =
-      code && code.trim().length > 0
-        ? code
-        : res.error instanceof Error
-          ? res.error.message
-          : "unknown error";
+    const detail = code && code.trim().length > 0 ? code : res.error.message;
     restartLog.warn(`lsof failed during initial stale-pid scan for port ${port}: ${detail}`);
     return [];
   }
@@ -394,13 +390,17 @@ export function findGatewayPidsOnPortSync(port: number, spawnTimeoutMs?: number)
 }
 
 // Unknown probes distinguish permanent tool failures from retryable inspection errors.
-type PollResult = { free: true } | { free: false } | { free: null; permanent: boolean };
+type PollResult = { free: boolean } | { free: null; permanent: boolean };
 
 function pollPortOnce(port: number): PollResult {
-  if (process.platform === "win32") {
-    return pollPortOnceWindows(port);
-  }
   try {
+    if (process.platform === "win32") {
+      // Occupancy alone matters after cleanup; keep PowerShell within the per-probe budget.
+      const result = readWindowsListeningPidsResultSync(port, POLL_SPAWN_TIMEOUT_MS);
+      return result.ok
+        ? { free: result.pids.length === 0 }
+        : { free: null, permanent: result.permanent };
+    }
     const lsof = resolveLsofCommandSync();
     const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
       env: resolveDiagnosticProcessEnv(),
@@ -435,19 +435,6 @@ function pollPortOnce(port: number): PollResult {
   }
 }
 
-// Occupancy alone matters after cleanup; keep PowerShell within the per-probe budget.
-function pollPortOnceWindows(port: number): PollResult {
-  try {
-    const result = readWindowsListeningPidsResultSync(port, POLL_SPAWN_TIMEOUT_MS);
-    if (!result.ok) {
-      return { free: null, permanent: result.permanent };
-    }
-    return result.pids.length === 0 ? { free: true } : { free: false };
-  } catch {
-    return { free: null, permanent: false };
-  }
-}
-
 /**
  * Synchronously terminate stale gateway processes.
  * Callers must pass a non-empty pids array.
@@ -473,7 +460,7 @@ function terminateStaleProcessesSync(pids: number[], canSignal: () => boolean): 
   }
   sleepSync(STALE_SIGTERM_WAIT_MS);
   for (const pid of killed) {
-    if (isProcessAlive(pid)) {
+    if (isPidAlive(pid)) {
       if (!canSignal()) {
         break;
       }
@@ -519,12 +506,12 @@ function terminateStaleProcessesWindows(pids: number[], canSignal: () => boolean
       windowsHide: true,
     });
     const gracefulFailed = graceful.error != null || (graceful.status ?? 0) !== 0;
-    if (!gracefulFailed && !isProcessAlive(pid)) {
+    if (!gracefulFailed && !isPidAlive(pid)) {
       killed.push(pid);
       continue;
     }
     sleepSync(STALE_SIGTERM_WAIT_MS);
-    if (!isProcessAlive(pid)) {
+    if (!isPidAlive(pid)) {
       killed.push(pid);
       continue;
     }
@@ -540,20 +527,11 @@ function terminateStaleProcessesWindows(pids: number[], canSignal: () => boolean
       continue;
     }
     sleepSync(STALE_SIGKILL_WAIT_MS);
-    if (!isProcessAlive(pid)) {
+    if (!isPidAlive(pid)) {
       killed.push(pid);
     }
   }
   return killed;
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
 }
 
 /** Wait for a free port, a permanent inspection failure, or the wall-clock deadline. */

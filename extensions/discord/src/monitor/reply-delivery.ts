@@ -5,7 +5,6 @@ import {
   listMessageReceiptPlatformIds,
   sendDurableMessageBatch,
   type OutboundIdentity,
-  type OutboundSendDeps,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type {
   MarkdownTableMode,
@@ -14,7 +13,6 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RequestClient } from "../internal/discord.js";
@@ -97,7 +95,7 @@ function resolveBindingIdentity(
     return undefined;
   }
   const baseLabel = binding.label?.trim() || binding.agentId;
-  const displayName = `🤖 ${baseLabel}`.trim() || "🤖 agent";
+  const displayName = `🤖 ${baseLabel}`.trim();
   const identity: OutboundIdentity = {
     name: truncateUtf16Safe(displayName, 80),
   };
@@ -110,37 +108,6 @@ function resolveBindingIdentity(
     // Avatar is cosmetic; delivery should not depend on local identity config.
   }
   return identity;
-}
-
-function createDiscordDeliveryDeps(params: {
-  cfg: OpenClawConfig;
-  token: string;
-  rest?: RequestClient;
-  allowedMentions?: DiscordAllowedMentions;
-}): OutboundSendDeps {
-  return {
-    // Discord webhooks default to user-only parsing; bot messages need this
-    // explicit policy to prevent a fresh preview final from broadcasting.
-    discord: (to: string, text: string, opts?: Parameters<typeof sendMessageDiscord>[2]) =>
-      sendMessageDiscord(to, text, {
-        ...opts,
-        cfg: opts?.cfg ?? params.cfg,
-        token: params.token,
-        rest: params.rest,
-        ...(params.allowedMentions ? { allowedMentions: params.allowedMentions } : {}),
-      }),
-    discordVoice: (
-      to: string,
-      audioPath: string,
-      opts?: Parameters<typeof sendVoiceMessageDiscord>[2],
-    ) =>
-      sendVoiceMessageDiscord(to, audioPath, {
-        ...opts,
-        cfg: opts?.cfg ?? params.cfg,
-        token: params.token,
-        rest: params.rest,
-      }),
-  };
 }
 
 function formatDiscordReasoningPayload(payload: ReplyPayload): ReplyPayload {
@@ -163,7 +130,6 @@ export async function deliverDiscordReply(params: {
   token: string;
   accountId?: string;
   rest?: RequestClient;
-  runtime: RuntimeEnv;
   textLimit: number;
   maxLinesPerMessage?: number;
   replyToId?: string;
@@ -179,8 +145,6 @@ export async function deliverDiscordReply(params: {
   onPlatformSendDispatch?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;
 }) {
-  void params.runtime;
-
   const binding = resolveBoundThreadBinding(params);
   const to = binding ? `channel:${binding.channelId}` : params.target;
   const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, {
@@ -195,6 +159,7 @@ export async function deliverDiscordReply(params: {
     };
   }
 
+  const { cfg, token, rest, allowedMentions } = params;
   const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel: "discord",
@@ -213,12 +178,29 @@ export async function deliverDiscordReply(params: {
     identity: resolveBindingIdentity(params.cfg, binding),
     onPlatformSendDispatch: params.onPlatformSendDispatch,
     assertDirectAdapterHandoff: params.assertPlatformSendAuthorized,
-    deps: createDiscordDeliveryDeps({
-      cfg: params.cfg,
-      token: params.token,
-      rest: params.rest,
-      allowedMentions: params.allowedMentions,
-    }),
+    deps: {
+      // Discord webhooks default to user-only parsing; bot messages need this
+      // explicit policy to prevent a fresh preview final from broadcasting.
+      discord: (recipient: string, text: string, opts?: Parameters<typeof sendMessageDiscord>[2]) =>
+        sendMessageDiscord(recipient, text, {
+          ...opts,
+          cfg: opts?.cfg ?? cfg,
+          token,
+          rest,
+          ...(allowedMentions ? { allowedMentions } : {}),
+        }),
+      discordVoice: (
+        recipient: string,
+        audioPath: string,
+        opts?: Parameters<typeof sendVoiceMessageDiscord>[2],
+      ) =>
+        sendVoiceMessageDiscord(recipient, audioPath, {
+          ...opts,
+          cfg: opts?.cfg ?? cfg,
+          token,
+          rest,
+        }),
+    },
     mediaAccess: params.mediaLocalRoots?.length
       ? { localRoots: params.mediaLocalRoots }
       : undefined,

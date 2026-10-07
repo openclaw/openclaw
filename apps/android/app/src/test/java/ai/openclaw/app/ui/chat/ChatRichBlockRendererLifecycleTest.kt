@@ -80,7 +80,7 @@ class ChatRichBlockRendererLifecycleTest {
   ): ChatRichBlockRequest =
     when (kind) {
       ChatRichBlockKind.Math -> {
-        ChatMathRenderRequest.create(source, widthPx = 320, darkMode = false, textColor = 0xff000000.toInt(), fontSizePx = 16f, density = 1f)
+        ChatMathRenderRequest.create(source, widthPx = 320, textColor = 0xff000000.toInt(), fontSizePx = 16f, density = 1f)
       }
 
       ChatRichBlockKind.Mermaid -> {

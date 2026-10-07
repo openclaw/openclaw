@@ -1,6 +1,5 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
-import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
   ChannelOnboardingPostWriteHook,
@@ -60,7 +59,7 @@ import {
   noteChannelPrimer,
   resolveCatalogChannelSelectionHint,
   resolveChannelSelectionNoteLines,
-  resolveChannelSetupSelectionContributions,
+  resolveChannelSetupSelectionOptions,
   resolveChannelSetupWorkspaceDir,
   resolveQuickstartDefault,
 } from "./channel-setup.status.js";
@@ -168,10 +167,6 @@ export async function setupChannels(
   let preparedWorkspaceDir = options?.workspaceDir;
   const resolveWorkspaceDir = () =>
     (preparedWorkspaceDir ??= resolveChannelSetupWorkspaceDir(next));
-  const rememberScopedPlugin = (plugin: ChannelSetupPlugin) => {
-    const channel = plugin.id;
-    scopedPluginsById.set(channel, plugin);
-  };
   const activePluginsById = new Map<ChannelChoice, ChannelSetupPlugin>();
   const rememberActivePlugin = (plugin: ChannelSetupPlugin) => {
     activePluginsById.set(plugin.id, plugin);
@@ -181,13 +176,10 @@ export async function setupChannels(
     scopedPluginsById.get(channel) ?? activePluginsById.get(channel);
   const listVisibleInstalledPlugins = (): ChannelSetupPlugin[] => {
     const merged = new Map<string, ChannelSetupPlugin>();
-    const registryPlugins = listActiveChannelSetupPlugins().map(rememberActivePlugin);
-    for (const plugin of registryPlugins) {
-      if (shouldShowChannelInSetup(plugin.meta)) {
-        merged.set(plugin.id, plugin);
-      }
-    }
-    for (const plugin of scopedPluginsById.values()) {
+    for (const plugin of [
+      ...listActiveChannelSetupPlugins().map(rememberActivePlugin),
+      ...scopedPluginsById.values(),
+    ]) {
       if (shouldShowChannelInSetup(plugin.meta)) {
         merged.set(plugin.id, plugin);
       }
@@ -203,13 +195,10 @@ export async function setupChannels(
   const loadScopedChannelPlugin = async (
     channel: ChannelChoice,
     pluginId?: string,
-    setup?: {
-      forceReload?: boolean;
-      forceSetupOnlyChannelPlugins?: boolean;
-    },
+    forceReload = false,
   ): Promise<ChannelSetupPlugin | undefined> => {
     const existing = getVisibleChannelPlugin(channel);
-    if (existing && setup?.forceReload !== true) {
+    if (existing && !forceReload) {
       return existing;
     }
     const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
@@ -218,21 +207,16 @@ export async function setupChannels(
       channel,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
-      forceSetupOnlyChannelPlugins: setup?.forceSetupOnlyChannelPlugins ?? true,
+      forceSetupOnlyChannelPlugins: true,
     });
     const plugin =
       snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin ??
-      snapshot.channels.find((entry) => entry.plugin.id === channel)?.plugin;
+      snapshot.channels.find((entry) => entry.plugin.id === channel)?.plugin ??
+      getBundledChannelSetupPlugin(channel);
     if (plugin) {
-      rememberScopedPlugin(plugin);
-      return plugin;
+      scopedPluginsById.set(plugin.id, plugin);
     }
-    const bundledPlugin = getBundledChannelSetupPlugin(channel);
-    if (bundledPlugin) {
-      rememberScopedPlugin(bundledPlugin);
-      return bundledPlugin;
-    }
-    return undefined;
+    return plugin;
   };
   const setupCache = getPluginCache();
   const enableChannelPluginForSetup = async (channel: ChannelChoice) =>
@@ -251,13 +235,8 @@ export async function setupChannels(
       }
       return result;
     });
-  const getVisibleSetupFlowAdapter = (channel: ChannelChoice) => {
-    const scopedPlugin = scopedPluginsById.get(channel);
-    if (scopedPlugin) {
-      return resolveChannelSetupWizardAdapterForPlugin(scopedPlugin);
-    }
-    return resolveChannelSetupWizardAdapterForPlugin(getVisibleChannelPlugin(channel));
-  };
+  const getVisibleSetupFlowAdapter = (channel: ChannelChoice) =>
+    resolveChannelSetupWizardAdapterForPlugin(getVisibleChannelPlugin(channel));
   const preloadConfiguredExternalPlugins = async () => {
     // Keep setup memory bounded by snapshot-loading only configured external plugins.
     listVisibleInstalledPlugins();
@@ -350,18 +329,9 @@ export async function setupChannels(
       deferStatusUntilSelection,
     });
 
-  const getChannelEntries = () => {
-    const resolved = resolveVisibleChannelEntries();
-    return {
-      entries: resolved.entries,
-      catalogById: resolved.installableCatalogById,
-      installedCatalogById: resolved.installedCatalogById,
-    };
-  };
-
   // Deferred setup has no runtime status yet; only external catalog entries need download hints.
   const buildStatusByChannelForSelection = (
-    catalogById: ReturnType<typeof getChannelEntries>["catalogById"],
+    catalogById: ReturnType<typeof resolveVisibleChannelEntries>["installableCatalogById"],
   ): Map<ChannelChoice, ChannelSetupStatus> => {
     const decorated = new Map(statusByChannel);
     if (catalogById.size === 0) {
@@ -386,16 +356,16 @@ export async function setupChannels(
     return decorated;
   };
 
-  const resolveSelectionContributions = () =>
+  const resolveSelectionOptions = () =>
     withCommandPluginMetadata({ config: next, workspaceDir: resolveWorkspaceDir() }, async () => {
-      const { entries, catalogById } = getChannelEntries();
+      const { entries, installableCatalogById: catalogById } = resolveVisibleChannelEntries();
       const disabledHints = new Map<ChannelChoice, string | undefined>();
       for (const entry of entries) {
         if (shouldShowChannelInSetup(entry.meta)) {
           disabledHints.set(entry.id, await resolveDisabledHint(entry.id));
         }
       }
-      return resolveChannelSetupSelectionContributions({
+      return resolveChannelSetupSelectionOptions({
         entries,
         statusByChannel: buildStatusByChannelForSelection(catalogById),
         resolveDisabledHint: (channel) => disabledHints.get(channel),
@@ -442,20 +412,7 @@ export async function setupChannels(
       return false;
     }
     const plugin = getVisibleChannelPlugin(channel);
-    const adapter = getVisibleSetupFlowAdapter(channel);
     if (!plugin) {
-      if (adapter) {
-        await prompter.note(
-          t("wizard.channels.pluginMissingRecoverable", {
-            channel,
-            listCommand: formatCliCommand("openclaw plugins list"),
-            enableCommand: formatCliCommand("openclaw plugins enable " + channel),
-          }),
-          t("wizard.channels.setupTitle"),
-        );
-        await refreshStatus(channel);
-        return true;
-      }
       await prompter.note(
         t("wizard.channels.pluginNotAvailable", { channel }),
         t("wizard.channels.setupTitle"),
@@ -528,7 +485,6 @@ export async function setupChannels(
   };
   const runScopedChannelStep = async <T>(
     runner: (prompter: WizardPrompter, options: SetupChannelsOptions) => Promise<T>,
-    onPersistentEffect?: () => void,
   ) =>
     await runNavigationScope({
       prompter,
@@ -537,7 +493,6 @@ export async function setupChannels(
         withCommandPluginMetadata({ config: next, workspaceDir: resolveWorkspaceDir() }, () =>
           runner(scopedPrompter, scopedOptions),
         ),
-      ...(onPersistentEffect ? { onPersistentEffect } : {}),
     });
 
   const configureChannel = async (
@@ -546,10 +501,7 @@ export async function setupChannels(
     setupOptions: SetupChannelsOptions,
   ) => {
     if (scopedPluginsById.has(channel)) {
-      await loadScopedChannelPlugin(channel, undefined, {
-        forceReload: true,
-        forceSetupOnlyChannelPlugins: true,
-      });
+      await loadScopedChannelPlugin(channel, undefined, true);
     }
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
@@ -639,9 +591,7 @@ export async function setupChannels(
           plugin,
         })
       : DEFAULT_ACCOUNT_ID;
-    const resolvedAccountId =
-      normalizeAccountId(accountId) ??
-      (plugin ? resolveChannelDefaultAccountId({ plugin, cfg: next }) : DEFAULT_ACCOUNT_ID);
+    const resolvedAccountId = normalizeAccountId(accountId);
     const accountLabel = formatAccountLabel(resolvedAccountId);
 
     if (action === "delete") {
@@ -732,17 +682,25 @@ export async function setupChannels(
       : undefined;
     let resumingDisabledChannel = false;
     if (deferredDisabledHint) {
+      if (deferredDisabledHint !== "disabled" && deferredDisabledHint !== "plugin disabled") {
+        await noteDisabledBeforeSetup(prompter, channel, deferredDisabledHint);
+        return "done";
+      }
+      if (
+        channel !== targetedChannel &&
+        !(await prompter.confirm({
+          message: t(
+            deferredDisabledHint === "disabled"
+              ? "wizard.channels.resumeDisabledSetup"
+              : "wizard.channels.resumeDisabledPluginSetup",
+            { channel },
+          ),
+          initialValue: true,
+        }))
+      ) {
+        return "done";
+      }
       if (deferredDisabledHint === "disabled") {
-        const resume =
-          channel === targetedChannel
-            ? true
-            : await prompter.confirm({
-                message: t("wizard.channels.resumeDisabledSetup", { channel }),
-                initialValue: true,
-              });
-        if (!resume) {
-          return "done";
-        }
         const channels = next.channels as
           | Record<string, Record<string, unknown> | undefined>
           | undefined;
@@ -756,18 +714,7 @@ export async function setupChannels(
             },
           },
         } as OpenClawConfig;
-        resumingDisabledChannel = true;
-      } else if (deferredDisabledHint === "plugin disabled") {
-        const resume =
-          channel === targetedChannel
-            ? true
-            : await prompter.confirm({
-                message: t("wizard.channels.resumeDisabledPluginSetup", { channel }),
-                initialValue: true,
-              });
-        if (!resume) {
-          return "done";
-        }
+      } else {
         const result = await enableChannelPluginForSetup(channel);
         if (!result.enabled) {
           await prompter.note(
@@ -780,18 +727,16 @@ export async function setupChannels(
           );
           return "done";
         }
-        resumingDisabledChannel = true;
-      } else {
-        await noteDisabledBeforeSetup(prompter, channel, deferredDisabledHint);
-        return "done";
       }
+      resumingDisabledChannel = true;
       deferredDisabledHint = resolveConfigDisabledHint(channel);
       if (deferredDisabledHint) {
         await noteDisabledBeforeSetup(prompter, channel, deferredDisabledHint);
         return "done";
       }
     }
-    const { catalogById, installedCatalogById } = getChannelEntries();
+    const { installableCatalogById: catalogById, installedCatalogById } =
+      resolveVisibleChannelEntries();
     const catalogEntry = catalogById.get(channel);
     const installedCatalogEntry = installedCatalogById.get(channel);
     if (catalogEntry) {
@@ -901,7 +846,7 @@ export async function setupChannels(
     const skipValue = "__skip__" as const;
     const quickstartInitialValue = options?.initialSelection?.[0] ?? skipValue;
     while (true) {
-      const contributions = await resolveSelectionContributions();
+      const selectionOptions = await resolveSelectionOptions();
       const choice = await prompter.select({
         message: t("wizard.channels.selectQuickstart"),
         options: [
@@ -912,7 +857,7 @@ export async function setupChannels(
               command: formatCliCommand("openclaw channels add"),
             }),
           },
-          ...contributions.map((contribution) => contribution.option),
+          ...selectionOptions,
         ],
         initialValue: quickstartInitialValue,
         searchable: true,
@@ -928,11 +873,11 @@ export async function setupChannels(
     const doneValue = "__done__" as const;
     const initialValue = options?.initialSelection?.[0] ?? quickstartDefault;
     while (true) {
-      const contributions = await resolveSelectionContributions();
+      const selectionOptions = await resolveSelectionOptions();
       const choice = await prompter.select({
         message: t("wizard.channels.select"),
         options: [
-          ...contributions.map((contribution) => contribution.option),
+          ...selectionOptions,
           {
             value: doneValue,
             label: t("common.finished"),

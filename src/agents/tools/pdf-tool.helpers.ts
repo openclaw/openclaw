@@ -1,8 +1,4 @@
-/**
- * PDF tool parsing and response helpers.
- *
- * Normalizes PDF inputs, page ranges, provider native support, model config, and assistant text output.
- */
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   filterStringEntries,
   normalizeUniqueTrimmedStringList,
@@ -11,18 +7,16 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage, Context } from "../../llm/types.js";
-import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import type { PdfExtractedContent } from "../../media/pdf-extract.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
 
-/** Normalized PDF model preference used by tool registration and execution. */
-type PdfModelConfig = { primary?: string; fallbacks?: string[] };
+type PdfModelConfig = Exclude<AgentModelConfig, string>;
 
-/** Reads `pdf` and `pdfs` tool arguments into a trimmed, de-duplicated PDF input list. */
 export function resolvePdfInputs(record: Record<string, unknown>): string[] {
   const pdfInputs = normalizeUniqueTrimmedStringList([
     record.pdf,
@@ -32,11 +26,6 @@ export function resolvePdfInputs(record: Record<string, unknown>): string[] {
     throw new Error("pdf required: provide a path or URL to a PDF document");
   }
   return pdfInputs;
-}
-
-/** Checks whether a provider supports native PDF document input. */
-export function providerSupportsNativePdf(provider: string): boolean {
-  return providerSupportsNativePdfDocument({ providerId: provider });
 }
 
 function readPageNumber(value: string, errorLabel: string): number {
@@ -90,7 +79,6 @@ export function parsePageRange(
   return { pages, truncated: false };
 }
 
-/** Converts a provider assistant message into PDF text or throws a model-labelled failure. */
 export function coercePdfAssistantText(params: {
   message: AssistantMessage;
   provider: string;
@@ -98,26 +86,22 @@ export function coercePdfAssistantText(params: {
 }): string {
   const label = `${params.provider}/${params.model}`;
   const errorMessage = params.message.errorMessage?.trim();
-  const fail = (message?: string) => {
+  if (
+    params.message.stopReason === "error" ||
+    params.message.stopReason === "aborted" ||
+    errorMessage
+  ) {
     throw new Error(
-      message ? `PDF model failed (${label}): ${message}` : `PDF model failed (${label})`,
+      errorMessage ? `PDF model failed (${label}): ${errorMessage}` : `PDF model failed (${label})`,
     );
-  };
-  if (params.message.stopReason === "error" || params.message.stopReason === "aborted") {
-    fail(errorMessage);
   }
-  if (errorMessage) {
-    fail(errorMessage);
-  }
-  const text = extractEmbeddedAssistantText(params.message);
-  const trimmed = text.trim();
-  if (trimmed) {
-    return trimmed;
+  const text = extractEmbeddedAssistantText(params.message).trim();
+  if (text) {
+    return text;
   }
   throw new Error(`PDF model returned no text (${label}).`);
 }
 
-/** Reads configured PDF primary/fallback models from agent defaults. */
 export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
   const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.pdfModel);
   const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.pdfModel);
@@ -131,19 +115,12 @@ export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
   return modelConfig;
 }
 
-/** Caps requested PDF response tokens to the selected model's advertised maximum. */
 export function resolvePdfToolMaxTokens(
   modelMaxTokens: number | undefined,
   requestedMaxTokens = 4096,
 ) {
-  if (
-    typeof modelMaxTokens !== "number" ||
-    !Number.isFinite(modelMaxTokens) ||
-    modelMaxTokens <= 0
-  ) {
-    return requestedMaxTokens;
-  }
-  return Math.min(requestedMaxTokens, modelMaxTokens);
+  const modelLimit = asPositiveFiniteNumber(modelMaxTokens);
+  return modelLimit === undefined ? requestedMaxTokens : Math.min(requestedMaxTokens, modelLimit);
 }
 
 const CODEX_PDF_INSTRUCTIONS =
@@ -159,7 +136,6 @@ export function buildPdfExtractionContext(
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   > = [];
 
-  // Add extracted text and images
   for (const [i, extraction] of extractions.entries()) {
     const notice = renderDocumentTruncationNotice(extraction.metadata, explicitSelectionLimit);
     if (extraction.text.trim() || notice) {
@@ -177,7 +153,6 @@ export function buildPdfExtractionContext(
     }
   }
 
-  // Add the user prompt
   content.push({ type: "text", text: prompt });
 
   const systemPrompt =

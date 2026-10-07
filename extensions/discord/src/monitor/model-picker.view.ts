@@ -5,7 +5,7 @@ import type {
   ModelsRuntimeChoice,
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   Button,
   Container,
@@ -150,14 +150,6 @@ function createModelSelect(params: {
   return new DiscordModelPickerSelect();
 }
 
-/**
- * Build the alpha-bucket select row that appears above the provider/model
- * surface when the list exceeds {@link DISCORD_MODEL_PICKER_BUCKET_THRESHOLD}.
- *
- * Selecting a bucket emits action=bucket. The chosen bucket travels in the
- * select value, while the custom_id carries only the stable context needed to
- * rebuild the picker under Discord's 100-character custom_id limit.
- */
 function buildBucketSelectRow(params: {
   command: DiscordModelPickerCommandContext;
   userId: string;
@@ -169,7 +161,6 @@ function buildBucketSelectRow(params: {
   runtimeToken?: string;
   providerPage?: number;
   modelIndex?: number;
-  providerBucket?: string;
 }): Row<StringSelectMenu> | null {
   if (params.buckets.length <= 1) {
     return null;
@@ -179,13 +170,8 @@ function buildBucketSelectRow(params: {
     value: bucket.id,
     default: bucket.id === params.currentBucketId,
   }));
-  // The bucket select uses `action: "bucket"` so the interaction handler
-  // can route the chosen value (interaction.values[0]) into providerBucket
-  // or modelBucket and re-render. page resets to 1. providerBucket is
-  // intentionally omitted from the customId — when view=models the handler
-  // derives the provider bucket from `params.provider` via
-  // findProviderBucketId, keeping the customId under Discord's 100-char
-  // cap for long provider ids + 20-digit user ids.
+  // The select value carries the bucket; derive the provider bucket on interaction
+  // to keep long provider and user IDs within Discord's 100-character custom-id cap.
   const select = createModelSelect({
     customId: buildDiscordModelPickerCustomId({
       command: params.command,
@@ -380,10 +366,7 @@ function buildModelRows(
 
   const hasQuickModels = (params.quickModels ?? []).length > 0;
 
-  // Preserve the active provider bucket inside the model view so the
-  // "switch provider" select shows the same letter range the user picked
-  // when entering the model view. Without this the select always falls
-  // back to the first bucket and silently jumps the user out of "H–N".
+  // Keep the provider switcher in the letter range used to enter this model view.
   const providerPage = getDiscordModelPickerProviderPage({
     data: params.data,
     page: params.providerPage,
@@ -425,6 +408,14 @@ function buildModelRows(
     currentRuntime,
     pendingRuntime: params.pendingRuntime,
   });
+  const modelViewState = {
+    command: params.command,
+    userId: params.userId,
+    view: "models" as const,
+    provider: params.modelPage.provider,
+    page: params.modelPage.page,
+    providerPage: providerPage.page,
+  };
 
   if (
     runtimeChoices &&
@@ -436,18 +427,13 @@ function buildModelRows(
       new Row([
         createModelSelect({
           customId: buildDiscordModelPickerCustomId({
-            command: params.command,
+            ...modelViewState,
             action: "runtime",
-            view: "models",
-            provider: params.modelPage.provider,
-            page: params.modelPage.page,
-            providerPage: providerPage.page,
             modelIndex: params.pendingModelIndex,
             modelToken: pendingModelToken,
             ...(params.pendingModelIndex === undefined && activeModelBucket
               ? { modelBucket: activeModelBucket }
               : {}),
-            userId: params.userId,
           }),
           options: runtimeChoices.map((choice) => {
             const option: APISelectMenuOption = {
@@ -468,31 +454,21 @@ function buildModelRows(
 
   const selectedModelRef = parsedPendingModel ?? parsedCurrentModel;
   const modelOptions: APISelectMenuOption[] = params.modelPage.items.map((model) => ({
-    label: model,
-    value: model,
+    label: truncateCodePoints(model, 100),
+    value: createDiscordModelPickerModelToken(params.modelPage.provider, model),
     default: selectedModelRef
       ? selectedModelRef.provider === params.modelPage.provider && selectedModelRef.model === model
       : false,
   }));
 
-  // Model select customId omits providerBucket and modelBucket: both are
-  // pure functions of the durable state (provider + picked model) and
-  // including them risks blowing past Discord's 100-char customId cap for
-  // long provider ids + 20-digit user ids + active bucket strings. The
-  // action=model handler derives both buckets via findProviderBucketId /
-  // findModelBucketId at re-render time.
+  // Derive both buckets from the selected provider/model to preserve custom-id budget.
   rows.push(
     new Row([
       createModelSelect({
         customId: buildDiscordModelPickerCustomId({
-          command: params.command,
-          action: "model",
-          view: "models",
-          provider: params.modelPage.provider,
+          ...modelViewState,
           ...compactRuntime,
-          page: params.modelPage.page,
-          providerPage: providerPage.page,
-          userId: params.userId,
+          action: "pick",
         }),
         options: modelOptions,
         placeholder: `Select ${params.modelPage.provider} model`,
@@ -501,16 +477,11 @@ function buildModelRows(
   );
 
   const modelNavRow = buildPaginationRow({
-    command: params.command,
-    userId: params.userId,
-    view: "models",
-    page: params.modelPage.page,
+    ...modelViewState,
     totalPages: params.modelPage.totalPages,
     hasPrev: params.modelPage.hasPrev,
     hasNext: params.modelPage.hasNext,
-    provider: params.modelPage.provider,
     ...compactRuntime,
-    providerPage: providerPage.page,
     modelIndex: params.pendingModelIndex,
     modelToken: pendingModelToken,
     // Model navigation derives providerBucket from provider on interaction;
@@ -533,14 +504,7 @@ function buildModelRows(
     typeof params.pendingModelIndex === "number" &&
     params.pendingModelIndex > 0;
 
-  const modelActionState = {
-    command: params.command,
-    provider: params.modelPage.provider,
-    ...compactRuntime,
-    page: params.modelPage.page,
-    providerPage: providerPage.page,
-    userId: params.userId,
-  };
+  const modelActionState = { ...modelViewState, ...compactRuntime };
   const buttonRowItems: Button[] = [
     createModelPickerButton({
       label: "Providers",
@@ -558,7 +522,6 @@ function buildModelRows(
       customId: buildDiscordModelPickerCustomId({
         ...modelActionState,
         action: "cancel",
-        view: "models",
       }),
     }),
     createModelPickerButton({
@@ -567,7 +530,6 @@ function buildModelRows(
       customId: buildDiscordModelPickerCustomId({
         ...modelActionState,
         action: "reset",
-        view: "models",
       }),
     }),
   ];
@@ -596,7 +558,6 @@ function buildModelRows(
       customId: buildDiscordModelPickerCustomId({
         ...modelActionState,
         action: "submit",
-        view: "models",
         modelIndex: params.pendingModelIndex,
         modelToken: pendingModelToken,
       }),
@@ -734,7 +695,6 @@ export function renderDiscordModelPickerModelsView(
     // Keep the runtime identity stable when the current choice list changes.
     runtimeToken: pendingRuntime ? createDiscordModelPickerRuntimeToken(pendingRuntime) : undefined,
     providerPage,
-    providerBucket: params.providerBucket,
   });
   if (bucketRow) {
     rows.push(bucketRow);
@@ -792,10 +752,9 @@ function formatRecentsButtonLabel(modelRef: string, suffix?: string): string {
   if (label.length <= maxLen) {
     return label;
   }
-  const trimmed = suffix
+  return suffix
     ? `${sliceUtf16Safe(modelRef, 0, maxLen - suffix.length - 2)}… ${suffix}`
     : `${sliceUtf16Safe(modelRef, 0, maxLen - 1)}…`;
-  return trimmed;
 }
 
 function createModelRefToken(modelRef: string): string | undefined {
@@ -836,7 +795,6 @@ export function renderDiscordModelPickerRecentsView(
     );
   }
 
-  // Back button after a divider (via trailingRows).
   const backRow: Row<Button> = new Row([
     createModelPickerButton({
       label: "Back",

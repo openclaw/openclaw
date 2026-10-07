@@ -17,6 +17,13 @@ Targets one real private Slack channel with two distinct bots: a driver bot
 controlled by the harness and a SUT bot started by the child OpenClaw gateway
 through the bundled Slack plugin.
 
+Once the Slack QA adapter loads, it requires async proxy capture support so write
+evidence can be read without running SQLite on the Gateway thread. If that
+capability is missing, adapter creation asks you to upgrade before acquiring
+credentials or contacting Slack. This does not guarantee that the current QA CLI
+loads on older hosts: use a matching current source checkout and see the
+[older-host import limitation](/concepts/qa-e2e-automation/operator-flow#operator-flow).
+
 ### Agent E2E recipes
 
 Use `.agents/skills/slack-e2e/SKILL.md` from the checkout under test for reusable
@@ -88,17 +95,17 @@ Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
   exactly one SUT reply after message/app-mention twin delivery, confirms a
   native threaded follow-up can recall that bot reply, then closes the MPIM.
 - `slack-allowlist-block`
-- `slack-channel-disabled-warning` - opt-in real-Slack probe that confirms a
+- `slack-channel-disabled-warning` - opt-in real-Slack check that confirms a
   configured disabled channel emits a structured warning without replying.
 - `slack-top-level-reply-shape`
 - `slack-restart-resume`
 - `slack-progress-commentary-true`, `slack-progress-commentary-false`,
   `slack-progress-commentary-omitted`, and
-  `slack-progress-commentary-verbose-dedupe` / `slack-progress-commentary-verbose-full` - opt-in real-Slack probes for
+  `slack-progress-commentary-verbose-dedupe` / `slack-progress-commentary-verbose-full` - opt-in real-Slack checks for
   independent commentary/tool-progress controls, the omitted-key legacy
   default, and single-delivery behavior for durable verbose progress. The `on`
-  probe requires a safe Exec summary without command text or output; the `full`
-  probe requires the exact stdout marker in a separate tool-output message.
+  check requires a safe Exec summary without command text or output; the `full`
+  check requires the exact stdout marker in a separate tool-output message.
   Both use the same command and require one commentary identity separate from
   the final answer. Full verbosity allows the runtime's command metadata and
   one separate start summary, while requiring a unique completed-output identity.

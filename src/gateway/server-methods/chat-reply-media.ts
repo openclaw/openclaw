@@ -16,6 +16,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
+import { WEBCHAT_LOCAL_MEDIA_MAX_BYTES } from "../../media/configured-max-bytes.js";
 import type { LocalMediaAccessError } from "../../media/local-media-access.js";
 import {
   appendLocalMediaParentRoots,
@@ -316,6 +317,7 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
       allowHostWorkspace: !remote,
       accountId: params.accountId,
       ...resolveRequesterPolicyContext(params.requesterContext),
+      localMediaMaxBytes: WEBCHAT_LOCAL_MEDIA_MAX_BYTES,
     });
     const normalized: ReplyPayload[] = [];
     for (const payload of params.payloads) {

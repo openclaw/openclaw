@@ -1,4 +1,3 @@
-// Minimax provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
@@ -10,8 +9,6 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
-  executeProviderOperationWithRetry,
-  fetchWithTimeoutGuarded,
   pollProviderOperation,
   postJsonRequest,
   readProviderJsonResponse,
@@ -19,9 +16,7 @@ import {
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
-  type ProviderOperationRetryStage,
   type ProviderOperationTimeoutMs,
-  type TransientProviderRetryConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
@@ -32,7 +27,7 @@ import type {
 import {
   assertMinimaxBaseResp,
   DEFAULT_MINIMAX_MEDIA_BASE_URL,
-  resolveMinimaxGuardedRequestOptions,
+  fetchMinimaxResponse,
   resolveMinimaxMediaBaseUrl,
   type MinimaxBaseResp,
   type MinimaxRequestPolicy,
@@ -74,48 +69,6 @@ type MinimaxFileRetrieveResponse = {
   };
   base_resp?: MinimaxBaseResp;
 };
-
-function resolveMinimaxRequestTimeoutMs(
-  timeoutMs: ProviderOperationTimeoutMs | undefined,
-): number | undefined {
-  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-  return typeof resolved === "number" && Number.isFinite(resolved) && resolved > 0
-    ? resolved
-    : undefined;
-}
-
-async function fetchMinimaxResponse(params: {
-  stage: ProviderOperationRetryStage;
-  url: string;
-  init?: RequestInit;
-  timeoutMs?: ProviderOperationTimeoutMs;
-  fetchFn: typeof fetch;
-  requestFailedMessage: string;
-  policy: MinimaxRequestPolicy;
-  retry?: TransientProviderRetryConfig;
-}) {
-  return await executeProviderOperationWithRetry({
-    provider: "minimax",
-    stage: params.stage,
-    retry: params.retry,
-    operation: async () => {
-      const result = await fetchWithTimeoutGuarded(
-        params.url,
-        params.init ?? {},
-        resolveMinimaxRequestTimeoutMs(params.timeoutMs),
-        params.fetchFn,
-        resolveMinimaxGuardedRequestOptions(params.policy),
-      );
-      try {
-        await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
-      } catch (error) {
-        await result.release();
-        throw error;
-      }
-      return result;
-    },
-  });
-}
 
 function resolveFirstFrameImage(req: VideoGenerationRequest): string | undefined {
   const input = req.inputImages?.[0];
@@ -460,30 +413,26 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
         });
         const videoUrl = normalizeOptionalString(completed.video_url);
         const fileId = normalizeOptionalString(completed.file_id);
-        const maxVideoBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
+        const downloadOptions = {
+          timeoutMs: createProviderOperationTimeoutResolver({
+            deadline,
+            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          }),
+          fetchFn,
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+          policy: requestPolicy,
+        };
         const video = videoUrl
           ? await downloadVideoFromUrl({
+              ...downloadOptions,
               url: videoUrl,
-              timeoutMs: createProviderOperationTimeoutResolver({
-                deadline,
-                defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-              }),
-              fetchFn,
-              maxBytes: maxVideoBytes,
-              policy: requestPolicy,
             })
           : fileId
             ? await downloadVideoFromFileId({
+                ...downloadOptions,
                 fileId,
                 headers,
-                timeoutMs: createProviderOperationTimeoutResolver({
-                  deadline,
-                  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-                }),
                 baseUrl,
-                fetchFn,
-                maxBytes: maxVideoBytes,
-                policy: requestPolicy,
               })
             : (() => {
                 throw new Error(

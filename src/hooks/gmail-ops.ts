@@ -9,6 +9,7 @@ import {
   resolveGatewayPort,
   validateConfigObjectWithPlugins,
 } from "../config/config.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -35,7 +36,6 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
   type GmailHookOverrides,
-  type GmailHookRuntimeConfig,
   generateHookToken,
   mergeHookPresets,
   normalizeHooksPath,
@@ -45,22 +45,14 @@ import {
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
 
-type GmailCommonOptions = {
-  topic?: string;
-  subscription?: string;
-  label?: string;
-  hookToken?: string;
-  pushToken?: string;
-  hookUrl?: string;
+type GmailCommonOptions = Omit<
+  GmailHookOverrides,
+  "account" | "serveBind" | "servePort" | "servePath" | "tailscaleMode"
+> & {
   bind?: string;
   port?: number;
   path?: string;
-  includeBody?: boolean;
-  maxBytes?: number;
-  renewEveryMinutes?: number;
-  tailscale?: "off" | "serve" | "funnel";
-  tailscalePath?: string;
-  tailscaleTarget?: string;
+  tailscale?: GmailHookOverrides["tailscaleMode"];
 };
 
 export type GmailSetupOptions = GmailCommonOptions & {
@@ -184,7 +176,16 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   await ensureSubscription(projectId, subscription, topicName, pushEndpoint);
 
-  await startGmailWatch({ account: opts.account, label, topic: topicPath });
+  const watch = await runCommandWithTimeout(
+    [
+      resolveGogExecutable(),
+      ...buildGogWatchStartArgs({ account: opts.account, label, topic: topicPath }),
+    ],
+    { timeoutMs: 120_000 },
+  );
+  if (watch.code !== 0) {
+    throw new Error(formatCommandResult("gog gmail watch start", watch));
+  }
 
   const nextConfig: OpenClawConfig = {
     ...baseConfig,
@@ -289,6 +290,7 @@ export async function runGmailService(opts: GmailRunOptions) {
   }
 
   const runtimeConfig = resolved.value;
+  const scheduler = new GatewayScheduler();
   const controller = new AbortController();
   let shutdownTask: Promise<void> | undefined;
   const detachSignals = () => {
@@ -301,7 +303,14 @@ export async function runGmailService(opts: GmailRunOptions) {
       return;
     }
     controller.abort();
-    shutdownTask = stopGmailWatcher()
+    scheduler.beginClose();
+    shutdownTask = (async () => {
+      try {
+        await stopGmailWatcher();
+      } finally {
+        await scheduler.stop();
+      }
+    })()
       .catch((err: unknown) => {
         defaultRuntime.error(`gmail watcher shutdown failed: ${String(err)}`);
       })
@@ -317,7 +326,10 @@ export async function runGmailService(opts: GmailRunOptions) {
     if (runtimeConfig.tailscale.mode !== "off") {
       await ensureDependency("tailscale", ["tailscale"]);
     }
-    const result = await startGmailWatcherService(runtimeConfig, { signal: controller.signal });
+    const result = await startGmailWatcherService(runtimeConfig, {
+      scheduler,
+      signal: controller.signal,
+    });
     if (!result.started && !controller.signal.aborted) {
       throw new Error(result.reason ?? "gmail watcher failed to start");
     }
@@ -328,13 +340,5 @@ export async function runGmailService(opts: GmailRunOptions) {
     if (controller.signal.aborted) {
       await shutdownTask;
     }
-  }
-}
-
-async function startGmailWatch(cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">) {
-  const args = [resolveGogExecutable(), ...buildGogWatchStartArgs(cfg)];
-  const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
-  if (result.code !== 0) {
-    throw new Error(formatCommandResult("gog gmail watch start", result));
   }
 }

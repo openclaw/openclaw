@@ -25,7 +25,7 @@ import {
 import {
   resolveCodexAppServerRequestModelSelection,
   resolveCodexBindingModelProviderFallback,
-} from "./app-server/thread-lifecycle.js";
+} from "./app-server/thread-model-selection.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 
 type ActiveTurn = {
@@ -130,7 +130,6 @@ export async function setCodexConversationModel(input: {
   bindingStore: CodexAppServerBindingStore;
   binding: CodexAppServerThreadBinding | undefined;
   model: string;
-  pluginConfig?: unknown;
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
   storePath?: string;
@@ -142,18 +141,20 @@ export async function setCodexConversationModel(input: {
   if (!model) {
     return "Usage: /codex model <model>";
   }
-  const lookup = buildBindingLookup(params);
+  const lookup = buildCodexConversationAgentLookup(params);
   params.assertCurrent();
   const assertCommitAllowed = params.assertCommitAllowed ?? params.assertCurrent;
   const binding = requirePreparedThreadBinding(params.binding);
   if (binding.connectionScope === "supervision") {
     throw new ModelSelectionLockedError();
   }
-  const modelProvider = resolveConversationControlModelProvider({
+  const modelProvider = resolveThreadRequestModelProvider({
     authProfileId: binding.authProfileId,
-    bindingModel: binding.model,
-    bindingModelProvider: binding.modelProvider,
-    currentModel: model,
+    modelProvider: resolveCodexBindingModelProviderFallback({
+      bindingModel: binding.model,
+      bindingModelProvider: binding.modelProvider,
+      currentModel: model,
+    }),
     ...lookup,
   });
   const modelSelection = resolveCodexAppServerRequestModelSelection({
@@ -236,9 +237,6 @@ export async function setCodexConversationFastMode(params: {
   bindingStore: CodexAppServerBindingStore;
   binding: CodexAppServerThreadBinding | undefined;
   enabled?: boolean;
-  pluginConfig?: unknown;
-  agentDir?: string;
-  config?: CodexAppServerBindingLookup["config"];
   assertCurrent: () => void;
 }): Promise<string> {
   params.assertCurrent();
@@ -360,7 +358,7 @@ async function patchThreadBinding(
   }
 }
 
-function buildBindingLookup(params: {
+export function buildCodexConversationAgentLookup(params: {
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
 }): CodexAppServerBindingLookup {
@@ -371,19 +369,10 @@ function buildBindingLookup(params: {
   };
 }
 
-function resolveConversationControlModelProvider(params: {
-  authProfileId?: string;
-  bindingModel?: string;
-  bindingModelProvider?: string;
-  currentModel?: string;
-  agentDir?: string;
-  config?: CodexAppServerBindingLookup["config"];
-}): string | undefined {
-  const modelProvider = resolveCodexBindingModelProviderFallback({
-    currentModel: params.currentModel,
-    bindingModel: params.bindingModel,
-    bindingModelProvider: params.bindingModelProvider,
-  })?.trim();
+export function resolveThreadRequestModelProvider(
+  params: CodexAppServerAuthProfileLookup & { modelProvider?: string },
+): string | undefined {
+  const modelProvider = params.modelProvider?.trim();
   if (!modelProvider || modelProvider.toLowerCase() === "codex") {
     return undefined;
   }

@@ -1,7 +1,6 @@
-// Shared session workspace presentation for Gateway-local and worker-owned files.
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionFileBrowserEntry,
@@ -13,6 +12,9 @@ import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessio
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { BROWSER_IMAGE_MIME_TYPES } from "../../shared/browser-image-mime-types.js";
+import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
+import { resolveSessionFileReadTarget, type SessionFileReadBoundary } from "./session-file-read.js";
 import {
   decodeUtf8Strict,
   listWorkspacePath,
@@ -25,7 +27,6 @@ import {
   sortWorkspaceEntries,
   statWorkspacePath,
   toUpdatedAtMs,
-  WORKSPACE_PREVIEW_MAX_BYTES,
   type WorkspaceDirEntry,
   type WorkspaceRoot,
   updateWorkspaceFile,
@@ -33,28 +34,16 @@ import {
 } from "./workspace-fs.js";
 
 export type TouchedFile = { path: string; kind: "modified" | "read" };
-export type LoadedSessionFiles = {
-  root?: string;
-  fileRoot?: string;
+export type LoadedSessionFiles = SessionFileReadBoundary & {
   diffCwd?: string;
   files: TouchedFile[];
 };
-const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
 // Matches file-type's documented default buffer sample while keeping metadata
 // classification independent from the 256 KiB inline-content cap.
 const MIME_SNIFF_PREFIX_BYTES = 4_100;
-// Inline previews stay limited to formats supported by modern Control UI browsers.
-// Native workspace clients intentionally own a broader, separate image policy.
-const BROWSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
-  "image/avif",
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
 const DETECTED_TEXT_MIME_TYPES = new Set([
   "application/rtf",
   "application/xml",
@@ -73,11 +62,7 @@ const SEARCH_SKIP_DIRS = new Set([
 ]);
 
 function toDisplayPath(root: string, resolved: string): string {
-  const relative = path.relative(root, resolved);
-  if (!relative) {
-    return "";
-  }
-  return relative.split(path.sep).join("/");
+  return path.relative(root, resolved).split(path.sep).join("/");
 }
 
 function resolveTouchedFilePath(params: {
@@ -109,19 +94,6 @@ export function resolveFileRoot(params: {
   const resolvedCwd = path.resolve(params.spawnedCwd);
   const resolvedRoot = path.resolve(params.root);
   return isPathInside(resolvedRoot, resolvedCwd) ? params.spawnedCwd : params.root;
-}
-
-function mergeRelevance(
-  current: SessionFileRelevance | undefined,
-  next: SessionFileRelevance | undefined,
-): SessionFileRelevance | undefined {
-  if (!current) {
-    return next;
-  }
-  if (!next || current === next) {
-    return current;
-  }
-  return "mixed";
 }
 
 function buildSessionRelevanceMap(
@@ -158,15 +130,14 @@ function relevanceForBrowserPath(
   let aggregate: SessionFileRelevance | undefined;
   for (const [filePath, sessionKind] of relevance) {
     if (filePath.startsWith(prefix) && filePath !== browserPath) {
-      aggregate = mergeRelevance(aggregate, sessionKind);
+      aggregate = !aggregate || aggregate === sessionKind ? sessionKind : "mixed";
     }
   }
   return aggregate;
 }
 
 function displayNameForPath(filePath: string): string {
-  const base = path.basename(filePath);
-  return base || filePath;
+  return path.basename(filePath) || filePath;
 }
 
 function isDetectedTextMime(mimeType: string): boolean {
@@ -177,8 +148,12 @@ function isDetectedTextMime(mimeType: string): boolean {
   );
 }
 
-function applyInlineFilePreview(entry: SessionFileEntry, buffer: Buffer, mimeType?: string): void {
-  if (mimeType && BROWSER_PREVIEW_IMAGE_MIME_TYPES.has(mimeType)) {
+export async function populateSessionFilePreview(
+  entry: SessionFileEntry,
+  buffer: Buffer,
+): Promise<void> {
+  const mimeType = await detectMime({ buffer });
+  if (mimeType && BROWSER_IMAGE_MIME_TYPES.has(mimeType)) {
     entry.mimeType = mimeType;
     entry.contentEncoding = "base64";
     entry.previewKind = "image";
@@ -193,29 +168,7 @@ function applyInlineFilePreview(entry: SessionFileEntry, buffer: Buffer, mimeTyp
     entry.content = text;
     // The hash doubles as the sessions.files.set CAS token. Binary files
     // never receive one, so replacement characters cannot be saved back.
-    entry.hash = createHash("sha256").update(buffer).digest("hex");
-    return;
-  }
-  entry.previewKind = "unsupported";
-  if (mimeType) {
-    entry.mimeType = mimeType;
-  }
-}
-
-export async function populateSessionFilePreview(
-  entry: SessionFileEntry,
-  buffer: Buffer,
-): Promise<void> {
-  applyInlineFilePreview(entry, buffer, await detectMime({ buffer }));
-}
-
-function applyOversizedFileMetadata(
-  entry: SessionFileEntry,
-  buffer: Buffer,
-  mimeType?: string,
-): void {
-  const prefixIsText = decodeUtf8Strict(buffer) !== undefined;
-  if ((!mimeType && prefixIsText) || (mimeType && isDetectedTextMime(mimeType) && prefixIsText)) {
+    entry.hash = sha256Hex(buffer);
     return;
   }
   entry.previewKind = "unsupported";
@@ -228,25 +181,39 @@ async function toSessionFileEntry(
   touched: TouchedFile,
   root: string | undefined,
   fileRoot: string | undefined,
-  opts: { includeContent?: boolean; workspaceRoot?: WorkspaceRoot } = {},
+  opts: {
+    includeContent?: boolean;
+    workspaceRoot?: WorkspaceRoot;
+    assertCurrent?: () => void;
+    authorizeHostRead?: () => Promise<boolean>;
+    onOutsideBoundary?: () => void;
+  } = {},
 ): Promise<SessionFileEntry> {
-  const resolved = resolveTouchedFilePath({ root, fileRoot, filePath: touched.path });
+  const target = await resolveSessionFileReadTarget(
+    { root, fileRoot, authorizeHostRead: opts.authorizeHostRead },
+    touched.path,
+  );
   const base = {
     path: touched.path,
     name: displayNameForPath(touched.path),
     kind: touched.kind,
   } satisfies Pick<SessionFileEntry, "path" | "name" | "kind">;
-  if (!resolved) {
+  if (!target || target === "outside_session_boundary") {
+    if (target === "outside_session_boundary") {
+      opts.onOutsideBoundary?.();
+    }
     return { ...base, missing: true };
   }
-  const browserPath = toDisplayPath(root!, resolved);
-  const stat = await statWorkspacePath(opts.workspaceRoot ?? root!, browserPath);
+  const browserPath = target.path;
+  const readRoot = target.outside ? target.root : (opts.workspaceRoot ?? target.root);
+  const stat = await statWorkspacePath(readRoot, browserPath, opts.assertCurrent);
   if (!stat?.isFile) {
     return { ...base, missing: true };
   }
   const entry: SessionFileEntry = {
     ...base,
-    workspacePath: browserPath,
+    ...(target.outside ? { path: target.absolutePath } : {}),
+    workspacePath: target.outside ? target.absolutePath : browserPath,
     missing: false,
     size: stat.size,
     updatedAtMs: toUpdatedAtMs(stat.mtimeMs),
@@ -254,29 +221,34 @@ async function toSessionFileEntry(
   if (!opts.includeContent) {
     return entry;
   }
-  if (stat.size <= MAX_PREVIEW_BYTES) {
-    const read = await readWorkspaceFile(root!, browserPath);
-    if (!read) {
-      return { ...base, missing: true };
-    }
-    if (read === "too-large") {
-      return entry;
-    }
-    entry.workspacePath = read.canonicalPath;
-    entry.size = read.stat.size;
-    entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
-    await populateSessionFilePreview(entry, read.buffer);
-    return entry;
-  }
-  const prefix = await readWorkspaceFilePrefix(root!, browserPath, MIME_SNIFF_PREFIX_BYTES);
-  if (!prefix) {
+  const inline = stat.size <= WORKSPACE_PREVIEW_MAX_BYTES;
+  const read = inline
+    ? await readWorkspaceFile(readRoot, browserPath, { assertCurrent: opts.assertCurrent })
+    : await readWorkspaceFilePrefix(readRoot, browserPath, MIME_SNIFF_PREFIX_BYTES);
+  if (!read) {
     return { ...base, missing: true };
   }
-  entry.workspacePath = prefix.canonicalPath;
-  entry.size = prefix.stat.size;
-  entry.updatedAtMs = toUpdatedAtMs(prefix.stat.mtimeMs);
-  const mimeType = await detectMime({ buffer: prefix.buffer });
-  applyOversizedFileMetadata(entry, prefix.buffer, mimeType);
+  if (read === "too-large" || read === "unsupported") {
+    return entry;
+  }
+  entry.workspacePath = target.outside ? target.absolutePath : read.canonicalPath;
+  entry.size = read.stat.size;
+  entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
+  if (inline) {
+    await populateSessionFilePreview(entry, read.buffer);
+    if (read.readOnly || target.outside) {
+      delete entry.hash;
+    }
+  } else {
+    const mimeType = await detectMime({ buffer: read.buffer });
+    const prefixIsText = decodeUtf8Strict(read.buffer) !== undefined;
+    if (!prefixIsText || (mimeType && !isDetectedTextMime(mimeType))) {
+      entry.previewKind = "unsupported";
+      if (mimeType) {
+        entry.mimeType = mimeType;
+      }
+    }
+  }
   return entry;
 }
 
@@ -313,20 +285,14 @@ function toBrowserEntry(
   };
 }
 
-function matchesSearch(entryPath: string, name: string, query: string): boolean {
-  const normalizedQuery = query.toLowerCase();
-  return (
-    name.toLowerCase().includes(normalizedQuery) ||
-    entryPath.toLowerCase().includes(normalizedQuery)
-  );
-}
-
 async function searchBrowserEntries(params: {
+  assertCurrent?: () => void;
   root: string | WorkspaceRoot;
   query: string;
   relevance: ReadonlyMap<string, SessionFileRelevance>;
-}): Promise<{ entries: SessionFileBrowserEntry[]; truncated?: boolean }> {
+}): Promise<{ entries: SessionFileBrowserEntry[]; truncated?: true }> {
   const entries: SessionFileBrowserEntry[] = [];
+  const query = params.query.toLowerCase();
   let visitedEntries = 0;
   let truncated = false;
   const shouldStop = (): boolean => {
@@ -340,7 +306,7 @@ async function searchBrowserEntries(params: {
     if (shouldStop()) {
       return;
     }
-    const dirents = await listWorkspacePath(params.root, dir);
+    const dirents = await listWorkspacePath(params.root, dir, params.assertCurrent);
     if (!dirents) {
       return;
     }
@@ -350,7 +316,7 @@ async function searchBrowserEntries(params: {
       }
       visitedEntries += 1;
       const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
-      if (matchesSearch(browserPath, dirent.name, params.query)) {
+      if (browserPath.toLowerCase().includes(query)) {
         const entry = toBrowserEntry(browserPath, dirent, params.relevance);
         if (entry) {
           entries.push(entry);
@@ -366,6 +332,7 @@ async function searchBrowserEntries(params: {
 }
 
 async function buildBrowserResult(params: {
+  assertCurrent?: () => void;
   root: string | undefined;
   workspaceRoot?: WorkspaceRoot;
   fileRoot: string | undefined;
@@ -383,12 +350,12 @@ async function buildBrowserResult(params: {
       root: params.workspaceRoot ?? params.root,
       query: search,
       relevance,
+      assertCurrent: params.assertCurrent,
     });
     return {
       path: "",
       search,
-      entries: result.entries,
-      ...(result.truncated ? { truncated: result.truncated } : {}),
+      ...result,
     };
   }
   const browserPath = normalizeRelativePath(params.path);
@@ -396,11 +363,19 @@ async function buildBrowserResult(params: {
   if (!resolved) {
     return undefined;
   }
-  const stat = await statWorkspacePath(params.workspaceRoot ?? params.root, browserPath);
+  const stat = await statWorkspacePath(
+    params.workspaceRoot ?? params.root,
+    browserPath,
+    params.assertCurrent,
+  );
   if (!stat?.isDirectory) {
     return undefined;
   }
-  const dirents = await listWorkspacePath(params.workspaceRoot ?? params.root, browserPath);
+  const dirents = await listWorkspacePath(
+    params.workspaceRoot ?? params.root,
+    browserPath,
+    params.assertCurrent,
+  );
   if (!dirents) {
     return undefined;
   }
@@ -424,6 +399,7 @@ export async function listSessionWorkspaceFiles(
   params: LoadedSessionFiles & {
     path?: string;
     search?: string;
+    assertCurrent?: () => void;
   },
 ): Promise<{
   root?: string;
@@ -431,27 +407,43 @@ export async function listSessionWorkspaceFiles(
   files: SessionFileEntry[];
   browser?: SessionFileBrowserResult;
 }> {
-  const loaded = params;
-  const root = loaded.root;
-  const gitCheckout = loaded.diffCwd ? insideGitCheckout(loaded.diffCwd) : undefined;
+  const root = params.root;
   const workspaceRoot = root ? await openWorkspaceRoot(root) : undefined;
-  const workspaceFiles = root
-    ? loaded.files.filter((file) =>
-        Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
-      )
-    : loaded.files;
+  const gitCheckout =
+    workspaceRoot && "access" in workspaceRoot
+      ? undefined
+      : params.diffCwd
+        ? insideGitCheckout(params.diffCwd)
+        : undefined;
+  const allowOutside =
+    root &&
+    params.files.some(
+      (file) => !resolveTouchedFilePath({ root, fileRoot: params.fileRoot, filePath: file.path }),
+    ) &&
+    (await params.authorizeHostRead?.());
+  const workspaceFiles =
+    root && !allowOutside
+      ? params.files.filter((file) =>
+          Boolean(resolveTouchedFilePath({ root, fileRoot: params.fileRoot, filePath: file.path })),
+        )
+      : params.files;
   const files = await Promise.all(
     workspaceFiles.map((file) =>
-      toSessionFileEntry(file, loaded.root, loaded.fileRoot, { workspaceRoot }),
+      toSessionFileEntry(file, params.root, params.fileRoot, {
+        workspaceRoot,
+        assertCurrent: params.assertCurrent,
+        authorizeHostRead: params.authorizeHostRead,
+      }),
     ),
   );
   const browser = await buildBrowserResult({
     root,
     workspaceRoot,
-    fileRoot: loaded.fileRoot,
+    fileRoot: params.fileRoot,
     path: params.path,
     search: params.search,
     files: workspaceFiles,
+    assertCurrent: params.assertCurrent,
   });
   return {
     ...(root ? { root } : {}),
@@ -462,47 +454,66 @@ export async function listSessionWorkspaceFiles(
 }
 
 export async function getSessionWorkspaceFile(
-  params: LoadedSessionFiles & { path: string },
-): Promise<{ root?: string; file?: SessionFileEntry }> {
-  const loaded = params;
-  const exactTouched = loaded.files.find((file) => file.path === params.path);
+  params: LoadedSessionFiles & { path: string; assertCurrent?: () => void },
+): Promise<{ root?: string; file?: SessionFileEntry; reason?: "outside_session_boundary" }> {
+  let outsideBoundary = false;
+  const options = {
+    includeContent: true,
+    assertCurrent: params.assertCurrent,
+    authorizeHostRead: params.authorizeHostRead,
+    onOutsideBoundary: () => {
+      outsideBoundary = true;
+    },
+  };
+  const exactTouched = params.files.find((file) => file.path === params.path);
   if (exactTouched) {
+    const file = await toSessionFileEntry(exactTouched, params.root, params.fileRoot, options);
     return {
-      ...(loaded.root ? { root: loaded.root } : {}),
-      file: await toSessionFileEntry(exactTouched, loaded.root, loaded.fileRoot, {
-        includeContent: true,
-      }),
+      ...(params.root ? { root: params.root } : {}),
+      file,
+      ...(outsideBoundary ? { reason: "outside_session_boundary" as const } : {}),
     };
   }
-  if (!loaded.root) {
+  if (!params.root) {
     return {};
   }
   // Any in-root file is previewable; fs-safe root enforces containment, symlink/hardlink
   // rejection, and the 256 KB cap.
   const candidates = resolveSessionFileCandidates({
-    root: loaded.root,
-    fileRoot: loaded.fileRoot,
+    root: params.root,
+    fileRoot: params.fileRoot,
     filePath: params.path,
   });
-  if (candidates.length === 0) {
-    return { root: loaded.root };
+  if (
+    candidates.length === 0 ||
+    !resolveTouchedFilePath({ root: params.root, fileRoot: params.fileRoot, filePath: params.path })
+  ) {
+    const file = await toSessionFileEntry(
+      { path: params.path, kind: "read" },
+      params.root,
+      params.fileRoot,
+      options,
+    );
+    return {
+      root: params.root,
+      file,
+      ...(outsideBoundary ? { reason: "outside_session_boundary" as const } : {}),
+    };
   }
-  const relevance = buildSessionRelevanceMap(loaded.files, loaded.root, loaded.fileRoot);
+  const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
   for (const candidate of candidates) {
-    const browserPath = toDisplayPath(loaded.root, candidate);
+    const browserPath = toDisplayPath(params.root, candidate);
     const sessionKind = relevance.get(browserPath);
     const touched: TouchedFile = {
       path: browserPath,
       kind: sessionKind === "modified" ? "modified" : "read",
     };
-    const file = await toSessionFileEntry(touched, loaded.root, loaded.root, {
-      includeContent: true,
-    });
+    const file = await toSessionFileEntry(touched, params.root, params.root, options);
     if (!file.missing) {
-      return { root: loaded.root, file };
+      return { root: params.root, file };
     }
   }
-  return { root: loaded.root };
+  return { root: params.root };
 }
 
 export type SessionWorkspaceWriteResult =
@@ -525,7 +536,7 @@ export async function setSessionWorkspaceFile(params: {
     return { status: "unsafe" };
   }
   const size = Buffer.byteLength(params.content, "utf8");
-  if (size > MAX_PREVIEW_BYTES) {
+  if (size > WORKSPACE_PREVIEW_MAX_BYTES) {
     return { status: "too-large", size };
   }
   if (Buffer.from(params.content, "utf8").toString("utf8") !== params.content) {

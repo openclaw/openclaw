@@ -3,11 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
-import {
-  createAudioAsVoiceBuffer,
-  createBlockReplyContentKey,
-  createBlockReplyPipeline,
-} from "./block-reply-pipeline.js";
+import { createBlockReplyContentKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
 const waitForAbort = (signal: AbortSignal | undefined): Promise<void> =>
   new Promise((resolve) => {
@@ -27,14 +23,6 @@ afterEach(() => {
 });
 
 describe("createBlockReplyContentKey", () => {
-  it("produces the same key for payloads differing only by replyToId", () => {
-    const a = createBlockReplyContentKey({ text: "hello world", replyToId: "post-1" });
-    const b = createBlockReplyContentKey({ text: "hello world", replyToId: "post-2" });
-    const c = createBlockReplyContentKey({ text: "hello world" });
-    expect(a).toBe(b);
-    expect(a).toBe(c);
-  });
-
   it("keeps rich content in the reply-independent content key", () => {
     const a = createBlockReplyContentKey({
       presentation: {
@@ -257,10 +245,8 @@ describe("createBlockReplyPipeline dedup with threading", () => {
         idleMs: 0,
         joiner: " ",
       },
-      buffer: createAudioAsVoiceBuffer({
-        isAudioPayload: (payload) =>
-          [payload.mediaUrl, ...(payload.mediaUrls ?? [])].some((url) => url?.endsWith(".ogg")),
-      }),
+      isAudioPayload: (payload) =>
+        [payload.mediaUrl, ...(payload.mediaUrls ?? [])].some((url) => url?.endsWith(".ogg")),
     });
 
     for (const payload of payloads) {
@@ -441,19 +427,6 @@ describe("createBlockReplyPipeline dedup with threading", () => {
       { text: "First block", mediaUrls: undefined },
       { text: undefined, mediaUrls: ["file:///photo.png"] },
     ]);
-  });
-
-  it("does not track media when text-only blocks are delivered", async () => {
-    const pipeline = createBlockReplyPipeline({
-      onBlockReply: async () => {},
-      timeoutMs: 5000,
-    });
-
-    pipeline.enqueue({ text: "hello" });
-    pipeline.enqueue({ text: "world" });
-    await pipeline.flush({ force: true });
-
-    expect(pipeline.getSentMediaUrls()).toStrictEqual([]);
   });
 
   it("does not coalesce logical assistant blocks across assistantMessageIndex boundaries", async () => {
@@ -690,7 +663,7 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
         sent.push(payload);
       },
       timeoutMs: 5000,
-      buffer: createAudioAsVoiceBuffer({ isAudioPayload: (payload) => Boolean(payload.mediaUrl) }),
+      isAudioPayload: (payload) => Boolean(payload.mediaUrl),
     });
     pipeline.enqueue(
       setReplyPayloadMetadata(

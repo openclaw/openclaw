@@ -10,6 +10,7 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -40,6 +41,7 @@ function createAuthorityHarness(
   > = {},
 ): GatewayAux {
   const aux = createGatewayAuxHandlers({
+    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     log: {},
     getNativeApprovalRouteCoordinator: () => undefined,
     activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
@@ -418,22 +420,22 @@ describe("gateway auxiliary authority lifecycle", () => {
       sessionId: identity.sessionId,
       ownerEpoch: 7,
     });
-    let placement = placements.startDispatch(identity);
-    placement = placements.transition({
+    let placement = await placements.startDispatch(identity);
+    placement = await placements.transition({
       sessionId: identity.sessionId,
       from: "requested",
       to: "provisioning",
       expectedGeneration: placement.generation,
       patch: { environmentId: "worker-env" },
     });
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: identity.sessionId,
       from: "provisioning",
       to: "syncing",
       expectedGeneration: placement.generation,
       patch: { workerBundleHash: "a".repeat(64) },
     });
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: identity.sessionId,
       from: "syncing",
       to: "starting",
@@ -443,7 +445,7 @@ describe("gateway auxiliary authority lifecycle", () => {
         remoteWorkspaceDir: "/workspace/worker-close",
       },
     });
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: identity.sessionId,
       from: "starting",
       to: "active",
@@ -458,7 +460,7 @@ describe("gateway auxiliary authority lifecycle", () => {
       runId: "worker-run-close",
     });
     const runAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-    const turnClaim = placements.claimTurn({
+    const turnClaim = await placements.claimTurn({
       ...identity,
       claimId: "worker-claim-close",
       runId: operationalRunInstance.runId,
@@ -553,7 +555,7 @@ describe("gateway auxiliary authority lifecycle", () => {
     expect(questionResolved).not.toHaveBeenCalled();
     expect(publishResolved).not.toHaveBeenCalled();
 
-    placements.releaseTurn(turnClaim);
+    await placements.releaseTurn(turnClaim);
 
     expect(questionResolved).toHaveBeenCalledExactlyOnceWith(
       { id: question.id, status: "cancelled" },

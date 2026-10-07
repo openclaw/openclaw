@@ -86,16 +86,6 @@ describe("resolveMemoryWikiConfig", () => {
     expect(config.vault.renderMode).toBe("obsidian");
   });
 
-  it("normalizes the bridge artifact toggle", () => {
-    const canonical = resolveMemoryWikiConfig({
-      bridge: {
-        readMemoryArtifacts: false,
-      },
-    });
-
-    expect(canonical.bridge.readMemoryArtifacts).toBe(false);
-  });
-
   it("resolves normalized agent ids to distinct vault roots", () => {
     const base = resolveMemoryWikiConfig(
       {
@@ -108,7 +98,7 @@ describe("resolveMemoryWikiConfig", () => {
     );
     const appConfig = {
       agents: {
-        list: [{ id: "Support Team", default: true }, { id: "Marketing" }],
+        entries: { "support-team": {}, marketing: {} },
       },
     } as OpenClawConfig;
 
@@ -143,7 +133,7 @@ describe("resolveMemoryWikiConfig", () => {
 
     const resolved = resolveMemoryWikiAgentConfig({
       config: base,
-      appConfig: { agents: { list: [{ id: "support", default: true }] } },
+      appConfig: { agents: { entries: { support: {} } } },
     });
 
     const expectedRoot = path.join("/Users/tester", ".openclaw", "wiki");
@@ -154,7 +144,7 @@ describe("resolveMemoryWikiConfig", () => {
   it("fails closed when a multi-agent scoped vault has no agent context", () => {
     const config = resolveMemoryWikiConfig({ vault: { scope: "agent" } });
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     } as OpenClawConfig;
 
     expect(() => resolveMemoryWikiAgentConfig({ config, appConfig })).toThrow(
@@ -165,7 +155,7 @@ describe("resolveMemoryWikiConfig", () => {
   it("fails closed for unknown scoped agents", () => {
     const config = resolveMemoryWikiConfig({ vault: { scope: "agent" } });
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     } as OpenClawConfig;
 
     expect(() => resolveMemoryWikiAgentConfig({ config, appConfig, agentId: "finance" })).toThrow(

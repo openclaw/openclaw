@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { safeStatSync } from "@openclaw/fs-safe/path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
@@ -38,7 +37,6 @@ import {
 } from "../config/sessions/paths.js";
 import {
   applySessionEntryReplacements,
-  iterateDoctorSessionKeyBatches,
   loadExactSessionEntryReadOnly,
   scanDoctorSessionEntriesStrict,
 } from "../config/sessions/session-accessor.js";
@@ -52,9 +50,11 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
-import { findGitRoot } from "../infra/git-root.js";
+import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { preserveDeferredPluginSessionSource } from "../infra/deferred-plugin-session-sources.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
+import { existsDir, migrationFileExists as existsFile } from "../infra/state-migrations.fs.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
@@ -72,31 +72,20 @@ import {
   noteMainSessionRecoveryIntegrity,
   type MainSessionRecoveryIntegrityCandidate,
 } from "./doctor-main-session-recovery.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
 import { countLabel, type OrphanAgentDir } from "./doctor-state-integrity-format.js";
 import { collectRetainedUnconfiguredAgentDatabaseWarnings } from "./doctor-unconfigured-agent-databases.js";
+import { iterateDoctorSessionKeyBatches } from "./doctor/shared/session-entry-rewrite.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 
-type DoctorPrompterLike = {
-  confirmRuntimeRepair: (params: {
-    message: string;
-    initialValue?: boolean;
-    requiresInteractiveConfirmation?: boolean;
-  }) => Promise<boolean>;
+type DoctorPrompterLike = Pick<DoctorPrompter, "confirmRuntimeRepair"> & {
   note?: typeof note;
 };
-
-function existsDir(dir: string): boolean {
-  return safeStatSync(dir)?.isDirectory() ?? false;
-}
-
-function existsFile(filePath: string): boolean {
-  return safeStatSync(filePath)?.isFile() ?? false;
-}
 
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 
@@ -324,19 +313,14 @@ function countJsonlLines(filePath: string): number {
   }
 }
 
-function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
-  return isPathUnderRootWithPathOps(targetPath, rootPath, path);
-}
-
 function resolvePathThroughExistingAncestor(
   targetPath: string,
-  resolveRealPath: (targetPath: string) => string | null,
   pathOps: Pick<typeof path, "resolve" | "dirname" | "basename">,
 ): string | null {
   const missingSegments: string[] = [];
   let candidate = pathOps.resolve(targetPath);
   while (true) {
-    const resolved = resolveRealPath(candidate);
+    const resolved = safeRealpathSync(candidate);
     if (resolved) {
       return pathOps.resolve(resolved, ...missingSegments);
     }
@@ -350,36 +334,13 @@ function resolvePathThroughExistingAncestor(
 }
 
 function escapeControlCharsForTerminal(value: string): string {
-  let escaped = "";
-  for (const char of value) {
-    if (char === "\u001b") {
-      escaped += "\\x1b";
-      continue;
-    }
-    if (char === "\r") {
-      escaped += "\\r";
-      continue;
-    }
-    if (char === "\n") {
-      escaped += "\\n";
-      continue;
-    }
-    if (char === "\t") {
-      escaped += "\\t";
-      continue;
-    }
+  const named: Record<string, string> = { "\r": "\\r", "\n": "\\n", "\t": "\\t" };
+  return Array.from(value, (char) => {
     const code = char.charCodeAt(0);
-    if ((code >= 0 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31)) {
-      escaped += `\\x${code.toString(16).padStart(2, "0")}`;
-      continue;
-    }
-    if (code === 127) {
-      escaped += "\\x7f";
-      continue;
-    }
-    escaped += char;
-  }
-  return escaped;
+    return code <= 31 || code === 127
+      ? (named[char] ?? `\\x${code.toString(16).padStart(2, "0")}`)
+      : char;
+  }).join("");
 }
 
 type LinuxMountInfoEntry = {
@@ -424,10 +385,10 @@ function parseLinuxMountInfo(rawMountInfo: string): LinuxMountInfoEntry[] {
   return entries;
 }
 
-function isPathUnderRootWithPathOps(
+function isPathUnderRoot(
   targetPath: string,
   rootPath: string,
-  pathOps: Pick<typeof path, "resolve" | "sep" | "parse">,
+  pathOps: Pick<typeof path, "resolve" | "sep" | "parse"> = path,
 ): boolean {
   const normalizedTarget = pathOps.resolve(targetPath);
   const normalizedRoot = pathOps.resolve(rootPath);
@@ -449,7 +410,7 @@ function findLinuxMountInfoEntryForPath(
   const normalizedTarget = pathOps.resolve(targetPath);
   let bestMatch: LinuxMountInfoEntry | null = null;
   for (const entry of entries) {
-    if (!isPathUnderRootWithPathOps(normalizedTarget, entry.mountPoint, pathOps)) {
+    if (!isPathUnderRoot(normalizedTarget, entry.mountPoint, pathOps)) {
       continue;
     }
     if (
@@ -475,19 +436,11 @@ function tryReadLinuxMountInfo(): string | null {
   }
 }
 
-function resolveLinuxStateMount(
-  stateDir: string,
-  deps?: {
-    mountInfo?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
-): LinuxSdBackedStateDir | null {
+function resolveLinuxStateMount(stateDir: string): LinuxSdBackedStateDir | null {
   const linuxPath = path.posix;
-  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
-    linuxPath.resolve(stateDir);
-  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
+    resolvePathThroughExistingAncestor(stateDir, linuxPath) ?? linuxPath.resolve(stateDir);
+  const mountInfo = tryReadLinuxMountInfo();
   const mountEntry = mountInfo
     ? findLinuxMountInfoEntryForPath(resolvedStatePath, parseLinuxMountInfo(mountInfo), linuxPath)
     : null;
@@ -502,28 +455,19 @@ function resolveLinuxStateMount(
 }
 
 /** Detects Linux state directories mounted from SD/eMMC-style block devices. */
-export function detectLinuxSdBackedStateDir(
-  stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    mountInfo?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-    resolveDeviceRealPath?: (targetPath: string) => string | null;
-  },
-): LinuxSdBackedStateDir | null {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "linux") {
+export function detectLinuxSdBackedStateDir(stateDir: string): LinuxSdBackedStateDir | null {
+  if (process.platform !== "linux") {
     return null;
   }
   const linuxPath = path.posix;
-  const stateMount = resolveLinuxStateMount(stateDir, deps);
+  const stateMount = resolveLinuxStateMount(stateDir);
   if (!stateMount) {
     return null;
   }
 
   const sourceCandidates = [stateMount.source];
   if (stateMount.source.startsWith("/dev/")) {
-    const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? safeRealpathSync)(stateMount.source);
+    const resolvedDevicePath = safeRealpathSync(stateMount.source);
     if (resolvedDevicePath) {
       sourceCandidates.push(linuxPath.resolve(resolvedDevicePath));
     }
@@ -560,19 +504,11 @@ type LinuxVolatileStateDir = Omit<LinuxSdBackedStateDir, "source">;
 const VOLATILE_FS_TYPES = new Set(["tmpfs", "ramfs"]);
 
 /** Detects Linux state directories mounted on filesystems that do not survive a reboot. */
-export function detectLinuxVolatileStateDir(
-  stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    mountInfo?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
-): LinuxVolatileStateDir | null {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "linux") {
+export function detectLinuxVolatileStateDir(stateDir: string): LinuxVolatileStateDir | null {
+  if (process.platform !== "linux") {
     return null;
   }
-  const stateMount = resolveLinuxStateMount(stateDir, deps);
+  const stateMount = resolveLinuxStateMount(stateDir);
   if (!stateMount || !VOLATILE_FS_TYPES.has(stateMount.fsType)) {
     return null;
   }
@@ -598,25 +534,17 @@ export function formatLinuxVolatileStateDirWarning(
 }
 
 /** Detects macOS state directories under iCloud Drive or CloudStorage providers. */
-export function detectMacCloudSyncedStateDir(
-  stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    homedir?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
-): {
+export function detectMacCloudSyncedStateDir(stateDir: string): {
   path: string;
   storage: "iCloud Drive" | "CloudStorage provider";
 } | null {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "darwin") {
+  if (process.platform !== "darwin") {
     return null;
   }
 
   // Cloud-sync roots should always be anchored to the OS account home on macOS.
   // OPENCLAW_HOME can relocate app data defaults, but iCloud/CloudStorage remain under the OS home.
-  const homedir = deps?.homedir ?? os.homedir();
+  const homedir = os.homedir();
   const roots = [
     {
       storage: "iCloud Drive" as const,
@@ -627,10 +555,9 @@ export function detectMacCloudSyncedStateDir(
       root: path.join(homedir, "Library", "CloudStorage"),
     },
   ];
-  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   // Missing state leaves must still follow existing symlink ancestors, like the Linux detectors.
   const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
+    resolvePathThroughExistingAncestor(stateDir, path) ?? path.resolve(stateDir);
 
   for (const { storage, root } of roots) {
     if (isPathUnderRoot(resolvedStatePath, root)) {
@@ -644,16 +571,12 @@ export function detectMacCloudSyncedStateDir(
 /** Detects Windows state directories under OneDrive sync roots. */
 export function detectWindowsCloudSyncedStateDir(
   stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    env?: NodeJS.ProcessEnv;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
+  env: NodeJS.ProcessEnv = process.env,
 ): {
   path: string;
   storage: "OneDrive" | "OneDrive for Business";
 } | null {
-  const platform = deps?.platform ?? process.platform;
+  const platform = process.platform;
   if (platform !== "win32") {
     return null;
   }
@@ -661,7 +584,6 @@ export function detectWindowsCloudSyncedStateDir(
   // The OneDrive sync client maintains these variables, so they are the
   // canonical sync-root source; path-shape heuristics would misfire on
   // ordinary local folders that merely contain "OneDrive" in a segment.
-  const env = deps?.env ?? process.env;
   const roots: { storage: "OneDrive" | "OneDrive for Business"; root: string }[] = [];
   const addRoot = (storage: "OneDrive" | "OneDrive for Business", root: string | undefined) => {
     if (root && root.trim() !== "") {
@@ -675,14 +597,13 @@ export function detectWindowsCloudSyncedStateDir(
     return null;
   }
 
-  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   // A state dir that does not exist yet cannot be resolved directly, and
   // falling back to the lexical path misreads a not-yet-created leaf beneath a
   // OneDrive-named junction that actually resolves to local storage. Resolve
   // through the nearest existing ancestor, as the Linux detectors do, so the
   // junction is followed even when the leaf is absent.
   const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
+    resolvePathThroughExistingAncestor(stateDir, path) ?? path.resolve(stateDir);
 
   for (const { storage, root } of roots) {
     // Windows filesystems are case-insensitive by default; compare folded.
@@ -723,23 +644,11 @@ function hasPairingPolicy(value: unknown): boolean {
   if (!record) {
     return false;
   }
-  if (isPairingPolicy(record.dmPolicy)) {
-    return true;
-  }
-  const dm = asNullableObjectRecord(record.dm);
-  if (dm && isPairingPolicy(dm.policy)) {
-    return true;
-  }
-  const accounts = asNullableObjectRecord(record.accounts);
-  if (!accounts) {
-    return false;
-  }
-  for (const accountCfg of Object.values(accounts)) {
-    if (hasPairingPolicy(accountCfg)) {
-      return true;
-    }
-  }
-  return false;
+  return (
+    isPairingPolicy(record.dmPolicy) ||
+    isPairingPolicy(asNullableObjectRecord(record.dm)?.policy) ||
+    Object.values(asNullableObjectRecord(record.accounts) ?? {}).some(hasPairingPolicy)
+  );
 }
 
 function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
@@ -807,17 +716,15 @@ export function detectStateIntegrityHealthIssues(
   if (cloudSyncedStateDir) {
     issues.push({
       kind: "mac-cloud-state-dir",
-      path: cloudSyncedStateDir.path,
-      storage: cloudSyncedStateDir.storage,
+      ...cloudSyncedStateDir,
     });
   }
 
-  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir, { env });
+  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir, env);
   if (windowsCloudSyncedStateDir) {
     issues.push({
       kind: "windows-cloud-state-dir",
-      path: windowsCloudSyncedStateDir.path,
-      storage: windowsCloudSyncedStateDir.storage,
+      ...windowsCloudSyncedStateDir,
     });
   }
 
@@ -825,10 +732,7 @@ export function detectStateIntegrityHealthIssues(
   if (linuxSdBackedStateDir) {
     issues.push({
       kind: "linux-sd-state-dir",
-      path: linuxSdBackedStateDir.path,
-      mountPoint: linuxSdBackedStateDir.mountPoint,
-      fsType: linuxSdBackedStateDir.fsType,
-      source: linuxSdBackedStateDir.source,
+      ...linuxSdBackedStateDir,
     });
   }
 
@@ -836,9 +740,7 @@ export function detectStateIntegrityHealthIssues(
   if (linuxVolatileStateDir) {
     issues.push({
       kind: "linux-volatile-state-dir",
-      path: linuxVolatileStateDir.path,
-      mountPoint: linuxVolatileStateDir.mountPoint,
-      fsType: linuxVolatileStateDir.fsType,
+      ...linuxVolatileStateDir,
     });
   }
 
@@ -918,95 +820,82 @@ export function detectStateIntegrityHealthIssues(
 export function stateIntegrityIssueToHealthFinding(
   issue: StateIntegrityHealthIssue,
 ): HealthFinding {
+  const finding = (
+    message: string,
+    fixHint: string,
+    severity: HealthFinding["severity"] = "warning",
+    target?: string,
+  ): HealthFinding => ({
+    checkId: STATE_INTEGRITY_CHECK_ID,
+    severity,
+    message,
+    path: issue.path,
+    ...(target !== undefined ? { target } : {}),
+    fixHint,
+  });
   switch (issue.kind) {
     case "mac-cloud-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: `State directory is under macOS cloud-synced storage (${issue.storage}), which can cause slow I/O and sync races.`,
-        path: issue.path,
-        fixHint: "Move OPENCLAW_STATE_DIR to local non-synced storage such as ~/.openclaw.",
-      };
+      return finding(
+        `State directory is under macOS cloud-synced storage (${issue.storage}), which can cause slow I/O and sync races.`,
+        "Move OPENCLAW_STATE_DIR to local non-synced storage such as ~/.openclaw.",
+      );
     case "windows-cloud-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: `State directory is under Windows cloud-synced storage (${issue.storage}), which can cause slow I/O, sync races, and Files On-Demand dehydration.`,
-        path: issue.path,
-        fixHint:
-          "Move OPENCLAW_STATE_DIR to local non-synced storage such as %USERPROFILE%\\.openclaw.",
-      };
+      return finding(
+        `State directory is under Windows cloud-synced storage (${issue.storage}), which can cause slow I/O, sync races, and Files On-Demand dehydration.`,
+        "Move OPENCLAW_STATE_DIR to local non-synced storage such as %USERPROFILE%\\.openclaw.",
+      );
     case "linux-sd-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: `State directory appears to be on SD/eMMC storage (${issue.source}, ${issue.fsType}), which can hurt startup and durability.`,
-        path: issue.path,
-        target: issue.mountPoint,
-        fixHint: "Move OPENCLAW_STATE_DIR to SSD/NVMe-backed storage.",
-      };
+      return finding(
+        `State directory appears to be on SD/eMMC storage (${issue.source}, ${issue.fsType}), which can hurt startup and durability.`,
+        "Move OPENCLAW_STATE_DIR to SSD/NVMe-backed storage.",
+        "warning",
+        issue.mountPoint,
+      );
     case "linux-volatile-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: `State directory is on volatile ${issue.fsType} storage and may disappear on reboot.`,
-        path: issue.path,
-        target: issue.mountPoint,
-        fixHint: "Move OPENCLAW_STATE_DIR to persistent local storage.",
-      };
+      return finding(
+        `State directory is on volatile ${issue.fsType} storage and may disappear on reboot.`,
+        "Move OPENCLAW_STATE_DIR to persistent local storage.",
+        "warning",
+        issue.mountPoint,
+      );
     case "missing-state-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "error",
-        message:
-          "State directory is missing. Sessions, credentials, logs, and config are stored there.",
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to create the state directory.",
-      };
+      return finding(
+        "State directory is missing. Sessions, credentials, logs, and config are stored there.",
+        "Run `openclaw doctor --fix` to create the state directory.",
+        "error",
+      );
     case "state-dir-not-writable":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "error",
-        message: issue.hint
+      return finding(
+        issue.hint
           ? `State directory is not writable. ${issue.hint}`
           : "State directory is not writable.",
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to repair state directory permissions.",
-      };
+        "Run `openclaw doctor --fix` to repair state directory permissions.",
+        "error",
+      );
     case "state-dir-too-open":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: "State directory permissions are too open. Recommend chmod 700.",
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to tighten state directory permissions.",
-      };
+      return finding(
+        "State directory permissions are too open. Recommend chmod 700.",
+        "Run `openclaw doctor --fix` to tighten state directory permissions.",
+      );
     case "config-file-too-open":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "warning",
-        message: "Config file is group/world readable. Recommend chmod 600.",
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to tighten config file permissions.",
-      };
+      return finding(
+        "Config file is group/world readable. Recommend chmod 600.",
+        "Run `openclaw doctor --fix` to tighten config file permissions.",
+      );
     case "missing-runtime-dir":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "error",
-        message: `${issue.label} is missing.`,
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to create missing runtime state directories.",
-      };
+      return finding(
+        `${issue.label} is missing.`,
+        "Run `openclaw doctor --fix` to create missing runtime state directories.",
+        "error",
+      );
     case "runtime-dir-not-writable":
-      return {
-        checkId: STATE_INTEGRITY_CHECK_ID,
-        severity: "error",
-        message: issue.hint
+      return finding(
+        issue.hint
           ? `${issue.label} is not writable. ${issue.hint}`
           : `${issue.label} is not writable.`,
-        path: issue.path,
-        fixHint: "Run `openclaw doctor --fix` to repair runtime state directory permissions.",
-      };
+        "Run `openclaw doctor --fix` to repair runtime state directory permissions.",
+        "error",
+      );
   }
   return assertNeverStateIntegrityIssue(issue);
 }
@@ -1014,53 +903,28 @@ export function stateIntegrityIssueToHealthFinding(
 export function stateIntegrityIssueToRepairEffect(
   issue: StateIntegrityHealthIssue,
 ): HealthRepairEffect {
+  const effect = (
+    action: string,
+    dryRunSafe = false,
+    kind: HealthRepairEffect["kind"] = "state",
+  ): HealthRepairEffect => ({ kind, action, target: issue.path, dryRunSafe });
   switch (issue.kind) {
     case "mac-cloud-state-dir":
     case "windows-cloud-state-dir":
     case "linux-sd-state-dir":
     case "linux-volatile-state-dir":
-      return {
-        kind: "state",
-        action: "would-recommend-moving-state-dir",
-        target: issue.path,
-        dryRunSafe: true,
-      };
+      return effect("would-recommend-moving-state-dir", true);
     case "missing-state-dir":
-      return {
-        kind: "state",
-        action: "would-create-state-dir",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-create-state-dir");
     case "state-dir-not-writable":
     case "state-dir-too-open":
-      return {
-        kind: "state",
-        action: "would-repair-state-dir-permissions",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-repair-state-dir-permissions");
     case "config-file-too-open":
-      return {
-        kind: "file",
-        action: "would-tighten-config-file-permissions",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-tighten-config-file-permissions", false, "file");
     case "missing-runtime-dir":
-      return {
-        kind: "state",
-        action: "would-create-runtime-state-dir",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-create-runtime-state-dir");
     case "runtime-dir-not-writable":
-      return {
-        kind: "state",
-        action: "would-repair-runtime-state-dir-permissions",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("would-repair-runtime-state-dir-permissions");
   }
   return assertNeverStateIntegrityIssue(issue);
 }
@@ -1313,6 +1177,7 @@ export async function noteStateIntegrity(
   }
 
   const compatibilityAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
+  const pending = readDeferredPluginMigrations({ env });
   const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
     resolveConfiguredAgentDatabaseTargets(cfg, { env }),
   );
@@ -1336,10 +1201,10 @@ export async function noteStateIntegrity(
     if (isRetained(sqliteStorePath, agentId)) {
       return;
     }
-    // A successful SQLite import archives sessions.json. Its continued presence
-    // is therefore the explicit signal that pre-import rows still need inspection.
     const legacyStore =
-      inspectLegacyStore && existsFile(absoluteStorePath)
+      inspectLegacyStore &&
+      existsFile(absoluteStorePath) &&
+      !preserveDeferredPluginSessionSource({ cfg, env, target, pending })
         ? loadLegacySessionStore(absoluteStorePath)
         : {};
     const legacyEntries = Object.entries(legacyStore).filter(
@@ -1397,7 +1262,6 @@ export async function noteStateIntegrity(
       warnings,
       changes,
       confirmRepair: (params) => prompter.confirmRuntimeRepair(params),
-      countLabel,
     });
     // Session SQLite migration owns legacy transcript validation and archival.
     // Repeating it here turns healthy pending imports into integrity warnings.
@@ -1407,12 +1271,12 @@ export async function noteStateIntegrity(
         warnings.push(
           [
             `- Found ${wedgedCount} with automatic restart recovery tombstoned.`,
-            "  OpenClaw will not auto-resume these child sessions on restart; reconcile their task records instead.",
+            "  OpenClaw will not auto-resume these child sessions on restart; use Doctor to repair stale native subagent recovery state.",
             `  Examples: ${wedgedSubagentSessions
               .slice(0, 3)
               .map(({ key }) => key)
               .join(", ")}`,
-            `  Fix: ${formatCliCommand("openclaw tasks maintenance --apply")}`,
+            `  Fix: ${formatCliCommand("openclaw doctor --fix")}`,
           ].join("\n"),
         );
         const repairWedged = await prompter.confirmRuntimeRepair({
@@ -1559,23 +1423,4 @@ export async function noteStateIntegrity(
   }
 }
 
-/** Returns the workspace git-backup tip when the workspace exists but is not a git repo. */
-export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
-  if (!existsDir(workspaceDir)) {
-    return null;
-  }
-  const resolvedWorkspaceDir = safeRealpathSync(workspaceDir);
-  if (!resolvedWorkspaceDir || findGitRoot(resolvedWorkspaceDir)) {
-    return null;
-  }
-  return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
-}
-
-/** Emits the workspace backup tip when applicable. */
-export function noteWorkspaceBackupTip(workspaceDir: string) {
-  const tip = collectWorkspaceBackupTip(workspaceDir);
-  if (tip) {
-    note(tip, "Workspace");
-  }
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

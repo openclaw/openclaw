@@ -1,21 +1,16 @@
-// Status, health, sessions, and task/flow command registration.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { sessionsCommand } from "../../commands/sessions.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { ExpectedCliError } from "../failure-output.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
-import { registerTasksCommand } from "./register.tasks.js";
+import type { SessionsImportOptions } from "../sessions-import.js";
 
-type SessionsListCliOptions = {
-  json?: boolean;
+type SessionsListCliOptions = Omit<Parameters<typeof sessionsCommand>[0], "limit"> & {
   verbose?: boolean;
-  store?: string;
-  agent?: string;
-  allAgents?: boolean;
-  active?: string;
   limit?: string;
 };
 
@@ -93,17 +88,7 @@ function mergeSessionsListOptions(
 async function runSessionsListCli(opts: SessionsListCliOptions): Promise<void> {
   setVerbose(Boolean(opts.verbose));
   const { sessionsCommand } = await import("../../commands/sessions.js");
-  await sessionsCommand(
-    {
-      json: Boolean(opts.json),
-      store: opts.store,
-      agent: opts.agent,
-      allAgents: Boolean(opts.allAgents),
-      active: opts.active,
-      limit: opts.limit,
-    },
-    defaultRuntime,
-  );
+  await sessionsCommand(opts, defaultRuntime);
 }
 
 function registerSessionsLifecycleCommand(
@@ -176,14 +161,10 @@ function registerSessionsLifecycleCommand(
           : lifecycleCommands.sessionsArchiveCommand;
         await handler(
           {
+            ...opts,
             keys,
             agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
-            dryRun: Boolean(opts.dryRun),
-            ...(destructive ? { yes: Boolean(opts.yes) } : {}),
             timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
-            url: opts.url as string | undefined,
-            token: opts.token as string | undefined,
-            password: opts.password as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,
@@ -207,7 +188,7 @@ async function runWithVerboseAndTimeout(
   });
 }
 
-/** Register status/health plus persistent session/task inspection command groups. */
+/** Register status/health plus persistent session inspection command groups. */
 export function registerStatusHealthSessionsCommands(program: Command) {
   program
     .command("status")
@@ -216,8 +197,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--all", "Full diagnosis (read-only, pasteable)", false)
     .option("--usage", "Show model provider usage/quota snapshots", false)
     .option("--agent <id>", "Agent id for --usage auth scope")
-    .option("--deep", "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
-    .option("--timeout <ms>", "Probe timeout in milliseconds")
+    .option("--deep", "Check channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
+    .option("--timeout <ms>", "Check timeout in milliseconds")
     .option("--verbose", "Verbose logging", false)
     .option("--debug", "Alias for --verbose", false)
     .addHelpText(
@@ -230,9 +211,9 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw status --usage", "Show model provider usage/quota snapshots."],
           [
             "openclaw status --deep",
-            "Run channel probes (WA + Telegram + Discord + Slack + Signal).",
+            "Run channel checks (WA + Telegram + Discord + Slack + Signal).",
           ],
-          ["openclaw status --deep --timeout 5000", "Tighten probe timeout."],
+          ["openclaw status --deep --timeout 5000", "Tighten check timeout."],
         ])}`,
     )
     .addHelpText("after", () => formatDocsHelp("/cli/status"))
@@ -295,9 +276,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         )}`,
     )
     .addHelpText("after", () => formatDocsHelp("/cli/sessions"))
-    .action(async (opts) => {
-      await runSessionsListCli(opts as SessionsListCliOptions);
-    });
+    .action(runSessionsListCli);
   sessionsCmd.enablePositionalOptions();
 
   addSessionsListOptions(
@@ -309,8 +288,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
 
   sessionsCmd
     .command("cleanup")
-    .description("Run session-store maintenance now")
-    .option("--store <path>", "Legacy session store selector path")
+    .description(
+      "Run session-store maintenance (local destructive cleanup requires offline ownership)",
+    )
+    .option("--store <path>", "Local store selector (destructive cleanup refuses live owners)")
     .option("--agent <id>", "Agent id to maintain (required for multiple explicit agents)")
     .option("--all-agents", "Run maintenance across all configured agents", false)
     .option("--dry-run", "Preview maintenance actions without writing", false)
@@ -345,7 +326,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions cleanup --all-agents --dry-run", "Preview all agent stores."],
           [
             "openclaw sessions cleanup --enforce --store ./tmp/sessions.sqlite",
-            "Use a specific store.",
+            "Use an offline store inside OPENCLAW_STATE_DIR.",
           ],
         ])}`,
     )
@@ -361,14 +342,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         const { sessionsCleanupCommand } = await import("../../commands/sessions-cleanup.js");
         await sessionsCleanupCommand(
           {
+            ...opts,
             store: (opts.store as string | undefined) ?? parentOpts?.store,
             agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
             allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
-            dryRun: Boolean(opts.dryRun),
-            enforce: Boolean(opts.enforce),
-            fixMissing: Boolean(opts.fixMissing),
-            fixDmScope: Boolean(opts.fixDmScope),
-            activeKey: opts.activeKey as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,
@@ -379,10 +356,16 @@ export function registerStatusHealthSessionsCommands(program: Command) {
   sessionsCmd
     .command("tail")
     .description("Tail human-readable session trajectory progress")
-    .option("--session-key <key>", "Session key to tail (default: active sessions or latest)")
+    .option(
+      "--session-key <key>",
+      "Session key to tail (default: Gateway running sessions or latest activity)",
+    )
     .option("--tail <count>", "Number of existing trajectory events to show", "80")
     .option("--follow", "Continue following for new trajectory events", false)
-    .option("--store <path>", "Legacy session store selector path")
+    .option(
+      "--store <path>",
+      "Session store selector path (orders by activity without Gateway lookup)",
+    )
     .option("--agent <id>", "Agent id to inspect (required for multiple explicit agents)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .action(async (opts, command) => {
@@ -397,12 +380,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         const { sessionsTailCommand } = await import("../../commands/sessions-tail.js");
         await sessionsTailCommand(
           {
-            sessionKey: opts.sessionKey as string | undefined,
+            ...opts,
             store: (opts.store as string | undefined) ?? parentOpts?.store,
             agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
             allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
-            follow: Boolean(opts.follow),
-            tail: opts.tail as string | undefined,
           },
           defaultRuntime,
         );
@@ -431,12 +412,9 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         const { exportTrajectoryCommand } = await import("../../commands/export-trajectory.js");
         await exportTrajectoryCommand(
           {
-            sessionKey: opts.sessionKey as string | undefined,
-            output: opts.output as string | undefined,
-            workspace: opts.workspace as string | undefined,
+            ...opts,
             store: (opts.store as string | undefined) ?? parentOpts?.store,
             agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
-            requestJsonBase64: opts.requestJsonBase64 as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,
@@ -446,6 +424,57 @@ export function registerStatusHealthSessionsCommands(program: Command) {
 
   registerSessionsLifecycleCommand(sessionsCmd, "archive");
   registerSessionsLifecycleCommand(sessionsCmd, "delete");
+
+  addSessionsGatewayOptions(sessionsCmd.command("import [catalogId] [threadId]"))
+    .description("Preserve native catalog transcripts in ordinary OpenClaw sessions")
+    .option("--all", "Import every visible catalog session, paging each source", false)
+    .option("--catalog <id>", "Catalog to import with --all (for example: claude or codex)")
+    .option("--host <hostId>", "Source host (single transcript default: discover the Gateway host)")
+    .option("--source-home <id>", "Source home for a single transcript")
+    .option("--limit <n>", "Maximum number of sessions to import with --all")
+    .option("--dry-run", "List the transcripts that would be imported without writing", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw sessions import claude <thread-id>", "Preserve a Claude Code transcript."],
+          ["openclaw sessions import codex <thread-id>", "Preserve a Codex transcript."],
+          ["openclaw sessions import --all --json", "Import or sync every visible transcript."],
+          [
+            "openclaw sessions import --all --catalog claude --limit 20 --dry-run",
+            "Preview a bounded Claude Code import.",
+          ],
+        ])}`,
+    )
+    .action(
+      async (
+        catalogId: string | undefined,
+        threadId: string | undefined,
+        opts: SessionsImportOptions,
+        command: Command,
+      ) => {
+        const parentOpts = command.parent?.opts<SessionsListCliOptions>();
+        rejectUnsupportedSessionsParentOptions(
+          "import",
+          parentOpts,
+          ["store", "allAgents", "active", "limit", "verbose"],
+          "catalog imports use Gateway sources; pass --limit after import to bound --all",
+        );
+        await runCommandWithRuntime(defaultRuntime, async () => {
+          const { sessionsImportCommand } = await import("../sessions-import.js");
+          await sessionsImportCommand(
+            {
+              ...opts,
+              catalogId,
+              threadId,
+              agent: opts.agent ?? parentOpts?.agent,
+              json: Boolean(opts.json || parentOpts?.json),
+            },
+            defaultRuntime,
+          );
+        });
+      },
+    );
 
   addSessionsGatewayOptions(sessionsCmd.command("compact <key>"))
     .description("Compact a stored session transcript via the running gateway")
@@ -507,6 +536,4 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         );
       });
     });
-
-  registerTasksCommand(program);
 }

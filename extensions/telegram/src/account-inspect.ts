@@ -1,5 +1,5 @@
 import { resolveAccountWithDefaultFallback } from "openclaw/plugin-sdk/account-core";
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
@@ -14,6 +14,7 @@ import {
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccountConfig,
+  type ResolvedTelegramAccount,
 } from "./accounts.js";
 
 type CredentialUnavailableDiagnostic = Extract<
@@ -21,19 +22,11 @@ type CredentialUnavailableDiagnostic = Extract<
   { status: "configured_unavailable" }
 >["diagnostic"];
 
-export type TelegramCredentialStatus = "available" | "configured_unavailable" | "missing";
+export type TelegramCredentialStatus = ResolvedTelegramAccount["tokenStatus"];
 
-type TelegramAccountInspection = {
-  accountId: string;
-  enabled: boolean;
-  name?: string;
-  token: string;
-  tokenSource: "env" | "tokenFile" | "config" | "none";
-  tokenStatus: TelegramCredentialStatus;
-  credentialDiagnostics?: CredentialUnavailableDiagnostic[];
+type TelegramAccountInspection = ResolvedTelegramAccount & {
   configured: boolean;
   stateReason?: string;
-  config: TelegramAccountConfig;
 };
 
 export type InspectedTelegramAccount = TelegramAccountInspection & {
@@ -69,9 +62,9 @@ function inspectTokenFile(
     };
   }
   return {
-    token: result.status === "available" ? result.value : "",
+    token: result.value,
     tokenSource: "tokenFile",
-    tokenStatus: result.status === "available" ? "available" : "configured_unavailable",
+    tokenStatus: "available",
   };
 }
 
@@ -80,34 +73,19 @@ function inspectTokenValue(params: { cfg: OpenClawConfig; value: unknown }): {
   tokenSource: "config" | "env" | "none";
   tokenStatus: TelegramCredentialStatus;
 } | null {
-  // Try to resolve env-based SecretRefs from process.env for read-only inspection
   const ref = coerceSecretRef(params.value, params.cfg.secrets?.defaults);
   if (ref?.source === "env") {
-    if (
-      !canResolveEnvSecretRefInReadOnlyPath({
-        cfg: params.cfg,
-        provider: ref.provider,
-        id: ref.id,
-      })
-    ) {
-      return {
-        token: "",
-        tokenSource: "env",
-        tokenStatus: "configured_unavailable",
-      };
-    }
-    const envValue = normalizeOptionalString(process.env[ref.id]);
-    if (envValue) {
-      return {
-        token: envValue,
-        tokenSource: "env",
-        tokenStatus: "available",
-      };
-    }
+    const envValue = canResolveEnvSecretRefInReadOnlyPath({
+      cfg: params.cfg,
+      provider: ref.provider,
+      id: ref.id,
+    })
+      ? normalizeOptionalString(process.env[ref.id])
+      : undefined;
     return {
-      token: "",
+      token: envValue ?? "",
       tokenSource: "env",
-      tokenStatus: "configured_unavailable",
+      tokenStatus: envValue ? "available" : "configured_unavailable",
     };
   }
   const token = normalizeSecretInputString(params.value);
@@ -146,6 +124,12 @@ function inspectTelegramAccountPrimary(params: {
   const accountId = normalizeAccountId(params.accountId);
   const merged = mergeTelegramAccountConfig(params.cfg, accountId);
   const enabled = params.cfg.channels?.telegram?.enabled !== false && merged.enabled !== false;
+  const account = {
+    accountId,
+    enabled,
+    name: normalizeOptionalString(merged.name),
+    config: merged,
+  };
 
   const accountConfig = resolveTelegramAccountConfig(params.cfg, accountId);
   const allowChannelCredentialFallback =
@@ -164,12 +148,9 @@ function inspectTelegramAccountPrimary(params: {
       inspectTokenValue({ cfg: params.cfg, value: config?.botToken });
     if (credential) {
       return {
-        accountId,
-        enabled,
-        name: normalizeOptionalString(merged.name),
+        ...account,
         ...credential,
         configured: credential.tokenStatus !== "missing",
-        config: merged,
       };
     }
   }
@@ -182,21 +163,16 @@ function inspectTelegramAccountPrimary(params: {
     : "";
   if (envToken) {
     return {
-      accountId,
-      enabled,
-      name: normalizeOptionalString(merged.name),
+      ...account,
       token: envToken,
       tokenSource: "env",
       tokenStatus: "available",
       configured: true,
-      config: merged,
     };
   }
 
   return {
-    accountId,
-    enabled,
-    name: normalizeOptionalString(merged.name),
+    ...account,
     token: "",
     tokenSource: "none",
     tokenStatus: "missing",
@@ -204,7 +180,6 @@ function inspectTelegramAccountPrimary(params: {
     stateReason: allowChannelCredentialFallback
       ? undefined
       : `not configured: unknown accountId "${accountId}" in multi-bot setup`,
-    config: merged,
   };
 }
 

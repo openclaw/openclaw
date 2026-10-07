@@ -4,6 +4,7 @@ import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -240,14 +241,18 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
       if (failed) {
         expect(completed.status).toBe("error");
         expect(messageText(history.messages.at(-1))).toBe(
-          `⚠️ LLM request failed (provider internal error). This is usually temporary — try again shortly.\n\n${prefix}`,
+          `⚠️ The AI service is having trouble. Please try again in a moment.\n\n${prefix}`,
         );
         expect(terminal.some((event) => event.state === "error")).toBe(true);
         const deltas = events.filter(
           (event): event is Extract<ChatEvent, { state: "delta" }> =>
             event.runId === started.runId && event.state === "delta",
         );
-        expect(messageText(deltas.at(-1)?.message)).toBe(prefix);
+        const liveMessage = deltas.reduce<unknown>(
+          (previous, event) => mergeChatStreamMessage(previous, event),
+          undefined,
+        );
+        expect(messageText(liveMessage)).toBe(prefix);
       } else {
         expect(completed.status).toBe("ok");
         expect(completed.terminalReply?.text).toBe(answer);

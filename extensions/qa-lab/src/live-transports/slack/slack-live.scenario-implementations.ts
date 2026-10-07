@@ -1,4 +1,3 @@
-// QA Lab Slack live scenario implementations.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { waitForSlackReaction } from "./slack-live.codex-approval.js";
@@ -219,7 +218,6 @@ export const slackQaChannelDisabledWarningScenario: SlackQaScenarioImplementatio
       input: `<@${sutUserId}> reply with only this exact marker: ${marker}`,
       matchText: marker,
       noReplyObservationMs: 8_000,
-      preserveGatewayDebug: true,
       beforeRun: async ({ gateway }) => {
         const gatewayLogTail = (await gateway.call(
           "logs.tail",

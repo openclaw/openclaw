@@ -4,47 +4,54 @@ import Testing
 @testable import OpenClawKit
 
 /// Real URLSession I/O for the header-only, no-redirect transport used by Access admission.
-@MainActor
-private final class GatewayHTTPFixture {
+/// The serial queue owns mutable state and callbacks, independently of MainActor test work.
+private final class GatewayHTTPFixture: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "gateway-http-fixture")
     private let listener: NWListener
     private let reply: String
     private let ready = AsyncThrowingStream<Void, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
     private let received = AsyncThrowingStream<Void, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
     private var stopped = false
     private var connections: [NWConnection] = []
-    private(set) var requests: [String] = []
+    private var recordedRequests: [String] = []
+
+    var requests: [String] {
+        self.queue.sync { self.recordedRequests }
+    }
 
     init(reply: String) throws {
         self.reply = reply
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         self.listener = try NWListener(using: parameters, on: .any)
-        let ready = self.ready.continuation
-        self.listener.stateUpdateHandler = { state in
+        self.listener.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            dispatchPrecondition(condition: .onQueue(self.queue))
+            guard !self.stopped else { return }
             switch state {
             case .ready:
-                ready.yield(())
-                ready.finish()
-            case let .failed(error): ready.finish(throwing: error)
-            case .cancelled: ready.finish(throwing: CancellationError())
+                self.ready.continuation.yield(())
+                self.ready.continuation.finish()
+            case let .failed(error): self.ready.continuation.finish(throwing: error)
+            case .cancelled: self.ready.continuation.finish(throwing: CancellationError())
             default: break
             }
         }
         self.listener.newConnectionHandler = { [weak self] connection in
-            Task { @MainActor in
-                guard let self else { connection.cancel()
-                    return
-                }
-                self.accept(connection)
+            guard let self else {
+                connection.cancel()
+                return
             }
+            self.accept(connection)
         }
-        self.listener.start(queue: .main)
+        self.listener.start(queue: self.queue)
     }
 
     func readyURL() async throws -> URL {
         try await Self.wait(for: self.ready.stream)
-        try #require(self.listener.state == .ready)
-        let port = try #require(self.listener.port)
+        let observation = self.queue.sync { (state: self.listener.state, port: self.listener.port) }
+        try #require(observation.state == .ready)
+        let port = try #require(observation.port)
         return try #require(URL(string: "http://127.0.0.1:\(port.rawValue)/probe"))
     }
 
@@ -53,6 +60,7 @@ private final class GatewayHTTPFixture {
         try #require(!self.requests.isEmpty)
     }
 
+    @concurrent
     private static func wait(for signal: AsyncThrowingStream<Void, Error>) async throws {
         try await AsyncTimeout.withTimeout(seconds: 3, onTimeout: { URLError(.timedOut) }) {
             var iterator = signal.makeAsyncIterator()
@@ -63,40 +71,46 @@ private final class GatewayHTTPFixture {
     }
 
     func stop() {
-        guard !self.stopped else { return }
-        self.stopped = true
-        self.ready.continuation.finish(throwing: CancellationError())
-        self.received.continuation.finish(throwing: CancellationError())
-        self.listener.cancel()
-        self.connections.forEach { $0.cancel() }
+        self.queue.sync {
+            guard !self.stopped else { return }
+            self.stopped = true
+            self.ready.continuation.finish(throwing: CancellationError())
+            self.received.continuation.finish(throwing: CancellationError())
+            self.listener.cancel()
+            self.connections.forEach { $0.cancel() }
+            self.connections.removeAll()
+        }
     }
 
     private func accept(_ connection: NWConnection) {
+        dispatchPrecondition(condition: .onQueue(self.queue))
         guard !self.stopped else { connection.cancel()
             return
         }
         self.connections.append(connection)
-        connection.start(queue: .main)
+        connection.start(queue: self.queue)
         self.receive(connection, buffered: Data())
     }
 
     private func receive(_ connection: NWConnection, buffered: Data) {
+        dispatchPrecondition(condition: .onQueue(self.queue))
         connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, ended, error in
-            Task { @MainActor in
-                guard let self else { return }
-                var accumulated = buffered
-                if let data { accumulated.append(data) }
-                guard accumulated.count < 65536 else { connection.cancel()
-                    return
-                }
-                if let text = String(data: accumulated, encoding: .utf8), text.contains("\r\n\r\n") {
-                    self.requests.append(text)
-                    self.received.continuation.yield(())
-                    self.received.continuation.finish()
-                    connection.send(content: Data(self.reply.utf8), completion: .contentProcessed { _ in })
-                } else if !ended, error == nil {
-                    self.receive(connection, buffered: accumulated)
-                }
+            guard let self else { return }
+            dispatchPrecondition(condition: .onQueue(self.queue))
+            guard !self.stopped else { return }
+            var accumulated = buffered
+            if let data { accumulated.append(data) }
+            guard accumulated.count < 65536 else {
+                connection.cancel()
+                return
+            }
+            if let text = String(data: accumulated, encoding: .utf8), text.contains("\r\n\r\n") {
+                self.recordedRequests.append(text)
+                self.received.continuation.yield(())
+                self.received.continuation.finish()
+                connection.send(content: Data(self.reply.utf8), completion: .contentProcessed { _ in })
+            } else if !ended, error == nil {
+                self.receive(connection, buffered: accumulated)
             }
         }
     }

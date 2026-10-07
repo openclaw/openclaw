@@ -549,6 +549,11 @@ invalidate another client's snapshot refs. This is not an isolated browser per
 client or complete isolation of every CDP domain and competing client policy.
 A complete tab-list request returns an error when native targets cannot yet be
 matched to Playwright pages, rather than reporting a partial list as complete.
+Pages that Chrome permanently refuses to debug, such as the Chrome Web Store,
+are excluded from this list. The Gateway logs a warning naming the skipped tab
+and Chrome's refusal; ordinary tabs remain available. Transient attachment
+failures still fail the complete request. This handling is Gateway-side and
+does not require a new Chrome extension release.
 
 If the extension connection drops, its debugger attachments retire before the
 replacement connection reattaches. An uncertain native Fetch operation also
@@ -622,7 +627,7 @@ non-secret failure code. The bootstrap request remains exactly
 `{v:1, op:"ensure_relay", nonce, relayPort}` with a required integer port from
 1 through 65535. Missing, duplicate, malformed, or extra fields are rejected.
 After manifest and caller validation, the host checks the requested port
-against current extension profiles before probing or spawning. No request can
+against current extension profiles before checking or spawning. No request can
 supply a host, executable path, or credential to the launcher.
 The response is below Chrome's 1 MiB native-message limit. Pairing keys never
 appear in launcher arguments, manifests, status JSON, or diagnostics.

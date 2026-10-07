@@ -469,24 +469,6 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("uses the configured default account for omitted-account list", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: {
-            ...telegramAllowlistTestPlugin,
-            config: {
-              ...telegramAllowlistTestPlugin.config,
-              defaultAccountId: (cfg: OpenClawConfig) =>
-                (cfg.channels?.telegram as TelegramTestSectionConfig | undefined)?.defaultAccount ??
-                DEFAULT_ACCOUNT_ID,
-            },
-          },
-        },
-      ]),
-    );
-
     const cfg = {
       commands: { text: true, config: true },
       channels: {
@@ -542,24 +524,6 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("honors the configured default account when gating omitted-account config edits", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: {
-            ...telegramAllowlistTestPlugin,
-            config: {
-              ...telegramAllowlistTestPlugin.config,
-              defaultAccountId: (cfg: OpenClawConfig) =>
-                (cfg.channels?.telegram as TelegramTestSectionConfig | undefined)?.defaultAccount ??
-                DEFAULT_ACCOUNT_ID,
-            },
-          },
-        },
-      ]),
-    );
-
     const previousWriteCount = replaceConfigFileMock.mock.calls.length;
     const cfg = {
       commands: { text: true, config: true },

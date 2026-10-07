@@ -1,6 +1,6 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { restoreCodexThreadSkillsCatalogAfterCompaction } from "./thread-policy.js";
+import { restoreCodexThreadInstructionsAfterCompaction } from "./thread-policy.js";
 
 /** Restore host-owned context after native compaction rebuilds a live thread. */
 export async function restoreCodexAttemptCompactionContext(
@@ -37,12 +37,13 @@ export async function restoreCodexAttemptCompactionContext(
       error: formatErrorMessage(error),
     });
   }
-  thread.liveThreadEphemeralPolicy = await restoreCodexThreadSkillsCatalogAfterCompaction({
+  thread.liveThreadEphemeralPolicy = await restoreCodexThreadInstructionsAfterCompaction({
     client,
     threadId: thread.threadId,
     ephemeralPolicy: thread.liveThreadEphemeralPolicy,
     timeoutMs: connection.appServer.requestTimeoutMs,
     signal: runAbortController.signal,
     assertCurrent,
+    withCurrent: connection.withCurrent,
   });
 }

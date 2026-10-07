@@ -73,6 +73,15 @@ function transactions(count = 1) {
   };
 }
 
+it("rejects alpha package transactions before granting parent authority", () => {
+  const value = transactions();
+  value.packages[0]!.version = "2026.8.2-alpha.1";
+  expect(() => validateClawHubTransactions(value)).not.toThrow();
+  expect(() => createClawHubParentAuthorization(value, "automated-awaited")).toThrow(
+    "Alpha releases are retired;",
+  );
+});
+
 describe("ClawHub parent publication authorization", () => {
   it("writes an exact human recovery receipt once for the child and parent attempts", () => {
     const receipt = createClawHubRecoveryApproval(recoveryEnv, noGh);
@@ -343,6 +352,13 @@ describe("ClawHub parent publication authorization", () => {
         inventoryDigest,
       })),
     );
+    expect(validateClawHubParentAuthorization(receipt, sealed)).toEqual(receipt);
+  });
+
+  it("seals detached publication at the immutable release milestone", () => {
+    const sealed = transactions();
+    const receipt = createClawHubParentAuthorization(sealed, "automated-sealed");
+    expect(receipt.authorizationRoute).toBe("automated-sealed");
     expect(validateClawHubParentAuthorization(receipt, sealed)).toEqual(receipt);
   });
 

@@ -66,11 +66,6 @@ struct ChatMarkdownRenderer: View {
     let typography: Typography
     let textColor: Color
 
-    static func styledText(_ content: String, font: Font) -> SwiftUI.Text {
-        SwiftUI.Text(content)
-            .font(font)
-    }
-
     var reveal: ChatMarkdownProseReveal?
 
     @ScaledMetric private var inlineMathFontSize: CGFloat
@@ -204,10 +199,24 @@ struct ChatMarkdownRenderSnapshot {
 
     init(text: String, isComplete: Bool, preparesReveal: Bool = false) {
         let processed = ChatMarkdownPreprocessor.preprocess(markdown: text)
-        self.blocks = ChatMarkdownBlockSegmenter.segments(
+        let segments = ChatMarkdownBlockSegmenter.segments(
             markdown: processed.cleaned,
-            isComplete: isComplete).map {
-            Self.renderedBlock($0, isComplete: isComplete, preparesReveal: preparesReveal)
+            isComplete: isComplete)
+        let lastProseIndex: Int? = if preparesReveal, !isComplete {
+            segments.lastIndex {
+                if case .prose = $0 {
+                    return true
+                }
+                return false
+            }
+        } else {
+            nil
+        }
+        self.blocks = segments.enumerated().map { index, block in
+            Self.renderedBlock(
+                block,
+                isComplete: isComplete,
+                preparesReveal: preparesReveal && (isComplete || index == lastProseIndex))
         }
         self.images = processed.images
     }
@@ -392,16 +401,6 @@ struct ChatMarkdownProse {
         }
     }
 
-    // periphery:ignore - package tests inspect parsed math spans without exposing renderer internals.
-    var inlineMathLatex: [String] {
-        self.inlineContent?.compactMap { content in
-            if case let .math(span) = content {
-                return span.latex
-            }
-            return nil
-        } ?? []
-    }
-
     var inlineAccessibilityText: String? {
         guard let inlineContent else { return nil }
         return inlineContent.reduce(into: "") { text, content in
@@ -561,8 +560,19 @@ struct ChatMarkdownProse {
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .full,
             failurePolicy: .returnPartiallyParsedIfPossible)
-        return (try? AttributedString(markdown: displayMarkdown, options: options))
+        let parsed = (try? AttributedString(markdown: displayMarkdown, options: options))
             ?? AttributedString(displayMarkdown)
+        // Foundation stores block boundaries as presentation intents, without newline
+        // characters. SwiftUI Text needs explicit separators, including on the reveal path.
+        var rendered = AttributedString()
+        for (_, range) in parsed.runs[\.presentationIntent] {
+            if !rendered.characters.isEmpty {
+                let trailingNewlines = rendered.characters.suffix(2).reversed().prefix { $0 == "\n" }.count
+                rendered.append(AttributedString(String(repeating: "\n", count: 2 - trailingNewlines)))
+            }
+            rendered.append(AttributedString(parsed[range]))
+        }
+        return rendered
     }
 
     private static func tailPieces(

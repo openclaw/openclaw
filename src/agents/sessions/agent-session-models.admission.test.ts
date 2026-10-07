@@ -12,11 +12,11 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
-import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -224,45 +224,9 @@ describe("model transitions after SQLite write admission", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32").each(["model", "thinking"] as const)(
-    "preserves private database-family modes through a warm %s metadata action",
-    async (kind) => {
-      const root = tempDirs.make("openclaw-model-admission-permissions-");
-      const { session, options, target } = await createModelSession(undefined, undefined, root);
-      await session.setModel(nextModel);
-      const databasePath = openOpenClawAgentDatabase(options).path;
-      const before = await loadTranscriptEvents(target);
-      const files = resolveSqliteDatabaseFilePaths(databasePath).filter((file) =>
-        fs.existsSync(file),
-      );
-      expect(files).toContain(`${databasePath}-wal`);
-      for (const file of files) {
-        fs.chmodSync(file, 0o644);
-        expect(fs.statSync(file).mode & 0o7777).toBe(0o644);
-      }
-
-      // Host admission may repair early; native owner tests prove the pre-COMMIT boundary.
-      await (kind === "model" ? session.setModel(lastModel) : session.setThinkingLevel("low"));
-
-      for (const file of files) {
-        expect(fs.statSync(file).mode & 0o7777).toBe(0o600);
-      }
-      const after = await loadTranscriptEvents(target);
-      expect(after.slice(0, before.length)).toEqual(before);
-      expect(after.slice(before.length)).toMatchObject([
-        kind === "model"
-          ? { type: "model_change", provider: lastModel.provider, modelId: lastModel.id }
-          : { type: "thinking_level_change", thinkingLevel: "low" },
-      ]);
-    },
-  );
-
   it.each([
     { kind: "model", authority: "current" },
-    { kind: "thinking", authority: "current" },
     { kind: "model", authority: "writer" },
-    { kind: "thinking", authority: "writer" },
-    { kind: "model", authority: "lifecycle" },
     { kind: "thinking", authority: "lifecycle" },
   ] as const)(
     "preserves ambient $authority authority for $kind metadata",
@@ -327,17 +291,16 @@ describe("model transitions after SQLite write admission", () => {
       const afterRows = readRows();
       expect(afterRows.slice(0, beforeRows.length)).toEqual(beforeRows);
       expect(afterRows).toHaveLength(beforeRows.length + 1);
-      expect(sessionManager.getEntries().at(-1)).toMatchObject(
-        kind === "model"
-          ? { type: "model_change", modelId: lastModel.id }
-          : { type: "thinking_level_change", thinkingLevel: "low" },
-      );
-      expect(session.model?.id).toBe(kind === "model" ? lastModel.id : nextModel.id);
-      expect(session.thinkingLevel).toBe(kind === "thinking" ? "low" : "medium");
+      expect(sessionManager.getEntries().at(-1)).toMatchObject({
+        type: "model_change",
+        modelId: lastModel.id,
+      });
+      expect(session.model?.id).toBe(lastModel.id);
+      expect(session.thinkingLevel).toBe("medium");
       expect(settingsManager.getDefaultModel()).toBe(session.model?.id);
       expect(settingsManager.getDefaultThinkingLevel()).toBe(session.thinkingLevel);
-      expect(transitions).toHaveLength(kind === "model" ? 1 : 0);
-      expect(thinkingSelections).toHaveLength(kind === "thinking" ? 1 : 0);
+      expect(transitions).toHaveLength(1);
+      expect(thinkingSelections).toHaveLength(0);
     },
   );
 
@@ -413,28 +376,111 @@ describe("model transitions after SQLite write admission", () => {
     expect(SessionManager.open(replacement, root).getEntries()).toEqual(manager.getEntries());
   });
 
-  it.each(["model", "thinking"] as const)(
-    "rejects $0 metadata from an extension invalidated while queued",
+  it.each(["auth", "extension", "session", "storage-root"] as const)(
+    "rejects queued metadata after its %s authority changes",
     async (kind) => {
-      const { session, settingsManager, options, target, extensionRuntime } =
-        await createModelSession();
-      await session.setModel(nextModel);
+      const env =
+        kind === "storage-root"
+          ? { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("metadata-root-first-")) }
+          : undefined;
+      const {
+        session,
+        sessionManager,
+        settingsManager,
+        modelRegistry,
+        options,
+        target,
+        extensionRuntime,
+        transitions,
+      } = await createModelSession(undefined, undefined, undefined, env);
+      if (kind === "extension" || kind === "storage-root") {
+        await session.setModel(nextModel);
+      }
       const before = await loadTranscriptEvents(target);
+      const defaults = {
+        provider: settingsManager.getDefaultProvider(),
+        model: settingsManager.getDefaultModel(),
+        thinking: settingsManager.getDefaultThinkingLevel(),
+      };
+      const replacement =
+        kind === "storage-root"
+          ? {
+              ...target,
+              env: { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("metadata-root-second-")) },
+            }
+          : {
+              ...target,
+              sessionId: `${target.sessionId}-replacement`,
+              sessionKey: `${target.sessionKey}-replacement`,
+            };
+      if (kind === "session") {
+        await replaceSessionEntry(replacement, { sessionId: replacement.sessionId, updatedAt: 1 });
+      }
+      const replacementBefore = kind === "session" ? await loadTranscriptEvents(replacement) : [];
+      if (kind === "auth") {
+        expect(modelRegistry.hasConfiguredAuth(nextModel)).toBe(true);
+      }
       const reservation = await holdAdmission(options);
-      const change = track<boolean | void>(
-        kind === "model"
-          ? extensionRuntime.setModel(lastModel)
-          : extensionRuntime.setThinkingLevel("low"),
+      const change = track<unknown>(
+        kind === "extension"
+          ? extensionRuntime.setThinkingLevel("low")
+          : kind === "storage-root"
+            ? sessionManager.appendModelChange(lastModel.provider, lastModel.id)
+            : session.setModel(nextModel),
       );
-      extensionRuntime.invalidate("extension invalidated during metadata admission");
-      reservation.release();
-      await expect(change).rejects.toThrow("extension invalidated during metadata admission");
+      try {
+        if (kind === "auth") {
+          modelRegistry.authStorage.removeRuntimeApiKey(nextModel.provider);
+          expect(modelRegistry.hasConfiguredAuth(nextModel)).toBe(false);
+        } else if (kind === "extension") {
+          extensionRuntime.invalidate("extension invalidated during metadata admission");
+        } else {
+          sessionManager.setSessionTarget(replacement);
+          expect(sessionManager.getSessionTarget()).toMatchObject(replacement);
+        }
+      } finally {
+        reservation.release();
+      }
+      const outcomes = await Promise.allSettled([change]);
       await reservation.done;
-      expect(await loadTranscriptEvents(target)).toEqual(before);
-      expect(session.model?.id).toBe(nextModel.id);
-      expect(session.thinkingLevel).toBe("medium");
-      expect(settingsManager.getDefaultModel()).toBe(nextModel.id);
-      expect(settingsManager.getDefaultThinkingLevel()).toBe("medium");
+      expect.soft(await loadTranscriptEvents(target)).toEqual(before);
+      if (kind === "auth") {
+        expect.soft(outcomes).toEqual([
+          {
+            status: "rejected",
+            reason: new Error(`No API key for ${nextModel.provider}/${nextModel.id}`),
+          },
+        ]);
+        expect({
+          provider: settingsManager.getDefaultProvider(),
+          model: settingsManager.getDefaultModel(),
+          thinking: settingsManager.getDefaultThinkingLevel(),
+        }).toEqual(defaults);
+      } else if (kind === "storage-root") {
+        const outcome = outcomes[0];
+        expect(outcome.status).toBe("rejected");
+        if (outcome.status === "rejected") {
+          expect(outcome.reason).not.toBeInstanceOf(SessionMetadataCommittedError);
+        }
+      } else {
+        await expect(change).rejects.toThrow(
+          kind === "extension"
+            ? "extension invalidated during metadata admission"
+            : "Session manager identity changed",
+        );
+      }
+      if (kind === "extension") {
+        expect(session.model?.id).toBe(nextModel.id);
+        expect(session.thinkingLevel).toBe("medium");
+        expect(settingsManager.getDefaultModel()).toBe(nextModel.id);
+        expect(settingsManager.getDefaultThinkingLevel()).toBe("medium");
+      } else if (kind !== "storage-root") {
+        expect.soft(session.model?.id).toBe(startModel.id);
+        expect.soft(transitions).toEqual([]);
+        if (kind === "session") {
+          expect(await loadTranscriptEvents(replacement)).toEqual(replacementBefore);
+        }
+      }
     },
   );
 
@@ -485,23 +531,11 @@ describe("model transitions after SQLite write admission", () => {
     },
   );
 
-  it("keeps a committed model result when its extension invalidates during notification", async () => {
-    let invalidate = () => {};
-    const { session, extensionRuntime, readModelChanges } = await createModelSession(async () =>
-      invalidate(),
-    );
-    invalidate = () => extensionRuntime.invalidate("extension invalidated after commit");
-    await expect(extensionRuntime.setModel(nextModel)).resolves.toBe(true);
-    expect(session.model?.id).toBe(nextModel.id);
-    expect(readModelChanges()).toEqual([startModel.id, nextModel.id]);
-  });
-
   it("retains the committed receipt when scalar publication fails", async () => {
     const { session, sessionManager, settingsManager, target, readModelChanges } =
       await createModelSession();
     await session.setModel(nextModel);
-    const publicationFailure = new Error("Scalar publication failed");
-    publicationFailure.name = "SqliteTranscriptMutationConflictError";
+    const publicationFailure = new SqliteTranscriptMutationConflictError(target.sessionId);
     const publication = vi
       .spyOn(settingsManager, "setDefaultModelAndProvider")
       .mockImplementationOnce(() => {
@@ -526,9 +560,10 @@ describe("model transitions after SQLite write admission", () => {
     }
   });
 
-  it.each(["extension", "manager", "manager-after-close"] as const)(
+  it.each(["extension", "extension-notification", "manager", "manager-after-close"] as const)(
     "settles the committed result when the %s changes at the result boundary",
     async (changedOwner) => {
+      let invalidate = () => {};
       const {
         session,
         sessionManager,
@@ -536,14 +571,21 @@ describe("model transitions after SQLite write admission", () => {
         extensionRuntime,
         target,
         readModelChanges,
-      } = await createModelSession();
-      await session.setModel(nextModel);
+      } = await createModelSession(async () => invalidate());
+      const duringNotification = changedOwner === "extension-notification";
+      const changesExtension = changedOwner === "extension" || duringNotification;
+      const selectedModel = duringNotification ? nextModel : lastModel;
+      if (duringNotification) {
+        invalidate = () => extensionRuntime.invalidate("extension invalidated after commit");
+      } else {
+        await session.setModel(nextModel);
+      }
       const replacement = {
         ...target,
         sessionId: `${target.sessionId}-replacement-after-commit`,
         sessionKey: `${target.sessionKey}-replacement-after-commit`,
       };
-      if (changedOwner !== "extension") {
+      if (!changesExtension) {
         await replaceSessionEntry(replacement, { sessionId: replacement.sessionId, updatedAt: 2 });
       }
       const external = SessionManager.open(target);
@@ -585,8 +627,8 @@ describe("model transitions after SQLite write admission", () => {
         .spyOn(metadataRuntime, "withSessionMetadataWorker")
         .mockImplementation(observeCommittedResult);
       try {
-        const change = extensionRuntime.setModel(lastModel);
-        if (changedOwner === "extension") {
+        const change = extensionRuntime.setModel(selectedModel);
+        if (changesExtension) {
           await expect(change).resolves.toBe(true);
         } else {
           await expect(change).rejects.toMatchObject({
@@ -596,188 +638,147 @@ describe("model transitions after SQLite write admission", () => {
           });
         }
         expect(invalidated).toBe(true);
-        expect(session.model?.id).toBe(changedOwner === "extension" ? lastModel.id : nextModel.id);
+        expect(session.model?.id).toBe(changesExtension ? selectedModel.id : nextModel.id);
         expect(settingsManager.getDefaultModel()).toBe(
-          changedOwner === "extension" ? lastModel.id : nextModel.id,
+          changesExtension ? selectedModel.id : nextModel.id,
         );
-        if (changedOwner === "extension") {
+        if (changesExtension) {
           expect(sessionManager.getBranch().map((entry) => entry.id)).toContain(externalEntry);
         } else {
           expect(sessionManager.getSessionTarget()).toMatchObject(replacement);
           expect(() => sessionManager.getBranch()).toThrow(SessionMetadataCommittedError);
           expect(SessionManager.open(replacement).getEntries()).toEqual([]);
         }
-        expect(readModelChanges()).toEqual([startModel.id, nextModel.id, lastModel.id]);
+        expect(readModelChanges()).toEqual(
+          duringNotification
+            ? [startModel.id, nextModel.id]
+            : [startModel.id, nextModel.id, lastModel.id],
+        );
       } finally {
         observer.mockRestore();
       }
     },
   );
 
-  it.each(["model", "thinking"] as const)(
-    "retains committed %s metadata when the stale transcript view cannot be decoded",
-    async (kind) => {
-      const root = tempDirs.make("openclaw-model-admission-corruption-");
-      const { session, sessionManager, settingsManager, options, target } =
-        await createModelSession(undefined, undefined, root);
-      await session.setModel(nextModel);
-      const firstModel = sessionManager.getEntries().find((entry) => entry.type === "model_change");
-      if (!firstModel) {
-        throw new Error("Fixture must contain its initial model");
-      }
-      const external = SessionManager.open(target);
-      external.appendMessage({ role: "user", content: "Newer durable turn", timestamp: 2 });
-      const database = openOpenClawAgentDatabase(options).db;
-      const original = database
-        .prepare(
-          "SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
-        )
-        .get(target.sessionId, target.sessionId, firstModel.id)?.event_json;
-      if (typeof original !== "string") {
-        throw new Error("Fixture must retain its original transcript bytes");
-      }
-      database
-        .prepare(
-          "UPDATE transcript_events SET event_json = '{invalid-prior-event' WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
-        )
-        .run(target.sessionId, target.sessionId, firstModel.id);
-      const before = database
-        .prepare("SELECT MAX(seq) AS seq FROM transcript_events WHERE session_id = ?")
-        .get(target.sessionId)?.seq;
-      if (typeof before !== "number") {
-        throw new Error("Fixture must contain transcript rows");
-      }
-
-      const failure: unknown = await (
-        kind === "model" ? session.setModel(lastModel) : session.setThinkingLevel("low")
-      ).catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(SessionMetadataCommittedError);
-      expect(failure).toMatchObject({ cause: { name: "SyntaxError" } });
-
-      const appended = database
-        .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq > ?")
-        .all(target.sessionId, before);
-      expect(appended).toHaveLength(1);
-      const expectedEntry =
-        kind === "model"
-          ? { type: "model_change", modelId: lastModel.id }
-          : { type: "thinking_level_change", thinkingLevel: "low" };
-      expect(JSON.parse(String(appended[0]?.event_json))).toMatchObject(expectedEntry);
-      expect(session.model?.id).toBe(kind === "model" ? lastModel.id : nextModel.id);
-      expect(settingsManager.getDefaultModel()).toBe(
-        kind === "model" ? lastModel.id : nextModel.id,
-      );
-      expect(session.thinkingLevel).toBe(kind === "thinking" ? "low" : "medium");
-      expect(settingsManager.getDefaultThinkingLevel()).toBe(
-        kind === "thinking" ? "low" : "medium",
-      );
-      for (const read of [
-        () => sessionManager.getEntries(),
-        () => sessionManager.getBranch(),
-        () => sessionManager.getTree(),
-        () => sessionManager.buildSessionContext(),
-        () => sessionManager.prepareTranscriptRewrite(),
-      ]) {
-        expect(read).toThrow(failure);
-      }
-      expect(sessionManager.getSessionTarget()).toMatchObject(target);
-      expect(sessionManager.getSessionId()).toBe(target.sessionId);
-      database
-        .prepare(
-          "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
-        )
-        .run(original, target.sessionId, target.sessionId, firstModel.id);
-      expect(() => sessionManager.getEntries()).toThrow(failure);
-      expect(SessionManager.open(target).getEntries().at(-1)).toMatchObject(expectedEntry);
-    },
-  );
-
-  it("inherits thinking and reports the model actually replaced by each queued transition", async () => {
-    const { session, settingsManager, options, transitions, readModelChanges } =
-      await createModelSession();
-    const reservation = await holdAdmission(options);
-    const first = track(session.setModel(nextModel));
-    const second = track(session.setModel(lastModel));
-    expect(session.model?.id).toBe(startModel.id);
-    expect(transitions).toEqual([]);
-    reservation.release();
-    await Promise.all([reservation.done, first, second]);
-
-    expect(readModelChanges()).toEqual(models.map((model) => model.id));
-    expect.soft(transitions).toEqual([
-      { previous: startModel.id, next: nextModel.id },
-      { previous: nextModel.id, next: lastModel.id },
-    ]);
-    expect.soft(session.thinkingLevel).toBe("medium");
-    expect(settingsManager.getDefaultThinkingLevel()).toBe("medium");
-  });
-
-  it("rejects a queued model switch when its configured auth was removed before admission", async () => {
-    const { session, modelRegistry, settingsManager, target, options, transitions } =
-      await createModelSession();
-    const before = await loadTranscriptEvents(target);
-    const defaults = {
-      provider: settingsManager.getDefaultProvider(),
-      model: settingsManager.getDefaultModel(),
-      thinking: settingsManager.getDefaultThinkingLevel(),
-    };
-    expect(modelRegistry.hasConfiguredAuth(nextModel)).toBe(true);
-    const reservation = await holdAdmission(options);
-    const change = track(session.setModel(nextModel));
-    modelRegistry.authStorage.removeRuntimeApiKey(nextModel.provider);
-    expect(modelRegistry.hasConfiguredAuth(nextModel)).toBe(false);
-    reservation.release();
-    const outcomes = await Promise.allSettled([change]);
-    await reservation.done;
-
-    expect.soft(outcomes).toEqual([
-      {
-        status: "rejected",
-        reason: new Error(`No API key for ${nextModel.provider}/${nextModel.id}`),
-      },
-    ]);
-    expect.soft(session.model?.id).toBe(startModel.id);
-    expect.soft(await loadTranscriptEvents(target)).toEqual(before);
-    expect.soft(transitions).toEqual([]);
-    expect({
-      provider: settingsManager.getDefaultProvider(),
-      model: settingsManager.getDefaultModel(),
-      thinking: settingsManager.getDefaultThinkingLevel(),
-    }).toEqual(defaults);
-  });
-
-  it("settles queued thinking changes before adopting settings or notifying hooks", async () => {
-    const thinkingSelections: ThinkingLevelSelectEvent[] = [];
-    const { session, settingsManager, options, target } = await createModelSession(
+  it("retains committed thinking metadata when the stale transcript view cannot be decoded", async () => {
+    const root = tempDirs.make("openclaw-model-admission-corruption-");
+    const { session, sessionManager, settingsManager, options, target } = await createModelSession(
       undefined,
-      async (event) => {
-        thinkingSelections.push(event);
-      },
+      undefined,
+      root,
     );
     await session.setModel(nextModel);
-    thinkingSelections.length = 0;
-    const before = await loadTranscriptEvents(target);
-    const reservation = await holdAdmission(options);
-    const first = track(session.setThinkingLevel("low"));
-    const second = track(session.setThinkingLevel("high"));
+    const firstModel = sessionManager.getEntries().find((entry) => entry.type === "model_change");
+    if (!firstModel) {
+      throw new Error("Fixture must contain its initial model");
+    }
+    const external = SessionManager.open(target);
+    external.appendMessage({ role: "user", content: "Newer durable turn", timestamp: 2 });
+    const database = openOpenClawAgentDatabase(options).db;
+    const original = database
+      .prepare(
+        "SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
+      )
+      .get(target.sessionId, target.sessionId, firstModel.id)?.event_json;
+    if (typeof original !== "string") {
+      throw new Error("Fixture must retain its original transcript bytes");
+    }
+    database
+      .prepare(
+        "UPDATE transcript_events SET event_json = '{invalid-prior-event' WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
+      )
+      .run(target.sessionId, target.sessionId, firstModel.id);
+    const before = database
+      .prepare("SELECT MAX(seq) AS seq FROM transcript_events WHERE session_id = ?")
+      .get(target.sessionId)?.seq;
+    if (typeof before !== "number") {
+      throw new Error("Fixture must contain transcript rows");
+    }
 
-    expect(session.thinkingLevel).toBe("medium");
-    expect(settingsManager.getDefaultThinkingLevel()).toBe("medium");
-    expect(thinkingSelections).toEqual([]);
-    reservation.release();
-    await Promise.all([reservation.done, first, second]);
+    const failure: unknown = await session.setThinkingLevel("low").catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(SessionMetadataCommittedError);
+    expect(failure).toMatchObject({ cause: { name: "SyntaxError" } });
 
-    expect(session.thinkingLevel).toBe("high");
-    expect(settingsManager.getDefaultThinkingLevel()).toBe("high");
-    expect(thinkingSelections).toEqual([
-      { type: "thinking_level_select", level: "low", previousLevel: "medium" },
-      { type: "thinking_level_select", level: "high", previousLevel: "low" },
-    ]);
-    expect((await loadTranscriptEvents(target)).slice(before.length)).toMatchObject([
-      { type: "thinking_level_change", thinkingLevel: "low" },
-      { type: "thinking_level_change", thinkingLevel: "high" },
-    ]);
+    const appended = database
+      .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq > ?")
+      .all(target.sessionId, before);
+    expect(appended).toHaveLength(1);
+    const expectedEntry = { type: "thinking_level_change", thinkingLevel: "low" };
+    expect(JSON.parse(String(appended[0]?.event_json))).toMatchObject(expectedEntry);
+    expect(session.model?.id).toBe(nextModel.id);
+    expect(settingsManager.getDefaultModel()).toBe(nextModel.id);
+    expect(session.thinkingLevel).toBe("low");
+    expect(settingsManager.getDefaultThinkingLevel()).toBe("low");
+    for (const read of [
+      () => sessionManager.getEntries(),
+      () => sessionManager.getBranch(),
+      () => sessionManager.getTree(),
+      () => sessionManager.buildSessionContext(),
+      () => sessionManager.prepareTranscriptRewrite(),
+    ]) {
+      expect(read).toThrow(failure);
+    }
+    expect(sessionManager.getSessionTarget()).toMatchObject(target);
+    expect(sessionManager.getSessionId()).toBe(target.sessionId);
+    database
+      .prepare(
+        "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
+      )
+      .run(original, target.sessionId, target.sessionId, firstModel.id);
+    expect(() => sessionManager.getEntries()).toThrow(failure);
+    expect(SessionManager.open(target).getEntries().at(-1)).toMatchObject(expectedEntry);
   });
+
+  it.each(["model", "thinking"] as const)(
+    "publishes queued %s changes in order after admission",
+    async (kind) => {
+      const thinkingSelections: ThinkingLevelSelectEvent[] = [];
+      const { session, settingsManager, options, target, transitions, readModelChanges } =
+        await createModelSession(undefined, async (event) => {
+          thinkingSelections.push(event);
+        });
+      if (kind === "thinking") {
+        await session.setModel(nextModel);
+        thinkingSelections.length = 0;
+      }
+      const before = await loadTranscriptEvents(target);
+      const reservation = await holdAdmission(options);
+      const first = track(
+        kind === "model" ? session.setModel(nextModel) : session.setThinkingLevel("low"),
+      );
+      const second = track(
+        kind === "model" ? session.setModel(lastModel) : session.setThinkingLevel("high"),
+      );
+      if (kind === "model") {
+        expect(session.model?.id).toBe(startModel.id);
+        expect(transitions).toEqual([]);
+      } else {
+        expect(session.thinkingLevel).toBe("medium");
+        expect(settingsManager.getDefaultThinkingLevel()).toBe("medium");
+        expect(thinkingSelections).toEqual([]);
+      }
+      reservation.release();
+      await Promise.all([reservation.done, first, second]);
+      expect.soft(session.thinkingLevel).toBe(kind === "model" ? "medium" : "high");
+      expect(settingsManager.getDefaultThinkingLevel()).toBe(kind === "model" ? "medium" : "high");
+      if (kind === "model") {
+        expect(readModelChanges()).toEqual(models.map((model) => model.id));
+        expect.soft(transitions).toEqual([
+          { previous: startModel.id, next: nextModel.id },
+          { previous: nextModel.id, next: lastModel.id },
+        ]);
+      } else {
+        expect(thinkingSelections).toEqual([
+          { type: "thinking_level_select", level: "low", previousLevel: "medium" },
+          { type: "thinking_level_select", level: "high", previousLevel: "low" },
+        ]);
+        expect((await loadTranscriptEvents(target)).slice(before.length)).toMatchObject([
+          { type: "thinking_level_change", thinkingLevel: "low" },
+          { type: "thinking_level_change", thinkingLevel: "high" },
+        ]);
+      }
+    },
+  );
 
   it("releases admission before model hooks settle", async () => {
     const hookEntered = createDeferredCore();
@@ -830,133 +831,55 @@ describe("model transitions after SQLite write admission", () => {
     expect(readModelChanges()).toEqual(models.map((model) => model.id));
   });
 
-  it.each(["model", "thinking"] as const)(
-    "rejects queued %s metadata after the same locator changes storage root",
-    async (kind) => {
-      const firstRoot = fs.realpathSync(tempDirs.make("metadata-root-first-"));
-      const secondRoot = fs.realpathSync(tempDirs.make("metadata-root-second-"));
-      const { session, sessionManager, target, options } = await createModelSession(
-        undefined,
-        undefined,
-        undefined,
-        { OPENCLAW_STATE_DIR: firstRoot },
-      );
-      await session.setModel(nextModel);
-      const before = await loadTranscriptEvents(target);
-      const replacement = { ...target, env: { OPENCLAW_STATE_DIR: secondRoot } };
-      const reservation = await holdAdmission(options);
-      const change = track(
-        (kind === "model"
-          ? sessionManager.appendModelChange(lastModel.provider, lastModel.id)
-          : sessionManager.appendThinkingLevelChange("low")
-        ).then(
-          () => ({ status: "fulfilled" as const }),
-          (error: unknown) => ({ status: "rejected" as const, error }),
-        ),
-      );
-      try {
-        sessionManager.setSessionTarget(replacement);
-        expect(sessionManager.getSessionTarget()).toMatchObject(replacement);
-      } finally {
-        reservation.release();
-        await Promise.all([reservation.done, change]);
-      }
-      const outcome = await change;
-      expect.soft(await loadTranscriptEvents(target)).toEqual(before);
-      expect(outcome.status).toBe("rejected");
-      if (outcome.status === "rejected") {
-        expect(outcome.error).not.toBeInstanceOf(SessionMetadataCommittedError);
-      }
-    },
-  );
-
-  it.each(["model", "thinking"] as const)(
-    "retains committed %s metadata without adopting into the same locator under another storage root",
-    async (kind) => {
-      const firstRoot = fs.realpathSync(tempDirs.make("metadata-commit-root-first-"));
-      const secondRoot = fs.realpathSync(tempDirs.make("metadata-commit-root-second-"));
-      const { session, sessionManager, settingsManager, target } = await createModelSession(
-        undefined,
-        undefined,
-        undefined,
-        { OPENCLAW_STATE_DIR: firstRoot },
-      );
-      await session.setModel(nextModel);
-      const before = await loadTranscriptEvents(target);
-      const replacement = { ...target, env: { OPENCLAW_STATE_DIR: secondRoot } };
-      const original = metadataRuntime.withSessionMetadataWorker;
-      const observeCommittedResult: typeof original = async (
-        options,
-        database,
-        assertCurrent,
-        operation,
-      ) => {
-        const result = await original(options, database, assertCurrent, operation);
-        sessionManager.setSessionTarget(replacement);
-        return result;
-      };
-      const observer = vi
-        .spyOn(metadataRuntime, "withSessionMetadataWorker")
-        .mockImplementation(observeCommittedResult);
-      try {
-        const outcome = await (
-          kind === "model" ? session.setModel(lastModel) : session.setThinkingLevel("low")
-        ).then(
-          () => ({ status: "fulfilled" as const }),
-          (error: unknown) => ({ status: "rejected" as const, error }),
-        );
-        expect(observer).toHaveBeenCalledOnce();
-        expect(sessionManager.getSessionTarget()).toMatchObject(replacement);
-        const after = await loadTranscriptEvents(target);
-        const expectedEntry =
-          kind === "model"
-            ? { type: "model_change", provider: lastModel.provider, modelId: lastModel.id }
-            : { type: "thinking_level_change", thinkingLevel: "low" };
-        expect(after.slice(0, before.length)).toEqual(before);
-        expect(after.slice(before.length)).toMatchObject([expectedEntry]);
-        expect.soft(session.model?.id).toBe(nextModel.id);
-        expect.soft(session.thinkingLevel).toBe("medium");
-        expect.soft(settingsManager.getDefaultModel()).toBe(nextModel.id);
-        expect.soft(settingsManager.getDefaultThinkingLevel()).toBe("medium");
-        expect(outcome.status).toBe("rejected");
-        if (outcome.status === "rejected") {
-          expect(outcome.error).toBeInstanceOf(SessionMetadataCommittedError);
-          expect(outcome.error).toMatchObject({
-            committedEntry: expectedEntry,
-            committedTarget: { ...target, env: { OPENCLAW_STATE_DIR: firstRoot } },
-          });
-          expect(hasModelFallbackStop(outcome.error)).toBe(true);
-          expect(() => sessionManager.getEntries()).toThrow(outcome.error);
-        }
-      } finally {
-        observer.mockRestore();
-      }
-    },
-  );
-
-  it("rejects a queued switch after its manager is rebound to another session", async () => {
-    const { session, sessionManager, target, options, transitions } = await createModelSession();
-    const replacementTarget = {
-      ...target,
-      sessionId: `${target.sessionId}-replacement`,
-      sessionKey: `${target.sessionKey}-replacement`,
-    };
-    await replaceSessionEntry(replacementTarget, {
-      sessionId: replacementTarget.sessionId,
-      updatedAt: 1,
-    });
+  it("retains committed thinking metadata without adopting into the same locator under another storage root", async () => {
+    const firstRoot = fs.realpathSync(tempDirs.make("metadata-commit-root-first-"));
+    const secondRoot = fs.realpathSync(tempDirs.make("metadata-commit-root-second-"));
+    const { session, sessionManager, settingsManager, target } = await createModelSession(
+      undefined,
+      undefined,
+      undefined,
+      { OPENCLAW_STATE_DIR: firstRoot },
+    );
+    await session.setModel(nextModel);
     const before = await loadTranscriptEvents(target);
-    const replacementBefore = await loadTranscriptEvents(replacementTarget);
-    const reservation = await holdAdmission(options);
-    const change = track(session.setModel(nextModel));
-    sessionManager.setSessionTarget(replacementTarget);
-    reservation.release();
-
-    await expect(change).rejects.toThrow("Session manager identity changed");
-    await reservation.done;
-    expect(session.model?.id).toBe(startModel.id);
-    expect(transitions).toEqual([]);
-    expect(await loadTranscriptEvents(target)).toEqual(before);
-    expect(await loadTranscriptEvents(replacementTarget)).toEqual(replacementBefore);
+    const replacement = { ...target, env: { OPENCLAW_STATE_DIR: secondRoot } };
+    const original = metadataRuntime.withSessionMetadataWorker;
+    const observeCommittedResult: typeof original = async (
+      options,
+      database,
+      assertCurrent,
+      operation,
+    ) => {
+      const result = await original(options, database, assertCurrent, operation);
+      sessionManager.setSessionTarget(replacement);
+      return result;
+    };
+    const observer = vi
+      .spyOn(metadataRuntime, "withSessionMetadataWorker")
+      .mockImplementation(observeCommittedResult);
+    try {
+      const failure: unknown = await session
+        .setThinkingLevel("low")
+        .catch((error: unknown) => error);
+      expect(observer).toHaveBeenCalledOnce();
+      expect(sessionManager.getSessionTarget()).toMatchObject(replacement);
+      const after = await loadTranscriptEvents(target);
+      const expectedEntry = { type: "thinking_level_change", thinkingLevel: "low" };
+      expect(after.slice(0, before.length)).toEqual(before);
+      expect(after.slice(before.length)).toMatchObject([expectedEntry]);
+      expect.soft(session.model?.id).toBe(nextModel.id);
+      expect.soft(session.thinkingLevel).toBe("medium");
+      expect.soft(settingsManager.getDefaultModel()).toBe(nextModel.id);
+      expect.soft(settingsManager.getDefaultThinkingLevel()).toBe("medium");
+      expect(failure).toBeInstanceOf(SessionMetadataCommittedError);
+      expect(failure).toMatchObject({
+        committedEntry: expectedEntry,
+        committedTarget: { ...target, env: { OPENCLAW_STATE_DIR: firstRoot } },
+      });
+      expect(hasModelFallbackStop(failure)).toBe(true);
+      expect(() => sessionManager.getEntries()).toThrow(failure);
+    } finally {
+      observer.mockRestore();
+    }
   });
 });

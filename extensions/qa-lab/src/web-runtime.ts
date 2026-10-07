@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
-// Qa Lab plugin module implements web runtime behavior.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  resolveOptionalIntegerOption,
+  resolvePositiveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 
 type QaWebSession = {
@@ -12,7 +15,7 @@ type QaWebSession = {
   ready?: { page: Page; diagnostics: QaWebDiagnosticEntry[] };
   acquisition: Promise<{ pageId: string; url: string; title: string }>;
   closing?: Promise<unknown[]>;
-  owner?: Set<string>;
+  owner: Set<string>;
   signal?: AbortSignal;
 };
 
@@ -21,7 +24,7 @@ type QaWebDiagnosticEntry = {
   text: string;
 };
 
-type QaWebOpenPageParams = {
+export type QaWebOpenPageParams = {
   url: string;
   headless?: boolean;
   channel?: "chrome";
@@ -176,7 +179,7 @@ function closeSession(pageId: string, session: QaWebSession): Promise<unknown[]>
     // A passing retry must not hide an earlier browser's failed cleanup.
     if (errors.length === 0) {
       sessions.delete(pageId);
-      session.owner?.delete(pageId);
+      session.owner.delete(pageId);
     }
     return errors;
   });
@@ -231,9 +234,9 @@ async function acquirePage(pageId: string, session: QaWebSession, params: QaWebO
   return { pageId, url: page.url(), title };
 }
 
-async function openPage(params: QaWebOpenPageParams, owner?: Set<string>, signal?: AbortSignal) {
+async function openPage(params: QaWebOpenPageParams, owner: Set<string>, signal?: AbortSignal) {
   signal?.throwIfAborted();
-  if (owner && closedSessionOwners.has(owner)) {
+  if (closedSessionOwners.has(owner)) {
     throw new Error("web session owner is closed");
   }
   const pageId = randomUUID();
@@ -245,7 +248,7 @@ async function openPage(params: QaWebOpenPageParams, owner?: Set<string>, signal
     acquisition: Promise.resolve().then(() => acquirePage(pageId, session, params)),
   };
   sessions.set(pageId, session);
-  owner?.add(pageId);
+  owner.add(pageId);
   const onAbort = () => {
     void closeSession(pageId, session);
   };
@@ -267,10 +270,6 @@ async function openPage(params: QaWebOpenPageParams, owner?: Set<string>, signal
     // The signal owns only acquisition; ready pages remain owned by the suite.
     signal?.removeEventListener("abort", onAbort);
   }
-}
-
-export function qaWebOpenPage(params: QaWebOpenPageParams) {
-  return openPage(params);
 }
 
 export function createQaWebPageOpener(owner: Set<string>, signal?: AbortSignal) {
@@ -313,10 +312,7 @@ export async function qaWebSnapshot(params: QaWebSnapshotParams) {
   const body = session.page.locator("body");
   await body.waitFor({ timeout: timeoutMs });
   const text = (await body.textContent({ timeout: timeoutMs })) ?? "";
-  const maxChars =
-    typeof params.maxChars === "number" && Number.isFinite(params.maxChars)
-      ? Math.max(1, Math.floor(params.maxChars))
-      : undefined;
+  const maxChars = resolveOptionalIntegerOption(params.maxChars, { min: 1 });
   return {
     url: session.page.url(),
     title: await session.page.title().catch(() => ""),
@@ -328,24 +324,13 @@ export async function qaWebSnapshot(params: QaWebSnapshotParams) {
 export async function qaWebEvaluate<T = unknown>(params: QaWebEvaluateParams): Promise<T> {
   const session = resolveSession(params.pageId);
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return (await Promise.race([
-      session.page.evaluate(({ expression }) => (0, eval)(expression) as unknown, {
-        expression: params.expression,
-      }),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error(`web evaluate timed out after ${timeoutMs}ms`)),
-          timeoutMs,
-        );
-      }),
-    ])) as T;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  return (await withTimeout(
+    session.page.evaluate(({ expression }) => (0, eval)(expression) as unknown, {
+      expression: params.expression,
+    }),
+    timeoutMs,
+    { label: "web evaluate" },
+  )) as T;
 }
 
 export async function closeQaWebSessions(pageIds?: Iterable<string>): Promise<void> {

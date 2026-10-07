@@ -2,10 +2,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderConfigDocBaselineArtifacts } from "./doc-baseline.js";
 
-vi.mock("./doc-baseline.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./doc-baseline.runtime.js")>();
+vi.mock("./doc-baseline.runtime.js", async () => {
+  const { collectBundledChannelConfigsCore } =
+    await import("../plugins/bundled-channel-config-metadata.js");
   return {
-    ...actual,
+    collectBundledChannelConfigs: collectBundledChannelConfigsCore,
     loadPluginManifestRegistry: () => ({ plugins: [] }),
     collectChannelSchemaMetadata: () => [],
     collectPluginSchemaMetadata: () => [],

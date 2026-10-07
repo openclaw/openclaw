@@ -1,17 +1,17 @@
-// Status-tool session resolution helpers keep storage lookup out of the tool body.
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionEntryCandidateTarget, type SessionEntry } from "../../config/sessions.js";
+import { resolveSessionEntryCandidateTargetForRuntime } from "../../config/sessions/session-accessor.entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveInternalSessionKey } from "./sessions-helpers.js";
 
-type ResolvedStatusSessionEntry = {
+export type ResolvedStatusSessionEntry = {
   entry: SessionEntry;
   key: string;
   persisted: boolean;
 };
 
-/** Resolves one status lookup against ordered tool-local session key candidates. */
 export function resolveSessionStatusEntry(params: {
   agentId: string;
   alias: string;
@@ -20,7 +20,7 @@ export function resolveSessionStatusEntry(params: {
   keyRaw: string;
   mainKey: string;
   requesterInternalKey?: string;
-}): ResolvedStatusSessionEntry | null {
+}): ResolvedStatusSessionEntry | null | Promise<ResolvedStatusSessionEntry | null> {
   const keyRaw = params.keyRaw.trim();
   if (!keyRaw) {
     return null;
@@ -29,7 +29,6 @@ export function resolveSessionStatusEntry(params: {
   const internal = resolveInternalSessionKey({
     key: keyRaw,
     alias: params.alias,
-    mainKey: params.mainKey,
     requesterInternalKey: params.requesterInternalKey,
   });
 
@@ -39,12 +38,8 @@ export function resolveSessionStatusEntry(params: {
   }
   if (includeAliasFallback && internal !== keyRaw) {
     candidates.push(internal);
-  }
-  if (includeAliasFallback && !keyRaw.startsWith("agent:")) {
-    const agentInternal = `agent:${params.agentId}:${internal}`;
-    const agentRaw = `agent:${params.agentId}:${keyRaw}`;
-    if (agentInternal !== agentRaw) {
-      candidates.push(agentInternal);
+    if (!keyRaw.startsWith("agent:")) {
+      candidates.push(`agent:${params.agentId}:${internal}`);
     }
   }
   if (includeAliasFallback && (keyRaw === "main" || keyRaw === "current")) {
@@ -57,18 +52,20 @@ export function resolveSessionStatusEntry(params: {
     }
   }
 
-  const resolved = resolveSessionEntryCandidateTarget({
+  const resolved = resolveSessionEntryCandidateTargetForRuntime({
     agentId: params.agentId,
     candidateKeys: candidates,
     cfg: params.cfg,
   });
-  return resolved
-    ? {
-        entry: resolved.entry,
-        key: resolved.sessionKey,
-        persisted: resolved.persisted,
-      }
-    : null;
+  const project = (value: Awaited<typeof resolved>) =>
+    value
+      ? {
+          entry: value.entry,
+          key: value.sessionKey,
+          persisted: value.persisted,
+        }
+      : null;
+  return isPromiseLike(resolved) ? resolved.then(project) : project(resolved);
 }
 
 /** Maps requester keys into the currently selected agent store's legacy main key shape. */
@@ -82,13 +79,6 @@ export function resolveStoreScopedRequesterKey(params: {
     return params.requesterKey;
   }
   return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
-}
-
-function synthesizeImplicitCurrentSessionEntry(): SessionEntry {
-  return {
-    sessionId: "",
-    updatedAt: Date.now(),
-  };
 }
 
 /** Returns a synthesized current-session entry without writing it to storage. */
@@ -108,7 +98,7 @@ export function resolveImplicitCurrentSessionFallback(params: {
     cfg: params.cfg,
     fallback: {
       sessionKey: fallbackKey,
-      entry: synthesizeImplicitCurrentSessionEntry(),
+      entry: { sessionId: "", updatedAt: Date.now() },
     },
   });
   return resolved
@@ -135,16 +125,15 @@ export function listImplicitDefaultDirectFallbackKeys(params: {
   }
   const channel = parts[0];
   const peerParts = parts.slice(3);
-  if (!channel || peerParts.length === 0) {
+  if (!channel) {
     return [];
   }
-  const candidates = [
+  return uniqueStrings([
     `agent:${parsed.agentId}:${channel}:direct:${peerParts.join(":")}`,
     buildAgentMainSessionKey({
       agentId: parsed.agentId,
       mainKey: params.mainKey,
     }),
     params.mainKey,
-  ];
-  return uniqueStrings(candidates);
+  ]);
 }

@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
 type PendingInput = NonNullable<BuildChatItemsProps["pendingInputs"]>[number];
@@ -40,11 +41,8 @@ function acceptedInput(
   };
 }
 
-function visibleRows(
-  overrides: Partial<BuildChatItemsProps>,
-  build = buildChatItems,
-): Array<string | null> {
-  return build({
+function createInput(overrides: Partial<BuildChatItemsProps>): BuildChatItemsProps {
+  return createProps({
     paneId: "input-order",
     sessionKey: "agent:main:input-order",
     messages: [
@@ -55,13 +53,15 @@ function visibleRows(
         __openclaw: { id: "earlier-answer", seq: 1 },
       },
     ],
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
     ...overrides,
-  }).flatMap((item) =>
+  });
+}
+
+function visibleRows(
+  overrides: Partial<BuildChatItemsProps>,
+  build: (input: BuildChatItemsProps) => ReturnType<typeof buildChatItems> = buildChatItems,
+): Array<string | null> {
+  return build(createInput(overrides)).flatMap((item) =>
     item.kind === "group"
       ? item.messages.map(({ message }) => extractTextCached(message))
       : item.kind === "notice"
@@ -70,37 +70,90 @@ function visibleRows(
   );
 }
 
+beforeEach(() => resetChatThreadState("input-order"));
+afterEach(() => resetChatThreadState("input-order"));
+
 describe("transcript input order", () => {
-  it.each(["failed", "unconfirmed", "waiting-reconnect"] as const)(
-    "keeps an earlier %s input ahead of a newer submitting input",
-    (sendState) => {
+  it.each(["steer", "interrupt"] as const)(
+    "keeps consecutive sends in submission order while a %s ACK is pending",
+    (queueMode) => {
+      const first = { ...queuedInput("First input", 10, "sending"), queueMode };
+      const second = { ...queuedInput("Second input", 20, "sending"), queueMode };
+      expect(visibleRows({ queue: [first] }, buildCachedChatItems)).toEqual([
+        "Existing conversation",
+        "First input",
+      ]);
+      const expected = ["Existing conversation", "First input", "Second input"];
+      expect(visibleRows({ queue: [first, second] }, buildCachedChatItems)).toEqual(expected);
+      // Custody can retire the successor's outbox row before the first ACK.
       expect(
-        visibleRows({
-          queue: [queuedInput("Earlier input", 10, sendState), queuedInput("New input", 20)],
-        }),
-      ).toEqual(["Existing conversation", "Earlier input", "New input"]);
+        visibleRows(
+          { queue: [first], pendingInputs: [acceptedInput("Second input", 30)] },
+          buildCachedChatItems,
+        ),
+      ).toEqual(expected);
+      const canonical = [first, second].map((input, index) => ({
+        role: "user",
+        content: input.text,
+        timestamp: input.createdAt,
+        __openclaw: { id: input.id, seq: index + 2, idempotencyKey: input.sendRunId },
+      }));
+      expect(
+        visibleRows({ messages: [canonical[1]], queue: [first] }, buildCachedChatItems),
+      ).toEqual(["First input", "Second input"]);
+      expect(
+        visibleRows({ messages: [canonical[1]], queue: [first] }, (input) =>
+          buildCachedChatItems(input, "unfiltered"),
+        ),
+      ).toEqual(["First input", "Second input"]);
+      expect(visibleRows({ messages: canonical, queue: [] }, buildCachedChatItems)).toEqual([
+        "First input",
+        "Second input",
+      ]);
     },
   );
 
-  it("keeps accepted input ahead of a new submission through its custody handoff", () => {
-    const queue = [queuedInput("New input", 20)];
-    const earlier = acceptedInput("Earlier input", 10);
-    const expected = ["Existing conversation", "Earlier input", "New input"];
+  it.each(["unconfirmed", "waiting-reconnect", "accepted", "reordered"] as const)(
+    "keeps an earlier %s input ahead of a new submission through custody",
+    (state) => {
+      const reordered = state === "reordered";
+      const earlier = queuedInput(
+        "Earlier input",
+        reordered ? 30 : 10,
+        state === "unconfirmed" || state === "waiting-reconnect" ? state : "submitting",
+      );
+      const later = queuedInput("New input", reordered ? 10 : 20);
+      const queue =
+        state === "accepted"
+          ? [later]
+          : reordered
+            ? [
+                { ...earlier, orderKey: 10 },
+                { ...later, orderKey: 30 },
+              ]
+            : [earlier, later];
+      const pendingInputs = state === "accepted" ? [acceptedInput("Earlier input", 10)] : [];
+      const expected = ["Existing conversation", "Earlier input", "New input"];
+      expect(visibleRows({ queue, pendingInputs })).toEqual(expected);
+      if (state === "accepted" || reordered) {
+        expect(
+          visibleRows({
+            queue,
+            pendingInputs: [
+              ...pendingInputs,
+              acceptedInput(reordered ? "Earlier input" : "New input", reordered ? 40 : 30),
+            ],
+          }),
+        ).toEqual(expected);
+      }
+    },
+  );
 
-    expect([
-      visibleRows({ queue, pendingInputs: [earlier] }),
-      visibleRows({ queue, pendingInputs: [earlier, acceptedInput("New input", 30)] }),
-    ]).toEqual([expected, expected]);
-  });
-
-  it.each(
-    (["queued", "interrupted", "cancelled"] as const).flatMap((state) =>
-      [
-        { label: "equal", timestamps: [20, 20] as const },
-        { label: "reversed", timestamps: [30, 20] as const },
-      ].map((clock) => ({ state, label: clock.label, timestamps: clock.timestamps })),
-    ),
-  )(
+  it.each([
+    { state: "queued", label: "reversed", timestamps: [30, 20] },
+    { state: "interrupted", label: "reversed", timestamps: [30, 20] },
+    { state: "cancelled", label: "equal", timestamps: [20, 20] },
+  ] as const)(
     "preserves server $state input order and attached notices with $label timestamps",
     ({ state, timestamps }) => {
       const notice =
@@ -124,45 +177,28 @@ describe("transcript input order", () => {
     },
   );
 
-  it("preserves a reordered queue when its first input receives custody", () => {
-    const first = { ...queuedInput("Moved first", 30), orderKey: 10 };
-    const second = { ...queuedInput("Moved second", 10), orderKey: 30 };
-    const queue = [first, second];
-    const expected = ["Existing conversation", "Moved first", "Moved second"];
-
-    expect([
-      visibleRows({ queue }),
-      visibleRows({ queue, pendingInputs: [acceptedInput("Moved first", 40)] }),
-    ]).toEqual([expected, expected]);
-  });
-
   it("keeps the displayed order while consumption retires a local custody anchor", () => {
     const earlier = queuedInput("Earlier input", 10, "failed");
     const later = queuedInput("Later input", 20);
     const pendingInputs = [acceptedInput("Later input", 30)];
     const expected = ["Existing conversation", "Earlier input", "Later input"];
-    resetChatThreadState("input-order");
-    try {
-      for (const queue of [[earlier, later], [earlier], [{ ...earlier }]]) {
-        expect(visibleRows({ queue, pendingInputs }, buildCachedChatItems)).toEqual(expected);
-      }
-      expect(
-        visibleRows(
-          {
-            queue: [earlier],
-            pendingInputs,
-            searchOpen: true,
-            searchQuery: "Earlier input",
-          },
-          buildCachedChatItems,
-        ),
-      ).toEqual(["Earlier input"]);
-      expect(visibleRows({ queue: [earlier], pendingInputs }, buildCachedChatItems)).toEqual(
-        expected,
-      );
-    } finally {
-      resetChatThreadState("input-order");
+    for (const queue of [[earlier, later], [earlier], [{ ...earlier }]]) {
+      expect(visibleRows({ queue, pendingInputs }, buildCachedChatItems)).toEqual(expected);
     }
+    expect(
+      visibleRows(
+        {
+          queue: [earlier],
+          pendingInputs,
+          searchOpen: true,
+          searchQuery: "Earlier input",
+        },
+        buildCachedChatItems,
+      ),
+    ).toEqual(["Earlier input"]);
+    expect(visibleRows({ queue: [earlier], pendingInputs }, buildCachedChatItems)).toEqual(
+      expected,
+    );
   });
 
   it.each(["followup", "steer"] as const)(
@@ -186,17 +222,39 @@ describe("transcript input order", () => {
         queueMode === "steer"
           ? ["Later input", "Recovered reply", "Earlier input"]
           : ["Earlier input", "Later input", "Recovered reply"];
-      resetChatThreadState("input-order");
-      try {
-        expect(
-          visibleRows({ messages: [reply], queue: [earlier, later] }, buildCachedChatItems),
-        ).toEqual(expected);
-        expect(
-          visibleRows({ messages: [canonical, reply], queue: [earlier] }, buildCachedChatItems),
-        ).toEqual(expected);
-      } finally {
-        resetChatThreadState("input-order");
-      }
+      expect(
+        visibleRows({ messages: [reply], queue: [earlier, later] }, buildCachedChatItems),
+      ).toEqual(expected);
+      expect(
+        visibleRows({ messages: [canonical, reply], queue: [earlier] }, buildCachedChatItems),
+      ).toEqual(expected);
     },
   );
+
+  it("reuses loaded history when a render rebuilds its pending input list", () => {
+    let messageReads = 0;
+    const loaded = new Proxy(
+      {
+        role: "assistant",
+        content: "Loaded history",
+        timestamp: 1,
+        __openclaw: { id: "loaded", seq: 1 },
+      },
+      {
+        get(target, key, receiver) {
+          messageReads += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    const accepted = acceptedInput("Later input", 30);
+    const input = createInput({ messages: [loaded] });
+    const first = buildCachedChatItems({ ...input, pendingInputs: [accepted] });
+    messageReads = 0;
+    // renderChat derives this list on every render, including scroll-driven ones.
+    const next = buildCachedChatItems({ ...input, pendingInputs: [accepted] });
+
+    expect(next).toBe(first);
+    expect(messageReads).toBe(0);
+  });
 });

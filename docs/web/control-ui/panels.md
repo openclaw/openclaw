@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Ask OpenClaw, the Home dock, the operator terminal, and the browser panel"
 read_when:
   - Opening a terminal or browser beside a conversation
@@ -16,6 +17,8 @@ Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent.
 
 If no AI provider is configured, Ask OpenClaw offers **Connect an AI provider**. If a configured runtime fails to start or verify, the conversation stays visible with the actual error and **Retry**. Sending stays disabled until verification succeeds. Retry checks the runtime without resending your earlier message or clearing your draft.
 
+Onboarding suggestions can focus the recommended answer when nothing else has focus. If you have already focused the composer or another control, arriving suggestions leave your keyboard focus there.
+
 Each chat message carries the Control UI page you are currently viewing as an untrusted ambient hint, so requests like "configure this channel" or "why is this page empty?" resolve against the page you are looking at.
 
 Guided channel setup, workspace skills setup, web-search provider setup, and local Gateway setup run as hosted wizards inside the chat. Wizard questions stay in the conversation, secret steps mask input in the browser, and successful config-backed flows are audited and re-validated. If a chosen web-search provider needs a plugin install and that install fails, setup stops and reports the failure instead of pretending the provider is configured.
@@ -24,7 +27,7 @@ For Gateway setup, say `configure gateway` to choose the port, bind address, tok
 
 Say `import memory` to copy detected local memory into the existing default agent workspace. This flow does not change config or import credentials or skills, needs no Gateway restart, and distinguishes confirmed imports, nothing to import, provider failures, and failures where some files may already have been copied. Finish onboarding first if the default workspace does not exist. See [Import assistant memory](/web/control-ui/settings#import-assistant-memory) for the broader page that can target another agent or replace existing imports, and [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
 
-Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel probe, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
+Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel check, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
 
 ## Home dock
 
@@ -36,15 +39,30 @@ Home can include a bounded, quoted work-context reference with your message. Bef
 
 Sent messages show **Context attached** below your words instead of displaying the generated context as message text. Open it to inspect the captured session, page, agent, workspace, file, or selection; **Technical details** shows the snapshot as JSON. The snapshot is frozen when you send, including through queues and retries. Copying or editing your message does not include the generated reference. It remains reference data, not instructions or permission to access another conversation. Older messages without a recorded attachment are left unchanged.
 
+## Plugin conversation docks
+
+A plugin page can offer an action to open its conversation beside the page.
+It uses the same chat pane, drafts, attachments, right-or-bottom placement,
+resizing, and close controls as Home. Opening it replaces Home, Ask OpenClaw,
+or another conversation dock. It stays open across page navigation and hides
+while the same conversation is open as the Chat or Dashboard page. Closing
+leaves no dock open. Read-only access and session errors follow the normal
+chat rules. A plugin can include a bounded page reference, shown as
+**Context attached** after sending; it remains untrusted reference data.
+
 ## Operator terminal
 
 The operator terminal is enabled by default; set `gateway.terminal.enabled: false` to opt out. The terminal requires an `operator.admin` connection and opens a host PTY in the active agent workspace. New tabs follow the currently selected chat agent.
 
 When the terminal is disabled or your connection lacks admin access, the main terminal page shows an unavailable notice and a **New session** button to return to the composer.
 
-On Linux and macOS, a Gateway running on Bun uses a Node helper for terminal
-I/O. Keep Node available on the Gateway's `PATH`; an unavailable Node executable
-produces a startup error with installation guidance.
+On Linux and macOS, a Gateway running on Bun uses Bun's native PTY without a
+Node runtime only on builds providing `Bun.Terminal.pause()` and `resume()`,
+such as the OpenClaw Bun fork builds that also carry the macOS child-exit fix.
+Other Bun releases use a Node helper for terminal I/O. Keep Node available on
+the Gateway's `PATH`; OpenClaw skips Bun's `node` shim, and an unavailable Node
+executable produces a startup error with installation guidance. Windows keeps
+`node-pty`. See [Bun compatibility](/install/bun-compatibility#known-limitations).
 
 Enablement changes hot-apply without restarting the Gateway. Disabling closes
 attached, detached, and conversation-owned terminals and cancels pending opens.
@@ -59,7 +77,10 @@ Use **Ctrl + backtick** to toggle the **Terminal** tab in the selected Chat pane
 
 Terminal sessions appear as tabs in the Chat side-panel header; choosing **Terminal** again in the panel's **+** menu opens another shell, while sessions, upload, and dock-to-bottom actions sit in the header. A Terminal moved to the main area keeps its own tab strip.
 
-The unified panel also hosts **Browser**, **Files**, **Tasks**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so switching sessions or reloading restores each session's own working layout. A chat conversation without a saved panel layout does not inherit panels open in another session. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
+The unified panel also hosts **Browser**, **Files**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so switching sessions or reloading restores each session's own working layout. A chat conversation without a saved panel layout does not inherit panels open in another session. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
+
+The side-panel divider follows the pointer and arrow-key direction in both
+left-to-right and right-to-left layouts.
 
 Chat and each tool have their own named region for assistive navigation. Swapping Chat with a tool keeps each tab associated with its own content, including when the same conversation is open in multiple split panes.
 
@@ -91,9 +112,13 @@ Eligibility is per session and per host. Gateway-local sessions start the provid
 
 Standalone operator sessions, including the main terminal page and terminal focus presentation, are connection-owned. Leaving the main terminal route does not close its PTY; returning to its terminal session URL reattaches it. The main page and the dock keep separate terminal tabs. A page reload, laptop sleep, or network blip detaches one on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached connection-owned sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). Attaching one of these sessions remains tmux-style take-over.
 
+A shell that exits normally with code zero closes its terminal tab automatically, including after `logout`, `exit`, or EOF. Closing the last terminal tab closes its panel, whether docked right or bottom, unless other tool tabs remain. Nonzero exits, signals, disconnects, and errors stay visible for inspection. The fullscreen terminal keeps its new-session control available after the last tab closes.
+
 Closing a connecting tab cancels that opening or attachment request. Other tabs and queued requests remain available, and a late response does not reopen the cancelled tab or display its error.
 
 Conversation-owned sessions opened from a Chat session's Terminal panel are not bound to a browser connection. `terminal.attach` adds each browser as a viewer without taking ownership, and closing an established viewer tab detaches only that browser. Conversation-owned PTYs remain until the exact-session agent closes them, their shell exits, the session is archived, policy disables them, or the Gateway shuts down. `terminal.list` marks each entry as connection- or agent-owned.
+
+Resetting an Incognito session closes its conversation-owned terminals and cancels pending terminal opens before deleting the session.
 
 All Gateway terminal PTYs are process-local. A Gateway restart ends them; the
 PTY sessions and their scrollback are not recovered after the new process starts.

@@ -7,6 +7,7 @@ import { testState } from "./test-helpers.js";
 import { resetPersistentGatewaySessionStore } from "./test/persistent-session-store.test-support.js";
 import {
   setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   getGatewayConfigModule,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -84,6 +85,20 @@ export function setupSessionCreateTestHarness(
   setup?: Parameters<typeof setupGatewaySessionsTestHarness>[0],
 ) {
   const fixture = setupGatewaySessionsTestHarness(setup);
+  installSessionCreateTestMocks();
+  return fixture;
+}
+
+/** Direct handlers with nested state must not retain a Gateway on a different state root. */
+export function setupSessionCreateHandlerTestHarness(
+  setup?: Parameters<typeof setupGatewaySessionsHandlerTestHarness>[0],
+) {
+  const fixture = setupGatewaySessionsHandlerTestHarness(setup);
+  installSessionCreateTestMocks();
+  return fixture;
+}
+
+function installSessionCreateTestMocks() {
   beforeEach(async () => {
     sessionDiffBaselineMocks.captureGate = undefined;
     sessionDiffBaselineMocks.captureStarted = undefined;
@@ -96,13 +111,12 @@ export function setupSessionCreateTestHarness(
     dashboardTitleScheduleMocks.schedule.mockReset();
     dashboardTitleScheduleMocks.schedule.mockImplementation(await actualDashboardTitleScheduler());
   });
-  return fixture;
 }
 
 /** Ordinary main-session lifecycle cases can reset rows without reopening their store. */
 export function setupPersistentSessionCreateTestHarness() {
   let dir: string | undefined;
-  setupSessionCreateTestHarness(async (makeTempDir) => {
+  const { openClient } = setupSessionCreateTestHarness(async (makeTempDir) => {
     dir = await fs.realpath(makeTempDir("openclaw-session-create-persistent-"));
   });
   afterEach(async () => {
@@ -112,6 +126,7 @@ export function setupPersistentSessionCreateTestHarness() {
     await resetPersistentGatewaySessionStore(dir);
   });
   return {
+    openClient,
     createSessionStoreDir: async () => {
       if (!dir) {
         throw new Error("Persistent session fixture was not created");

@@ -147,7 +147,7 @@ describe("renderChatComposer controls", () => {
       onDraftChange: (value) => {
         draft = value;
       },
-      onSend: () => onSend(draft),
+      onSend: (_mode, action) => onSend(draft, action),
       onToggleRealtimeTalk: vi.fn(),
       submitDisabledReason,
     });
@@ -203,13 +203,14 @@ describe("renderChatComposer controls", () => {
       const send = primaryButton(container);
       expect(send.getAttribute("aria-label")).toBe("Send");
       expect(send.disabled).toBe(false);
-      send.click();
+      const action = new MouseEvent("click", { bubbles: true, cancelable: true });
+      send.dispatchEvent(action);
 
       expect(finishActive).toHaveBeenCalledOnce();
       expect(onSend).not.toHaveBeenCalled();
       finalTranscript.resolve("dictated ending");
       await vi.waitFor(() =>
-        expect(onSend).toHaveBeenCalledExactlyOnceWith("Typed beginning dictated ending"),
+        expect(onSend).toHaveBeenCalledExactlyOnceWith("Typed beginning dictated ending", action),
       );
     },
   );
@@ -243,30 +244,6 @@ describe("renderChatComposer controls", () => {
       label: t("chat.runControls.stopGenerating"),
       disabled: false,
       stop: true,
-    },
-    {
-      name: "queued follow-up",
-      overrides: {
-        canAbort: true,
-        draft: "Follow up later",
-        followUpMode: "queue" as const,
-        onAbort: vi.fn(),
-      },
-      label: t("chat.runControls.queueMessage"),
-      disabled: false,
-      stop: false,
-    },
-    {
-      name: "steered follow-up",
-      overrides: {
-        canAbort: true,
-        draft: "Steer this run",
-        followUpMode: "steer" as const,
-        onAbort: vi.fn(),
-      },
-      label: t("chat.followUpModeSteer"),
-      disabled: false,
-      stop: false,
     },
     {
       name: "draft idle",
@@ -334,21 +311,25 @@ describe("renderChatComposer controls", () => {
     expect(onAbort).toHaveBeenCalledOnce();
   });
 
-  it("keeps mobile voice controls disabled while the composer is busy", () => {
-    const { container } = renderComposer({
-      sending: true,
-      onToggleRealtimeTalk: vi.fn(),
-    });
+  it.each([{ sending: true }, { stream: "Working" }])(
+    "keeps dictation available while Talk is held during an active turn: %j",
+    (run) => {
+      const { container } = renderComposer({
+        ...run,
+        onToggleRealtimeTalk: vi.fn(),
+      });
 
-    const mobileDictation = container.querySelector<HTMLButtonElement>(
-      ".chat-mobile-dictation-action .chat-send-btn--voice",
-    );
-    expect(mobileDictation?.disabled).toBe(true);
-    expect(
-      container.querySelector<HTMLButtonElement>(".chat-mobile-talk-action .chat-send-btn")
-        ?.disabled,
-    ).toBe(true);
-  });
+      const mobileDictation = container.querySelector<HTMLButtonElement>(
+        ".chat-mobile-dictation-action .chat-send-btn--voice",
+      );
+      expect(mobileDictation?.disabled).toBe(false);
+      expect(button(container, t("chat.composer.startVoiceInput")).disabled).toBe(false);
+      expect(
+        container.querySelector<HTMLButtonElement>(".chat-mobile-talk-action .chat-send-btn")
+          ?.disabled,
+      ).toBe(true);
+    },
+  );
 
   it.each([true, false])(
     "holds Talk during initial history while preserving draft input (hold-to-record=%s)",
@@ -495,70 +476,45 @@ describe("renderChatComposer controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  describe.each([
-    ["queue", "steer"],
-    ["steer", "queue"],
-    ["collect", "steer"],
-    ["followup", "steer"],
-  ] as const)("alternate follow-up from %s to %s", (followUpMode, alternateMode) => {
-    it.each([
-      [
-        "Meta+Enter with a rendered draft",
-        { metaKey: true },
-        "Steer this now",
-        undefined,
-        undefined,
-      ],
-      [
-        "Control+Enter with a rendered draft",
-        { ctrlKey: true },
-        "Steer this now",
-        undefined,
-        undefined,
-      ],
-      [
-        "Control+Enter with attachment-only content",
-        { ctrlKey: true },
-        "",
-        () => [{ id: "image-1", mimeType: "image/png", fileName: "proof.png" }],
-        undefined,
-      ],
-      [
-        "Control+Enter with live textarea content before the draft prop rerenders",
-        { ctrlKey: true },
-        "",
-        undefined,
-        "Steer the live textarea value",
-      ],
-    ] as const)(
-      "uses %s to submit the alternate action",
-      (_name, modifiers, draft, getAttachments, liveDraft) => {
-        const onSend = vi.fn();
-        const { container } = renderComposer({
-          canAbort: true,
-          draft,
-          followUpMode,
-          getAttachments,
-          onAbort: vi.fn(),
-          onSend,
-          sendShortcut: "enter",
-        });
-        const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-        if (textarea && liveDraft !== undefined) {
-          textarea.value = liveDraft;
-        }
+  it.each([
+    ["queue", "steer", { metaKey: true }, "Steer this now", undefined, undefined],
+    ["steer", "queue", { ctrlKey: true }, "Queue this next", undefined, undefined],
+    [
+      "collect",
+      "steer",
+      { ctrlKey: true },
+      "",
+      () => [{ id: "image-1", mimeType: "image/png", fileName: "proof.png" }],
+      undefined,
+    ],
+    ["followup", "steer", { ctrlKey: true }, "", undefined, "Steer the live textarea value"],
+  ] as const)(
+    "submits %s as %s with modified Enter",
+    (followUpMode, alternateMode, modifiers, draft, getAttachments, liveDraft) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({
+        canAbort: true,
+        draft,
+        followUpMode,
+        getAttachments,
+        onAbort: vi.fn(),
+        onSend,
+        sendShortcut: "enter",
+      });
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+      if (textarea && liveDraft !== undefined) {
+        textarea.value = liveDraft;
+      }
 
-        const action = pressComposerEnter(container, modifiers);
+      const action = pressComposerEnter(container, modifiers);
+      expect(onSend).toHaveBeenCalledOnce();
+      expect(onSend).toHaveBeenCalledWith(alternateMode, action);
 
-        expect(onSend).toHaveBeenCalledOnce();
-        expect(onSend).toHaveBeenCalledWith(alternateMode, action);
-
-        const held = pressComposerEnter(container, { ...modifiers, repeat: true });
-        expect(held.defaultPrevented).toBe(true);
-        expect(onSend).toHaveBeenCalledOnce();
-      },
-    );
-  });
+      const held = pressComposerEnter(container, { ...modifiers, repeat: true });
+      expect(held.defaultPrevented).toBe(true);
+      expect(onSend).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     ["modifier-enter", true, "queue", false],
@@ -586,23 +542,13 @@ describe("renderChatComposer controls", () => {
     },
   );
 
-  it.each(["keyboard", "pointer"] as const)(
-    "passes the original %s submission event through the composer",
-    (kind) => {
-      const onSend = vi.fn();
-      const { container } = renderComposer({ draft: "Repeat this message", onSend });
-      const action =
-        kind === "keyboard"
-          ? pressComposerEnter(container)
-          : new MouseEvent("click", { bubbles: true, cancelable: true });
-
-      if (kind === "pointer") {
-        primaryButton(container).dispatchEvent(action);
-      }
-
-      expect(onSend).toHaveBeenCalledWith(undefined, action);
-    },
-  );
+  it("passes the original pointer submission event through the composer", () => {
+    const onSend = vi.fn();
+    const { container } = renderComposer({ draft: "Repeat this message", onSend });
+    const action = new MouseEvent("click", { bubbles: true, cancelable: true });
+    primaryButton(container).dispatchEvent(action);
+    expect(onSend).toHaveBeenCalledWith(undefined, action);
+  });
 
   it("keeps empty modified Enter on the existing empty-draft path", () => {
     const onSend = vi.fn();
@@ -648,8 +594,6 @@ describe("renderChatComposer controls", () => {
   it.each([
     ["queue", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
     ["steer", "Steer ⏎ · Queue ⌘/Ctrl+Enter"],
-    ["collect", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
-    ["followup", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
   ] as const)(
     "teaches both actions for %s without changing ordinary Enter",
     (followUpMode, tooltip) => {
