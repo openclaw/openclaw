@@ -277,9 +277,7 @@ describe("runIsolatedCompletion", () => {
         },
       });
     registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
-    const error = await runIsolatedCompletion(isolatedRequest()).catch(
-      (failure: unknown) => failure,
-    );
+    const error = await runIsolatedCompletion(isolatedRequest()).catch((cause: unknown) => cause);
     expect(error).toMatchObject({ code: "output-rejected", cause: { retryAfterMs: 90_000 } });
     expect(resolveModelFallbackError(error)).toMatchObject({
       kind: "failover",
