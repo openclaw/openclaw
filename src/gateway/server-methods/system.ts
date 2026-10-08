@@ -36,7 +36,11 @@ import {
   resolveSystemEventQueueKey,
   withSystemEventOwner,
 } from "../../infra/system-event-ownership.js";
-import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
+import {
+  enqueueSystemEvent,
+  enqueueSystemEventWithReceipt,
+  isSystemEventContextChanged,
+} from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
@@ -335,10 +339,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       const normalizedReason = normalizeLowercaseStringOrEmpty(reasonValue);
       const ignoreReason =
         normalizedReason.startsWith("periodic") ||
-        normalizedReason === "heartbeat" ||
-        normalizedReason === "connect" ||
-        normalizedReason === "launch" ||
-        normalizedReason === "instances-refresh";
+        ["heartbeat", "connect", "launch", "instances-refresh"].includes(normalizedReason);
       const hostChanged = changed.has("host");
       const ipChanged = changed.has("ip");
       const versionChanged = changed.has("version");
@@ -383,7 +384,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       }
     } else {
       const eventOptions = { sessionKey };
-      enqueueSystemEvent(
+      enqueueSystemEventWithReceipt(
         text,
         eventOwnerAgentId ? withSystemEventOwner(eventOptions, eventOwnerAgentId) : eventOptions,
       );

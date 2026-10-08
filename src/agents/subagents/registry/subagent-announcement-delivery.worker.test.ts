@@ -29,6 +29,7 @@ import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js"
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import * as registryReads from "./subagent-registry-read-cache.js";
 import * as registryRead from "./subagent-registry-read.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import * as registryState from "./subagent-registry-state.js";
 import {
   prepareSubagentSessionCleanupRevocation,
@@ -37,7 +38,6 @@ import {
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });

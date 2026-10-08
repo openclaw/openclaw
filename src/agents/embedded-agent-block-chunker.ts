@@ -1,7 +1,7 @@
-/**
- * Splits streamed embedded-agent replies into Markdown-safe message chunks.
- */
-
+import {
+  findGraphemeChunkEnd,
+  firstGraphemeClusterLength,
+} from "@openclaw/normalization-core/grapheme";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { FenceSpan } from "../../packages/markdown-core/src/fences.js";
 import {
@@ -52,6 +52,8 @@ export type BlockChunkMetadata = {
 
 type BlockChunkDrain = {
   force: boolean;
+  /** Only for cumulative previews that replace previously emitted text. */
+  mutablePreview?: boolean;
   emit: (chunk: string, options?: BlockChunkMetadata) => void;
 };
 
@@ -241,7 +243,6 @@ export class EmbeddedBlockChunker {
     return this.#buffer.length > 0;
   }
 
-  /** Emit safe chunks according to size and Markdown fence constraints. */
   drain(params: BlockChunkDrain) {
     const sourceBreaks = this.#sourceBreaks;
     while (this.#nextSourceBreak < sourceBreaks.length) {
@@ -439,6 +440,7 @@ export class EmbeddedBlockChunker {
         force && remainingLength <= maxChars
           ? this.#pickPreferredBreakIndex(view, unsafe, chunking, false, 1, start, openFence)
           : this.#pickBreakIndex(
+              params,
               view,
               spans,
               chunking,
@@ -604,6 +606,7 @@ export class EmbeddedBlockChunker {
   }
 
   #pickBreakIndex(
+    { force, mutablePreview }: BlockChunkDrain,
     buffer: string,
     spans: BreakSpans,
     chunking: BlockReplyChunking,
@@ -656,6 +659,10 @@ export class EmbeddedBlockChunker {
       ).length;
       // An unfinished span ends at the buffer boundary without a source closer.
       const absoluteBreakIndex = offset + forcedBreakIndex;
+      const endingFence = findFenceSpanAt(spans.fences, absoluteBreakIndex - 1);
+      if (endingFence?.end === absoluteBreakIndex && endingFence !== openFence) {
+        return { index: forcedBreakIndex };
+      }
       const fence =
         findFenceSpanAt(spans.fences, absoluteBreakIndex) ??
         (openFence?.end === absoluteBreakIndex ? openFence : undefined);
@@ -684,7 +691,23 @@ export class EmbeddedBlockChunker {
           fenceSplit: { closeFenceLine, reopenFenceLine, fence },
         };
       }
-      return { index: forcedBreakIndex };
+      // Trailing clusters can gain combining marks or ZWJ continuations.
+      // Permanent replies wait for lookahead; cumulative previews can revise them.
+      const waitForBoundary = !force && !mutablePreview;
+      const graphemeSource =
+        !force && /[\uD800-\uDBFF]$/u.test(buffer) ? buffer.slice(0, -1) : buffer;
+      const maxEnd = Math.min(forcedBreakIndex, graphemeSource.length - (waitForBoundary ? 1 : 0));
+      const wholeEnd = findGraphemeChunkEnd(graphemeSource, 0, maxEnd, maxEnd, false);
+      if (waitForBoundary && wholeEnd > 0 && buffer.length === forcedBreakIndex) {
+        // Wait for lookahead instead of turning a full chunk into a shorter
+        // prefix and a trailing fragment solely to reserve its last cluster.
+        return { index: 0 };
+      }
+      return {
+        index:
+          wholeEnd ||
+          (firstGraphemeClusterLength(graphemeSource) >= forcedBreakIndex ? forcedBreakIndex : 0),
+      };
     }
 
     return { index: -1 };

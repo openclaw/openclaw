@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, expect, it, vi } from "vitest";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
+import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  type TranscriptAppendRefusal,
+} from "../config/sessions/session-transcript-writer-claim-error.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import {
@@ -61,6 +66,21 @@ describe("shared-state worker error transport", () => {
   const verificationCause = new Error("Synthetic read failure");
   const identity = { scope: "test", key: "read", leaseLabel: "test lease" };
   const verification = toOpenClawStateLeaseVerificationError(identity, verificationCause);
+  const transcriptRefusals = [
+    {
+      code: "session-entry-missing",
+      agentIdHash: "sha256:0123456789ab",
+      expectedSessionIdHash: "sha256:abcdef012345",
+      sessionKeyHash: "-",
+    },
+    {
+      code: "session-rebound",
+      agentIdHash: "sha256:0123456789ab",
+      expectedSessionIdHash: "sha256:abcdef012345",
+      sessionKeyHash: "sha256:123456abcdef",
+      actualSessionIdHash: "sha256:987654fedcba",
+    },
+  ] as const satisfies readonly TranscriptAppendRefusal[];
   const cases: Array<{
     error: Error;
     fields?: object;
@@ -89,6 +109,19 @@ describe("shared-state worker error transport", () => {
       error: new WorkerSessionAlreadyAttachedError("session", "environment"),
       fields: { sessionId: "session", environmentId: "environment" },
     },
+    {
+      error: new SqliteTranscriptMutationConflictError("session"),
+      fields: { sessionId: "session" },
+    },
+    ...transcriptRefusals.map((cause) => ({
+      error: new SessionTranscriptWriterClaimReboundError(cause),
+      fields: { cause },
+    })),
+    ...["detail", new SyntaxError("Synthetic rebound cause")].map((cause) => ({
+      error: Object.assign(new SessionTranscriptWriterClaimReboundError(), { cause }),
+      fields: { cause: typeof cause === "string" ? cause : { message: cause.message } },
+      causeType: cause instanceof Error ? SyntaxError : undefined,
+    })),
     ...[undefined, "SQLITE_IOERR"].map((code) => ({
       error: Object.assign(new Error("native open refused"), { code }),
       fields: { code },
@@ -97,10 +130,12 @@ describe("shared-state worker error transport", () => {
     ...[
       { code: "ERR_SQLITE_ERROR", errcode: 517 },
       { code: "ERR_SQLITE_ERROR", errcode: 262 },
+      { code: "ERR_SQLITE_ERROR", errcode: 26 },
+      { code: "ERR_SQLITE_ERROR", errcode: 266 },
       { code: "SQLITE_BUSY" },
       { code: "SQLITE_LOCKED" },
     ].map((fields) => ({
-      error: Object.assign(new Error("native lock contention"), fields),
+      error: Object.assign(new Error("native SQLite failure"), fields),
       fields,
     })),
     ...[RangeError, SyntaxError, TypeError, SkillUploadRequestError].map((ErrorType) => ({
@@ -251,6 +286,7 @@ describe("shared-state worker error transport", () => {
     const payload = encodeOpenClawStateWorkerError(original);
     assert(payload);
     const job: Job = {
+      observation: { started() {}, completed() {} },
       request: {
         type: "execute",
         id: 1,
@@ -433,6 +469,26 @@ describe("shared-state worker error transport", () => {
     expect(decoded.errors.slice(2)).toEqual(["plain failure", 2, true, null, undefined, undefined]);
   });
 
+  it("transports only redacted refusal fields belonging to a transcript writer error", () => {
+    const cause = { ...transcriptRefusals[1], privateState: "fixture-not-for-transport" };
+    const primary = new SessionTranscriptWriterClaimReboundError(cause);
+    const unredacted = Object.assign(new SessionTranscriptWriterClaimReboundError(), {
+      cause: { ...cause, sessionKeyHash: "fixture-not-for-transport" },
+    });
+    const original = new AggregateError(
+      [primary, new Error("ordinary wrapper", { cause }), unredacted],
+      "transcript failures",
+    );
+    const payload = encodeOpenClawStateWorkerError(original);
+    expect(JSON.stringify(payload)).not.toContain("fixture-not-for-transport");
+    const decoded = roundTrip(original);
+    assert(decoded instanceof AggregateError);
+    expect(decoded.errors[0]).toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+    expect(decoded.errors[0].cause).toEqual(transcriptRefusals[1]);
+    expect(decoded.errors[1].cause).toBeUndefined();
+    expect(decoded.errors[2].cause).toBeUndefined();
+  });
+
   it("leaves unrelated errors and name-only imitations on the ordinary transport", () => {
     const imitation = Object.assign(new Error("imitation"), { name: "SqliteSchemaVersionError" });
     for (const error of [
@@ -479,9 +535,9 @@ describe("shared-state worker error transport", () => {
   });
 
   it("opts into complete ordinary graphs without promoting name-only classifications", () => {
-    const native = Object.assign(new Error("native read failed"), {
-      code: "ERR_SQLITE_ERROR",
-      errcode: 11,
+    const native = Object.assign(new Error("ordinary read failed"), {
+      code: "EIO",
+      errno: -5,
       privateState: "fixture-not-for-transport",
     });
     const integrity = Object.assign(new Error("read refused", { cause: native }), {
@@ -505,7 +561,7 @@ describe("shared-state worker error transport", () => {
     expect(decoded.cause).toBe(decoded.errors[0]);
     expect(decoded.errors[0]).toMatchObject({ name: "SqliteIntegrityError" });
     expect(decoded.errors[0].cause).toBe(decoded.errors[1]);
-    expect(decoded.errors[1]).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 11 });
+    expect(decoded.errors[1]).toMatchObject({ code: "EIO", errno: -5 });
     expect(decoded.errors[2]).not.toBeInstanceOf(SqliteSchemaVersionError);
     expect(decoded.errors[3]).toBe(decoded);
     expect(findStartupMaintenanceRequiredError(decoded)).toBeUndefined();
@@ -539,6 +595,23 @@ describe("shared-state worker error transport", () => {
       { ...validNode, kind: "unknown-migration" },
       { ...validNode, cause: { ref: 1 } },
       { ...validNode, cause: { value: {} } },
+      ...[
+        { ...transcriptRefusals[1], code: "unknown-refusal" },
+        { ...transcriptRefusals[1], sessionKeyHash: "raw-session-key" },
+        { ...transcriptRefusals[1], actualSessionIdHash: undefined },
+      ].map((refusal) => ({
+        type: "session-transcript-writer-claim-rebound",
+        name: "SessionTranscriptWriterClaimReboundError",
+        message: "invalid refusal",
+        refusal,
+      })),
+      {
+        type: "session-transcript-writer-claim-rebound",
+        name: "SessionTranscriptWriterClaimReboundError",
+        message: "conflicting causes",
+        refusal: transcriptRefusals[0],
+        cause: { value: "must not overwrite the refusal" },
+      },
       { ...validNode, code: {} },
       { ...validNode, nativeOpen: false },
       { ...validNode, errcode: -1 },

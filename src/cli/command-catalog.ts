@@ -23,7 +23,10 @@ const modelRunStartupPolicy: CliCommandCatalogEntry["policy"] = {
 };
 
 const serviceInstallStartupPolicy: CliCommandCatalogEntry["policy"] = {
-  configGuard: ({ options }) => (options?.expectedRuntimePin !== undefined ? "defer" : "run"),
+  configGuard: ({ options }) =>
+    options?.expectedRuntimePin !== undefined || options?.restoreServiceCli !== undefined
+      ? "defer"
+      : "run",
   networkProxy: "bypass",
 };
 
@@ -177,7 +180,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "gateway-status" },
   },
-  ...["call", "suspend", "resume"].map((subcommand): CliCommandCatalogEntry => ({
+  {
+    commandPath: ["gateway", "call"],
+    exact: true,
+    policy: PASSIVE_STARTUP_POLICY,
+  },
+  ...["suspend", "resume"].map((subcommand): CliCommandCatalogEntry => ({
     commandPath: ["gateway", subcommand],
     exact: true,
     policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
@@ -329,10 +337,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["worktrees"],
     policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
-  },
-  {
-    commandPath: ["fleet"],
-    policy: { loadPlugins: "never", networkProxy: "bypass" },
   },
   {
     commandPath: ["doctor"],

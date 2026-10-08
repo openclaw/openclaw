@@ -18,6 +18,11 @@ const fixtures = process.argv.slice(2).map((agentId) => {
     BEGIN IMMEDIATE;
     INSERT INTO auth_profile_state VALUES ('killed-write', '{}', 2);
   `);
+  if (agentId === "checkpointed-wal") {
+    database.db.exec(
+      "ROLLBACK; PRAGMA wal_checkpoint(TRUNCATE); BEGIN IMMEDIATE; INSERT INTO auth_profile_state VALUES ('killed-write', '{}', 2)",
+    );
+  }
   const pageSize = Number(database.db.prepare("PRAGMA page_size").get()?.page_size);
   const rootPage = Number(
     database.db.prepare("SELECT rootpage FROM sqlite_schema WHERE name='auth_profile_store'").get()
@@ -39,20 +44,21 @@ if (interrupted?.agentId !== "interrupted-admission") {
 const wal = openNodeSqliteDatabase(interrupted.path);
 wal.exec("UPDATE auth_profile_state SET updated_at=3 WHERE state_key='committed-wal'");
 
-const { DatabaseSync } = requireNodeSqlite();
-// oxlint-disable-next-line typescript/unbound-method -- The interceptor always supplies the native receiver with call().
-const prepare = DatabaseSync.prototype.prepare;
-DatabaseSync.prototype.prepare = function (sql) {
-  const statement = prepare.call(this, sql);
-  if (this.location() === interrupted.path && /^PRAGMA integrity_check;?$/i.test(sql.trim())) {
-    statement.all = () => {
-      // The real owner has claimed its lease but has not completed the mandatory scan.
-      process.send?.(fixtures);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)), 0, 0);
-      throw new Error("Interrupted integrity admission unexpectedly resumed");
-    };
+const sqlite = requireNodeSqlite();
+const { DatabaseSync } = sqlite;
+sqlite.DatabaseSync = class extends DatabaseSync {
+  override prepare(sql: string) {
+    const statement = super.prepare(sql);
+    if (this.location() === interrupted.path && /^PRAGMA integrity_check;?$/i.test(sql.trim())) {
+      statement.all = () => {
+        // The real owner has claimed its lease but has not completed the mandatory scan.
+        process.send?.(fixtures);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)), 0, 0);
+        throw new Error("Interrupted integrity admission unexpectedly resumed");
+      };
+    }
+    return statement;
   }
-  return statement;
 };
 openOpenClawAgentDatabase({ agentId: interrupted.agentId });
 throw new Error("Crash fixture reopened without entering its mandatory integrity scan");

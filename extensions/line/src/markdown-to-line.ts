@@ -194,9 +194,9 @@ function sameSpanStyle(left: FlexSpan, right: FlexSpan): boolean {
   );
 }
 
-function renderTableCell(cell: MarkdownTableCell | undefined, fallback: string): RenderedCell {
-  if (!cell?.text.trim()) {
-    return { text: fallback, hasMarkup: false };
+function renderTableCell(cell: MarkdownTableCell): RenderedCell {
+  if (!cell.text.trim()) {
+    return { text: "-", hasMarkup: false };
   }
 
   const codeSpans = cell.styles.filter((span) => span.style === "code");
@@ -276,7 +276,7 @@ function renderTableCell(cell: MarkdownTableCell | undefined, fallback: string):
     spans
       .map((span) => span.text ?? "")
       .join("")
-      .trim() || fallback;
+      .trim() || "-";
   return {
     text: renderedText,
     ...(hasMarkup ? { contents: spans } : {}),
@@ -284,7 +284,6 @@ function renderTableCell(cell: MarkdownTableCell | undefined, fallback: string):
   };
 }
 
-/** Convert a table to a Flex bubble when its rows fit the layout. */
 function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefined {
   // Receipt cards keep 12 plain rows; generic and styled layouts keep only 10.
   const requiresPlainCells = table.rowCells.length > 10;
@@ -295,7 +294,7 @@ function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefi
   const renderCells = (cells: MarkdownTableCell[]): RenderedCell[] | undefined => {
     const rendered: RenderedCell[] = [];
     for (const cell of cells) {
-      const prepared = renderTableCell(cell, "-");
+      const prepared = renderTableCell(cell);
       if (requiresPlainCells && prepared.hasMarkup) {
         return undefined;
       }
@@ -372,7 +371,6 @@ function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefi
   };
 }
 
-/** Convert a code block to a LINE Flex Message bubble. */
 function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
   const titleText = block.language ? `Code (${block.language})` : "Code";
 

@@ -414,19 +414,6 @@ it.each([
   },
 );
 
-it("returns A2A operator denial to the originating tool without dispatch", async () => {
-  const execution = executeNodeHostCommand({
-    ...request,
-    ask: "on-miss",
-    security: "allowlist",
-    turnSourceChannel: "a2a",
-  });
-  await Promise.race([decisionEntered.promise, execution]);
-  resolveDecision({ decision: "deny" });
-  await expect(execution).rejects.toThrow("exec denied: user-denied");
-  expect(invokeCount).toBe(0);
-});
-
 it("prompts for target ask=always even when the caller is full/off", async () => {
   setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "always" } } });
   const result = executeNodeHostCommand(request);
@@ -435,31 +422,6 @@ it("prompts for target ask=always even when the caller is full/off", async () =>
   expect(invokeCount).toBe(0);
   resolveDecision({ decision: "allow-once" });
   expect((await result).details.status).toBe("completed");
-});
-
-it("reports target policy denial as not executed", async () => {
-  setRuntimeConfigSnapshot({ tools: { exec: { security: "deny", ask: "off" } } });
-  const { dispatchNodeSystemRun, buildNodeSystemRunInvoke, resolveNodeExecutionTarget } =
-    await import("./bash-tools.exec-host-node-phases.js");
-  const target = await resolveNodeExecutionTarget(request);
-  const result = await dispatchNodeSystemRun({
-    request,
-    target,
-    invoke: buildNodeSystemRunInvoke({
-      target,
-      command: target.argv,
-      rawCommand: request.command,
-      cwd: request.workdir,
-      agentId: request.agentId,
-      sessionKey: request.sessionKey,
-    }),
-  });
-  expect(result.details).toMatchObject({ status: "failed", failureKind: "policy-denied" });
-  expect(result.content).toEqual([
-    expect.objectContaining({
-      text: expect.not.stringMatching(/may have executed|request approval/),
-    }),
-  ]);
 });
 
 it("does not dispatch a late A2A approval after cancellation", async () => {
@@ -497,10 +459,13 @@ it("preserves a target deny introduced while approval was pending", async () => 
   expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
   setRuntimeConfigSnapshot({ tools: { exec: { security: "deny", ask: "off" } } });
   resolveDecision({ decision: "allow-once" });
-  expect((await execution).details).toMatchObject({
-    status: "failed",
-    failureKind: "policy-denied",
-  });
+  const result = await execution;
+  expect(result.details).toMatchObject({ status: "failed", failureKind: "policy-denied" });
+  expect(result.content).toEqual([
+    expect.objectContaining({
+      text: expect.not.stringMatching(/may have executed|request approval/),
+    }),
+  ]);
 });
 
 it("executes full/off through a symlink cwd using the prepared canonical directory", async () => {

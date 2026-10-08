@@ -93,22 +93,17 @@ function removeRetiredTelegramGroupHistoryContextConfig(params: {
     return { entry: params.entry, changed: false };
   }
   const { includeGroupHistoryContext, ...rest } = params.entry;
-  let updated = includeGroupHistoryContext === "none" ? { ...rest, historyLimit: 0 } : rest;
-  if (
-    includeGroupHistoryContext === "recent" &&
-    params.preserveRecentHistoryLimit !== undefined &&
-    updated.historyLimit === undefined
-  ) {
-    updated = { ...updated, historyLimit: params.preserveRecentHistoryLimit };
-  }
-  const historyLimitNote =
+  const historyLimit =
     includeGroupHistoryContext === "none"
-      ? " and set historyLimit to 0"
+      ? 0
       : includeGroupHistoryContext === "recent" &&
           params.preserveRecentHistoryLimit !== undefined &&
           params.entry.historyLimit === undefined
-        ? ` and set historyLimit to ${params.preserveRecentHistoryLimit}`
-        : "";
+        ? params.preserveRecentHistoryLimit
+        : undefined;
+  const updated = historyLimit === undefined ? rest : { ...rest, historyLimit };
+  const historyLimitNote =
+    historyLimit === undefined ? "" : ` and set historyLimit to ${historyLimit}`;
   params.changes.push(
     `Removed ${params.pathPrefix}.includeGroupHistoryContext${historyLimitNote}; Telegram group history is always on for groups and bounded by historyLimit.`,
   );
@@ -132,7 +127,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   },
 ];
 
-export function normalizeCompatibilityConfig({
+export function normalizeHistoricalWebhookConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
@@ -153,7 +148,19 @@ export function normalizeCompatibilityConfig({
             resolveTelegramWebhookPathConflict(path) !== undefined
           );
         });
-  const webhook = webhookListenerMigration.normalizeCompatibilityConfig({ cfg });
+  return {
+    ...webhookListenerMigration.normalizeCompatibilityConfig({ cfg }),
+    historicalWebhookAccountIds,
+  };
+}
+
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const webhook = normalizeHistoricalWebhookConfig({ cfg });
+  const { historicalWebhookAccountIds } = webhook;
   const changes = [...webhook.changes];
   const rawEntry = asObjectRecord(
     (webhook.config.channels as Record<string, unknown> | undefined)?.telegram,

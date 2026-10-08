@@ -9,7 +9,7 @@ import { expect, it } from "vitest";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
-it("uses a configured command owner for the approval fixture's resolver probe", async () => {
+it("accepts an unavailable approval response for the configured command owner's resolver probe", async () => {
   setActivePluginRegistry(
     createTestRegistry([{ pluginId: "qa-channel", plugin: qaChannelPlugin, source: "test" }]),
   );
@@ -20,7 +20,6 @@ it("uses a configured command owner for the approval fixture's resolver probe", 
     workspaceDir: "/qa-workspace",
     transportPluginIds: ["qa-channel"],
   });
-  const captured = new Error("resolver probe captured");
   let senderIsOwner: boolean | undefined;
   try {
     await expect(
@@ -49,12 +48,34 @@ it("uses a configured command owner for the approval fixture's resolver probe", 
             },
             commandAuthorized: true,
           }).senderIsOwner;
-          throw captured;
+          state.addOutboundMessage({
+            accountId: "qa-channel",
+            to: "dm:approve-prototype-dm",
+            text: "That approval is no longer available. Check the request in the Control UI.",
+          });
         },
       }),
-    ).rejects.toBe(captured);
+    ).resolves.toMatchObject({ status: "pass" });
     expect(senderIsOwner).toBe(true);
   } finally {
     resetPluginRuntimeStateForTest();
   }
+});
+
+it.each([
+  ["retired submission error", "❌ Failed to submit approval: unknown or expired approval id"],
+  ["usage", "Usage: /approve <id> <decision>"],
+  ["unrelated reply", "Everything looks good."],
+])("rejects %s for a real approval decision", async (_label, reply) => {
+  await expect(
+    runLoadedScenarioFlow("approve-command-prototype-decision-usage", {
+      onWaitForOutboundMessage: ({ waitCount, state }) => {
+        state.addOutboundMessage({
+          accountId: "qa-channel",
+          to: "dm:approve-prototype-dm",
+          text: waitCount === 1 ? "Usage: /approve <id> <decision>" : reply,
+        });
+      },
+    }),
+  ).rejects.toThrow(`real decision did not receive the unknown-approval response: ${reply}`);
 });

@@ -122,16 +122,12 @@ function buildPendingPayload(params: {
         ? [{ text: action.label, callback_data: callbackData, ...(style ? { style } : {}) }]
         : [];
     });
+    const buttons = decisionButtons.length > 0 ? [decisionButtons] : [];
     return {
       text: lines.join("\n"),
       buttons: reviewUrl
-        ? [
-            [{ text: "Review in Control UI", url: reviewUrl }],
-            ...(decisionButtons.length > 0 ? [decisionButtons] : []),
-          ]
-        : decisionButtons.length > 0
-          ? [decisionButtons]
-          : [],
+        ? [[{ text: "Review in Control UI", url: reviewUrl }], ...buttons]
+        : buttons,
     };
   }
   const execView = params.view.approvalKind === "exec" ? params.view : undefined;

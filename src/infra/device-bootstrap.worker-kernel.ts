@@ -211,7 +211,6 @@ function consumeDeviceBootstrapTokenWithSetupCompletion(
   });
 }
 
-/** Remove every outstanding bootstrap token from the pairing state file. */
 function clearDeviceBootstrapTokens(params: { nowMs: number }): { removed: number } {
   const state = loadState(params.nowMs);
   const removed = Object.keys(state).length;

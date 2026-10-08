@@ -33,7 +33,6 @@ export const MAX_HEADLESS_WALL_CLOCK_MS = 900_000;
 export const DEFAULT_HEADLESS_TOOL_CALLS = 5;
 export const MAX_HEADLESS_TOOL_CALLS = 200;
 
-/** Resolved Code Mode runtime limits. */
 export type CodeModeConfig = Omit<AgentToolSurfacePresentation["codeMode"], "enabled"> & {
   /** Effective activation policy; "auto" follows the model catalog flag. */
   enabled: boolean | "auto";
@@ -114,7 +113,6 @@ export function readPositiveInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-/** Resolves Code Mode runtime limits from config. */
 export function resolveCodeModeConfig(
   config?: OpenClawConfig,
   agentId?: string,
@@ -220,7 +218,7 @@ export function resolveCodeModeHeadlessConfig(
 export function readCode(args: unknown): {
   code: string;
   restartSafe: boolean;
-  required: boolean;
+  awaitResults: boolean;
 } {
   const params = asToolParamsRecord(args);
   // Full-schema tool calls can materialize an unused alias as blank.
@@ -239,9 +237,9 @@ export function readCode(args: unknown): {
       "Code Mode accepts JavaScript only. Remove language and typecheck; use API.read(...) for tool types.",
     );
   }
-  const required = params.required;
-  if (required !== undefined && typeof required !== "boolean") {
-    throw new ToolInputError("required must be a boolean.");
+  const awaitResults = params.awaitResults;
+  if (awaitResults !== undefined && typeof awaitResults !== "boolean") {
+    throw new ToolInputError("awaitResults must be a boolean.");
   }
   const restartSafe = params.restartSafe;
   if (restartSafe !== undefined && typeof restartSafe !== "boolean") {
@@ -250,7 +248,7 @@ export function readCode(args: unknown): {
   return {
     code,
     restartSafe: restartSafe === true,
-    required: required === true,
+    awaitResults: awaitResults === true,
   };
 }
 

@@ -1,6 +1,6 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   formatInboundMediaUnavailableText,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type {
@@ -42,7 +42,7 @@ import { UrbitSSEClient } from "../urbit/sse-client.js";
 import { createTlonApprovalRuntime } from "./approval-runtime.js";
 import { createPendingApproval } from "./approval.js";
 import { resolveChannelAuthorization } from "./authorization.js";
-import { createTlonCitationResolver } from "./cites.js";
+import { resolveTlonCitations } from "./cites.js";
 import { fetchInitData } from "./discovery.js";
 import { createChannelHistoryCache, fetchThreadHistory } from "./history.js";
 import { createTlonIngressMonitor, type TlonIngressLifecycle } from "./ingress.js";
@@ -316,13 +316,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       }
     }
 
-    // Fetch thread context when entering a thread for the first time
     if (isThreadReply && parentId && channelNest) {
       try {
         const threadHistory = await fetchThreadHistory(api, channelNest, parentId, 20, runtime);
         if (threadHistory.length > 0) {
           const threadContext = threadHistory
-            .slice(-10) // Last 10 messages for context
+            .slice(-10)
             .map((msg) => `${msg.author}: ${msg.content}`)
             .join("\n");
 
@@ -464,7 +463,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
 
     const promptMedia = buildTlonInboundMediaPrompt(messageText, attachments);
 
-    const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
+    const body = (await createChannelInboundEnvelopeBuilderAsync({ cfg, route }))({
       channel: "Tlon",
       from: fromLabel,
       timestamp,
@@ -642,11 +641,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     return watchedChannels.size - previousCount;
   };
 
-  const { resolveAllCites } = createTlonCitationResolver({
-    api,
-    runtime,
-  });
-
   const { queueApprovalRequest, handleApprovalResponse, handleAdminCommand } =
     createTlonApprovalRuntime({
       api,
@@ -810,7 +804,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         return;
       }
 
-      const messageText = (await resolveAllCites(contentBody)) + rawText;
+      const messageText = (await resolveTlonCitations(contentBody, api, runtime)) + rawText;
 
       await processMessage({
         messageId,
@@ -929,7 +923,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       const partnerShip = extractDmPartnerShip(whom);
       const senderShip = partnerShip || authorShip;
 
-      // Ignore the bot's own outbound DM events.
       if (authorShip === botShipName) {
         return;
       }
@@ -988,7 +981,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         return;
       }
 
-      const resolvedMessageText = (await resolveAllCites(essay.content)) + rawText;
+      const resolvedMessageText =
+        (await resolveTlonCitations(essay.content, api, runtime)) + rawText;
       if (ownerDm) {
         runtime.log?.(`[tlon] Processing DM from owner ${senderShip}`);
       }

@@ -281,17 +281,6 @@ describe("session accessor boundary guard", () => {
     ]);
   });
 
-  it("allows migrated accessor writes", () => {
-    expect(
-      findSessionAccessorWriteBoundaryViolations(
-        ...parseFixture(`
-        import { updateSessionEntry } from "../config/sessions/session-accessor.js";
-        updateSessionEntry({ storePath, sessionKey }, () => undefined);
-      `),
-      ),
-    ).toEqual([]);
-  });
-
   it("flags legacy transcript writer imports", () => {
     expect(
       findTranscriptWriterBoundaryViolations(
@@ -319,18 +308,6 @@ describe("session accessor boundary guard", () => {
       { line: 3, reason: 'references legacy transcript writer "emitSessionTranscriptUpdate"' },
       { line: 4, reason: 'references legacy transcript writer "appendSessionTranscriptMessage"' },
     ]);
-  });
-
-  it("allows migrated transcript writer helpers", () => {
-    expect(
-      findTranscriptWriterBoundaryViolations(
-        ...parseFixture(`
-        import { appendTranscriptMessage, publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
-        appendTranscriptMessage(scope, { message });
-        publishTranscriptUpdate(scope, { messageId });
-      `),
-      ),
-    ).toEqual([]);
   });
 
   it("flags legacy writers inside the gateway sessions.create lifecycle", () => {

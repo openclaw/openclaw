@@ -163,7 +163,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
 
   async heartbeat(id: string, input: WorkboardHeartbeatInput): Promise<WorkboardCard> {
     const note = normalizeBoundedString(input.note, undefined, 400, "heartbeat note");
-    const card = await this.updateMetadata(id, (existing) => {
+    return await this.updateMetadata(id, (existing) => {
       const claim = existing.metadata?.claim;
       if (!claim) {
         throw new Error("card is not claimed.");
@@ -192,7 +192,6 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         comments: appendComment(metadata.comments, note, now),
       };
     });
-    return card;
   }
 
   async releaseClaim(
@@ -225,7 +224,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     input: WorkboardCompleteInput = {},
     scope: WorkboardMutationScope | null | undefined = input,
   ): Promise<WorkboardCard> {
-    return await this.enqueueMutation(async () => await this.completeDirect(id, input, scope));
+    return await this.enqueueMutation(() => this.completeDirect(id, input, scope));
   }
 
   private async completeDirect(

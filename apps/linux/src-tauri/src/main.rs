@@ -92,17 +92,13 @@ pub(crate) fn native_auth_initialization_script(
         return gateway_control_auth::initialization_script(dashboard, gateway);
     }
     let path = dashboard.path().trim_end_matches('/');
-    let origin = serde_json::to_string(&dashboard.origin().ascii_serialization())
-        .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
-    let path = serde_json::to_string(if path.is_empty() { "/" } else { path })
-        .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
+    let origin = serde_json::json!(dashboard.origin().ascii_serialization());
+    let path = serde_json::json!(if path.is_empty() { "/" } else { path });
     let auth = serde_json::json!({
         "gatewayUrl": gateway.as_str(),
         "token": request.token,
         "password": request.password,
     });
-    let auth = serde_json::to_string(&auth)
-        .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
     Ok(format!(
         r#"(() => {{
   try {{
@@ -773,10 +769,7 @@ impl DesktopState {
                     None,
                 )
             });
-        match result {
-            Ok(snapshot) => Ok(snapshot),
-            Err(error) => self.remote_failure(app, error, selection, None),
-        }
+        result.or_else(|error| self.remote_failure(app, error, selection, None))
     }
 
     fn connect_selected(
@@ -950,7 +943,6 @@ impl DesktopState {
         &self,
         app: &AppHandle,
         action: GatewayAction,
-        _selection: u64,
     ) -> Result<GatewaySnapshot, String> {
         let _operation = self
             .inner
@@ -1052,10 +1044,7 @@ impl DesktopState {
                 .permit_local(true, None);
             // Keep the first-run page that owns the pending bootstrap reply.
             if !state.main_window_has_local_content(&main_window(&app)?) {
-                let mut url = state.inner.local_url.clone();
-                url.query_pairs_mut()
-                    .clear()
-                    .append_pair("mode", "reconnecting");
+                let url = state.local_url("reconnecting");
                 app.state::<native_browser_bridge::NativeBrowserBridgeState>()
                     .clear(&app);
                 replace_main_webview(&app, url, None, None)?;
@@ -1217,7 +1206,6 @@ impl DesktopState {
                                 &mut commit_pending.lock().expect("pending SSH"),
                                 TunnelRoute {
                                     id: 0,
-                                    selection,
                                     request: request.clone(),
                                     url: gateway_url.clone(),
                                 },
@@ -1417,10 +1405,7 @@ impl DesktopState {
                 SettingsReturnTarget::Local(target)
             }
         };
-        let mut url = self.inner.local_url.clone();
-        url.query_pairs_mut()
-            .clear()
-            .append_pair("mode", "connectionSettings");
+        let url = self.local_url("connectionSettings");
         operations
             .while_current(selection, || {
                 navigation.begin_settings(selection, target)?;
@@ -1478,12 +1463,7 @@ impl DesktopState {
         }
         let monitor = navigation.finish_settings_return();
         drop(navigation);
-        if let Some(generation) = monitor {
-            // Reuse the connected CLI without discovery or a connection operation.
-            if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
-                self.watch_local(app.clone(), cli, generation);
-            }
-        }
+        self.resume_local_watchdog(app, monitor);
         Ok(true)
     }
 
@@ -1511,8 +1491,8 @@ impl DesktopState {
                     }
                     let ws_url = ws_url.ok_or("Select a Gateway in the desktop app first.")?;
                     let target = desktop_bridge::session_url(ws_url, session_key, agent_id)?;
-                    if !app.state::<gateway_windows::GatewayWindows>().main_is_primary(app) {
-                        gateway_windows::show_primary_url(app, target)?;
+                    if !app.state::<gateway_windows::GatewayWindows>().main_is_primary() {
+                        gateway_windows::show_primary_route(app, Some(target))?;
                         return Ok(None);
                     }
                     if navigation.remote_dashboard {
@@ -1550,9 +1530,8 @@ impl DesktopState {
                                 "reconnecting".to_string()
                             }
                         };
-                        let mut recovery = self.inner.local_url.clone();
+                        let mut recovery = self.local_url(&mode);
                         recovery.set_fragment(None);
-                        recovery.query_pairs_mut().clear().append_pair("mode", &mode);
                         let bridge =
                             app.state::<native_browser_bridge::NativeBrowserBridgeState>();
                         // The bridge scopes the whole dashboard, not just this session.
@@ -1577,11 +1556,7 @@ impl DesktopState {
                 })?
         };
         tray::show_window(app);
-        if let Some(generation) = monitor {
-            if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
-                self.watch_local(app.clone(), cli, generation);
-            }
-        }
+        self.resume_local_watchdog(app, monitor);
         Ok(())
     }
 
@@ -1679,15 +1654,12 @@ impl DesktopState {
                 });
                 let retired = pending.lock().expect("pending SSH").take();
                 drop(retired);
-                match result {
-                    Ok(snapshot) => Ok(snapshot),
-                    Err(error) => self.remote_failure(app, error, selection, Some(child_id)),
-                }
+                result.or_else(|error| self.remote_failure(app, error, selection, Some(child_id)))
             }
         }
     }
 
-    pub fn show_error(&self, app: &AppHandle, _error: &str) {
+    pub fn show_error(&self, app: &AppHandle) {
         let _ = self.show_local(app, "error", false, None);
         self.update_tray(&GatewaySnapshot::reconnecting("Gateway action failed."));
         tray::show_window(app);
@@ -1780,6 +1752,12 @@ impl DesktopState {
         self.with_tray(|tray| tray.update(snapshot));
     }
 
+    fn local_url(&self, mode: &str) -> Url {
+        let mut url = self.inner.local_url.clone();
+        url.query_pairs_mut().clear().append_pair("mode", mode);
+        url
+    }
+
     fn show_missing_cli(
         &self,
         app: &AppHandle,
@@ -1863,7 +1841,6 @@ impl DesktopState {
         target: &str,
         force: bool,
         expected_generation: Option<u64>,
-        reveal_window: bool,
         dashboard: bool,
     ) -> Result<bool, String> {
         let target = target.to_string();
@@ -1872,13 +1849,7 @@ impl DesktopState {
             if state.is_quitting() || !navigation.permit_local(force, expected_generation) {
                 return Ok(false);
             }
-            state.navigate_local_document(
-                &app,
-                &mut navigation,
-                &target,
-                reveal_window,
-                dashboard,
-            )?;
+            state.navigate_local_document(&app, &mut navigation, &target, false, dashboard)?;
             Ok(true)
         })
     }
@@ -1901,7 +1872,7 @@ impl DesktopState {
             {
                 return Ok(());
             }
-        } else if !windows.main_is_primary(app) {
+        } else if !windows.main_is_primary() {
             // Primary recovery must not replace an independently selected dashboard.
             return Ok(());
         }
@@ -1953,10 +1924,9 @@ impl DesktopState {
         force: bool,
         expected_generation: Option<u64>,
     ) -> Result<bool, String> {
-        let mut url = self.inner.local_url.clone();
-        url.query_pairs_mut().clear().append_pair("mode", mode);
+        let url = self.local_url(mode);
         // Status/watchdog updates may change the hidden WebView, but must not reveal it.
-        self.navigate_local(app, url.as_str(), force, expected_generation, false, false)
+        self.navigate_local(app, url.as_str(), force, expected_generation, false)
     }
 
     fn cancel_watchdog(&self) {
@@ -2017,6 +1987,15 @@ impl DesktopState {
         })
     }
 
+    fn resume_local_watchdog(&self, app: &AppHandle, generation: Option<u64>) {
+        if let Some(generation) = generation {
+            // Reuse the connected CLI without discovery or a connection operation.
+            if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
+                self.watch_local(app.clone(), cli, generation);
+            }
+        }
+    }
+
     fn watch_local(&self, app: AppHandle, mut cli: OpenClawCli, generation: u64) {
         let state = self.clone();
         thread::spawn(move || loop {
@@ -2027,10 +2006,7 @@ impl DesktopState {
             let Ok(_operation) = state.inner.operation.try_lock() else {
                 continue;
             };
-            let snapshot = match gateway::status(&cli) {
-                Ok(snapshot) => snapshot,
-                Err(error) => GatewaySnapshot::reconnecting(error),
-            };
+            let snapshot = gateway::status(&cli).unwrap_or_else(GatewaySnapshot::reconnecting);
             if snapshot.reachable {
                 state.update_tray(&snapshot);
                 if let Err(error) =
@@ -2079,10 +2055,8 @@ impl DesktopState {
                             }
                         }
                     }
-                    let snapshot = match gateway::status(&cli) {
-                        Ok(snapshot) => snapshot,
-                        Err(error) => GatewaySnapshot::reconnecting(error),
-                    };
+                    let snapshot =
+                        gateway::status(&cli).unwrap_or_else(GatewaySnapshot::reconnecting);
                     state.update_tray(&snapshot);
                     if snapshot.reachable {
                         if let Ok(ready) = gateway::dashboard(&cli, snapshot) {
@@ -2097,7 +2071,6 @@ impl DesktopState {
                                 &ready.dashboard_url,
                                 false,
                                 Some(generation),
-                                false,
                                 true,
                             ) {
                                 Ok(true) => {
@@ -2939,17 +2912,6 @@ pub(crate) async fn confirm_gateway_primary(app: &AppHandle, name: &str) -> Resu
         .map_err(|_| "Primary Gateway confirmation was closed.".into())
 }
 
-pub(crate) async fn promote_gateway_profile(
-    app: &AppHandle,
-    request: RemoteGatewayRequest,
-    guard: gateway_windows::PromotionGuard,
-) -> Result<(), String> {
-    app.state::<GatewayOperationQueue>()
-        .execute(GatewayOperation::PromoteProfile { request, guard })
-        .await
-        .map(|_| ())
-}
-
 // Called on the native thread after the window owner retires the failed document.
 pub(crate) fn recover_primary_navigation(
     app: &AppHandle,
@@ -2977,11 +2939,7 @@ pub(crate) fn recover_primary_navigation(
     }
 
     let mut navigation = state.inner.navigation.lock().expect("navigation");
-    let mut recovery = state.inner.local_url.clone();
-    recovery
-        .query_pairs_mut()
-        .clear()
-        .append_pair("mode", "remoteError");
+    let recovery = state.local_url("remoteError");
     // Back must return to local recovery, never to the failed browser document.
     navigation.settings_return = None;
     navigation.begin_settings(
@@ -2990,11 +2948,7 @@ pub(crate) fn recover_primary_navigation(
     )?;
     navigation.record_remote_failure(snapshot.clone(), None);
     navigation.remote_snapshot = Some(snapshot.clone());
-    let mut settings = state.inner.local_url.clone();
-    settings
-        .query_pairs_mut()
-        .clear()
-        .append_pair("mode", "connectionSettings");
+    let settings = state.local_url("connectionSettings");
     app.state::<native_browser_bridge::NativeBrowserBridgeState>()
         .clear(app);
     replace_main_webview(app, settings, None, None)?;
@@ -3196,12 +3150,7 @@ fn dashboard_document_ready(
     if let Some(snapshot) = snapshot {
         state.update_tray(&snapshot);
     }
-    if let Some(generation) = monitor {
-        let cli = state.inner.cli.lock().expect("CLI mutex poisoned").clone();
-        if let Some(cli) = cli {
-            state.watch_local(app.clone(), cli, generation);
-        }
-    }
+    state.resume_local_watchdog(app, monitor);
 }
 
 #[tauri::command]
@@ -3468,14 +3417,14 @@ fn main() {
                     operation_state.runtime_action(&operation_app, action, selection)
                 }
                 GatewayOperation::Action(action) => {
-                    operation_state.gateway_action(&operation_app, action, selection)
+                    operation_state.gateway_action(&operation_app, action)
                 }
                 GatewayOperation::RecoverRemote { child_id } => {
                     operation_state.recover_remote(&operation_app, selection, child_id)
                 }
             },
             move |error| match error {
-                GatewayOperationError::Action(error) => error_state.show_error(&error_app, &error),
+                GatewayOperationError::Action(_) => error_state.show_error(&error_app),
                 #[cfg(target_os = "linux")]
                 GatewayOperationError::Runtime(error) => {
                     tray::show_runtime_error(&error_app, &error)

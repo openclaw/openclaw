@@ -164,6 +164,15 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       return respondJson(res, 503, { error: "Discord Activities is not fully configured" });
     }
     const endpointRuntime = getDiscordEndpointRuntime() ?? null;
+    const fetchAccountJson = (
+      params: Pick<Parameters<typeof fetchDiscordJson>[0], "url" | "init" | "auditContext">,
+    ) =>
+      fetchDiscordJson({
+        ...params,
+        fetchGuard,
+        fetchImpl: account.proxyFetch,
+        endpointRuntime,
+      }).catch(() => undefined);
     const bodyResult = await readJsonBodyWithLimit(req, {
       maxBytes: BODY_MAX_BYTES,
       timeoutMs: bodyTimeoutMs,
@@ -196,26 +205,21 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
     }
     let completed = false;
     try {
-      let tokenResponse: Awaited<ReturnType<typeof fetchDiscordJson>>;
-      try {
-        tokenResponse = await fetchDiscordJson({
-          fetchGuard,
-          fetchImpl: account.proxyFetch,
-          url: DISCORD_TOKEN_URL,
-          init: {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: new URLSearchParams({
-              grant_type: "authorization_code",
-              client_id: account.applicationId,
-              client_secret: account.clientSecret,
-              code,
-            }),
-          },
-          auditContext: "discord.activities.oauth.token",
-          endpointRuntime,
-        });
-      } catch {
+      const tokenResponse = await fetchAccountJson({
+        url: DISCORD_TOKEN_URL,
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            grant_type: "authorization_code",
+            client_id: account.applicationId,
+            client_secret: account.clientSecret,
+            code,
+          }),
+        },
+        auditContext: "discord.activities.oauth.token",
+      });
+      if (!tokenResponse) {
         return respondJson(res, 503, { error: "Discord token exchange unavailable" });
       }
       const granted =
@@ -225,17 +229,12 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       if (!tokenResponse.ok || !granted) {
         return respondJson(res, 401, { error: "invalid authorization code" });
       }
-      let userResponse: Awaited<ReturnType<typeof fetchDiscordJson>>;
-      try {
-        userResponse = await fetchDiscordJson({
-          fetchGuard,
-          fetchImpl: account.proxyFetch,
-          url: DISCORD_USER_URL,
-          init: { headers: { Authorization: `Bearer ${granted}` } },
-          auditContext: "discord.activities.oauth.user",
-          endpointRuntime,
-        });
-      } catch {
+      const userResponse = await fetchAccountJson({
+        url: DISCORD_USER_URL,
+        init: { headers: { Authorization: `Bearer ${granted}` } },
+        auditContext: "discord.activities.oauth.user",
+      });
+      if (!userResponse) {
         return respondJson(res, 503, { error: "Discord user lookup unavailable" });
       }
       const discordUserId =

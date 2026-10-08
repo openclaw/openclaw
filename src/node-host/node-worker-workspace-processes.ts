@@ -15,6 +15,8 @@ import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/ind
 import type { RunExit } from "../process/supervisor/types.js";
 import type { NodeWorkerEnvironmentStopInput } from "../worker/node-supervisor-protocol.js";
 import {
+  NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
+  NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
   projectNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
@@ -112,8 +114,6 @@ export class NodeWorkerWorkspaceProcesses {
     env: NodeJS.ProcessEnv;
     signal?: AbortSignal;
     timeoutMs: number;
-    stdoutLimit: number;
-    stderrLimit: number;
     retainWorkspace: () => () => void;
   }): Promise<NodeWorkerWorkspaceExecResult> {
     // Legacy callers retain their shipped executor, including detached lease helpers.
@@ -126,7 +126,10 @@ export class NodeWorkerWorkspaceProcesses {
         ...(params.signal ? { signal: params.signal } : {}),
         killProcessTree: true,
         requireProcessTreeExtinction: true,
-        maxOutputBytes: { stdout: params.stdoutLimit, stderr: params.stderrLimit },
+        maxOutputBytes: {
+          stdout: NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
+          stderr: NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
+        },
         terminateOnOutputLimit: true,
       });
       return projectNodeWorkerWorkspaceExecResult(params.workspaceDir, result);
@@ -137,11 +140,7 @@ export class NodeWorkerWorkspaceProcesses {
         ...params.input,
         process: { action: "start", processId: "foreground-" + randomUUID() },
       },
-      foreground: {
-        timeoutMs: params.timeoutMs,
-        stdoutLimit: params.stdoutLimit,
-        stderrLimit: params.stderrLimit,
-      },
+      foregroundTimeoutMs: params.timeoutMs,
     });
   }
 
@@ -152,7 +151,7 @@ export class NodeWorkerWorkspaceProcesses {
     env: NodeJS.ProcessEnv;
     signal?: AbortSignal;
     retainWorkspace: () => () => void;
-    foreground?: { timeoutMs: number; stdoutLimit: number; stderrLimit: number };
+    foregroundTimeoutMs?: number;
   }): Promise<NodeWorkerWorkspaceExecResult> {
     const { input, workspaceDir, signal } = params;
     const operation = input.process!;
@@ -204,7 +203,7 @@ export class NodeWorkerWorkspaceProcesses {
           this.owners.set(key, owner);
         }
         if (
-          !params.foreground &&
+          params.foregroundTimeoutMs === undefined &&
           [...owner.processes.values()].filter((entry) => !entry.output).length >=
             MAX_PROCESSES_PER_WORKSPACE
         ) {
@@ -227,7 +226,7 @@ export class NodeWorkerWorkspaceProcesses {
           settled: false,
           started: Promise.resolve(),
           releaseWorkspace: params.retainWorkspace(),
-          ...(params.foreground
+          ...(params.foregroundTimeoutMs !== undefined
             ? {
                 output: {
                   stdout: createCapturedOutputBuffers(),
@@ -248,11 +247,13 @@ export class NodeWorkerWorkspaceProcesses {
           };
           const capture = (stream: "stdout" | "stderr", bytes: Buffer) => {
             const output = created.output;
-            const limit =
-              stream === "stdout" ? params.foreground?.stdoutLimit : params.foreground?.stderrLimit;
-            if (!output || limit === undefined) {
+            if (!output) {
               return;
             }
+            const limit =
+              stream === "stdout"
+                ? NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES
+                : NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES;
             appendCapturedOutput(output[stream], bytes, limit, "tail");
             if (output[stream].truncatedBytes > 0) {
               this.supervisor.cancel(runId);
@@ -270,9 +271,9 @@ export class NodeWorkerWorkspaceProcesses {
               exactEnv: true,
               ...(input.input === undefined ? {} : { input: input.input }),
               captureOutput: false,
-              ...(params.foreground
+              ...(params.foregroundTimeoutMs !== undefined
                 ? {
-                    timeoutMs: params.foreground.timeoutMs,
+                    timeoutMs: params.foregroundTimeoutMs,
                     onStdoutRaw: (bytes: Buffer) => capture("stdout", bytes),
                     onStderrRaw: (bytes: Buffer) => capture("stderr", bytes),
                   }
@@ -325,7 +326,7 @@ export class NodeWorkerWorkspaceProcesses {
       throw new Error("INVALID_REQUEST: unknown workspace process");
     }
     await process.started;
-    if (params.foreground) {
+    if (params.foregroundTimeoutMs !== undefined) {
       const accepted = process;
       const cancelAccepted = () => accepted.run!.cancel();
       signal?.addEventListener("abort", cancelAccepted, { once: true });
@@ -379,7 +380,7 @@ export class NodeWorkerWorkspaceProcesses {
         : completion?.reason === "manual-cancel" || completion?.reason === "signal"
           ? "signal"
           : "exit",
-      ...(params.foreground
+      ...(params.foregroundTimeoutMs !== undefined
         ? {
             killIssuedByAbort: signal?.aborted === true || undefined,
             stdoutTruncatedBytes: process.output?.stdout.truncatedBytes || undefined,

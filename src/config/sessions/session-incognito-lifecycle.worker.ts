@@ -32,6 +32,11 @@ import {
   type IncognitoLifecycleEntry,
   type IncognitoLifecycleOperations,
 } from "./session-incognito-lifecycle-contract.js";
+import {
+  commitParentForkInTransaction,
+  prepareParentForkEntry,
+  readParentForkSource,
+} from "./session-parent-fork.worker.js";
 
 type Command = SqliteWorkerCommand<IncognitoLifecycleOperations>;
 
@@ -85,8 +90,31 @@ export function createIncognitoLifecycleWorker(
     execute(command: Command) {
       const keys = incognitoLifecycleKeys(command, identity);
       switch (command.type) {
+        case "session.lifecycle.parentFork.prepare":
+          return { value: prepareParentForkEntry(command.input, { open: () => database }), keys };
+        case "session.lifecycle.parentFork.source": {
+          const entry = readExactSessionEntryRow(database, command.input.sessionKey)?.entry;
+          if (entry?.sessionId !== command.input.sessionId) {
+            throw new Error("Incognito parent fork source changed before reading");
+          }
+          return { value: readParentForkSource(command.input, { open: () => database }), keys };
+        }
+        case "session.lifecycle.parentFork.commit":
+          return {
+            value: write(keys, () => {
+              const input = command.input;
+              if (input.kind === "transcript" && input.source === undefined) {
+                assertEntry({
+                  sessionKey: input.params.parentSessionKey,
+                  entry: input.params.parentEntry,
+                });
+              }
+              return commitParentForkInTransaction(database, input, databaseOptions);
+            }),
+            keys,
+          };
         case "session.lifecycle.delete": {
-          const { target, reason, admissionIdentities } = command.input;
+          const { target, reason, admissionIdentities, expectedPluginOwnerId } = command.input;
           assertEntry(target);
           const deleteParams = {
             storePath: database.path,
@@ -102,7 +130,8 @@ export function createIncognitoLifecycleWorker(
               deleteParams,
               archiveDirectory: "",
               admissionIdentities,
-              allowLockedEntryRemoval: false,
+              allowLockedEntryRemoval: Boolean(expectedPluginOwnerId),
+              expectedPluginOwnerId,
             },
           });
           if (planned.operation !== "entry" || planned.value.kind !== "ready") {

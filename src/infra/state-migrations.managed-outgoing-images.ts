@@ -303,13 +303,9 @@ function removeClaimedSources(params: {
   }
 }
 
-function isExpiredTransient(record: ManagedImageRecord, nowMs: number, transientTtlMs: number) {
+function isExpiredTransient(record: ManagedImageRecord, nowMs: number) {
   const createdAtMs = Date.parse(record.createdAt);
-  return (
-    record.messageId === null &&
-    Number.isFinite(createdAtMs) &&
-    nowMs - createdAtMs >= transientTtlMs
-  );
+  return record.messageId === null && nowMs - createdAtMs >= DEFAULT_TRANSIENT_TTL_MS;
 }
 
 function rollbackImportedRecords(params: {
@@ -356,7 +352,6 @@ export function migrateLegacyManagedOutgoingImages(params: {
   detected: LegacyStateDetection["managedOutgoingImages"];
   stateDir: string;
   nowMs?: number;
-  transientTtlMs?: number;
   beforeClaim?: () => void;
   beforeVerify?: () => void;
   removeSource?: (sourcePath: string) => void;
@@ -390,7 +385,6 @@ export function migrateLegacyManagedOutgoingImages(params: {
   }
 
   const nowMs = params.nowMs ?? Date.now();
-  const transientTtlMs = params.transientTtlMs ?? DEFAULT_TRANSIENT_TTL_MS;
   const discardedIds = new Set<string>();
   const insertedRecords: ParsedLegacyRecord[] = [];
   let claimed: ClaimedLegacySource[];
@@ -421,7 +415,7 @@ export function migrateLegacyManagedOutgoingImages(params: {
             }
             continue;
           }
-          if (isExpiredTransient(parsed.record, nowMs, transientTtlMs)) {
+          if (isExpiredTransient(parsed.record, nowMs)) {
             discardedIds.add(parsed.record.attachmentId);
             continue;
           }
@@ -481,14 +475,12 @@ export function migrateLegacyManagedOutgoingImages(params: {
     return { changes, warnings };
   }
 
-  let deletedExpiredFiles = 0;
   try {
     for (const parsed of parsedRecords) {
       if (!discardedIds.has(parsed.record.attachmentId)) {
         continue;
       }
       fs.rmSync(parsed.originalPath, { force: true });
-      deletedExpiredFiles += 1;
     }
   } catch (error) {
     warnings.push(
@@ -522,8 +514,7 @@ export function migrateLegacyManagedOutgoingImages(params: {
   }
   if (discardedIds.size > 0) {
     changes.push(
-      `Discarded ${discardedIds.size} expired managed outgoing image record(s)` +
-        (deletedExpiredFiles > 0 ? ` and ${deletedExpiredFiles} attachment file(s)` : ""),
+      `Discarded ${discardedIds.size} expired managed outgoing image record(s) and ${discardedIds.size} attachment file(s)`,
     );
   }
   changes.push("Removed legacy managed outgoing image JSON after SQLite verification");

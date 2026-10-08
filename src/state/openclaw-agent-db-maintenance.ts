@@ -57,7 +57,7 @@ export function assertOpenClawAgentDatabaseOwner(
 export function assertOpenClawAgentDatabaseForMaintenance(
   database: DatabaseSync,
   options: { agentId: string; pathname: string; allowStartupIndexRepair?: boolean },
-): void {
+): boolean {
   const metadata = assertOpenClawAgentDatabaseOwner(database, options);
 
   const userVersion = assertSupportedAgentSchemaVersion(database, options.pathname);
@@ -71,7 +71,7 @@ export function assertOpenClawAgentDatabaseForMaintenance(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
     );
   }
-  assertOpenClawAgentSchemaContains(
+  return assertOpenClawAgentSchemaContains(
     database,
     options.pathname,
     OPENCLAW_AGENT_SCHEMA_SQL,

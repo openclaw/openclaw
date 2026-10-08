@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import { expect, test, vi } from "vitest";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import { getRegistryWorktree, listRegistryWorktrees } from "../agents/worktrees/registry.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import {
+  getRegistryWorktree,
+  listRegistryWorktrees,
+} from "../agents/worktrees/registry.test-support.js";
+import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -309,48 +313,6 @@ test("sessions.create commits no session after delegated authority closes", asyn
   }
 });
 
-test("sessions.create commits no child after its bound Gateway is replaced", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:dashboard:gateway-replacement-race";
-  const admitted = {};
-  const replacement = {};
-  let current = admitted;
-  const firstGuard = createDeferredCore();
-  const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
-  const creating = directSessionReq(
-    "sessions.create",
-    { agentId: "main", key: sessionKey },
-    {
-      sessionMutationAuthorization: {
-        assertCurrent: () => {
-          if (current !== admitted) {
-            throw new Error("current gateway instance binding was replaced");
-          }
-          firstGuard.resolve();
-        },
-        assertTargetCurrent: vi.fn(),
-      },
-    },
-  );
-
-  const rejected = expect(creating).rejects.toThrow(
-    "current gateway instance binding was replaced",
-  );
-
-  try {
-    await firstGuard.promise;
-    current = replacement;
-    releaseWriter.resolve();
-    await heldWriter;
-
-    await rejected;
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
-  } finally {
-    releaseWriter.resolve();
-    await Promise.allSettled([heldWriter, creating]);
-  }
-});
-
 test("sessions.create commits no child after its worker turn closes", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:worker-turn-race";
@@ -487,11 +449,11 @@ test("sessions.create removes a provisioned worktree when authority closes befor
   let authorityCurrent = true;
   let allocatedWorktree: { id: string; path: string } | undefined;
   let allocatedDirectoryExists = false;
-  const createWorktree = managedWorktrees.createWithOutcome.bind(managedWorktrees);
+  const createWorktree = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
   const createSpy = vi
-    .spyOn(managedWorktrees, "createWithOutcome")
-    .mockImplementation(async (params) => {
-      const outcome = await createWorktree(params);
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockImplementation(async function (this: ManagedWorktreeService, params) {
+      const outcome = await createWorktree(this, params);
       allocatedWorktree = outcome.record;
       allocatedDirectoryExists = (await fs.stat(outcome.record.path)).isDirectory();
       authorityCurrent = false;

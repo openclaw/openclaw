@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
 import {
@@ -11,6 +10,7 @@ import {
   getSubagentSessionListReadSnapshotIdentity,
   prepareSubagentSessionListReadCache,
 } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -54,10 +54,7 @@ class GitHubReadRequestInactiveError extends Error {
 async function prepareControlUiGitHubIdentity(
   { context, client, signal, hasCurrentClientAuthority }: GatewayRequestHandlerOptions,
   agentId: string,
-): Promise<{
-  identity: ControlUiGitHubPreviewIdentity | undefined;
-  assertSelected: () => void;
-}> {
+) {
   const config = context.getRuntimeConfig();
   const configuredIdentity = () => {
     const current = context.getRuntimeConfig();
@@ -128,7 +125,6 @@ function createGitHubReadHandler<T>(
       rawAgentId: params.agentId,
       respond,
       cfg: context.getRuntimeConfig(),
-      normalize: normalizeOptionalString,
     });
     if (!resolved) {
       return;
@@ -168,12 +164,6 @@ type SessionPreviewSource = {
   lastMessagePreview?: string;
   archived?: boolean;
 };
-
-type LoadSessionPreview = (
-  sessionKey: string,
-  context: GatewayRequestContext,
-  client: GatewayClient | null,
-) => SessionPreviewSource | null;
 
 const SESSION_PREVIEW_TEXT_MAX_CHARS = 200;
 
@@ -382,14 +372,30 @@ const loadSessionCheckDetails: LoadSessionCheckDetails = async (params, deps) =>
 export function createControlUiHandlers(
   loadGitHubPreview: LoadGitHubPreview = (...args) =>
     gitHubPublicApi.loadControlUiGitHubPreview(...args),
-  loadSessionPreview?: LoadSessionPreview,
   loadChecks: LoadSessionCheckDetails = loadSessionCheckDetails,
 ): GatewayRequestHandlers {
   return {
-    "controlUi.linkPreview": async ({ params, context, respond, signal }) => {
+    "controlUi.linkPreview": async ({
+      params,
+      client,
+      context,
+      respond,
+      signal,
+      hasCurrentClientAuthority,
+    }) => {
+      const revision = () =>
+        JSON.stringify([
+          getRuntimeConfigSnapshotMetadata()?.revision,
+          client?.authenticatedUserId,
+          client?.authenticatedUserProfile?.profileId,
+        ]);
+      const scope = { principal: client ?? context, revision: revision() };
       const isEnabled = () =>
+        !client?.connectionSignal?.aborted &&
+        hasCurrentClientAuthority?.() !== false &&
+        revision() === scope.revision &&
         context.getRuntimeConfig().gateway?.controlUi?.automaticallyFetchFavicons !== false;
-      if (!isEnabled()) {
+      if (signal?.aborted || !isEnabled()) {
         respond(true, {}, undefined);
         return;
       }
@@ -406,7 +412,7 @@ export function createControlUiHandlers(
         );
         return;
       }
-      const preview = await loadControlUiLinkPreview(url, isEnabled);
+      const preview = await loadControlUiLinkPreview(url, isEnabled, scope);
       respond(true, !signal?.aborted && isEnabled() ? preview : {}, undefined);
     },
     "controlUi.githubPreview": createGitHubReadHandler(
@@ -448,11 +454,7 @@ export function createControlUiHandlers(
           }
           respond(true, projectSessionPreview(preview), undefined);
         };
-        if (loadSessionPreview) {
-          consume(loadSessionPreview(sessionKey, context, client));
-        } else {
-          await withControlUiSessionPreview(sessionKey, context, client, consume);
-        }
+        await withControlUiSessionPreview(sessionKey, context, client, consume);
       } catch {
         respond(
           false,
@@ -566,7 +568,7 @@ export function createControlUiHandlers(
         );
         return;
       }
-      const admitted = new Promise<void>((resolve) => {
+      await new Promise<void>((resolve) => {
         const replacement = subscriptions.replace(
           connId,
           parsed.sessionKeys,
@@ -575,7 +577,6 @@ export function createControlUiHandlers(
         );
         void replacement.catch(() => {});
       });
-      await admitted;
       respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
     },
   };

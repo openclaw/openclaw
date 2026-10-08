@@ -1,6 +1,8 @@
+import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
   observeHostDataSql,
   observeSqliteReadSql,
@@ -16,14 +18,13 @@ import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
@@ -39,9 +40,12 @@ import {
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as agentWorkers from "../state/openclaw-agent-worker-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import {
   identifiedClient,
   listSessions,
@@ -281,6 +285,81 @@ it.each([
   },
 );
 
+it("refuses replacement shared-state bytes while its agent row preparation is pending", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const query = { agentId: "main", key: "agent:main:shared-source-replacement" };
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key },
+      {
+        sessionId: "shared-source",
+        lifecycleRevision: "first",
+        updatedAt: 1,
+      },
+    );
+    const databasePath = resolveOpenClawStateSqlitePath(state.env);
+    const successorPath = `${databasePath}.successor`;
+    for (const [pathname, backend] of [
+      [databasePath, "original"],
+      [successorPath, "successor"],
+    ] as const) {
+      seedCanonicalAcpSessionMeta({
+        databasePath: pathname,
+        env: state.env,
+        sessionKey: query.key,
+        lifecycleRevision: "first",
+        meta: {
+          backend,
+          agent: "main",
+          runtimeSessionName: "shared-source",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      });
+    }
+    await closeOpenClawStateDatabaseAsync();
+    const foreground = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({
+      cfg: { agents: { entries: { main: {} } } },
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let reading: Promise<void> | undefined;
+    try {
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.agentRuntime).toMatchObject({ id: "original" });
+      observeRowFacts(
+        (owner) => async (input) => {
+          const reply = await owner.readRowFacts(input);
+          entered.resolve();
+          await release.promise;
+          return reply;
+        },
+        true,
+      );
+      sessionChanges.emit({
+        agentId: query.agentId,
+        sessionKey: query.key,
+      });
+      reading = projection.ensureMaterialized();
+      await awaitGateBeforeSettlement(entered.promise, reading, "Expected the held agent row read");
+      await closeOpenClawStateDatabaseAsync();
+      fs.renameSync(databasePath, `${databasePath}.original`);
+      fs.renameSync(successorPath, databasePath);
+      const refused = expect(reading).rejects.toThrow(/admission|changed|closed|retired/i);
+      release.resolve();
+      await refused;
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.agentRuntime).toMatchObject({ id: "successor" });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([reading]);
+      projection.dispose();
+      foreground();
+    }
+  });
+});
+
 it("preserves a keyed replacement while an older worker reply is pending", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const query = { agentId: "main", key: "agent:main:worker-replacement" };
@@ -290,11 +369,13 @@ it("preserves a keyed replacement while an older worker reply is pending", async
     const entered = createDeferredCore();
     const release = createDeferredCore();
     let reading: Promise<void> | undefined;
-    const projection = await createSessionRowProjection({
-      cfg: { agents: { entries: { main: {} } } },
-    });
+    let describing: Promise<void> | undefined;
+    const cfg = { agents: { entries: { main: {} } } };
+    const projection = await createSessionRowProjection({ cfg });
     try {
       await projection.ensureMaterialized();
+      const original = projection.capture(query);
+      expect(original).toBeDefined();
       observeRowFacts(
         (owner) => async (input) => {
           const reply = await owner.readRowFacts(input);
@@ -307,19 +388,36 @@ it("preserves a keyed replacement while an older worker reply is pending", async
       sessionChanges.emit({ agentId: query.agentId, sessionKey: query.key });
       reading = projection.ensureMaterialized();
       await entered.promise;
-      // A direct reader can discover a new lifecycle independently of bulk publication.
-      vi.spyOn(entryCache, "readCommittedSessionEntryCache").mockReturnValueOnce(
-        new Map([[query.key, { ...entry, sessionId: "replacement" }]]),
+      // The committed replacement retires authority before the older reply returns.
+      replaceSessionEntrySync(
+        { agentId: query.agentId, sessionKey: query.key },
+        { ...entry, sessionId: "replacement" },
+      );
+      expect(projection.isCurrent(original!)).toBe(false);
+      const respond = vi.fn();
+      describing = Promise.resolve(
+        sessionByKeyReadHandlers["sessions.describe"]!({
+          req: { type: "req", id: "worker-replacement", method: "sessions.describe" },
+          params: query,
+          context: bindSessionRowProjection(requestContext(cfg), () => projection),
+          client: null,
+          isWebchatConnect: () => false,
+          respond,
+        }),
+      );
+      release.resolve();
+      await Promise.all([reading, describing]);
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        expect.objectContaining({ session: expect.objectContaining({ sessionId: "replacement" }) }),
       );
       const replacement = projection.describe(query);
       expect(replacement?.entry.sessionId).toBe("replacement");
-      release.resolve();
-      await reading;
       expect(projection.isCurrent(replacement!)).toBe(true);
       expect(projection.snapshot(query).row?.sessionId).toBe("replacement");
     } finally {
       release.resolve();
-      await reading;
+      await Promise.allSettled([reading, describing]);
       projection.dispose();
       releaseForeground();
     }

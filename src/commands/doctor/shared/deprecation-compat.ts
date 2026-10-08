@@ -40,35 +40,16 @@ const DEFAULT_TESTS = ["src/commands/doctor/shared/legacy-config-migrate.test.ts
 const DOCTOR_COMPAT_RENEWED_AT = "2026-08-29";
 const DOCTOR_COMPAT_RENEWED_REMOVE_AFTER = "2026-11-29";
 
-type CompatRecordDeadline =
-  | { removeAfter: string; previousRemoveAfter?: never }
-  | { previousRemoveAfter: string; removeAfter?: never };
-
-type CompatRecordInput = CompatRecordDeadline & {
-  owner: DoctorDeprecationCompatOwner;
-  introduced: string;
-  deprecated?: string;
-  warningStarts?: string;
-  source: string;
-  migration: string;
-  replacement: string;
-  docsPath: string;
-  tests?: readonly string[];
-  notes?: string;
-};
+type CompatRecordInput = Omit<
+  DoctorDeprecationCompatRecord,
+  "code" | "status" | "tests" | "removeAfter" | "renewedAt"
+> & { previousRemoveAfter: string; tests?: readonly string[] };
 
 function compatRecord(
   code: string,
   status: DoctorDeprecationCompatStatus,
   record: CompatRecordInput,
 ): DoctorDeprecationCompatRecord {
-  const renewedDeadline =
-    record.previousRemoveAfter === undefined
-      ? {}
-      : {
-          renewedAt: DOCTOR_COMPAT_RENEWED_AT,
-          removeAfter: DOCTOR_COMPAT_RENEWED_REMOVE_AFTER,
-        };
   return {
     code,
     status,
@@ -76,7 +57,8 @@ function compatRecord(
     warningStarts: record.introduced,
     tests: DEFAULT_TESTS,
     ...record,
-    ...renewedDeadline,
+    renewedAt: DOCTOR_COMPAT_RENEWED_AT,
+    removeAfter: DOCTOR_COMPAT_RENEWED_REMOVE_AFTER,
   };
 }
 

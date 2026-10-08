@@ -4,10 +4,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
-  applyWorkspaceSkillMutation,
-  isWorkspaceSkillMutationApplied,
-  isWorkspaceSkillMutationRestored,
-  prepareWorkspaceSkillMutation,
   prepareWorkspaceSkillRestoration,
   restoreWorkspaceSkillMutation,
 } from "./workspace-skill-write.js";
@@ -30,117 +26,29 @@ async function mutationPaths(slug: string) {
 }
 
 describe("workspace skill mutations", () => {
-  it("removes support files when the activating SKILL.md write fails", async () => {
-    const { workspaceDir, skillDir, skillFile, supportFile } =
-      await mutationPaths("partial-create");
-    const mutation = await prepareWorkspaceSkillMutation({
-      skillsRoot: workspaceDir,
-      skillDir,
-      skillFile,
-      content: "# Partial Create\n",
-      supportFiles: [{ path: "references/proof.md", content: "new support\n" }],
-      mode: "create",
-    });
-    await fs.mkdir(skillFile, { recursive: true });
-
-    await expect(applyWorkspaceSkillMutation(mutation)).rejects.toThrow();
-    await expect(fs.access(supportFile)).rejects.toThrow();
-    await expect(isWorkspaceSkillMutationRestored(mutation)).resolves.toBe(false);
-  });
-
-  it("restores the complete previous update bundle", async () => {
-    const { workspaceDir, skillDir, skillFile, supportFile } =
-      await mutationPaths("reversible-update");
-    await fs.mkdir(path.dirname(supportFile), { recursive: true });
-    await fs.writeFile(skillFile, "# Before\n", "utf8");
-    await fs.writeFile(supportFile, "before support\n", "utf8");
-    const mutation = await prepareWorkspaceSkillMutation({
-      skillsRoot: workspaceDir,
-      skillDir,
-      skillFile,
-      content: "# After\n",
-      supportFiles: [{ path: "references/proof.md", content: "after support\n" }],
-      mode: "update",
-    });
-
-    await applyWorkspaceSkillMutation(mutation);
-    await expect(fs.readFile(skillFile, "utf8")).resolves.toBe("# After\n");
-    await expect(fs.readFile(supportFile, "utf8")).resolves.toBe("after support\n");
-
-    await restoreWorkspaceSkillMutation(mutation);
-    await expect(isWorkspaceSkillMutationRestored(mutation)).resolves.toBe(true);
-    await expect(fs.readFile(skillFile, "utf8")).resolves.toBe("# Before\n");
-    await expect(fs.readFile(supportFile, "utf8")).resolves.toBe("before support\n");
-  });
-
-  it("removes a support file when its atomic write commits and then rejects", async () => {
-    const { workspaceDir, skillDir, skillFile, supportFile } =
-      await mutationPaths("partial-support");
-    const mutation = await prepareWorkspaceSkillMutation({
-      skillsRoot: workspaceDir,
-      skillDir,
-      skillFile,
-      content: "# Partial Support\n",
-      supportFiles: [{ path: "references/proof.md", content: "new support\n" }],
-      mode: "create",
-    });
-    await expect(
-      applyWorkspaceSkillMutation(mutation, async (file) => {
-        const targetPath = path.join(file.rootDir, file.relativePath);
-        await fs.mkdir(path.dirname(targetPath), { recursive: true });
-        await fs.writeFile(targetPath, file.content, "utf8");
-        if (targetPath === supportFile) {
-          throw new Error("injected post-commit write failure");
-        }
-      }),
-    ).rejects.toThrow("injected post-commit write failure");
-    await expect(fs.access(skillFile)).rejects.toThrow();
-    await expect(fs.access(supportFile)).rejects.toThrow();
-    await expect(isWorkspaceSkillMutationRestored(mutation)).resolves.toBe(true);
-  });
-
-  it("restores an update when the SKILL.md write commits and then rejects", async () => {
-    const { workspaceDir, skillDir, skillFile, supportFile } = await mutationPaths("partial-main");
-    await fs.mkdir(path.dirname(supportFile), { recursive: true });
-    await fs.writeFile(skillFile, "# Before\n", "utf8");
-    await fs.writeFile(supportFile, "before support\n", "utf8");
-    const mutation = await prepareWorkspaceSkillMutation({
-      skillsRoot: workspaceDir,
-      skillDir,
-      skillFile,
-      content: "# After\n",
-      supportFiles: [{ path: "references/proof.md", content: "after support\n" }],
-      mode: "update",
-    });
-    await expect(
-      applyWorkspaceSkillMutation(mutation, async (file) => {
-        const targetPath = path.join(file.rootDir, file.relativePath);
-        await fs.mkdir(path.dirname(targetPath), { recursive: true });
-        await fs.writeFile(targetPath, file.content, "utf8");
-        if (targetPath === skillFile) {
-          throw new Error("injected post-commit write failure");
-        }
-      }),
-    ).rejects.toThrow("injected post-commit write failure");
-    await expect(isWorkspaceSkillMutationRestored(mutation)).resolves.toBe(true);
-    await expect(fs.readFile(skillFile, "utf8")).resolves.toBe("# Before\n");
-    await expect(fs.readFile(supportFile, "utf8")).resolves.toBe("before support\n");
-  });
-
-  it("removes every file from a restored create mutation", async () => {
+  it("removes every file from a restored create", async () => {
     const { workspaceDir, skillDir, skillFile, supportFile } =
       await mutationPaths("reversible-create");
-    const mutation = await prepareWorkspaceSkillMutation({
+    await fs.mkdir(path.dirname(supportFile), { recursive: true });
+    await fs.writeFile(skillFile, "# Created\n", "utf8");
+    await fs.writeFile(supportFile, "created support\n", "utf8");
+    const restoration = await prepareWorkspaceSkillRestoration({
       skillsRoot: workspaceDir,
       skillDir,
       skillFile,
-      content: "# Created\n",
-      supportFiles: [{ path: "references/proof.md", content: "created support\n" }],
+      previousContent: null,
+      proposedContentHash: sha256Hex("# Created\n"),
+      supportFiles: [
+        {
+          path: "references/proof.md",
+          previousContent: null,
+          proposedContentHash: sha256Hex("created support\n"),
+        },
+      ],
       mode: "create",
     });
 
-    await applyWorkspaceSkillMutation(mutation);
-    await restoreWorkspaceSkillMutation(mutation);
+    await restoreWorkspaceSkillMutation(restoration);
 
     await expect(fs.access(skillFile)).rejects.toThrow();
     await expect(fs.access(supportFile)).rejects.toThrow();
@@ -174,21 +82,20 @@ describe("workspace skill mutations", () => {
     await expect(fs.readFile(supportFile, "utf8")).resolves.toBe("before support\n");
   });
 
-  it("detects external edits before restoring a completed mutation", async () => {
+  it("refuses to restore over an external edit", async () => {
     const { workspaceDir, skillDir, skillFile } = await mutationPaths("external-edit");
-    const mutation = await prepareWorkspaceSkillMutation({
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(skillFile, "# External edit\n", "utf8");
+    const restoration = await prepareWorkspaceSkillRestoration({
       skillsRoot: workspaceDir,
       skillDir,
       skillFile,
-      content: "# Proposed\n",
+      previousContent: null,
+      proposedContentHash: sha256Hex("# Proposed\n"),
       mode: "create",
     });
 
-    await applyWorkspaceSkillMutation(mutation);
-    await expect(isWorkspaceSkillMutationApplied(mutation)).resolves.toBe(true);
-    await fs.writeFile(skillFile, "# External edit\n", "utf8");
-    await expect(isWorkspaceSkillMutationApplied(mutation)).resolves.toBe(false);
-    await expect(restoreWorkspaceSkillMutation(mutation)).rejects.toThrow(
+    await expect(restoreWorkspaceSkillMutation(restoration)).rejects.toThrow(
       "Failed to restore the previous workspace skill state.",
     );
     await expect(fs.readFile(skillFile, "utf8")).resolves.toBe("# External edit\n");

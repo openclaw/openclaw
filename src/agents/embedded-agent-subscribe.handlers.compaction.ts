@@ -1,8 +1,3 @@
-/**
- * Handles embedded-agent compaction lifecycle events. The handlers pause
- * liveness, emit agent events, run hooks, reconcile persisted counts, and
- * clear stale usage after compaction rewrites history.
- */
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { recordSessionCompacted } from "../sessions/session-state-events.js";
@@ -90,7 +85,6 @@ function runBestEffortCompactionHook(
   });
 }
 
-/** Handles compaction start events from an embedded agent session. */
 export function handleCompactionStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: CompactionStartEvent,
@@ -113,7 +107,6 @@ export function handleCompactionStart(
   runBestEffortCompactionHook(ctx, "before");
 }
 
-/** Handles compaction completion, retry, and incomplete events. */
 export function handleCompactionEnd(
   ctx: EmbeddedAgentSubscribeContext,
   evt: SessionCompactionEndEvent,

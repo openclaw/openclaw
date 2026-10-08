@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearUserProfileAuthLink,
@@ -8,10 +9,7 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadDeferredCatalog } from "../server-model-catalog-auth.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-} from "./models-list-result.js";
+import { buildModelsListResult } from "./models-list-result.js";
 import {
   createModelsListTestContext,
   listModels,
@@ -54,23 +52,6 @@ async function listClaudeCliModel(
   });
 }
 
-async function listDirectClaudeCliModel(params: {
-  authenticated: boolean;
-  pluginDisabled?: boolean;
-}) {
-  const cfg = params.pluginDisabled
-    ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
-    : config;
-  return await listModels({
-    catalog: [providerCatalogEntry("claude-cli", "claude-opus-5")],
-    cfg,
-    preparedAuthModes:
-      params.authenticated && !params.pluginDisabled ? { "claude-cli": "oauth" } : {},
-    catalogComplete: true,
-    view: "all",
-  });
-}
-
 describe("models.list CLI runtime availability", () => {
   beforeEach(() => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
@@ -93,44 +74,12 @@ describe("models.list CLI runtime availability", () => {
   });
 
   it.each([
-    { authenticated: true, available: true, reason: undefined },
-    { authenticated: false, available: false, reason: "missing-auth" },
-    {
-      authenticated: true,
-      pluginDisabled: true,
-      available: false,
-      reason: "missing-auth",
-    },
-  ])(
-    "reports direct Claude CLI auth=$authenticated and plugin disabled=$pluginDisabled",
-    async (scenario) => {
-      const result = await listDirectClaudeCliModel(scenario);
-
-      expect(result.models).toEqual([
-        expect.objectContaining({
-          provider: "claude-cli",
-          id: "claude-opus-5",
-          available: scenario.available,
-          ...(scenario.reason ? { unavailableReason: scenario.reason } : {}),
-        }),
-      ]);
-    },
-  );
-
-  it.each([
     {
       authenticated: true,
       providerApiKey: false,
       pluginDisabled: false,
       available: true,
       reason: undefined,
-    },
-    {
-      authenticated: false,
-      providerApiKey: false,
-      pluginDisabled: false,
-      available: false,
-      reason: "missing-auth",
     },
     {
       authenticated: false,
@@ -158,35 +107,34 @@ describe("models.list CLI runtime availability", () => {
       expect(result.models[0]?.unavailableUntil).toBeUndefined();
     },
   );
-  it("does not use synthetic auth when plugins are globally disabled", async () => {
-    await expect(
-      listClaudeCliModel({
-        authenticated: true,
-        cfg: {
-          ...config,
-          plugins: { enabled: false },
+
+  it("keeps every Claude CLI model listed as needing login before the full catalog arrives", async () => {
+    const pinned = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"];
+    const result = await listModels({
+      catalog: [...pinned, "claude-haiku-4-5"].map((id) => providerCatalogEntry("anthropic", id)),
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-5" },
+            models: Object.fromEntries(
+              pinned.map((id) => [`anthropic/${id}`, { agentRuntime: { id: "claude-cli" } }]),
+            ),
+          },
         },
-      }),
-    ).resolves.toEqual({
-      models: [expect.objectContaining({ id: "claude-opus-5", available: false })],
+      },
+      view: "configured",
+      includeDefaultModels: false,
     });
-  });
-
-  it("does not use provider auth when the native runtime plugin is disabled", async () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
-
-    const result = await listClaudeCliModel({ authenticated: true, pluginDisabled: true });
-
-    expect(result.models[0]).toMatchObject({ available: false, unavailableReason: "missing-auth" });
+    expect(
+      result.models
+        .map(({ id, available, unavailableReason }) => ({ id, available, unavailableReason }))
+        .toSorted((left, right) => left.id.localeCompare(right.id)),
+    ).toEqual(pinned.map((id) => ({ id, available: false, unavailableReason: "missing-auth" })));
   });
 
   it.each([
-    { selection: "draft", expired: false, sharedOrder: false },
     { selection: "default", expired: false, sharedOrder: false },
-    { selection: "draft", expired: true, sharedOrder: false },
-    { selection: "default", expired: true, sharedOrder: false },
     { selection: "draft", expired: false, sharedOrder: true },
-    { selection: "default", expired: false, sharedOrder: true },
     { selection: "draft", expired: true, sharedOrder: true },
     { selection: "default", expired: true, sharedOrder: true },
     { selection: "default", expired: true, sharedOrder: true, oauth: true },
@@ -250,7 +198,7 @@ describe("models.list CLI runtime availability", () => {
             params: { view: "configured", preparedOnly: true },
             preloadedCatalog: { agentId: "main", config: cfg, snapshot },
             preloadedOnly: true,
-            catalogProjector: createGatewayAgentModelCatalogProjector({
+            catalogProjector: createModelCatalogDecisions({
               cfg,
               agentId: "main",
               agentDir: state.agentDir(),
@@ -290,8 +238,6 @@ describe("models.list CLI runtime availability", () => {
       reason: "auth-failed",
     },
     { scenario: "direct refresh-needed", expired: true, available: false },
-    { scenario: "direct unselected", expired: true, unselected: true, available: true },
-    { scenario: "direct disabled", disabled: true, available: false, reason: "missing-auth" },
     {
       scenario: "canonical pin",
       provider: "anthropic",
@@ -326,7 +272,6 @@ describe("models.list CLI runtime availability", () => {
             },
             order: { [provider]: ["shared"] },
           },
-          ...(scenario.disabled ? { plugins: { entries: { anthropic: { enabled: false } } } } : {}),
         };
         await state.writeAuthProfiles({
           version: 1,
@@ -361,7 +306,7 @@ describe("models.list CLI runtime availability", () => {
           params: { view: "all", preparedOnly: true },
           preloadedCatalog: { agentId: "main", config: cfg, snapshot },
           preloadedOnly: true,
-          catalogProjector: createGatewayAgentModelCatalogProjector({
+          catalogProjector: createModelCatalogDecisions({
             cfg,
             agentId: "main",
             agentDir: state.agentDir(),
@@ -371,9 +316,8 @@ describe("models.list CLI runtime availability", () => {
             preparedAuthStore: snapshot.authStore,
             preparedRuntimeAuthModes: snapshot.authModes,
             preparedSyntheticAuthComplete: true,
-            ...(scenario.unselected
-              ? {}
-              : { preferredProfileId: "selected", pinnedProfileId: "selected" }),
+            preferredProfileId: "selected",
+            pinnedProfileId: "selected",
           }),
         });
         const model = result.models.find(

@@ -58,6 +58,7 @@ export async function createPtyAdapter(
     },
     {
       abortSignal: params.abortSignal,
+      initiateSpawn: params.initiateSpawn,
       assertCurrent: () => {
         params.assertCurrent?.();
         params.beforeSpawn?.();

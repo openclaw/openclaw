@@ -19,9 +19,12 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
-import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
+import {
+  findModelInCatalog,
+  modelSupportsInput,
+  prepareModelRunCapabilities,
+} from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
-import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
 import {
   resolveScheduledToolCallerContext,
   resolveScheduledToolPolicyContext,
@@ -40,7 +43,6 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { assertCronExecutionRootRuntime } from "../execution-root-runtime.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
@@ -212,11 +214,7 @@ function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
-    const {
-      preparedRunAdmission,
-      messageActionTurnCapability,
-      close: closePromptAdmission,
-    } = prepareCronRunAdmission({
+    const cronAdmission = prepareCronRunAdmission({
       admissionSource: params.admissionSource,
       deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
@@ -246,12 +244,13 @@ function createCronPromptExecutor(
         jobId: params.job.id,
         jobConfigRevision: resolveCronJobConfigRevision(params.job),
         jobName: params.job.name,
+        standingGrantAuthority: cronAdmission.standingGrantAuthority,
       });
     } catch {
       // Non-canonicalizable job config: no grant registration for this run.
     }
     const fallbackResult = await runEmbeddedAgentEntry({
-      preparedRunAdmission,
+      preparedRunAdmission: cronAdmission.preparedRunAdmission,
       selection: {
         cfg: params.cfgWithAgentDefaults,
         provider: params.liveSelection.provider,
@@ -272,7 +271,7 @@ function createCronPromptExecutor(
         sessionKey: params.runSessionKey,
       },
       harness: {
-        workspaceDir: params.executionRoot ?? params.workspaceDir,
+        workspaceDir: params.workspaceDir,
         sessionKey: params.runSessionKey,
         preparation: { kind: "direct" },
         resolveRuntimeOverride: (provider) =>
@@ -371,12 +370,6 @@ function createCronPromptExecutor(
           catalog: thinkingCatalog,
           agentRuntime: candidateRuntime,
         });
-        const rootedExecution = params.executionRoot ? { root: params.executionRoot } : undefined;
-        assertCronExecutionRootRuntime(
-          params.executionRoot,
-          candidateRuntime,
-          cliExecution && Boolean(rootedExecution),
-        );
         assertCronRuntimeAuthorityCandidate({
           authority: params.job.runtimeAuthority,
           candidateRuntime,
@@ -413,16 +406,16 @@ function createCronPromptExecutor(
         // Snapshot mutable session and transcript facts only when the runtime is invoked.
         const buildCommonRunParams = () =>
           ({
-            preparedRunAdmission,
-            ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
-            cwd: params.executionRoot ?? params.cwd,
+            preparedRunAdmission: cronAdmission.preparedRunAdmission,
+            workspaceDir: params.workspaceDir,
+            cwd: params.cwd,
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
             sessionTarget,
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
-            messageActionTurnCapability,
+            messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
             finalizePromptForResolvedTools,
@@ -515,7 +508,6 @@ function createCronPromptExecutor(
                   sessionFile,
                   storePath: params.cronSession.storePath,
                   persistAssistantTranscript: true,
-                  rootedExecution,
                   modelProvider: providerOverride,
                   requesterModel: { provider: providerOverride, model: modelOverride },
                   modelHasVision: modelSupportsInput(
@@ -561,7 +553,7 @@ function createCronPromptExecutor(
                 return candidateResult;
               },
               {
-                preparedRunAdmission,
+                preparedRunAdmission: cronAdmission.preparedRunAdmission,
                 abortSignal: cliAbortSignal,
                 trigger: "cron",
                 isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
@@ -605,6 +597,12 @@ function createCronPromptExecutor(
           agentDir: params.agentDir,
           provider: providerOverride,
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
+          // Same capability the reply path and agent command prepare: harness-native effort lists
+          // (Codex `max`) reach the runtime model only through it.
+          modelThinkingCapability: prepareModelRunCapabilities(
+            [thinkingCatalog, []],
+            [providerOverride, modelOverride, candidateRuntime],
+          ).modelThinkingCapability,
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: cronFallbacksOverride,
           authProfileId: params.liveSelection.authProfileId,
@@ -647,7 +645,7 @@ function createCronPromptExecutor(
       })
       .finally(() => {
         unregisterCronRunExecSource();
-        closePromptAdmission();
+        cronAdmission.close();
       });
     const executionError =
       params.lifecycle.getDeferredError() ??

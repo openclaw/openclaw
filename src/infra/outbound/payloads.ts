@@ -33,7 +33,6 @@ import {
   type OutboundPayloadPlan,
 } from "./reply-payload-parts.js";
 
-/** Runtime-ready outbound payload after text/media/rich-content normalization. */
 export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
@@ -50,20 +49,11 @@ export type NormalizedOutboundPayload = {
   isStatusNotice?: boolean;
 };
 
-/** JSON-safe outbound payload projection used for envelopes and diagnostics. */
-export type OutboundPayloadJson = {
-  text: string;
-  isError?: boolean;
-  mediaUrl: string | null;
-  mediaUrls?: string[];
-  audioAsVoice?: boolean;
-  presentation?: MessagePresentation;
-  presentationTextMode?: ReplyPayload["presentationTextMode"];
-  delivery?: ReplyPayloadDelivery;
-  interactive?: LegacyInteractiveReply;
-  channelData?: Record<string, unknown>;
-  location?: ReplyPayload["location"];
-};
+export type OutboundPayloadJson = Omit<
+  NormalizedOutboundPayload,
+  "mediaUrls" | "hookContent" | "isStatusNotice"
+> &
+  Pick<ReplyPayload, "isError" | "mediaUrls"> & { mediaUrl: string | null };
 
 type OutboundPayloadPlanContext = {
   cfg?: OpenClawConfig;
@@ -73,7 +63,6 @@ type OutboundPayloadPlanContext = {
   extractMarkdownImages?: boolean;
 };
 
-/** Text/media projection used to mirror outbound replies into session state. */
 type OutboundPayloadMirror = {
   text: string;
   mediaUrls: string[];
@@ -232,13 +221,12 @@ function createStructuredOutboundPayloadPlanEntry(
   if (!isRenderablePayload(normalizedPayload)) {
     return null;
   }
-  const hasChannelData = hasReplyChannelData(normalizedPayload.channelData);
   return {
     payload: normalizedPayload,
     parts: resolveSendableOutboundReplyParts(normalizedPayload),
     hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
     hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
-    hasChannelData,
+    hasChannelData: hasReplyChannelData(normalizedPayload.channelData),
   };
 }
 
@@ -252,14 +240,10 @@ function buildOutboundPayloadPlan(
   const plan: OutboundPayloadPlan[] = [];
   for (const [sourceIndex, payload] of payloads.entries()) {
     const prepared = preparePayload ? preparePayload(payload) : payload;
-    if (!prepared) {
-      continue;
+    const entry = prepared ? createStructuredOutboundPayloadPlanEntry(prepared) : null;
+    if (entry) {
+      plan.push({ sourceIndex, ...entry });
     }
-    const entry = createStructuredOutboundPayloadPlanEntry(prepared);
-    if (!entry) {
-      continue;
-    }
-    plan.push({ sourceIndex, ...entry });
   }
   return plan;
 }
@@ -281,14 +265,12 @@ export function createStructuredOutboundPayloadPlan(
   return buildOutboundPayloadPlan(payloads);
 }
 
-/** Projects a payload plan back to normalized reply payloads for delivery. */
 export function projectOutboundPayloadPlanForDelivery(
   plan: readonly OutboundPayloadPlan[],
 ): ReplyPayload[] {
   return plan.map((entry) => entry.payload);
 }
 
-/** Projects a payload plan into runtime transport payload summaries. */
 export function projectOutboundPayloadPlanForOutbound(
   plan: readonly OutboundPayloadPlan[],
 ): NormalizedOutboundPayload[] {
@@ -324,7 +306,6 @@ export function projectOutboundPayloadPlanForOutbound(
   return normalizedPayloads;
 }
 
-/** Projects a payload plan into JSON-safe envelope/debug payloads. */
 export function projectOutboundPayloadPlanForJson(
   plan: readonly OutboundPayloadPlan[],
 ): OutboundPayloadJson[] {
@@ -348,7 +329,6 @@ export function projectOutboundPayloadPlanForJson(
   });
 }
 
-/** Projects a payload plan into text/media content for session mirroring. */
 export function projectOutboundPayloadPlanForMirror(
   plan: readonly OutboundPayloadPlan[],
 ): OutboundPayloadMirror {
@@ -361,7 +341,6 @@ export function projectOutboundPayloadPlanForMirror(
   };
 }
 
-/** Summarizes one reply payload for channel transport and hook processing. */
 export function summarizeOutboundPayloadForTransport(
   payload: ReplyPayload,
 ): NormalizedOutboundPayload {
@@ -387,14 +366,12 @@ export function summarizeOutboundPayloadForTransport(
   };
 }
 
-/** Normalizes reply payloads for direct delivery using the shared plan. */
 export function normalizeReplyPayloadsForDelivery(
   payloads: readonly ReplyPayload[],
 ): ReplyPayload[] {
   return projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan(payloads));
 }
 
-/** Formats normalized outbound payload text and attachments for logs. */
 export function formatOutboundPayloadLog(
   payload: Pick<NormalizedOutboundPayload, "text" | "channelData"> & {
     mediaUrls: readonly string[];

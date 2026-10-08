@@ -1,10 +1,9 @@
-// Gateway RPC call helper.
-// Builds a GatewayClient, resolves auth/scopes, and performs one request.
 import { randomUUID } from "node:crypto";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
+import { resolvePreauthHandshakeTimeoutMs } from "../../packages/gateway-client/src/timeouts.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -26,14 +25,13 @@ import { resolveConfigPath, resolveGatewayPort, resolveStateDir } from "../confi
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import type { DeviceIdentity } from "../infra/device-identity.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
-import { resolveGatewayAuth } from "./auth-resolve.js";
+import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import {
   GatewayCredentialsRequiredError,
   GatewayLocalBackendSharedAuthUnavailableError,
@@ -79,7 +77,6 @@ import {
   canSkipGatewayConfigLoad,
   isExplicitGatewayConnection,
 } from "./explicit-connection-policy.js";
-import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   ADMIN_SCOPE,
@@ -415,51 +412,6 @@ export function buildGatewayConnectionDetails(
   });
 }
 
-function resolveGatewayCallAuth(config: OpenClawConfig) {
-  return resolveGatewayAuth({
-    authConfig: config.gateway?.auth,
-    env: process.env,
-    tailscaleMode: config.gateway?.tailscale?.mode,
-  });
-}
-
-async function ensureGatewayCallCanAuthenticate(params: {
-  opts: CallGatewayBaseOptions;
-  context: ResolvedGatewayCallContext;
-  token?: string;
-  password?: string;
-  deviceIdentity: DeviceIdentity | null;
-  deviceAuthScope?: string;
-  storedAuth?: DeviceAuthEntry | null;
-}): Promise<void> {
-  const resolvedAuth = resolveGatewayCallAuth(params.context.config);
-  const authMode = resolvedAuth.mode;
-  if (authMode !== "token" && authMode !== "password") {
-    return;
-  }
-  if (params.token || params.password || params.opts.approvalRuntimeToken) {
-    return;
-  }
-  if (resolvedAuth.allowTailscale) {
-    return;
-  }
-  const storedAuth =
-    params.storedAuth === undefined
-      ? await loadStoredOperatorDeviceAuthToken(
-          params.deviceIdentity,
-          params.deviceAuthScope,
-          params.opts.sharedStateMode,
-        )
-      : params.storedAuth;
-  if (storedAuth?.token) {
-    return;
-  }
-  throw new GatewayCredentialsRequiredError({
-    method: params.opts.method,
-    configPath: params.context.configPath,
-  });
-}
-
 export type { ExplicitGatewayAuth } from "./credentials.js";
 
 export { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth };
@@ -670,10 +622,15 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const deviceAuthScope = bootstrap.deviceAuthScope;
   const token = useStoredDeviceAuth ? undefined : bootstrap.auth.token;
   const password = useStoredDeviceAuth ? undefined : bootstrap.auth.password;
-  const { clientOptions, omitDeviceIdentity, deviceIdentity } = resolveGatewayCallDeviceAuth({
+  const resolvedAuth = resolveGatewayAuthForConfig({
+    config: context.config,
+    env: process.env,
+    tailscaleMode: context.config.gateway?.tailscale?.mode,
+  });
+  const { clientOptions, omitDeviceIdentity, deviceIdentity } = await resolveGatewayCallDeviceAuth({
     opts: input,
     url,
-    authMode: resolveGatewayCallAuth(context.config).mode,
+    authMode: resolvedAuth.mode,
     isImplicitLocalTarget: !urlOverrideSource && !context.isRemoteMode,
     token,
     password,
@@ -726,15 +683,28 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       );
     }
   }
-  await ensureGatewayCallCanAuthenticate({
-    opts,
-    context,
-    token,
-    password,
-    deviceIdentity,
-    deviceAuthScope,
-    storedAuth,
-  });
+  if (
+    (resolvedAuth.mode === "token" || resolvedAuth.mode === "password") &&
+    !token &&
+    !password &&
+    !opts.approvalRuntimeToken &&
+    !resolvedAuth.allowTailscale
+  ) {
+    const availableAuth =
+      storedAuth === undefined
+        ? await loadStoredOperatorDeviceAuthToken(
+            deviceIdentity,
+            deviceAuthScope,
+            opts.sharedStateMode,
+          )
+        : storedAuth;
+    if (!availableAuth?.token) {
+      throw new GatewayCredentialsRequiredError({
+        method: opts.method,
+        configPath: context.configPath,
+      });
+    }
+  }
   try {
     await prepareGatewayClientDeviceAuth(
       {

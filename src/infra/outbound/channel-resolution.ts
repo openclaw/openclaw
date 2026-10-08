@@ -38,56 +38,6 @@ type OutboundChannelResolutionParams = {
 
 type BootstrapRequest = Parameters<typeof bootstrapOutboundChannelPlugin>[0];
 
-function* normalizeOutboundChannelForResolution(params: OutboundChannelResolutionParams): Generator<
-  BootstrapRequest,
-  {
-    channel?: string;
-    didBootstrap: boolean;
-    bootstrapRegistry?: PluginRegistry;
-  },
-  PluginRegistry | undefined
-> {
-  const normalized = normalizeMessageChannel(params.channel);
-  const deliverable =
-    normalized && isDeliverableMessageChannel(normalized) ? normalized : undefined;
-  if (deliverable || !normalized || normalized === INTERNAL_MESSAGE_CHANNEL) {
-    return { channel: deliverable, didBootstrap: false };
-  }
-
-  const activeRuntimePlugin = resolveOutboundPluginFromRuntimeRegistry(
-    normalized,
-    getOutboundRuntimeRegistry() ?? undefined,
-    true,
-  );
-  if (activeRuntimePlugin) {
-    return {
-      channel: activeRuntimePlugin.id,
-      didBootstrap: false,
-    };
-  }
-  if (params.allowBootstrap !== true) {
-    return { channel: undefined, didBootstrap: false };
-  }
-
-  // External channel ids remain normalized before their runtime is registered.
-  // Bootstrap first, then let the runtime candidate lookup confirm sendability.
-  const bootstrapRegistry = yield {
-    channel: normalized,
-    cfg: params.cfg,
-    agentId: params.agentId,
-  };
-  const bootstrappedRuntimePlugin = resolveOutboundPluginFromRuntimeRegistry(
-    normalized,
-    bootstrapRegistry,
-    true,
-  );
-  return {
-    channel: bootstrappedRuntimePlugin?.id ?? normalized,
-    didBootstrap: true,
-    ...(bootstrapRegistry ? { bootstrapRegistry } : {}),
-  };
-}
-
 function resolveSendCapableMessageAdapter(
   plugin: ChannelPlugin | undefined,
 ): ChannelMessageAdapterShape | undefined {
@@ -112,7 +62,6 @@ function resolveRuntimeOutboundPluginCandidate(params: {
   runtime?: ChannelPlugin;
   setupFallback?: ChannelPlugin;
   bundled?: ChannelPlugin;
-  allowSetupShell?: boolean;
   requireActivatedRuntime?: boolean;
 }): ChannelPlugin | undefined {
   const hasRuntimeSurface = params.requireActivatedRuntime
@@ -120,7 +69,9 @@ function resolveRuntimeOutboundPluginCandidate(params: {
     : channelPluginHasRuntimeOutboundSurface;
   return (
     [params.loaded, params.runtime, params.bundled].find(hasRuntimeSurface) ??
-    (params.allowSetupShell ? (params.loaded ?? params.setupFallback ?? params.bundled) : undefined)
+    (params.requireActivatedRuntime
+      ? undefined
+      : (params.loaded ?? params.setupFallback ?? params.bundled))
   );
 }
 
@@ -139,11 +90,31 @@ function resolveOutboundPluginFromRuntimeRegistry(
 function* resolveOutboundChannelPluginSteps(
   params: OutboundChannelResolutionParams,
 ): Generator<BootstrapRequest, ChannelPlugin | undefined, PluginRegistry | undefined> {
-  const {
-    channel: normalized,
-    didBootstrap,
-    bootstrapRegistry,
-  } = yield* normalizeOutboundChannelForResolution(params);
+  const channel = normalizeMessageChannel(params.channel);
+  let normalized = channel && isDeliverableMessageChannel(channel) ? channel : undefined;
+  let didBootstrap = false;
+  let bootstrapRegistry: PluginRegistry | undefined;
+  if (!normalized && channel && channel !== INTERNAL_MESSAGE_CHANNEL) {
+    const active = resolveOutboundPluginFromRuntimeRegistry(
+      channel,
+      getOutboundRuntimeRegistry() ?? undefined,
+      true,
+    );
+    if (active) {
+      normalized = active.id;
+    } else if (params.allowBootstrap === true) {
+      // External channel ids remain normalized before their runtime is registered.
+      // Bootstrap first, then let the runtime candidate lookup confirm sendability.
+      bootstrapRegistry = yield {
+        channel,
+        cfg: params.cfg,
+        agentId: params.agentId,
+      };
+      normalized =
+        resolveOutboundPluginFromRuntimeRegistry(channel, bootstrapRegistry, true)?.id ?? channel;
+      didBootstrap = true;
+    }
+  }
   if (!normalized) {
     return undefined;
   }
@@ -185,7 +156,6 @@ function* resolveOutboundChannelPluginSteps(
     runtime: runtimeCurrent,
     setupFallback,
     bundled: bundledCurrent,
-    allowSetupShell: params.allowBootstrap !== true,
     requireActivatedRuntime,
   });
   if (candidate) {

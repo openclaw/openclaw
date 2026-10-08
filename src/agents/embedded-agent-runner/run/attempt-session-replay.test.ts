@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createFailureMessage } from "../../../../packages/agent-core/src/turn-interruption.js";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
@@ -14,6 +18,7 @@ import {
   type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../../state/openclaw-agent-db.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -27,7 +32,6 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
-import { sessionManagerPrepareCurrentTurnReplay } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import {
   appendCompletedToolWork,
@@ -36,6 +40,7 @@ import {
   withReplaySession,
 } from "./attempt-session-replay.test-support.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
+import * as persistedReplay from "./pre-persisted-user-turn.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -95,6 +100,77 @@ describe("context engine bootstrap", () => {
 });
 
 describe("interrupted canonical user replay", () => {
+  it("rejects a byte-identical replacement source between replay preparations", async () => {
+    await withInterruptedTurn(false, async (fixture) => {
+      const prepared = await fixture.prepare();
+      const pathname = fixture.target.storePath!;
+      await closeOpenClawAgentDatabaseByPathAsync(pathname);
+      fs.renameSync(pathname, `${pathname}.retired`);
+      fs.copyFileSync(`${pathname}.retired`, pathname);
+      await expect(prepared.prepareInitialUserTurnReplay!()).rejects.toThrow(/database owner/);
+    });
+  });
+
+  it.each(["rewrite", "close", "revoke"] as const)(
+    "refuses replay after %s between worker validation and consumption",
+    async (change) => {
+      await withInterruptedTurn(false, async (fixture) => {
+        const prepared = await fixture.prepare();
+        const admit = await prepared.prepareInitialUserTurnReplay?.();
+        expect(admit).toBeTypeOf("function");
+        const original = SessionManager.open(fixture.target);
+        const validated = createDeferredCore();
+        const release = createDeferredCore();
+        // oxlint-disable-next-line typescript/unbound-method -- Preserve the original pool receiver.
+        const run = WorkerTaskPoolCore.prototype.run;
+        const spy = vi
+          .spyOn(WorkerTaskPoolCore.prototype, "run")
+          .mockImplementation(async function (
+            this: WorkerTaskPoolCore<unknown, unknown>,
+            input,
+            options,
+          ) {
+            const reply = await run.call(this, input, options);
+            if (
+              isRecord(reply) &&
+              reply.ok === true &&
+              isRecord(reply.value) &&
+              isRecord(reply.value.facts) &&
+              reply.value.facts.replayValidated === "current"
+            ) {
+              validated.resolve();
+              await release.promise;
+            }
+            return reply;
+          });
+        const consume = vi.fn();
+        const pending = admit!(consume);
+        let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
+        try {
+          await awaitGateBeforeSettlement(
+            validated.promise,
+            pending,
+            "Replay validation was not reached",
+          );
+          if (change === "rewrite") {
+            expect(original.removeTrailingEntries(() => true)).toBeGreaterThan(0);
+          } else if (change === "close") {
+            closing = closeOpenClawAgentDatabaseByPathAsync(fixture.target.storePath!);
+          } else {
+            fixture.revoke();
+          }
+          release.resolve();
+          await expect(pending).rejects.toThrow(/replay|revoked|closed|current|admission/i);
+          expect(consume).not.toHaveBeenCalled();
+        } finally {
+          release.resolve();
+          await Promise.allSettled([pending, closing]);
+          spy.mockRestore();
+        }
+      });
+    },
+  );
+
   it.each([
     { appendOnly: false, interruptedTurn: false, toolProgress: true },
     { appendOnly: true, interruptedTurn: false, toolProgress: true },
@@ -110,23 +186,45 @@ describe("interrupted canonical user replay", () => {
     async ({ appendOnly, interruptedTurn, toolProgress, oversizedMetadata, compactedInput }) => {
       let observedWalks = 0;
       const nativeReadFailures: unknown[] = [];
-      const prepare = SessionManager.prototype[sessionManagerPrepareCurrentTurnReplay];
-      const replayRead = vi
-        .spyOn(SessionManager.prototype, sessionManagerPrepareCurrentTurnReplay)
-        .mockImplementation(async function (this: SessionManager, ...args) {
-          const sql = observeMainThreadSql();
+      const prepare = persistedReplay.preparePersistedCurrentUserTurn;
+      const observe = async <T>(operation: (beforeConsume: () => void) => Promise<T>) => {
+        const sql = observeMainThreadSql();
+        const finish = () => {
           try {
-            return await prepare.apply(this, args);
+            sql.expectIdle();
+          } catch (error) {
+            nativeReadFailures.push(error);
           } finally {
-            observedWalks++;
-            try {
-              sql.expectIdle();
-            } catch (error) {
-              nativeReadFailures.push(error);
-            } finally {
-              sql.restore();
-            }
+            sql.restore();
           }
+        };
+        try {
+          return await operation(finish);
+        } finally {
+          observedWalks++;
+          finish();
+        }
+      };
+      const replayRead = vi
+        .spyOn(persistedReplay, "preparePersistedCurrentUserTurn")
+        .mockImplementation(async (...args) => {
+          const prepared = await observe(() => prepare(...args));
+          return (
+            prepared &&
+            (async (signal) => {
+              const admit = await observe(() => prepared(signal));
+              return (
+                admit &&
+                (async (onAdmitted) =>
+                  observe(async (beforeConsume) => {
+                    await admit(() => {
+                      beforeConsume();
+                      onAdmitted();
+                    });
+                  }))
+              );
+            })
+          );
         });
       onTestFinished(() => replayRead.mockRestore());
       await withInterruptedTurn(
@@ -371,7 +469,7 @@ describe("interrupted canonical user replay", () => {
                   JSON.stringify(message.content).includes(fixture.attempt.prompt),
               );
               expect(users).toHaveLength(1);
-              expect(users[0].content).toContainEqual(image);
+              expect(users[0]?.content).toContainEqual(image);
               expect(loadTranscriptEventsSync(fixture.target).slice(0, before.length)).toEqual(
                 before,
               );

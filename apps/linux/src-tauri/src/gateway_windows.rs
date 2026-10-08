@@ -459,9 +459,7 @@ impl Routing {
         let navigation = doc.native_navigation.take()?;
         let mut event = self.document_event(label, lifetime)?;
         event.navigation = navigation;
-        if !self.document_event_current(&event) {
-            return None;
-        }
+        self.current_document(&event)?;
         if matches!(native, NavigationEvent::Failed) {
             self.document_failed(label, lifetime)
         } else {
@@ -469,20 +467,21 @@ impl Routing {
         }
     }
 
-    fn document_event_current(&self, event: &DocumentEvent) -> bool {
-        !self.closing
-            && self.windows.get(&event.label).is_some_and(|route| {
-                route.lifetime == event.window_lifetime
-                    && route.document.as_ref().is_some_and(|doc| {
-                        doc.lifetime == event.document_lifetime
-                            && doc.navigation == event.navigation
-                    })
-            })
+    fn current_document(&self, event: &DocumentEvent) -> Option<(&WindowRoute, &Document)> {
+        if self.closing {
+            return None;
+        }
+        let route = self.windows.get(&event.label)?;
+        let doc = route.document.as_ref()?;
+        (route.lifetime == event.window_lifetime
+            && doc.lifetime == event.document_lifetime
+            && doc.navigation == event.navigation)
+            .then_some((route, doc))
     }
 
     fn document_failed(&mut self, label: &str, lifetime: &str) -> Option<DocumentEvent> {
         let event = self.document_event(label, lifetime)?;
-        if !self.document_event_current(&event) {
+        if self.closing {
             return None;
         }
         let doc = self.windows.get_mut(label)?.document.as_mut()?;
@@ -495,14 +494,9 @@ impl Routing {
     }
 
     fn failed_document(&self, event: &DocumentEvent) -> bool {
-        self.document_event_current(event)
-            && self.windows.get(&event.label).is_some_and(|route| {
-                route.pending.is_none()
-                    && route
-                        .document
-                        .as_ref()
-                        .is_some_and(|doc| doc.phase == NavigationPhase::Failed)
-            })
+        self.current_document(event).is_some_and(|(route, doc)| {
+            route.pending.is_none() && doc.phase == NavigationPhase::Failed
+        })
     }
 
     fn begin_document_recovery(&mut self, event: &DocumentEvent) -> Option<(Intent, bool)> {
@@ -532,9 +526,7 @@ impl Routing {
         event: &DocumentEvent,
         url: &Url,
     ) -> Option<(Document, SelectionCompletion, Option<String>)> {
-        if !self.document_event_current(event) {
-            return None;
-        }
+        self.current_document(event)?;
         let route = self.windows.get_mut(&event.label)?;
         let doc = route.document.as_mut()?;
         if doc.phase != NavigationPhase::Active || !matches_route(url, &doc.url) {
@@ -722,59 +714,44 @@ impl Routing {
     }
 
     fn refresh_primary(&mut self, label: &str) -> Intent {
-        let inherited = self
-            .windows
-            .get(label)
-            .and_then(|route| route.pending.as_ref())
-            .map(|pending| (pending.intent.clone(), pending.completion));
-        let source_url = self
-            .windows
-            .get(label)
-            .and_then(|route| route.document.as_ref())
-            .map(|doc| doc.navigation_url.clone());
-        let previous_base = self
-            .windows
-            .get(label)
-            .filter(|route| route.target == PRIMARY)
-            .and_then(|route| route.document.as_ref())
-            .map(|doc| doc.url.clone());
-        let mut destination = source_url.clone();
-        let mut completion = self
-            .windows
-            .get(label)
-            .and_then(|route| route.document.as_ref())
-            .and_then(|doc| doc.completion);
-        let mut next = self.begin(
-            label,
-            PRIMARY,
-            inherited
-                .as_ref()
-                .and_then(|(intent, _)| intent.source.clone()),
+        let route = self.windows.get(label);
+        let inherited = route.and_then(|route| route.pending.as_ref());
+        let document = route.and_then(|route| route.document.as_ref());
+        let source_url = inherited.map_or_else(
+            || document.map(|doc| doc.navigation_url.clone()),
+            |pending| pending.intent.source_url.clone(),
         );
+        let destination = inherited
+            .and_then(|pending| pending.intent.navigation_url.as_ref())
+            .or_else(|| document.map(|doc| &doc.navigation_url));
+        let previous_base = route
+            .filter(|route| route.target == PRIMARY)
+            .and(document)
+            .map(|doc| &doc.url);
+        let navigation_url = previous_base
+            .zip(destination)
+            .and_then(|(base, destination)| {
+                self.primary
+                    .as_ref()
+                    .and_then(|primary| primary.retained_destination(base, destination))
+            });
+        let completion = inherited
+            .map(|pending| pending.completion)
+            .or_else(|| document.and_then(|doc| doc.completion));
+        let source = inherited.and_then(|pending| pending.intent.source.clone());
+        let mut next = self.begin(label, PRIMARY, source);
         next.source_url = source_url;
-        if let Some((previous, inherited_completion)) = inherited {
-            next.source_url = previous.source_url;
-            destination = previous.navigation_url.or(destination);
-            completion = Some(inherited_completion);
-        }
-        next.navigation_url =
-            previous_base
-                .as_ref()
-                .zip(destination.as_ref())
-                .and_then(|(base, destination)| {
-                    self.primary
-                        .as_ref()
-                        .and_then(|primary| primary.retained_destination(base, destination))
-                });
-        if let Some(pending) = self
+        next.navigation_url = navigation_url;
+        let pending = self
             .windows
             .get_mut(label)
-            .and_then(|route| route.pending.as_mut())
-        {
-            pending.intent = next.clone();
-            if let Some(completion) = completion {
-                pending.completion = completion;
-            }
+            .expect("reserved window")
+            .pending
+            .as_mut()
+            .expect("reserved primary refresh");
+        pending.intent = next.clone();
+        if let Some(completion) = completion {
+            pending.completion = completion;
         }
         next
     }
@@ -881,25 +858,21 @@ impl Routing {
             self.upgrade_selection(&intent, explicit);
             return SelectionDisposition::Pending;
         }
-        let loading = self.windows.get(label).is_some_and(|route| {
-            route.target == target
-                && route.document.as_ref().is_some_and(|doc| {
-                    doc.completion.is_some()
-                        && doc.nonce.is_none()
-                        && doc.phase != NavigationPhase::Failed
-                })
-        });
-        if loading {
+        let loading = self
+            .windows
+            .get_mut(label)
+            .filter(|route| route.target == target)
+            .and_then(|route| route.document.as_mut())
+            .filter(|doc| {
+                doc.completion.is_some()
+                    && doc.nonce.is_none()
+                    && doc.phase != NavigationPhase::Failed
+            });
+        if let Some(doc) = loading {
             if explicit {
                 self.selection_sequence = self.selection_sequence.wrapping_add(1);
                 self.selection_target = Some(target.to_string());
-                if let Some(doc) = self
-                    .windows
-                    .get_mut(label)
-                    .and_then(|route| route.document.as_mut())
-                {
-                    doc.completion = Some(SelectionCompletion::Explicit(self.selection_sequence));
-                }
+                doc.completion = Some(SelectionCompletion::Explicit(self.selection_sequence));
             }
             return SelectionDisposition::Pending;
         }
@@ -947,14 +920,13 @@ impl Routing {
     fn remembers_edited_target(&self, id: &str) -> bool {
         self.windows.values().any(|route| {
             (route.target == id
-                && (route
-                    .recovery
-                    .is_some_and(|completion| completion.remembers(self.selection_sequence))
-                    || route
-                        .document
-                        .as_ref()
-                        .and_then(|doc| doc.completion)
-                        .is_some_and(|completion| completion.remembers(self.selection_sequence))))
+                && [
+                    route.recovery,
+                    route.document.as_ref().and_then(|doc| doc.completion),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|completion| completion.remembers(self.selection_sequence)))
                 || route.pending.as_ref().is_some_and(|pending| {
                     pending.intent.target == id
                         && self
@@ -1417,7 +1389,7 @@ impl GatewayWindows {
         Ok(())
     }
 
-    pub fn main_is_primary(&self, _app: &AppHandle) -> bool {
+    pub fn main_is_primary(&self) -> bool {
         self.routing
             .lock()
             .is_ok_and(|state| state.follows_primary())
@@ -1876,7 +1848,7 @@ async fn on_main<T: Send + 'static>(
 
 struct Prepared {
     route: Route,
-    profile: Option<SavedGateway>,
+    profile_revision: Option<String>,
     primary_generation: Option<u64>,
     tunnel: Option<SshTunnel>,
 }
@@ -1922,38 +1894,33 @@ impl Drop for WindowWork {
 
 fn prepare(app: &AppHandle, intent: &Intent) -> Result<Prepared, String> {
     let owner = app.state::<GatewayWindows>();
-    if !owner.routing.lock().map_err(|_| STALE)?.current(intent) {
+    let state = owner.routing.lock().map_err(|_| STALE)?;
+    if !state.current(intent) {
         return Err(STALE.into());
     }
-    if intent.target == PRIMARY {
-        let state = owner.routing.lock().map_err(|_| STALE)?;
-        return Ok(Prepared {
-            route: state.primary_route(
+    let primary = intent.target == PRIMARY;
+    let route = if primary {
+        Some(
+            state.primary_route(
                 app.try_state::<crate::gateway_ws::GatewayClient>()
                     .as_deref(),
             )?,
-            profile: None,
-            primary_generation: Some(state.primary_generation),
-            tunnel: None,
-        });
-    }
-    if let Some((_, url)) = owner
-        .routing
-        .lock()
-        .map_err(|_| STALE)?
-        .discovered
-        .get(&intent.target)
-    {
+        )
+    } else {
+        state.discovered.get(&intent.target).map(|(_, url)| Route {
+            url: url.clone(),
+            auth_script: None,
+        })
+    };
+    if let Some(route) = route {
         return Ok(Prepared {
-            route: Route {
-                url: url.clone(),
-                auth_script: None,
-            },
-            profile: None,
-            primary_generation: None,
+            route,
+            profile_revision: None,
+            primary_generation: primary.then_some(state.primary_generation),
             tunnel: None,
         });
     }
+    drop(state);
     let profile = owner.profiles.get(&intent.target)?;
     let request = &profile.request;
     remote_gateway::validate_request(request)?;
@@ -1979,18 +1946,18 @@ fn prepare(app: &AppHandle, intent: &Intent) -> Result<Prepared, String> {
     )?);
     Ok(Prepared {
         route: Route { url, auth_script },
-        profile: Some(profile),
+        profile_revision: Some(profile.revision),
         primary_generation: None,
         tunnel,
     })
 }
 
-fn revision_current(owner: &GatewayWindows, profile: Option<&SavedGateway>) -> bool {
-    profile.is_none_or(|saved| {
+fn revision_current(owner: &GatewayWindows, id: &str, revision: Option<&str>) -> bool {
+    revision.is_none_or(|revision| {
         owner
             .profiles
-            .get(&saved.id)
-            .is_ok_and(|current| current.revision == saved.revision)
+            .get(id)
+            .is_ok_and(|current| current.revision == revision)
     })
 }
 
@@ -2005,62 +1972,6 @@ fn source_current(app: &AppHandle, owner: &GatewayWindows, intent: &Intent) -> b
                 .is_ok_and(|authority| authority.lifetime == source.lifetime)
         })
     })
-}
-
-async fn select(
-    app: AppHandle,
-    label: String,
-    target: String,
-    source: Option<DocumentAuthority>,
-    remember: bool,
-) -> Result<(), String> {
-    let intent = on_main(&app, move |app| {
-        let owner = app.state::<GatewayWindows>();
-        if app.get_window(&label).is_none() {
-            return Err(STALE.into());
-        }
-        if let Some(source) = &source {
-            let view = app.get_webview(&source.label).ok_or(STALE)?;
-            if owner.authorize(&view, &source.nonce)?.lifetime != source.lifetime {
-                return Err(STALE.into());
-            }
-        }
-        if remember || source.is_some() {
-            owner
-                .routing
-                .lock()
-                .map_err(|_| STALE)?
-                .explicit_selection();
-        }
-        let disposition = owner
-            .routing
-            .lock()
-            .map_err(|_| STALE)?
-            .admit_selection(&label, &target, !remember, remember);
-        match disposition {
-            SelectionDisposition::Pending => return Ok(None),
-            SelectionDisposition::Reuse => {
-                if let Err(error) = owner.remember_now(if target.starts_with("manual-") {
-                    Some(&target)
-                } else {
-                    None
-                }) {
-                    show_error(app, &label, &error);
-                }
-                return Ok(None);
-            }
-            SelectionDisposition::Replace => {}
-        }
-        let mut state = owner.routing.lock().map_err(|_| STALE)?;
-        let intent = state.begin(&label, &target, source);
-        state.upgrade_selection(&intent, remember);
-        Ok(Some(intent))
-    })
-    .await?;
-    match intent {
-        Some(intent) => select_intent(app, intent).await,
-        None => Ok(()),
-    }
 }
 
 fn schedule_selection(app: &AppHandle, intent: Intent) {
@@ -2085,8 +1996,7 @@ async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
     let mut prepared = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
-            report_selection_failure(&app, &intent, &error).await;
-            cancel_intent(&app, &intent);
+            fail_selection(&app, &intent, &error).await;
             return Err(error);
         }
     };
@@ -2104,7 +2014,7 @@ async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
         };
         if !current
             || !source_current(app, &owner, &intent)
-            || !revision_current(&owner, prepared.profile.as_ref())
+            || !revision_current(&owner, &intent.target, prepared.profile_revision.as_deref())
             || app.get_window(&intent.label).is_none()
         {
             return Err(STALE.into());
@@ -2123,16 +2033,7 @@ async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
         {
             return Err(STALE.into());
         }
-        let view = if intent.label == "main" {
-            crate::replace_dashboard_webview(
-                app,
-                prepared.route.url,
-                prepared.route.auth_script,
-                &intent.target,
-            )?
-        } else {
-            replace_auxiliary(app, &intent.label, &intent.target, prepared.route)?
-        };
+        let view = replace_document(app, &intent.label, &intent.target, prepared.route)?;
         if let Some(url) = intent.navigation_url {
             owner.navigate_document(&view, url)?;
         }
@@ -2148,8 +2049,7 @@ async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
     let leftover = pending.lock().map_err(|_| STALE)?.take();
     retire_tunnel(&app, leftover);
     if let Err(error) = &result {
-        report_selection_failure(&app, &cleanup, error).await;
-        cancel_intent(&app, &cleanup);
+        fail_selection(&app, &cleanup, error).await;
     }
     result
 }
@@ -2190,24 +2090,12 @@ fn finish_document(
     let owner = app.state::<GatewayWindows>();
     let (target, profile_revision) = {
         let state = owner.routing.lock().map_err(|_| STALE)?;
-        if !state.document_event_current(&event) {
+        let Some((route, doc)) = state.current_document(&event) else {
             return Ok(());
-        }
-        let route = &state.windows[&event.label];
-        (
-            route.target.clone(),
-            route
-                .document
-                .as_ref()
-                .and_then(|doc| doc.profile_revision.clone()),
-        )
+        };
+        (route.target.clone(), doc.profile_revision.clone())
     };
-    if profile_revision.as_ref().is_some_and(|expected| {
-        !owner
-            .profiles
-            .get(&target)
-            .is_ok_and(|profile| profile.revision == *expected)
-    }) {
+    if !revision_current(&owner, &target, profile_revision.as_deref()) {
         let failed =
             owner.routing.lock().ok().and_then(|mut state| {
                 state.document_failed(&event.label, &event.document_lifetime)
@@ -2295,26 +2183,27 @@ fn schedule_document_failure(app: &AppHandle, event: DocumentEvent) {
     });
 }
 
-async fn report_selection_failure(app: &AppHandle, intent: &Intent, error: &str) {
-    let intent = intent.clone();
+async fn fail_selection(app: &AppHandle, intent: &Intent, error: &str) {
+    let failed = intent.clone();
     let error = error.to_string();
     let _ = on_main(app, move |app| {
         let owner = app.state::<GatewayWindows>();
         {
             let mut state = owner.routing.lock().map_err(|_| STALE)?;
-            if !state.current(&intent) {
+            if !state.current(&failed) {
                 return Ok(());
             }
-            let route = state.windows.get_mut(&intent.label).ok_or(STALE)?;
+            let route = state.windows.get_mut(&failed.label).ok_or(STALE)?;
             if route.recovery.is_none() {
                 return Ok(());
             }
             route.notice = Some(error);
         }
-        publish_recovery(app, &intent.label);
+        publish_recovery(app, &failed.label);
         Ok(())
     })
     .await;
+    cancel_intent(app, intent);
 }
 
 fn publish_recovery(app: &AppHandle, label: &str) {
@@ -2431,13 +2320,7 @@ fn open_profile_recovery(app: &AppHandle, intent: &Intent, error: &str) -> Resul
         app.state::<crate::native_browser_bridge::NativeBrowserBridgeState>()
             .clear(app);
     }
-    if let Some(previous) = app.get_webview(label) {
-        crate::window_chrome::loading(&previous);
-        crate::native_browser_platform::detach_surface(&previous)?;
-        previous
-            .close()
-            .map_err(|_| "Could not close the retired Gateway document.")?;
-    }
+    retire_document(app, label, "Could not close the retired Gateway document.")?;
     let capability = CapabilityBuilder::new(format!("gateway-recovery-{}", uuid::Uuid::new_v4()))
         .local(true)
         .webview(label)
@@ -2522,11 +2405,7 @@ fn reconcile_primary(app: &AppHandle, label: &str) -> Result<(), String> {
     if !allowed {
         return Ok(());
     }
-    let view = if label == "main" {
-        crate::replace_dashboard_webview(app, route.url, route.auth_script, PRIMARY)?
-    } else {
-        replace_auxiliary(app, label, PRIMARY, route)?
-    };
+    let view = replace_document(app, label, PRIMARY, route)?;
     if let Some(destination) = destination {
         owner.navigate_document(&view, destination)?;
     }
@@ -2534,21 +2413,27 @@ fn reconcile_primary(app: &AppHandle, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn replace_auxiliary(
+fn retire_document(app: &AppHandle, label: &str, error: &str) -> Result<(), String> {
+    if let Some(previous) = app.get_webview(label) {
+        crate::window_chrome::loading(&previous);
+        crate::native_browser_platform::detach_surface(&previous)?;
+        previous.close().map_err(|_| error)?;
+    }
+    Ok(())
+}
+
+fn replace_document(
     app: &AppHandle,
     label: &str,
     target: &str,
     route: Route,
 ) -> Result<Webview, String> {
+    if label == "main" {
+        return crate::replace_dashboard_webview(app, route.url, route.auth_script, target);
+    }
     let owner = app.state::<GatewayWindows>();
     let window = app.get_window(label).ok_or(STALE)?;
-    if let Some(previous) = app.get_webview(label) {
-        crate::window_chrome::loading(&previous);
-        crate::native_browser_platform::detach_surface(&previous)?;
-        previous
-            .close()
-            .map_err(|_| "Could not replace the Gateway dashboard.")?;
-    }
+    retire_document(app, label, "Could not replace the Gateway dashboard.")?;
     let size = window
         .inner_size()
         .map_err(|_| "Could not measure the Gateway window.")?;
@@ -2589,14 +2474,29 @@ fn replace_auxiliary(
     Ok(view)
 }
 
-async fn open_window(
+enum WindowSelection {
+    Current { label: String, remember: bool },
+    New,
+    Reuse,
+}
+
+async fn select_window(
     app: AppHandle,
     target: String,
-    reuse: bool,
     source: Option<DocumentAuthority>,
+    selection: WindowSelection,
 ) -> Result<(), String> {
     let (label, intent, created) = on_main(&app, move |app| {
         let owner = app.state::<GatewayWindows>();
+        let remember = match &selection {
+            WindowSelection::Current { label, remember } => {
+                if app.get_window(label).is_none() {
+                    return Err(STALE.into());
+                }
+                *remember
+            }
+            WindowSelection::New | WindowSelection::Reuse => true,
+        };
         if let Some(source) = &source {
             let view = app.get_webview(&source.label).ok_or(STALE)?;
             if owner.authorize(&view, &source.nonce)?.lifetime != source.lifetime {
@@ -2608,71 +2508,76 @@ async fn open_window(
             .lock()
             .map_err(|_| STALE)?
             .explicit_selection();
-        if reuse {
-            let existing = owner
-                .routing
-                .lock()
-                .map_err(|_| STALE)?
-                .window_for_target(&target);
-            if let Some(label) = existing {
-                if let Some(window) = app.get_window(&label) {
-                    let force = !owner.ready_document(app, &label);
-                    let disposition = owner
+        let (label, focus, created) = match selection {
+            WindowSelection::Current { label, .. } => (label, None, false),
+            WindowSelection::New | WindowSelection::Reuse => {
+                let existing = if matches!(selection, WindowSelection::Reuse) {
+                    owner
                         .routing
                         .lock()
                         .map_err(|_| STALE)?
-                        .admit_selection(&label, &target, force, true);
-                    match disposition {
-                        SelectionDisposition::Pending => return Ok((label, None, false)),
-                        SelectionDisposition::Reuse => {
-                            window
-                                .show()
-                                .map_err(|_| "Could not show the Gateway window.")?;
-                            let _ = window.unminimize();
-                            window
-                                .set_focus()
-                                .map_err(|_| "Could not focus the Gateway window.")?;
-                            if let Err(error) =
-                                owner.remember_now(if target.starts_with("manual-") {
-                                    Some(&target)
-                                } else {
-                                    None
-                                })
-                            {
-                                show_error(app, &label, &error);
-                            }
-                            return Ok((label, None, false));
-                        }
-                        SelectionDisposition::Replace => {
-                            let mut state = owner.routing.lock().map_err(|_| STALE)?;
-                            let intent = state.begin(&label, &target, source);
-                            state.upgrade_selection(&intent, true);
-                            return Ok((label, Some(intent), false));
-                        }
-                    }
+                        .window_for_target(&target)
+                } else {
+                    None
+                };
+                if let Some(window) = existing.and_then(|label| app.get_window(&label)) {
+                    (window.label().to_string(), Some(window), false)
+                } else {
+                    let label = format!("gateway-{}", uuid::Uuid::new_v4());
+                    let name = if target == PRIMARY {
+                        "Primary Gateway".to_string()
+                    } else if let Ok(profile) = owner.profiles.get(&target) {
+                        profile.name
+                    } else {
+                        owner
+                            .routing
+                            .lock()
+                            .map_err(|_| STALE)?
+                            .discovered
+                            .get(&target)
+                            .map(|(name, _)| name.clone())
+                            .ok_or("That Gateway is no longer available.")?
+                    };
+                    create_gateway_window(app, &label, &name)?;
+                    (label, None, true)
                 }
             }
-        }
-        let label = format!("gateway-{}", uuid::Uuid::new_v4());
-        let name = if target == PRIMARY {
-            "Primary Gateway".to_string()
-        } else if let Ok(profile) = owner.profiles.get(&target) {
-            profile.name
+        };
+        let disposition = if created {
+            SelectionDisposition::Replace
         } else {
+            let force = if focus.is_some() {
+                !owner.ready_document(app, &label)
+            } else {
+                !remember
+            };
             owner
                 .routing
                 .lock()
                 .map_err(|_| STALE)?
-                .discovered
-                .get(&target)
-                .map(|(name, _)| name.clone())
-                .ok_or("That Gateway is no longer available.")?
+                .admit_selection(&label, &target, force, remember)
         };
-        create_gateway_window(app, &label, &name)?;
-        let mut state = owner.routing.lock().map_err(|_| STALE)?;
-        let intent = state.begin(&label, &target, source);
-        state.upgrade_selection(&intent, true);
-        Ok((label, Some(intent), true))
+        let intent = match disposition {
+            SelectionDisposition::Pending => None,
+            SelectionDisposition::Reuse => {
+                if let Some(window) = focus {
+                    present_window(&window, "Gateway")?;
+                }
+                if let Err(error) =
+                    owner.remember_now(target.starts_with("manual-").then_some(&target))
+                {
+                    show_error(app, &label, &error);
+                }
+                None
+            }
+            SelectionDisposition::Replace => {
+                let mut state = owner.routing.lock().map_err(|_| STALE)?;
+                let intent = state.begin(&label, &target, source);
+                state.upgrade_selection(&intent, remember);
+                Some(intent)
+            }
+        };
+        Ok((label, intent, created))
     })
     .await?;
     let Some(intent) = intent else {
@@ -2692,10 +2597,7 @@ async fn open_window(
                     route.document.is_none() && route.pending.is_none() && route.recovery.is_none()
                 });
             if unused {
-                owner.closed(app, &label);
-                if let Some(window) = app.get_window(&label) {
-                    let _ = window.close();
-                }
+                close_window(app, &label);
             }
             Ok(())
         })
@@ -2716,9 +2618,21 @@ fn create_gateway_window(app: &AppHandle, label: &str, name: &str) -> Result<(),
         .map_err(|_| "Could not prepare Gateway window controls.".to_string())
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) fn show_primary_url(app: &AppHandle, target: Url) -> Result<(), String> {
-    show_primary_route(app, Some(target))
+fn present_window(window: &tauri::Window, name: &str) -> Result<(), String> {
+    window
+        .show()
+        .map_err(|_| format!("Could not show the {name} window."))?;
+    let _ = window.unminimize();
+    window
+        .set_focus()
+        .map_err(|_| format!("Could not focus the {name} window."))
+}
+
+fn close_window(app: &AppHandle, label: &str) {
+    app.state::<GatewayWindows>().closed(app, label);
+    if let Some(window) = app.get_window(label) {
+        let _ = window.close();
+    }
 }
 
 pub(crate) fn show_primary(app: &AppHandle) -> Result<(), String> {
@@ -2737,7 +2651,7 @@ pub(crate) fn show_primary(app: &AppHandle) -> Result<(), String> {
     show_primary_route(app, None)
 }
 
-fn show_primary_route(app: &AppHandle, mut target: Option<Url>) -> Result<(), String> {
+pub(crate) fn show_primary_route(app: &AppHandle, mut target: Option<Url>) -> Result<(), String> {
     let owner = app.state::<GatewayWindows>();
     let (primary, generation, existing) = {
         let mut state = owner.routing.lock().map_err(|_| STALE)?;
@@ -2781,11 +2695,7 @@ fn show_primary_route(app: &AppHandle, mut target: Option<Url>) -> Result<(), St
             }
         }
         let view = if replace || app.get_webview(&label).is_none() {
-            if label == "main" {
-                crate::replace_dashboard_webview(app, primary.url, primary.auth_script, PRIMARY)?
-            } else {
-                replace_auxiliary(app, &label, PRIMARY, primary)?
-            }
+            replace_document(app, &label, PRIMARY, primary)?
         } else {
             app.get_webview(&label).ok_or(STALE)?
         };
@@ -2806,22 +2716,13 @@ fn show_primary_route(app: &AppHandle, mut target: Option<Url>) -> Result<(), St
                 owner.navigate_document(&view, target)?;
             }
         }
-        view.window()
-            .show()
-            .map_err(|_| "Could not show the Primary Gateway window.")?;
-        let _ = view.window().unminimize();
-        view.window()
-            .set_focus()
-            .map_err(|_| "Could not focus the Primary Gateway window.")?;
+        present_window(&view.window(), "Primary Gateway")?;
         owner.publish(app);
         Ok(())
     })();
     if let Err(error) = &result {
         if created {
-            owner.closed(app, &label);
-            if let Some(window) = app.get_window(&label) {
-                let _ = window.close();
-            }
+            close_window(app, &label);
         }
         show_error(app, "main", error);
     }
@@ -2876,7 +2777,7 @@ pub(crate) async fn open_discovered(app: AppHandle, url: Url, name: String) -> R
         Ok(())
     })
     .await?;
-    open_window(app, target, true, None).await
+    select_window(app, target, None, WindowSelection::Reuse).await
 }
 
 fn local_settings_url(url: &Url) -> bool {
@@ -2994,11 +2895,14 @@ pub(crate) async fn gateway_request(
             .await;
         }
         "select" | "reconnect" => {
-            let remember = action == "select";
-            select(app, label, target, Some(source), remember).await?;
+            let selection = WindowSelection::Current {
+                label,
+                remember: action == "select",
+            };
+            select_window(app, target, Some(source), selection).await?;
         }
         "open-window" => {
-            open_window(app, target, false, Some(source)).await?;
+            select_window(app, target, Some(source), WindowSelection::New).await?;
         }
         "reconnect-cancel" => {
             on_main(&app, move |app| {
@@ -3033,17 +2937,9 @@ pub(crate) async fn gateway_request(
                 let owner = app.state::<GatewayWindows>();
                 let view = app.get_webview(&label).ok_or(STALE)?;
                 owner.authorize(&view, &source.nonce)?;
-                owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .explicit_selection();
-                let intent = owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .begin_promotion(&label, &target, source);
-                Ok(intent)
+                let mut state = owner.routing.lock().map_err(|_| STALE)?;
+                state.explicit_selection();
+                Ok(state.begin_promotion(&label, &target, source))
             })
             .await?;
             let guard = PromotionGuard {
@@ -3064,7 +2960,13 @@ pub(crate) async fn gateway_request(
                     }
                 })
                 .await?;
-                crate::promote_gateway_profile(&app, profile.request, guard).await
+                app.state::<crate::GatewayOperationQueue>()
+                    .execute(crate::GatewayOperation::PromoteProfile {
+                        request: profile.request,
+                        guard,
+                    })
+                    .await
+                    .map(|_| ())
             }
             .await;
             cancel_intent(&app, &intent);
@@ -3098,7 +3000,7 @@ pub(crate) async fn gateway_profile_request(
             .to_string();
         app.state::<GatewayWindows>().profiles.get(&id)?;
         if label == SETTINGS {
-            open_window(app, id, false, None).await?;
+            select_window(app, id, None, WindowSelection::New).await?;
         } else {
             let intent = on_main(&app, move |app| {
                 let view = app.get_webview(&label).ok_or(STALE)?;
@@ -3125,14 +3027,16 @@ pub(crate) async fn gateway_profile_request(
             return Err(STALE.into());
         }
         let owner = app.state::<GatewayWindows>();
+        if action == "list" {
+            let result =
+                json!({"profiles":owner.profiles.list()?,"selectedId":owner.profiles.selected()?});
+            owner.publish(app);
+            return Ok((result, Vec::new()));
+        }
         let id = message.get("id").and_then(Value::as_str);
-        let mut affected = Vec::new();
         let mut replacement = None;
         let mut remember_edited = false;
         let result = match action.as_str() {
-            "list" => {
-                json!({"profiles":owner.profiles.list()?,"selectedId":owner.profiles.selected()?})
-            }
             "save" => {
                 let name = message
                     .get("name")
@@ -3160,16 +3064,6 @@ pub(crate) async fn gateway_profile_request(
                     owner.routing.lock().map_err(|_| STALE)?.selection_target =
                         Some(profile.id.clone());
                 }
-                owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .explicit_selection();
-                affected = owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .invalidate_profile(id.unwrap_or(&profile.id));
                 replacement = Some(profile.id.clone());
                 serde_json::to_value(profile)
                     .map_err(|_| "Could not read saved Gateway details.")?
@@ -3177,41 +3071,29 @@ pub(crate) async fn gateway_profile_request(
             "remove" => {
                 let id = id.ok_or("Choose a saved Gateway.")?;
                 owner.profiles.remove(id)?;
-                owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .explicit_selection();
-                affected = owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .invalidate_profile(id);
                 Value::Null
             }
             _ => return Err("Unknown saved Gateway action.".into()),
         };
+        let affected = {
+            let mut state = owner.routing.lock().map_err(|_| STALE)?;
+            state.explicit_selection();
+            state.invalidate_profile(id.or(replacement.as_deref()).expect("changed profile"))
+        };
         let mut reconnects = Vec::new();
         for label in affected {
             if replacement.is_none() && label != "main" {
-                owner.closed(app, &label);
-                if let Some(window) = app.get_window(&label) {
-                    let _ = window.close();
-                }
+                close_window(app, &label);
             } else {
                 let target = replacement.as_deref().unwrap_or(PRIMARY);
-                let retiring = owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .begin(&label, target, None);
-                if remember_edited {
-                    owner
-                        .routing
-                        .lock()
-                        .map_err(|_| STALE)?
-                        .remember_edited_selection(&retiring);
-                }
+                let retiring = {
+                    let mut state = owner.routing.lock().map_err(|_| STALE)?;
+                    let intent = state.begin(&label, target, None);
+                    if remember_edited {
+                        state.remember_edited_selection(&intent);
+                    }
+                    intent
+                };
                 if let Err(error) = open_profile_recovery(app, &retiring, "") {
                     show_error(app, view.label(), &error);
                     continue;
@@ -3225,9 +3107,7 @@ pub(crate) async fn gateway_profile_request(
                 );
             }
         }
-        if matches!(action.as_str(), "save" | "remove") {
-            publish_profile_catalog(app, &label, id, replacement.as_deref());
-        }
+        publish_profile_catalog(app, &label, id, replacement.as_deref());
         owner.publish(app);
         Ok((result, reconnects))
     })
@@ -3283,22 +3163,19 @@ fn fill_menu(app: &AppHandle, menu: &Submenu<tauri::Wry>, snapshot: &Value) -> t
             let (Some(id), Some(name)) = (gateway["id"].as_str(), gateway["name"].as_str()) else {
                 continue;
             };
-            let accelerator = (index < 9).then(|| format!("CmdOrCtrl+{}", index + 1));
-            menu.append(&MenuItem::with_id(
-                app,
-                format!("gateway-focus:{id}"),
-                name,
-                true,
-                accelerator,
-            )?)?;
-            let accelerator = (index < 9).then(|| format!("CmdOrCtrl+Alt+{}", index + 1));
-            menu.append(&MenuItem::with_id(
-                app,
-                format!("gateway-new:{id}"),
-                format!("Open {name} in New Window"),
-                true,
-                accelerator,
-            )?)?;
+            for (action, name, modifier) in [
+                ("focus", name.to_string(), ""),
+                ("new", format!("Open {name} in New Window"), "Alt+"),
+            ] {
+                let accelerator = (index < 9).then(|| format!("CmdOrCtrl+{modifier}{}", index + 1));
+                menu.append(&MenuItem::with_id(
+                    app,
+                    format!("gateway-{action}:{id}"),
+                    name,
+                    true,
+                    accelerator,
+                )?)?;
+            }
         }
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
@@ -3336,17 +3213,17 @@ pub(crate) fn handle_menu(app: &AppHandle, id: &str) -> bool {
         }
         return true;
     }
-    let (target, reuse) = if let Some(id) = id.strip_prefix("gateway-focus:") {
-        (id, true)
+    let (target, selection) = if let Some(id) = id.strip_prefix("gateway-focus:") {
+        (id, WindowSelection::Reuse)
     } else if let Some(id) = id.strip_prefix("gateway-new:") {
-        (id, false)
+        (id, WindowSelection::New)
     } else {
         return false;
     };
     let app = app.clone();
     let target = target.to_string();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = open_window(app.clone(), target, reuse, None).await {
+        if let Err(error) = select_window(app.clone(), target, None, selection).await {
             show_error(&app, "main", &error);
         }
     });

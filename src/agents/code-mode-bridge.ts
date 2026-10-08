@@ -26,7 +26,7 @@ import { isCollectorSpawnTool } from "./subagents/swarm/swarm-collector-capabili
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { getToolContractFailureCode } from "./tool-contract-error.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
-import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "./tool-policy-shared.js";
+import { formatToolExecutionGatedMessage, isToolExecutionAllowed } from "./tool-policy-shared.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -173,7 +173,9 @@ function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
   // events and agents.run launches collectors. A run that executes only an allowlist
   // (detached skill review) gets the same refusal as the tool, never the foreground session.
   if (ctx.toolExecutionAllow && !isToolExecutionAllowed(ctx.toolExecutionAllow, "sessions_spawn")) {
-    throw new ToolInputError(TOOL_EXECUTION_GATED_MESSAGE);
+    throw new ToolInputError(
+      formatToolExecutionGatedMessage("sessions_spawn", ctx.toolExecutionAllow),
+    );
   }
 }
 
@@ -186,7 +188,7 @@ export function requiresCodeModeCompletion(
     if (
       request.method !== "callValue" ||
       !isRecord(request.args[1]) ||
-      request.args[1].required !== true
+      request.args[1].awaitResults !== true
     ) {
       return false;
     }
@@ -345,7 +347,7 @@ export async function runBridgeRequest(params: {
           input.background !== true &&
           params.completionRequired
         ) {
-          input = { ...input, required: true };
+          input = { ...input, awaitResults: true };
         } else if (
           binding.source === "openclaw" &&
           binding.name === "exec" &&
@@ -367,7 +369,7 @@ export async function runBridgeRequest(params: {
           isRecord(input) &&
           input.timeoutSeconds === undefined
         ) {
-          input = { ...input, required: true };
+          input = { ...input, awaitResults: true };
         }
         value = await params.runtime.callExactValue(binding.id, input, {
           recoverySurface: "catalog",
@@ -447,7 +449,9 @@ export async function runBridgeRequest(params: {
           params.ctx.toolExecutionAllow &&
           !isToolExecutionAllowed(params.ctx.toolExecutionAllow, "skills_search")
         ) {
-          throw new ToolInputError(TOOL_EXECUTION_GATED_MESSAGE);
+          throw new ToolInputError(
+            formatToolExecutionGatedMessage("skills_search", params.ctx.toolExecutionAllow),
+          );
         }
         const offset = values[0] ?? 0;
         if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {

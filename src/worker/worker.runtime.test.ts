@@ -94,6 +94,8 @@ import {
   registerWorkerGatewayToolAvailabilityTests,
   registerWorkerGatewayToolRpcTests,
 } from "./worker-runtime-gateway-tools.suite.js";
+import { registerWorkerGitHubFailureTests } from "./worker-runtime-github-failures.suite.js";
+import { registerWorkerNativeInferenceTests } from "./worker-runtime-native-inference.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { registerWorkerPromptTests } from "./worker-runtime-prompt.suite.js";
 import { registerWorkerReplayWindowTests } from "./worker-runtime-replay.suite.js";
@@ -163,6 +165,7 @@ type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" 
 type FakeGatewayOptions = {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
   backgroundCommand?: string;
+  backgroundYieldMs?: number;
   execCommand?: string;
   execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
@@ -270,6 +273,12 @@ class FakeWorkerGateway {
     });
     if (this.rootDir) {
       await rm(this.rootDir, { recursive: true, force: true });
+    }
+  }
+
+  disconnectClients(): void {
+    for (const client of this.clients) {
+      client.terminate();
     }
   }
 
@@ -765,7 +774,9 @@ class FakeWorkerGateway {
                   "setInterval(() => undefined, 1000)",
                 )}`
               : "exec sleep 60"),
-          background: true,
+          ...(this.options.backgroundYieldMs === undefined
+            ? { background: true }
+            : { yieldMs: this.options.backgroundYieldMs }),
         }
       : {
           command:
@@ -1528,6 +1539,8 @@ describe("worker runtime", () => {
     });
   });
 
+  registerWorkerNativeInferenceTests({ setup });
+
   it("bounds shutdown when remote inference cancellation cannot settle", async () => {
     const { gateway, launch } = await setup({
       inferencePlans: ["hold"],
@@ -1657,9 +1670,10 @@ describe("worker runtime", () => {
     });
   });
 
-  it.each(["running", "completed", "cancelled"] as const)(
-    "keeps completed-turn background processes controllable in the managed environment (%s)",
-    async (processState) => {
+  it.each(["running", "completed", "cancelled", "ordinary-yield"] as const)(
+    "keeps completed-turn commands controllable in the managed environment (%s)",
+    async (scenario) => {
+      const processState = scenario === "ordinary-yield" ? "running" : scenario;
       const { gateway, launch, workspaceDir } = await setup({
         inferencePlans: [
           "background-tool",
@@ -1672,6 +1686,7 @@ describe("worker runtime", () => {
         ...(processState === "completed"
           ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-release.cjs` }
           : {}),
+        ...(scenario === "ordinary-yield" ? { backgroundYieldMs: 10 } : {}),
       });
       const releaseBackground = createDeferred();
       let completionServer: Server | undefined;
@@ -2130,57 +2145,7 @@ describe("worker runtime", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "keeps exec unbound and creates no GitHub profile without a turn identity",
-    async () => {
-      const { gateway, launch } = await setup({
-        inferencePlans: ["tool", "text"],
-        execCommand: 'printf "profile=%s\\n" "${GH_CONFIG_DIR-unset}"',
-      });
-      const environment = await createWorkerRuntimeEnvironment(SESSION_ID);
-      try {
-        await expect(
-          runWorkerDescriptor(launch, { environmentStateDir: environment.stateDir }),
-        ).resolves.toMatchObject({ status: "completed" });
-
-        const toolResult = gateway.inferenceRequests[1]?.context.messages.find(
-          (message) => message.role === "toolResult" && message.toolName === "exec",
-        );
-        expect(toolResult).toMatchObject({
-          isError: false,
-          content: [{ type: "text", text: expect.stringContaining("profile=unset") }],
-        });
-        await expect(
-          stat(path.join(environment.stateDir, "github-profiles")),
-        ).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      } finally {
-        await environment.close();
-      }
-    },
-  );
-
-  it("reports a GitHub profile write failure before running inference", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.github = {
-      token: "worker-profile-write-fixture-token",
-      login: "worker-fixture",
-      branch: "openclaw/session-fixture",
-    };
-    const environment = await createWorkerRuntimeEnvironment(SESSION_ID);
-    try {
-      // A file in the root's parent path cannot be repaired by removing github-profiles.
-      const blockedStateDir = path.join(environment.stateDir, "obstruction");
-      await writeFile(blockedStateDir, "obstruction");
-      await expect(
-        runWorkerDescriptor(launch, { environmentStateDir: blockedStateDir }),
-      ).rejects.toThrow("Worker GitHub identity profile could not be written:");
-      expect(gateway.inferenceRequests).toHaveLength(0);
-    } finally {
-      await environment.close();
-    }
-  });
+  registerWorkerGitHubFailureTests({ setup, sessionId: SESSION_ID });
 
   registerWorkerPermissionTests({ setup });
 

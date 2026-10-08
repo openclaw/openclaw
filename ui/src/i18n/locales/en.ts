@@ -92,6 +92,7 @@ export const en: TranslationMap & {
   sessionsView: TranslationMap;
   skillWorkshop: TranslationMap;
   systems: TranslationMap;
+  talkPage: TranslationMap;
   usage: TranslationMap & { overview: TranslationMap };
 } = {
   pluginUi: {
@@ -144,7 +145,7 @@ export const en: TranslationMap & {
     restore: "Restore",
     unarchive: "Unarchive",
     undo: "Undo",
-    probe: "Probe",
+    probe: "Check connection",
     call: "Call",
     confirm: "Confirm",
     dontAskAgain: "Don't ask me again",
@@ -190,15 +191,15 @@ export const en: TranslationMap & {
     dark: "Dark",
     baseUrl: "Base URL",
     lastStart: "Last start",
-    lastProbe: "Last probe",
+    lastProbe: "Last connection check",
     lastConnect: "Last connect",
     lastMessage: "Last message",
     authAge: "Auth age",
     credential: "Credential",
     audience: "Audience",
     publicKey: "Public Key",
-    probeOk: "Probe ok",
-    probeFailed: "Probe failed",
+    probeOk: "Connection check passed",
+    probeFailed: "Connection check failed",
     reloadConfig: "Reload Config",
     multiSelect: {
       addCustom: "Add “{value}”",
@@ -1225,6 +1226,7 @@ export const en: TranslationMap & {
       empty: "No skills found.",
       missing: "Missing: {items}",
       reason: "Reason: {items}",
+      learnedAlwaysOn: "Learned skill — archive in Workshop to hide",
       updateError: "Could not update the agent skill allowlist.",
     },
     channels: {
@@ -1591,6 +1593,7 @@ export const en: TranslationMap & {
   agentTools: {},
   skillGroups: {
     workspace: "Workspace Skills",
+    learned: "Learned Skills",
     builtIn: "Built-in Skills",
     installed: "Installed Skills",
     extra: "Extra Skills",
@@ -1816,8 +1819,7 @@ export const en: TranslationMap & {
     cron: "Scheduled tasks and recurring agent runs.",
     skills: "Manage your agent skills",
     plugins: "Extend your Claw with tools",
-    skillWorkshop:
-      "The skills your agent uses now, suggestions waiting for review, and past decisions.",
+    skillWorkshop: "Skills your agent learned, recent changes, and undo.",
     devices: "Paired devices, pairing approvals, and exec bindings.",
     cloudWorkers: "Profiles and machine sizes for cloud sessions.",
     chat: "Gateway chat for quick interventions.",
@@ -1969,8 +1971,6 @@ export const en: TranslationMap & {
       prepareDialogLabel: "Local model setup",
       title: "Sign in with a provider",
       connected: "Account connected. Choose a model when you want to test a reply.",
-      failed: "Could not finish. Open Details to see what to do next.",
-      details: "Details",
       prepareTitle: "Set up a local model",
       starting: "Starting provider sign-in…",
       prepareStarting: "Starting local model setup…",
@@ -2104,47 +2104,7 @@ export const en: TranslationMap & {
   },
   mcpServers: {},
   mcpPage: {},
-  talkPage: {
-    intro: "Configure realtime voice providers, models, and speaker voices.",
-    voiceSection: {
-      title: "Realtime voice",
-      description:
-        "Continuous speech conversations with your agent. The pickers below write talk.realtime settings; the full form further down covers everything else.",
-    },
-    status: {
-      title: "Status",
-      ready: "Ready",
-      notReady: "Not configured",
-      unavailable: "Unavailable",
-      unavailableHint: "Connect to the Gateway to check realtime voice readiness.",
-      activeProvider: "Active provider: {provider}",
-      noProvider: "No realtime voice provider is configured yet.",
-    },
-    provider: {
-      title: "Provider",
-      description: "Auto picks the first provider with working credentials.",
-      auto: "Auto",
-    },
-    model: {
-      title: "Model",
-      description: "Realtime voice model for browser Talk sessions.",
-      default: "Provider default",
-      defaultNamed: "Default ({model})",
-    },
-    voice: {
-      title: "Speaker voice",
-      description: "Voice used for spoken replies. GPT-Live locks the voice once a call starts.",
-      default: "Provider default",
-      unsupported: "unsupported",
-      unsupportedDefault:
-        "This saved voice is unavailable for the selected route. Provider default will be used.",
-    },
-    gptLive: {
-      title: "GPT-Live",
-      hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
-      ready: "Ready",
-    },
-  },
+  talkPage: {},
   memoryPage: {},
   sessionsPage: {
     hubTablistLabel: "Session sections",
@@ -2262,7 +2222,7 @@ export const en: TranslationMap & {
       sessionUpdated: "Session updated",
       ago: "ago",
       viewActivity: "View activity",
-      web: "Web",
+      web: "Web app",
       cli: "Command line",
       terminal: "Terminal",
       app: "App",
@@ -2305,7 +2265,10 @@ export const en: TranslationMap & {
     online: "Online",
     idle: "Idle",
     offline: "Offline",
-    unknownDevice: "Unknown device",
+    unknownConnection: "Unknown client",
+    connectionDetails: "Connection details · {count}",
+    connectionOne: "1 connection",
+    connectionMany: "{count} connections",
     lastInput: "Last input {time} ago",
     viewingNow: "Viewing now",
     notViewing: "Not viewing a session right now.",
@@ -2325,6 +2288,12 @@ export const en: TranslationMap & {
     confirm: "Confirm original publication",
     check: "Check publication",
     refresh: "Refresh publication",
+    statusFailed: "Publication failed",
+    statusConfirm: "Confirmation needed",
+    statusRequested: "Publication queued",
+    statusPublishing: "Publication in progress",
+    statusUnavailable: "Publication status unavailable",
+    statusUnknown: "Outcome unknown",
     unknown:
       "The outcome is unknown. Retry keeps the original account and request; it does not switch accounts.",
     target: "Pull request: {repository} \u2192 {base}",
@@ -2895,8 +2864,12 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
-    yieldWaiting: "Handed off and waiting",
-    yieldResumed: "Resumed",
+    waitingOnSubagentsCount: "Waiting on {count} subagents",
+    waitingOnSubagent: "Waiting on {name}",
+    waitingOnSession: "Waiting on 1 session",
+    waitingOnSessionsCount: "Waiting on {count} sessions",
+    subagentsRunning: "{count} subagents running",
+    subagentsRunningOne: "1 subagent running",
     startupStatus: {
       retrying: "Retrying… {attempt}/{maxAttempts}",
       preparingWorkspace: "Preparing workspace…",
@@ -3219,6 +3192,7 @@ export const en: TranslationMap & {
       cloudPublicationGuidance:
         "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
       dismiss: "Dismiss pull request #{number}",
+      dismissBranch: "Hide {branch} for this session",
       open: "Open",
       draft: "Draft",
       merged: "Merged",
@@ -3483,8 +3457,6 @@ export const en: TranslationMap & {
       activeFilterCount: "Active filters: {count}",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
-      showOnlyPerson: "Show only {name}",
-      showEveryone: "Show everyone",
       showAllSessions: "Show all sessions",
       noActiveSessionsForFilter: "No active sessions match this filter",
       sortUpdated: "Last updated",
@@ -3607,6 +3579,7 @@ export const en: TranslationMap & {
       disconnected: "Not connected. Try again after reconnecting.",
     },
     imageLightbox: {
+      actions: "Image actions",
       previous: "Previous image",
       next: "Next image",
       position: "{current} / {total}",
@@ -4054,6 +4027,8 @@ export const en: TranslationMap & {
         fetchesMany: "{count} fetches",
         otherOne: "1 other operation",
         otherMany: "{count} other operations",
+        subagentsOne: "1 subagent",
+        subagentsMany: "{count} subagents",
         failed: "{count} failed",
         blocked: "{count} blocked",
         unknown: "{count} unknown",
@@ -4083,6 +4058,9 @@ export const en: TranslationMap & {
       skipped: "Skipped",
       skippedCount: "{count} skipped",
       running: "Running",
+      subagentRunning: "running",
+      subagentStopped: "stopped",
+      openSubagent: "Open subagent session",
       completed: "Completed",
       blocked: "Blocked",
       outcomeUnknown: "Outcome unknown",

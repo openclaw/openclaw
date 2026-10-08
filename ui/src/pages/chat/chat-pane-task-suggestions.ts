@@ -31,7 +31,6 @@ type TaskSuggestionOperation =
   | { action: "dismiss"; resolved: boolean }
   | {
       action: "accept";
-      resolved: boolean;
       suggestion: TaskSuggestion;
       mode: TaskSuggestionStartMode;
       cwd?: string;
@@ -131,18 +130,14 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     const scope = this.captureConnectionScope();
     if (
       !scope ||
-      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "taskSuggestions.list")
+      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "taskSuggestions.list") ||
+      parseCatalogSessionKey(scope.state.sessionKey)
     ) {
       this.setTaskSuggestions([]);
       this.requestUpdate();
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    if (parseCatalogSessionKey(sessionKey)) {
-      this.setTaskSuggestions([]);
-      this.requestUpdate();
-      return;
-    }
     const agentId = resolveChatAgentId(scope.state);
     const readScope = JSON.stringify([this.connectionGeneration, sessionKey, agentId]);
     if (options?.automatic) {
@@ -185,7 +180,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       ]);
     } else {
       const operation = this.taskSuggestionOperations.get(event.taskId);
-      if (operation) {
+      if (operation?.action === "dismiss") {
         operation.resolved = true;
       }
       this.setTaskSuggestions(this.taskSuggestions.filter((item) => item.id !== event.taskId));
@@ -389,7 +384,6 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       action === "accept"
         ? {
             action,
-            resolved: false,
             suggestion: previous?.suggestion ?? suggestion,
             mode: previous?.mode ?? mode,
             cwd: cwd ?? previous?.cwd,

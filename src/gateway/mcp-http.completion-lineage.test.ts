@@ -7,7 +7,10 @@ import {
   prepareAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
-import { withFileMutationQueue } from "../agents/sessions/tools/file-mutation-queue.js";
+import {
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeyResolution,
+} from "../agents/sessions/tools/file-mutation-queue.js";
 import { prepareGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
 import { callGatewayTool } from "../agents/tools/gateway.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -508,7 +511,10 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
     // Another mutation of the same file holds its queue, so the authorized write waits
     // inside the tool, after dispatch authorization and before its own I/O.
     const releaseQueue = createDeferredCore();
-    const holder = withFileMutationQueue(grant.target, () => releaseQueue.promise);
+    const holder = withFileMutationQueueKeyResolution(
+      resolveFileMutationQueueKey(grant.target),
+      () => releaseQueue.promise,
+    );
 
     const pending = grant.request("tools/call");
     await grant.prepared;

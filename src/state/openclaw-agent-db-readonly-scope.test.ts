@@ -2,13 +2,19 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeSqliteReadSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { readExactSessionEntriesWithLifecycle } from "../config/sessions/session-entry-read.worker.js";
 import { applyAgentDatabaseReaderRequest } from "../infra/agent-database-readers.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -19,11 +25,23 @@ import {
   retainOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
 } from "./openclaw-agent-db-readonly.js";
-import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
+import { releaseOpenClawAgentDatabaseReadValidation } from "./openclaw-agent-db-validation-cache.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
-it("bounds query preparation while scoped reads observe new commits", async () => {
+const thread = vi.hoisted(() => ({ isMainThread: true }));
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  get isMainThread() {
+    return thread.isMainThread;
+  },
+}));
+
+it("reuses admitted metadata between commits while scoped reads observe foreign writes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const { path } = openOpenClawAgentDatabase(options);
@@ -46,18 +64,20 @@ it("bounds query preparation while scoped reads observe new commits", async () =
               writer
                 .prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'")
                 .run(stamp);
-              expect(
-                withOpenClawAgentDatabaseReadOnly(
-                  (database) => executeSqliteQueryTakeFirstSync(database.db, query)?.updated_at,
-                  options,
-                ),
-              ).toEqual({ found: true, value: stamp });
+              for (let read = 0; read < 2; read++) {
+                expect(
+                  withOpenClawAgentDatabaseReadOnly(
+                    (database) => executeSqliteQueryTakeFirstSync(database.db, query)?.updated_at,
+                    options,
+                  ),
+                ).toEqual({ found: true, value: stamp });
+              }
             }
             const preparations = prepare.mock.calls.filter(([sql]) => sql === query.compile().sql);
             expect(preparations.length).toBeLessThanOrEqual(2);
             expect(
               observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql)),
-            ).toHaveLength(20);
+            ).toHaveLength(40);
             expect(
               observation.queries.filter((sql) =>
                 /^SELECT role, schema_version, agent_id/iu.test(sql),
@@ -382,6 +402,15 @@ it("closes generic and explicit candidate-family readers without releasing unrel
     const closeReaders = () =>
       applyAgentDatabaseReaderRequest({ kind: "close", candidates, deleted: false });
     try {
+      await applyAgentDatabaseReaderRequest({
+        kind: "close",
+        candidates,
+        deleted: false,
+        retainedPaths: [sibling],
+      });
+      expect(selected.isOpen).toBe(false);
+      expect(explicit.isOpen).toBe(true);
+      expect(retained.isOpen).toBe(true);
       await closeReaders();
       expect(selected.isOpen).toBe(false);
       expect(explicit.isOpen).toBe(false);
@@ -412,6 +441,57 @@ it("closes generic and explicit candidate-family readers without releasing unrel
       }
     } finally {
       scope.close();
+    }
+  });
+});
+
+it("loads canonical proof before fresh full reads without trusting a copied file", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const options = { agentId: "main", env };
+    const database = openOpenClawAgentDatabase(options);
+    const sessionKey = "agent:main:receipt-read";
+    writeSessionEntry(database, sessionKey, { sessionId: "receipt-session", updatedAt: 1 });
+    writeSessionEntry(database, "agent:main:unrelated", { sessionId: "unrelated", updatedAt: 1 });
+    runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
+    await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+    releaseOpenClawAgentDatabaseReadValidation([{ path: database.path }]);
+    const copiedPath = nodePath.join(nodePath.dirname(database.path), "copied.sqlite");
+    fs.copyFileSync(database.path, copiedPath);
+    for (const pathname of [database.path, copiedPath]) {
+      const target = { ...options, path: pathname };
+      const retained = new OpenClawAgentDatabaseReadOnlyScope();
+      try {
+        thread.isMainThread = false;
+        retained.run(target, () => {
+          const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, target);
+          if (!opened.found) {
+            throw new Error("Expected the seeded canonical database");
+          }
+          const queries = trackSqliteStatementExecutions(opened.value.db, ["inventory"], (sql) =>
+            sql.includes("retained_window") && !/\bwhere\b/iu.test(sql) ? "inventory" : null,
+          );
+          try {
+            const result = readExactSessionEntriesWithLifecycle({
+              kind: "session-exact-entries",
+              database: target,
+              env,
+              projection: "full",
+              sessionKeys: [sessionKey],
+            });
+            expect(result.entries[0]?.entry.sessionId).toBe("receipt-session");
+            if (pathname === database.path) {
+              expect(queries.rowCounts.inventory).toBe(0);
+            } else {
+              expect(queries.rowCounts.inventory).toBeGreaterThan(0);
+            }
+          } finally {
+            queries.restore();
+          }
+        });
+      } finally {
+        thread.isMainThread = true;
+        retained.close();
+      }
     }
   });
 });

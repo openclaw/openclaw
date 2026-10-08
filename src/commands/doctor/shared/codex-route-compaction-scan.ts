@@ -42,17 +42,6 @@ function collectUnsupportedCodexCompactionOverridesForAgent(
   const agent = asMutableRecord(params.agent);
   const compaction = asMutableRecord(agent?.compaction);
   const inheritedCompaction = asMutableRecord(params.inheritedCompaction);
-  if (
-    !agentUsesCodexRuntimeForCompaction({
-      cfg: params.cfg,
-      agent,
-      agentId: params.agentId,
-      inheritedModelRef: params.inheritedModelRef,
-      env: params.env,
-    })
-  ) {
-    return [];
-  }
   const providerValue = compaction?.provider ?? inheritedCompaction?.provider;
   if (normalizeString(providerValue) === LOSSLESS_CONTEXT_ENGINE_ID) {
     return [];
@@ -81,17 +70,6 @@ function collectLegacyLosslessCompactionForAgent(
   const agent = asMutableRecord(params.agent);
   const compaction = asMutableRecord(agent?.compaction);
   const inheritedCompaction = asMutableRecord(params.inheritedCompaction);
-  if (
-    !agentUsesCodexRuntimeForCompaction({
-      cfg: params.cfg,
-      agent,
-      agentId: params.agentId,
-      inheritedModelRef: params.inheritedModelRef,
-      env: params.env,
-    })
-  ) {
-    return [];
-  }
   const localProvider = compaction?.provider;
   const hasLocalProvider = typeof localProvider === "string" && localProvider.trim();
   const providerValue = hasLocalProvider ? localProvider : inheritedCompaction?.provider;
@@ -110,8 +88,6 @@ function collectLegacyLosslessCompactionForAgent(
     : (params.inheritedCompactionPath ?? compactionPath);
   return [
     {
-      path: params.path,
-      compactionPath,
       providerPath: `${compactionPath}.provider`,
       providerValue: String(providerValue).trim(),
       ...(typeof modelValue === "string" && modelValue.trim()
@@ -126,8 +102,15 @@ function collectLegacyLosslessCompactionForAgent(
 
 function collectCompactionConfigs<T>(
   params: CompactionScanParams,
-  collectForAgent: (params: AgentCompactionScanParams) => T[],
+  collect: (params: AgentCompactionScanParams) => T[],
 ): T[] {
+  const collectForAgent = (agentParams: AgentCompactionScanParams) =>
+    agentUsesCodexRuntimeForCompaction({
+      ...agentParams,
+      agent: asMutableRecord(agentParams.agent),
+    })
+      ? collect(agentParams)
+      : [];
   const defaults = params.cfg.agents?.defaults;
   const defaultModelRef = readAgentPrimaryModelRef(defaults);
   const defaultCompaction = asMutableRecord(defaults?.compaction);
@@ -162,7 +145,7 @@ export function collectLegacyLosslessCompactionConfigs(
   return dedupeByKey(
     collectCompactionConfigs(params, collectLegacyLosslessCompactionForAgent),
     (hit) =>
-      `${hit.compactionPath}\0${hit.providerValue}\0${hit.modelPath ?? ""}\0${hit.modelValue ?? ""}`,
+      `${hit.providerPath}\0${hit.providerValue}\0${hit.modelPath ?? ""}\0${hit.modelValue ?? ""}`,
   );
 }
 

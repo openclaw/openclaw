@@ -170,18 +170,14 @@ export function resolveAuthProfileEligibility(params: {
     now: params.now,
   });
   if (
-    credentialEligibility.eligible ||
-    (params.includePendingOAuthRefresh === true &&
-      credentialEligibility.reasonCode === "expired" &&
-      cred.type === "oauth" &&
-      isPendingOAuthRefreshFence(cred))
+    params.includePendingOAuthRefresh === true &&
+    credentialEligibility.reasonCode === "expired" &&
+    cred.type === "oauth" &&
+    isPendingOAuthRefreshFence(cred)
   ) {
     return { eligible: true, reasonCode: "ok" };
   }
-  return {
-    eligible: false,
-    reasonCode: credentialEligibility.reasonCode,
-  };
+  return credentialEligibility;
 }
 
 type ResolveAuthProfileOrderParams = {
@@ -243,28 +239,19 @@ export function resolveAuthProfileOrderWithMetadata(
       providerKey,
       providerAuthKey,
     });
-  const explicitProfiles = cfg?.auth?.profiles
-    ? Object.entries(cfg.auth.profiles)
-        .filter(([, profile]) =>
-          isProfileProviderCompatibleWithAuthProvider({
-            cfg,
-            authAliasLookupParams: params.authAliasLookupParams,
-            providerAuthKey,
-            provider: profile.provider,
-          }),
-        )
-        .map(([profileId]) => profileId)
-    : [];
-  const storeProfiles = Object.entries(store.profiles)
-    .filter(([, credential]) =>
-      isProfileProviderCompatibleWithAuthProvider({
-        cfg,
-        authAliasLookupParams: params.authAliasLookupParams,
-        providerAuthKey,
-        provider: credential.provider,
-      }),
-    )
-    .map(([profileId]) => profileId);
+  const compatibleProfileIds = (profiles: Record<string, { provider: string }>) =>
+    Object.entries(profiles)
+      .filter(([, profile]) =>
+        isProfileProviderCompatibleWithAuthProvider({
+          cfg,
+          authAliasLookupParams: params.authAliasLookupParams,
+          providerAuthKey,
+          provider: profile.provider,
+        }),
+      )
+      .map(([profileId]) => profileId);
+  const explicitProfiles = compatibleProfileIds(cfg?.auth?.profiles ?? {});
+  const storeProfiles = compatibleProfileIds(store.profiles);
   const baseOrder =
     explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : storeProfiles);
   if (baseOrder.length === 0) {

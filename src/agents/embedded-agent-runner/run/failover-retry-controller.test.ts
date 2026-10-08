@@ -39,29 +39,35 @@ import { createEmbeddedRunFailoverRetryController } from "./failover-retry-contr
 type ControllerInput = Parameters<typeof createEmbeddedRunFailoverRetryController>[0];
 
 function createController(
-  advanceAuthProfile: ControllerInput["advanceAuthProfile"],
+  advanceAuthProfile: ControllerInput["preparedRuntime"]["advanceAttemptAuthProfile"],
   fallbackConfigured = false,
   abortSignal?: AbortSignal,
-  onRetryWait?: ControllerInput["runParams"]["onRetryWait"],
+  onRetryWait?: ControllerInput["runInput"]["runParams"]["onRetryWait"],
 ) {
   return createEmbeddedRunFailoverRetryController({
-    runParams: {
-      runId: "run:failover-retry-controller-test",
-      abortSignal,
-      onRetryWait,
-    } as ControllerInput["runParams"],
-    provider: "openai",
-    modelId: "gpt-5.6-luna",
-    globalLane: "test",
-    agentDir: "/tmp/openclaw-failover-retry-controller-test",
-    fallbackConfigured,
-    profileFailureStore: { version: 1, profiles: {} },
-    getLastProfileId: () => "openai:p1",
+    runInput: {
+      runParams: {
+        runId: "run:failover-retry-controller-test",
+        abortSignal,
+        onRetryWait,
+      } as ControllerInput["runInput"]["runParams"],
+      globalLane: "test",
+      agentDir: "/tmp/openclaw-failover-retry-controller-test",
+      fallbackConfigured,
+    },
+    preparedRuntime: {
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      profileFailureStore: { version: 1, profiles: {} },
+      snapshot: () => ({
+        lastProfileId: "openai:p1",
+        pluginHarnessOwnsTransport: false,
+        agentHarness: { id: "embedded" },
+      }),
+      getApiKeyInfo: () => null,
+      advanceAttemptAuthProfile: advanceAuthProfile,
+    },
     getSessionId: () => "session:failover-retry-controller-test",
-    harnessOwnsTransport: () => false,
-    getRuntimeAuthOwnerId: () => "embedded",
-    getApiKeyInfo: () => null,
-    advanceAuthProfile,
   });
 }
 

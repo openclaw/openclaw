@@ -10,14 +10,16 @@ import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-stat
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
+import { requireNodeSqlite } from "../node-sqlite.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
 import { createAccountScopedConversationBindingManager } from "./account-scoped-conversation-bindings.js";
-import { createBoundDeliveryRouter } from "./bound-delivery-router.js";
+import { resolveBoundDeliveryDestination } from "./bound-delivery-router.js";
 import {
   inspectCurrentConversationBindingRecordAsync,
   readCurrentConversationBindingSelectionAsync,
@@ -26,8 +28,12 @@ import {
   touchCurrentConversationBindingRecordAsync,
   updateCurrentConversationBindingRecord,
 } from "./current-conversation-bindings.js";
+import { updateCurrentConversationBindingRecordInDatabase } from "./current-conversation-bindings.kernel.js";
+import { conversationBindingOperations } from "./current-conversation-bindings.worker.js";
+import { expectedCurrentSessionBinding } from "./session-binding-native-selection.js";
 import {
   getSessionBindingService,
+  listSessionBindingsBySessionsAsync,
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
   type SessionBindingAdapter,
@@ -399,10 +405,8 @@ it.each([
               }, attachment),
           );
           await expect(
-            createBoundDeliveryRouter().resolveDestination({
-              eventKind: "task_completion",
+            resolveBoundDeliveryDestination({
               targetSessionKey: bound.targetSessionKey,
-              failClosed: true,
             }),
           ).rejects.toMatchObject({ code: "BINDING_ADAPTER_UNAVAILABLE" });
           expect(retirements).toBe(1);
@@ -415,5 +419,244 @@ it.each([
     } finally {
       restoreActivePluginRegistrySnapshot(previousRegistry);
     }
+  },
+);
+
+it.each(["replaced", "removed", "expired", "malformed"] as const)(
+  "refreshes every batched session after a foreign binding is %s before expiry pruning",
+  async (change) => {
+    await withOpenClawTestState({ label: `binding-list-foreign-${change}` }, async () => {
+      const expired = {
+        ...record("expired-batch"),
+        targetSessionKey: "agent:main:expired",
+        expiresAt: 1,
+      };
+      const original = { ...record("valid-batch"), targetSessionKey: "agent:main:valid" };
+      for (const value of [expired, original]) {
+        updateCurrentConversationBindingRecord(value.conversation, () => value);
+      }
+      const database = openOpenClawStateDatabase();
+      const env = { ...process.env };
+      const foreign = new (requireNodeSqlite().DatabaseSync)(database.path);
+      const replacement =
+        change === "expired"
+          ? { ...original, expiresAt: 1 }
+          : { ...original, metadata: { label: "foreign replacement" } };
+      const grant = admission.createSqliteWorkerOperationAdmission((_request, allow) => {
+        allow();
+      });
+      const postMessage = grant.port.postMessage.bind(grant.port);
+      // The canonical operation and its private-port owner share this test thread.
+      const dispatch = vi
+        .spyOn(grant.port, "postMessage")
+        .mockImplementation((message, transfers) => {
+          postMessage(message, transfers);
+          grant.service();
+        });
+      try {
+        const result = admission.withSqliteWorkerOperationAdmission({ port: grant.port }, () =>
+          conversationBindingOperations["conversationBindings.listBySessions"](
+            {
+              targetSessionKeys: [expired.targetSessionKey, original.targetSessionKey],
+              scope: original.conversation,
+            },
+            {
+              open: () => database,
+              write: (operation, options) =>
+                runOpenClawStateWriteTransaction(operation, { database, env }, options),
+              stateOptions: () => {
+                // This existing context callback runs after prefetch and before BEGIN.
+                expect(database.db.isTransaction).toBe(false);
+                if (change === "malformed") {
+                  foreign
+                    .prepare(
+                      "UPDATE current_conversation_bindings SET record_json = ? WHERE binding_id = ?",
+                    )
+                    .run("{", original.bindingId);
+                } else {
+                  updateCurrentConversationBindingRecordInDatabase(
+                    foreign,
+                    original.conversation,
+                    () => (change === "removed" ? null : replacement),
+                  );
+                }
+                return { path: database.path, env };
+              },
+            },
+          ),
+        );
+        expect(result).toEqual([[], change === "replaced" ? [replacement] : []]);
+        const row = database.db.prepare(
+          "SELECT record_json FROM current_conversation_bindings WHERE binding_id = ?",
+        );
+        expect(row.get(expired.bindingId)).toBeUndefined();
+        expect(row.get(original.bindingId)).toEqual(
+          change === "replaced"
+            ? { record_json: JSON.stringify(replacement) }
+            : change === "malformed"
+              ? { record_json: "{" }
+              : undefined,
+        );
+      } finally {
+        dispatch.mockRestore();
+        grant.finish();
+        foreign.close();
+      }
+    });
+  },
+);
+
+it("binds, refreshes and removes generic and account-owned rows without caller-thread SQL", async () => {
+  await withOpenClawTestState({ label: "binding-mutations-worker" }, async () => {
+    const manager = createAccountScopedConversationBindingManager({
+      channel: "fixture",
+      accountId: "owner",
+      cfg: {},
+      stateKey: Symbol("binding-mutations"),
+      toStoredTargetKind: (kind) => kind,
+      toSessionBindingTargetKind: (kind) => kind,
+    });
+    const service = getSessionBindingService();
+    openOpenClawStateDatabase();
+    const hostSql = observeHostDataSql();
+    try {
+      for (const channel of [INTERNAL_MESSAGE_CHANNEL, "fixture"]) {
+        const conversation = { channel, accountId: "owner", conversationId: "bound" };
+        const initial = await service.bind({
+          conversation,
+          targetSessionKey: "agent:main:bound",
+          targetKind: "session",
+          metadata: { label: "original", cleared: "old value", opaque: { retained: true } },
+        });
+        const refreshed = await service.bind({
+          conversation,
+          targetSessionKey: initial.targetSessionKey,
+          targetKind: "session",
+          metadata: { label: "refreshed", cleared: undefined },
+        });
+        expect(refreshed.metadata).toMatchObject({
+          label: "refreshed",
+          opaque: { retained: true },
+        });
+        expect(refreshed.metadata?.cleared).toBeUndefined();
+        expect(await service.resolveByConversationAsync(conversation)).toEqual(refreshed);
+        expect(
+          await service.unbind({
+            bindingId: refreshed.bindingId,
+            scope: conversation,
+            reason: "test",
+          }),
+        ).toEqual([refreshed]);
+        expect(await service.resolveByConversationAsync(conversation)).toBeNull();
+        const rebound = await service.bind({
+          conversation,
+          targetSessionKey: initial.targetSessionKey,
+          targetKind: "session",
+        });
+        const listing = await listSessionBindingsBySessionsAsync([
+          rebound.targetSessionKey,
+          "agent:main:absent",
+        ]);
+        expect(listing.get(rebound.targetSessionKey)).toEqual([rebound]);
+        expect(listing.get("agent:main:absent")).toEqual([]);
+        expect(
+          await service.unbind({
+            targetSessionKey: rebound.targetSessionKey,
+            scope: conversation,
+            reason: "test",
+          }),
+        ).toEqual([rebound]);
+      }
+      for (const call of hostSql.calls) {
+        expect(call).not.toHaveBeenCalled();
+      }
+    } finally {
+      hostSql.restore();
+      manager.stop();
+    }
+  });
+});
+
+it.each(["transaction", "commit"] as const)(
+  "rolls back a binding whose caller authority expires at %s",
+  async (stage) => {
+    await withOpenClawTestState({ label: `binding-create-${stage}` }, async () => {
+      const service = getSessionBindingService();
+      const conversation = {
+        channel: INTERNAL_MESSAGE_CHANNEL,
+        accountId: "default",
+        conversationId: "guarded",
+      };
+      const original = await service.bind({
+        conversation,
+        targetSessionKey: "agent:main:original",
+        targetKind: "session",
+      });
+      let active = true;
+      const createAdmission = admission.createSqliteWorkerOperationAdmission;
+      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+        (admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === stage) {
+              active = false;
+            }
+            admit(request, grant);
+          }, attachment),
+      );
+      await expect(
+        service.bind({
+          conversation,
+          targetSessionKey: "agent:main:replacement",
+          targetKind: "session",
+          assertCurrent: () => {
+            if (!active) {
+              throw new Error("Binding caller retired");
+            }
+          },
+        }),
+      ).rejects.toThrow("Binding caller retired");
+      expect(await service.resolveByConversationAsync(conversation)).toEqual(original);
+    });
+  },
+);
+
+it.each(["bind", "unbind"] as const)(
+  "preserves a replacement row when a prepared %s reaches the worker",
+  async (mutation) => {
+    await withOpenClawTestState({ label: `binding-precondition-${mutation}` }, async () => {
+      const service = getSessionBindingService();
+      const conversation = {
+        channel: INTERNAL_MESSAGE_CHANNEL,
+        accountId: "default",
+        conversationId: "replaced",
+      };
+      const original = await service.bind({
+        conversation,
+        targetSessionKey: "agent:main:original",
+        targetKind: "session",
+      });
+      const replacement = await service.bind({
+        conversation,
+        targetSessionKey: "agent:main:replacement",
+        targetKind: "session",
+      });
+      const stale = { [expectedCurrentSessionBinding]: original };
+      const pending =
+        mutation === "bind"
+          ? service.bind({
+              ...stale,
+              conversation,
+              targetSessionKey: "agent:main:stale",
+              targetKind: "session",
+            })
+          : service.unbind({
+              ...stale,
+              bindingId: original.bindingId,
+              scope: conversation,
+              reason: "stale detach",
+            });
+      await expect(pending).rejects.toThrow("Conversation binding changed");
+      expect(await service.resolveByConversationAsync(conversation)).toEqual(replacement);
+    });
   },
 );

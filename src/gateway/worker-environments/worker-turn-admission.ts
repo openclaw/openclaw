@@ -1,19 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { createSessionPlacementSettlementClosedAbortError } from "../../agents/run-termination.js";
-import type {
-  SessionPlacementTurnParams,
-  LocalTurnPlacementClaim,
-} from "../../agents/session-placement-admission.js";
+import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.types.js";
 import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { createAbortError } from "../../infra/abort-signal.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
-import { projectWorkerSessionTurnClaim } from "./placement-record.js";
+import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -22,6 +21,7 @@ import type {
 import { matchesWorkerPlacementTarget } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import type { WorkerRuntimeRefreshInFlight } from "./provider-runtime-refresh.js";
+import { captureWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 import {
   projectWorkspaceResultConflict,
   type WorkerWorkspaceResultConflict,
@@ -67,11 +67,11 @@ export async function waitForPendingWorkerResult(params: {
   );
   // Restart clears local claims without discarding durable results. A claimless result cannot
   // make progress through this wait; keep its fence and let recovery retain control of the files.
-  const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(params.sessionId);
+  const facts = await params.placements.readProjection([params.sessionId], { current: true });
   params.signal?.throwIfAborted();
   if (
-    !params.placements.get(params.sessionId)?.turnClaim &&
-    pendingResults.some((pending) => pending.sessionId === params.sessionId)
+    !facts.placements.get(params.sessionId)?.turnClaim &&
+    facts.pendingResults.has(params.sessionId)
   ) {
     throw new Error(
       "Workspace recovery is still pending after its turn ended. " +
@@ -96,27 +96,35 @@ export async function waitForInitialWorkerPlacement(params: {
     storePath: params.turn.sessionTarget?.storePath ?? resolveSessionStorePathForScope(identity),
   };
   const original = loadSessionEntryReadOnly(target);
-  const assertSessionCurrent = () => {
-    params.turn.abortSignal?.throwIfAborted();
-    params.assertRunCurrent?.();
-    const current = loadSessionEntryReadOnly(target);
-    if (
-      !original ||
-      !current ||
-      current.sessionId !== identity.sessionId ||
-      current.archivedAt !== undefined ||
-      current.lifecycleRevision !== original.lifecycleRevision ||
-      current.activeWriterRunId !== original.activeWriterRunId
-    ) {
-      throw createAbortError("Session changed while waiting for worker setup");
-    }
+  const refuseSession = (): never => {
+    throw createAbortError("Session changed while waiting for worker setup");
   };
+  const source = original
+    ? captureWorkerTurnTranscriptSource(target, {
+        fields: ["sessionId", "archivedAt", "lifecycleRevision", "activeWriterRunId"],
+        expected: {
+          sessionId: identity.sessionId,
+          archivedAt: undefined,
+          lifecycleRevision: original.lifecycleRevision,
+          activeWriterRunId: original.activeWriterRunId,
+        },
+        refuse: refuseSession,
+      })
+    : refuseSession;
+  const assertSessionCurrent = composeSessionSourceAssertion(
+    [params.assertRunCurrent, source],
+    (assertSources) => {
+      params.turn.abortSignal?.throwIfAborted();
+      assertSources();
+    },
+  );
   assertSessionCurrent();
   const completed = await params.wait(params.placement, params.turn.abortSignal);
   // Setup completion is a notification, not authority: read the durable owner again.
   assertSessionCurrent();
-  const assertCurrent = () => {
-    assertSessionCurrent();
+  let placement = completed;
+  const assertCurrent = composeSessionSourceAssertion([assertSessionCurrent], (assertSession) => {
+    assertSession();
     const current = params.placements.get(identity.sessionId);
     if (
       !current ||
@@ -127,10 +135,11 @@ export async function waitForInitialWorkerPlacement(params: {
     ) {
       throw createAbortError("Worker placement changed while waiting for setup");
     }
-  };
+    placement = current;
+  });
   assertCurrent();
   return {
-    placement: requireActivePlacement(params.placements.get(identity.sessionId)!),
+    placement: requireActivePlacement(placement),
     assertCurrent,
   };
 }
@@ -186,20 +195,7 @@ export async function waitForTurnOperation<T>(params: {
     signal.reason instanceof Error
       ? signal.reason
       : new Error("Cloud worker operation aborted", { cause: signal.reason });
-  if (signal.aborted) {
-    throw abortError();
-  }
-  // Never start for a cancelled caller; always observe a started operation.
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(abortError());
-    signal.addEventListener("abort", onAbort, { once: true });
-    params
-      .start()
-      .then(resolve, reject)
-      .finally(() => {
-        signal.removeEventListener("abort", onAbort);
-      });
-  });
+  return await racePromiseWithAbortSignal(params.start, signal, abortError);
 }
 
 function resolvePlacementIdentityField(
@@ -238,23 +234,20 @@ export function resolvePlacementIdentity(
 }
 
 export async function resolveWorkerPlacementRuntimeOverride(
-  placements: Pick<WorkerSessionPlacementStore, "prepareRuntimeRefresh">,
+  placements: Pick<WorkerSessionPlacementStore, "readProjection">,
   identity: Omit<LocalTurnPlacementClaim, "runId">,
 ): Promise<string | undefined> {
-  const prepared = await placements.prepareRuntimeRefresh(identity.sessionId);
-  try {
-    prepared.assertCurrent();
-    const placement = prepared.placement;
-    return placement &&
-      placement.state !== "local" &&
-      placement.executionMode === "worker-turn" &&
-      (identity.agentId === undefined || placement.agentId === identity.agentId) &&
-      (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
-      ? "openclaw"
-      : undefined;
-  } finally {
-    prepared.release();
-  }
+  // This is a runtime preference, not turn authority. Setup and the preceding
+  // turn may publish while it is read; execution still acquires a current claim.
+  const projection = await placements.readProjection([identity.sessionId], { current: true });
+  const placement = projection.placements.get(identity.sessionId);
+  return placement &&
+    placement.state !== "local" &&
+    placement.executionMode === "worker-turn" &&
+    (identity.agentId === undefined || placement.agentId === identity.agentId) &&
+    (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
+    ? "openclaw"
+    : undefined;
 }
 
 export function requireActivePlacement(
@@ -361,11 +354,7 @@ export async function claimWorkerTurn(params: {
         ...params.identity,
         claimId: randomUUID(),
         runId: params.runId,
-        owner: {
-          kind: "worker",
-          environmentId: params.placement.environmentId,
-          ownerEpoch: params.placement.activeOwnerEpoch,
-        },
+        owner: placementTurnOwner(params.placement),
       },
       () => {
         params.signal?.throwIfAborted();
@@ -375,20 +364,23 @@ export async function claimWorkerTurn(params: {
   try {
     return { placement: params.placement, turnClaim: await claim() };
   } catch (error) {
-    if (!(error instanceof ActiveTurnClaimError)) {
+    if (
+      params.placement.executionMode === "remote-exec" ||
+      !(error instanceof ActiveTurnClaimError)
+    ) {
       throw error;
     }
-    const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(
-      params.identity.sessionId,
-    );
+    const facts = await params.placements.readProjection([params.identity.sessionId], {
+      current: true,
+    });
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
-    const activePlacement = params.placements.get(params.identity.sessionId);
+    const activePlacement = facts.placements.get(params.identity.sessionId);
     const activeClaim = activePlacement?.turnClaim;
     if (activeClaim?.runId === params.runId) {
       throw error;
     }
-    const resultIsReconciling = pendingResults.some(
+    const resultIsReconciling = [...facts.pendingResults.values()].some(
       (pending) =>
         activeClaim?.owner === "worker" &&
         pending.sessionId === params.identity.sessionId &&
@@ -405,7 +397,9 @@ export async function claimWorkerTurn(params: {
       return null;
     }
     if (!(cancelledClaim && params.isCancellationRequested(cancelledClaim))) {
-      const refreshed = params.placements.get(params.identity.sessionId);
+      const refreshed = await params.placements.getAsync(params.identity.sessionId);
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
       if (
         refreshed?.state !== "active" ||
         !matchesWorkerPlacementTarget(refreshed, params.placement) ||
@@ -420,7 +414,9 @@ export async function claimWorkerTurn(params: {
     timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
     ...(params.signal ? { signal: params.signal } : {}),
   });
-  const refreshed = params.placements.get(params.identity.sessionId);
+  const refreshed = await params.placements.getAsync(params.identity.sessionId);
+  params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   if (refreshed?.state !== "active" || !matchesWorkerPlacementTarget(refreshed, params.placement)) {
     throw new Error("Cloud worker placement changed while waiting for the previous turn");
   }

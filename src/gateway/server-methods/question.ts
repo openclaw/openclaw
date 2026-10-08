@@ -43,7 +43,7 @@ import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { managerError, QuestionRequestValidationError } from "./question.errors.js";
 import type { SecretStoreWriteService } from "./secrets.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 15 * 60 * 1_000;
@@ -98,6 +98,7 @@ export function createQuestionHandlers(
     options: GatewayRequestHandlerOptions,
     id: string,
     access: "read" | "mutate",
+    respond: RespondFn,
   ) => {
     readGatewayRequestMutationAuthority(options).assertCurrent();
     const question = canSelectQuestion(manager, id, options.client) ? manager.get(id) : null;
@@ -106,10 +107,29 @@ export function createQuestionHandlers(
       return undefined;
     }
     const observation = manager.observe(id, question);
+    const authorize = prepareQuestionAuthorization(options, observation, id, access);
     return {
       question,
       observation,
-      authorize: prepareQuestionAuthorization(options, observation, id, access),
+      authorize,
+      withCurrent<T>(consume: () => T, includeMembers?: boolean) {
+        return withPreparedQuestionSessions(
+          options,
+          [authorize.target],
+          ([prepared]) => {
+            const error = authorize.authorize(prepared);
+            if (error) {
+              respond(false, undefined, error);
+              return undefined;
+            }
+            return consume();
+          },
+          {
+            assertCurrent: authorize.assertCurrent,
+            ...(includeMembers !== undefined ? { includeMembers } : {}),
+          },
+        );
+      },
     };
   };
   return {
@@ -247,7 +267,7 @@ export function createQuestionHandlers(
           }
           if (narrow) {
             authority.assertCurrent();
-            if (!sessionAccess || !prepared?.canAccess(client, "mutate", true, sessionAccess)) {
+            if (!sessionAccess || !prepared?.canAccess(client, true, sessionAccess)) {
               respond(
                 false,
                 undefined,
@@ -431,49 +451,21 @@ export function createQuestionHandlers(
       }
       const request = params;
       try {
-        const selected = prepareSelectedQuestion(options, request.id, "read");
+        const selected = prepareSelectedQuestion(options, request.id, "read", respond);
         if (!selected) {
           return;
         }
-        const { authorize } = selected;
-        const target = authorize.target;
-        const waiting = await withPreparedQuestionSessions(
-          options,
-          [target],
-          ([prepared]) => {
-            const error = authorize.authorize(prepared);
-            if (error) {
-              respond(false, undefined, error);
-              return undefined;
-            }
-            // Register without yielding between final authorization and the exact-entry waiter.
-            return {
-              answer: manager.waitAnswer(
-                request.id,
-                request.timeoutMs,
-                request.includeResolutionId,
-              ),
-            };
-          },
-          { assertCurrent: authorize.assertCurrent },
-        );
+        const waiting = await selected.withCurrent(() => ({
+          // Register without yielding between final authorization and the exact-entry waiter.
+          answer: manager.waitAnswer(request.id, request.timeoutMs, request.includeResolutionId),
+        }));
         if (!waiting) {
           return;
         }
         const answer = await waiting.answer;
-        await withPreparedQuestionSessions(
-          options,
-          [target],
-          ([prepared]) => {
-            const error = authorize.authorize(prepared);
-            if (error) {
-              respond(false, undefined, error);
-              return;
-            }
-            respond(true, answer, undefined);
-          },
-          { assertCurrent: authorize.assertCurrent },
-        );
+        await selected.withCurrent(() => {
+          respond(true, answer, undefined);
+        });
       } catch (error) {
         if (!managerError(error, respond)) {
           throw error;
@@ -487,23 +479,17 @@ export function createQuestionHandlers(
       }
       const request = params;
       try {
-        const selected = prepareSelectedQuestion(options, request.id, "mutate");
+        const selected = prepareSelectedQuestion(options, request.id, "mutate", respond);
         if (!selected) {
           return;
         }
         const { question, observation, authorize } = selected;
         let reload: { name: string; result: ReturnType<QuestionManager["resolve"]> } | undefined;
         let save: Promise<void> | undefined;
-        await withPreparedQuestionSessions(
-          options,
-          [authorize.target],
-          ([prepared]) => {
-            const authorizationError = authorize.authorize(prepared);
-            if (authorizationError) {
-              respond(false, undefined, authorizationError);
-              return;
-            }
+        await selected.withCurrent(
+          () => {
             if ("cancel" in request) {
+              authorize.assertCurrent();
               respond(true, manager.cancel(request.id, request.resolvedBy), undefined);
               return;
             }
@@ -521,6 +507,7 @@ export function createQuestionHandlers(
                 );
                 return;
               }
+              authorize.assertCurrent();
               respond(
                 true,
                 manager.resolve(request.id, request.answers, request.resolvedBy, {
@@ -610,12 +597,8 @@ export function createQuestionHandlers(
               }
             })();
           },
-          {
-            assertCurrent: authorize.assertCurrent,
-            includeMembers:
-              !readGatewayRequestMutationAuthority(options).sessionScope &&
-              hasOperatorBoundary(client, options.context.getRuntimeConfig()),
-          },
+          !readGatewayRequestMutationAuthority(options).sessionScope &&
+            hasOperatorBoundary(client, options.context.getRuntimeConfig()),
         );
         await save;
         if (reload) {
@@ -644,28 +627,19 @@ export function createQuestionHandlers(
       if (!assertValidParams(params, validateQuestionGetParams, "question.get", respond)) {
         return;
       }
-      const selected = prepareSelectedQuestion(options, params.id, "read");
+      const selected = prepareSelectedQuestion(options, params.id, "read", respond);
       if (!selected) {
         return;
       }
-      const { observation, authorize } = selected;
-      await withPreparedQuestionSessions(
-        options,
-        [authorize.target],
-        ([prepared]) => {
-          const error = authorize.authorize(prepared);
-          if (error) {
-            respond(false, undefined, error);
-            return;
+      await selected
+        .withCurrent(() => {
+          respond(true, { question: selected.observation!.record }, undefined);
+        })
+        .catch((error: unknown) => {
+          if (!managerError(error, respond)) {
+            throw error;
           }
-          respond(true, { question: observation!.record }, undefined);
-        },
-        { assertCurrent: authorize.assertCurrent },
-      ).catch((error: unknown) => {
-        if (!managerError(error, respond)) {
-          throw error;
-        }
-      });
+        });
     },
     "question.list": async (options) => {
       const { params, respond } = options;

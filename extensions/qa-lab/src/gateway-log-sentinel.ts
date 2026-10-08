@@ -132,13 +132,6 @@ function filterGatewayLogSentinelFindings(
   });
 }
 
-function lineNumberForOffset(logs: string, offset: number) {
-  if (offset <= 0) {
-    return 1;
-  }
-  return logs.slice(0, offset).split(/\r?\n/u).length;
-}
-
 export function extractGatewayMessageText(message: Record<string, unknown>) {
   return extractQaMessageText(message, (type) => {
     const normalized = readNonEmptyString(type)?.toLowerCase().replace(/_/g, "");
@@ -213,22 +206,6 @@ function isCurrentChatMessageSend(name: unknown, rawArgs: unknown) {
   return /\b(?:current|same-chat|qa-operator|dm:qa-operator)\b/iu.test(explicitTarget);
 }
 
-function normalizeTranscriptText(text: string) {
-  return text.replace(/\s+/gu, " ").trim();
-}
-
-function createDirectReplyFinding(): GatewayLogSentinelFinding {
-  return {
-    kind: "direct-reply-self-message",
-    verdict: "product-bug",
-    owner: "openclaw-routing",
-    productImpact: "P1",
-    qaImpact: "P0",
-    line: 1,
-    text: "assistant called message(action=send) and then produced final text Sent.",
-  };
-}
-
 export function createDirectReplyTranscriptSentinelScanner() {
   let lastAssistantText = "";
   let sentToCurrentChat = false;
@@ -244,9 +221,20 @@ export function createDirectReplyTranscriptSentinelScanner() {
       sentToCurrentChat ||= hasCurrentChatMessageSend(message);
     },
     findings(): GatewayLogSentinelFinding[] {
-      const hasDirectReply =
-        sentToCurrentChat && normalizeTranscriptText(lastAssistantText).toLowerCase() === "sent.";
-      return hasDirectReply ? [createDirectReplyFinding()] : [];
+      if (!sentToCurrentChat || lastAssistantText.toLowerCase() !== "sent.") {
+        return [];
+      }
+      return [
+        {
+          kind: "direct-reply-self-message",
+          verdict: "product-bug",
+          owner: "openclaw-routing",
+          productImpact: "P1",
+          qaImpact: "P0",
+          line: 1,
+          text: "assistant called message(action=send) and then produced final text Sent.",
+        },
+      ];
     },
   };
 }
@@ -269,7 +257,7 @@ export function scanGatewayLogSentinels(
     return [];
   }
   const startOffset = Math.max(0, Math.min(logs.length, Math.floor(options?.since ?? 0)));
-  const lineOffset = lineNumberForOffset(logs, startOffset) - 1;
+  const lineOffset = logs.slice(0, startOffset).split(/\r?\n/u).length - 1;
   const findings: GatewayLogSentinelFinding[] = [];
   for (const [index, rawLine] of logs.slice(startOffset).split(/\r?\n/u).entries()) {
     const text = rawLine.trim();

@@ -24,14 +24,12 @@ import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
 } from "../registry/subagent-registry-persistence.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  readSubagentRun,
-} from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
+import { readSubagentRun } from "../registry/subagent-registry.store.sqlite.js";
 import { getSubagentRunRuntimeKey } from "../registry/subagent-run-generation.js";
 import {
   admitSubagentCompletionDelivery,
-  settleRequesterCompletionBatch,
+  mutateRequesterCompletionBatch,
 } from "./subagent-completion-admission.store.js";
 import {
   seedSubagentCompletionDelivery,
@@ -238,7 +236,7 @@ describe("native subagent completion worker admission", () => {
   );
 
   it.each(["ordinary", "reply lost", "replacement", "metadata successor"] as const)(
-    "publishes native completion before its admitted successor without main-thread SQLite (%s)",
+    "publishes native completion before its admitted successor without host SQLite or record parsing (%s)",
     async (change) => {
       await withAdmissionState(async ({ input, database, context }) => {
         const original = stateWorker.runOpenClawStateWorkerOperation;
@@ -285,6 +283,14 @@ describe("native subagent completion worker admission", () => {
             ),
         );
         const sql = forbidMainThreadSql("Correlated completion touched main-thread SQLite");
+        const parse = JSON.parse;
+        const parsedRecords: string[] = [];
+        const parser = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+          if (text.includes(input.expected.childSessionKey)) {
+            parsedRecords.push(text);
+          }
+          return parse(text, reviver);
+        });
         let result: Awaited<ReturnType<typeof admitCorrelatedSubagentSessionDelivery>>;
         try {
           result = await admitCorrelatedSubagentSessionDelivery({
@@ -299,7 +305,9 @@ describe("native subagent completion worker admission", () => {
           });
           expect(crossed).toBe(true);
           await successor;
+          expect(parsedRecords).toEqual([]);
         } finally {
+          parser.mockRestore();
           sql.restore();
         }
         expect(result).toMatchObject({ claimed: true, status: "pending" });
@@ -404,10 +412,10 @@ it("settles a requester cohort after concurrently admitted children complete", a
         return { value: undefined, postimages: new Map([[next.runId, next]]) };
       }),
     );
-    const settled = settleRequesterCompletionBatch({
-      entries: inputs.map(({ subagent }) => ({ subagent })),
-      outcome: { delivered: true, path: "direct" },
-      isCurrent: () => true,
+    const settled = mutateRequesterCompletionBatch({
+      entries: inputs.map(({ subagent }) => subagent),
+      operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
+      assertCurrent: () => {},
     });
     try {
       await Promise.race([acknowledged.promise, Promise.all(completions)]);

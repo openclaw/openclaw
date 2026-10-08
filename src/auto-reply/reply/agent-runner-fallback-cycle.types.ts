@@ -7,6 +7,7 @@ import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import type {
@@ -19,6 +20,7 @@ import type {
 } from "./agent-runner-execution.types.js";
 import type { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
+import type { CurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 
@@ -43,11 +45,10 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions & {
   fastModeAutoProgressState: FastModeAutoProgressState;
   bootstrapContextRunKind: BootstrapContextRunKind;
   bootstrapPromptWarningSignaturesSeen: string[];
-  currentTurnImages: Awaited<
-    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnImages>
-  >;
+  currentTurnImages: CurrentTurnImages;
   signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
-  notifyAgentRunStart: () => void;
+  prepareAgentRunStart: () => void | Promise<void>;
+  notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
   preserveProgressCallbackStartOrder: boolean;
   presentation: ReturnType<typeof createAgentTurnPresentation>;
   timing: AgentTurnTimingTracker;
@@ -105,14 +106,14 @@ export type AgentFallbackCycleParams = {
   >;
   runId: string;
   runAbortSignal?: AbortSignal;
-  currentTurnImages: Awaited<
-    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnImages>
-  >;
+  currentTurnImages: CurrentTurnImages;
   state: AgentFallbackCycleState;
   presentation: ReturnType<typeof createAgentTurnPresentation>;
   directBlockDeliveries: DirectBlockDelivery[];
-  notifyAgentRunStart: () => void;
-  signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
+  createAgentRunStartCallbacks: () => Pick<
+    AgentFallbackCandidateCommonParams,
+    "prepareAgentRunStart" | "notifyAgentRunStart" | "signalExecutionPhaseForTyping"
+  > & { close: () => void };
   notifyUserAboutCompaction: boolean;
   timing: AgentTurnTimingTracker;
   modelPatch: AgentFallbackModelPatch;

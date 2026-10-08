@@ -56,14 +56,14 @@ export class ChannelPluginPresentationController {
       }
       return;
     }
-    if (this.catalog) {
-      this.startIconLoad(client, this.catalog);
-      return;
-    }
     this.request?.controller.abort();
     const controller = new AbortController();
     const request: PluginPresentationRequest = { client, controller };
     this.request = request;
+    if (this.catalog) {
+      void this.loadIcons(this.catalog, request).finally(() => this.finishRequest(request));
+      return;
+    }
     void client
       .request<PluginListResult>("plugins.list", {}, { signal: controller.signal })
       .then(async (result) => {
@@ -81,13 +81,6 @@ export class ChannelPluginPresentationController {
         // Channel status metadata remains a complete fallback when catalog loading fails.
       })
       .finally(() => this.finishRequest(request));
-  }
-
-  private startIconLoad(client: GatewayBrowserClient, catalog: PluginListResult) {
-    this.request?.controller.abort();
-    const request: PluginPresentationRequest = { client, controller: new AbortController() };
-    this.request = request;
-    void this.loadIcons(catalog, request).finally(() => this.finishRequest(request));
   }
 
   private async loadIcons(result: PluginListResult, request: PluginPresentationRequest) {

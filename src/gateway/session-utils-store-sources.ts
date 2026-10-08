@@ -224,12 +224,9 @@ export function prepareGatewaySessionStoreReadSources(params: {
 }
 
 /** Capture source routing for the existing history worker; no native discovery runs here. */
-export async function prepareGatewaySessionStoreReadSourcesAsync(params: {
-  cfg: OpenClawConfig;
-  currentSource: SessionEntryReadSource;
-  env: NodeJS.ProcessEnv;
-  registryPath: string;
-}) {
+export async function prepareGatewaySessionStoreReadSourcesAsync(
+  params: Parameters<typeof prepareGatewaySessionStoreReadSources>[0],
+) {
   const routing = captureSessionStoreRouting(params.cfg);
   const env = captureSessionTranscriptStorageEnvironment(params.env);
   const inventory = prepareSessionStoreTargetInventory(

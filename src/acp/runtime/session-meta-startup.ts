@@ -17,11 +17,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
-import {
-  acpSessionRowMatchesEntry,
-  buildAcpDatabaseSessionKey,
-  parseAcpDatabaseSessionKey,
-} from "./session-meta-keys.js";
+import { acpSessionRowMatchesEntry, buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { legacyAcpSessionKeyCandidates } from "./session-meta-migration-keys.js";
 import { resolveSessionStorePathForAcp } from "./session-meta-store.js";
 
@@ -62,7 +58,6 @@ export async function assertAcpSessionKeysMigratedForStartup(
     matchesPath(candidatePath(agentId, storePath, sessionKey), admittedPath);
   for (const row of result.rows) {
     const identities = legacyAcpSessionKeyCandidates(row.session_key, candidateAgentIds);
-    const hasRecordedOwner = identities.some((identity) => identity.ownerRecorded);
     const candidates: Array<{
       owner: ReturnType<typeof resolveSessionStorePathForAcp>;
       ownerRecorded: boolean;
@@ -96,27 +91,19 @@ export async function assertAcpSessionKeysMigratedForStartup(
         local: ownsPath(owner.agentId, owner.storePath, owner.storeSessionKey),
       });
     }
-    if (!candidates.some((candidate) => candidate.local)) {
-      continue;
-    }
-    const recorded = candidates.find((candidate) => candidate.local && candidate.ownerRecorded);
-    if (recorded || (!hasRecordedOwner && admittedPath === undefined)) {
-      const canonical = parseAcpDatabaseSessionKey(row.session_key);
-      if (!canonical?.agentId) {
-        migrationRequired(`shared ACP key ${JSON.stringify(row.session_key)}`);
-      }
-      if (
-        recorded &&
-        buildAcpDatabaseSessionKey(recorded.owner.storeSessionKey, recorded.owner.agentId) !==
-          row.session_key
-      ) {
-        migrationRequired(`noncanonical inner ACP key ${JSON.stringify(row.session_key)}`);
-      }
-    }
     for (const candidate of candidates) {
-      if (candidate.ownerRecorded || !candidate.local) {
+      if (!candidate.local) {
         continue;
       }
+      if (
+        candidate.ownerRecorded &&
+        buildAcpDatabaseSessionKey(candidate.owner.storeSessionKey, candidate.owner.agentId) ===
+          row.session_key
+      ) {
+        continue;
+      }
+      // Doctor retains unbound historical rows. Only a current binding needs
+      // migration; runtime never consumes these noncanonical rows directly.
       const { owner } = candidate;
       await withSessionEntryReadOnlyInWorker(
         {
@@ -128,12 +115,10 @@ export async function assertAcpSessionKeysMigratedForStartup(
         () => assertCurrent?.(),
         async (read) => {
           if (!read.ok) {
-            migrationRequired(
-              `unreadable literal-key candidate store ${JSON.stringify(owner.storePath)}`,
-            );
+            migrationRequired(`unreadable ACP candidate store ${JSON.stringify(owner.storePath)}`);
           }
           if (read.value && acpSessionRowMatchesEntry(row, read.value)) {
-            migrationRequired(`historical literal ACP key ${JSON.stringify(row.session_key)}`);
+            migrationRequired(`historical ACP key ${JSON.stringify(row.session_key)}`);
           }
         },
       );

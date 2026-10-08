@@ -1,12 +1,16 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
-import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import { loadPluginRegistryHandle } from "./loader.js";
-import { assertMemoryCallerCurrent, isHostMemoryAudience } from "./memory-audience.js";
+import {
+  assertMemoryCallerCurrent,
+  isHostMemoryAudience,
+  prepareMemoryCallerRead,
+} from "./memory-audience.js";
 import { adaptLegacyMemoryProvider, bindMemoryProvider } from "./memory-provider-adapter.js";
 import type {
   ActiveMemoryProviderResult,
@@ -167,8 +171,7 @@ function ensureMemoryRuntime(params: {
   if (onlyPluginIds.length === 0) {
     return undefined;
   }
-  const dir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const workspaceDir = typeof dir === "string" && dir.trim() ? resolveUserPath(dir) : undefined;
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const registry = loadPluginRegistryHandle({
     config: params.cfg,
     onlyPluginIds,
@@ -315,6 +318,10 @@ export async function getActiveMemoryProviderCore(
     assertCurrent: () => assertMemoryCallerCurrent(params.context),
   };
   const openParams: MemoryProviderOpenParams = { ...params, context };
+  const before = prepareMemoryCallerRead(context);
+  if (before) {
+    await racePromiseWithAbortSignal(before, context.signal);
+  }
   context.assertCurrent();
   const owner = ensureMemoryRuntime(params);
   if (!owner?.runtime && !owner?.providerRuntime) {
@@ -332,6 +339,10 @@ export async function getActiveMemoryProviderCore(
     ? await owner.providerRuntime.open(openParams)
     : await adaptLegacyMemoryProvider(owner.runtime!, providerId, openParams);
   try {
+    const after = prepareMemoryCallerRead(context);
+    if (after) {
+      await racePromiseWithAbortSignal(after, context.signal);
+    }
     context.assertCurrent();
     if (
       result.provider &&

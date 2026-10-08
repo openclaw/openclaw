@@ -2,6 +2,7 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import { requireApiKey, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
@@ -20,6 +21,7 @@ import {
   hasImageReasoningOnlyResponse,
 } from "../agents/tools/image-tool.helpers.js";
 import { isSecretRef } from "../config/types.secrets.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { complete } from "../llm/stream.js";
 import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
 import { runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
@@ -297,57 +299,33 @@ async function withImageDescriptionTimeout<T>(params: {
   createTimeoutError: (timeoutMs: number) => Error;
 }): Promise<T> {
   params.signal?.throwIfAborted();
-  if (params.timeoutMs === undefined && !params.signal) {
-    return await params.task;
+  const abortError = (signal: AbortSignal) =>
+    signal.reason instanceof Error
+      ? signal.reason
+      : new Error("image description aborted", { cause: signal.reason });
+  if (params.timeoutMs === undefined) {
+    return await racePromiseWithAbortSignal(params.task, params.signal, abortError);
   }
-  let timeout: NodeJS.Timeout | undefined;
-  let removeAbortListener: (() => void) | undefined;
-  const races: Promise<T>[] = [params.task];
-  if (params.timeoutMs !== undefined) {
-    races.push(
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          params.controller.abort();
-          reject(params.createTimeoutError(params.timeoutMs!));
-        }, params.timeoutMs);
-      }),
-    );
-  }
-  if (params.signal) {
-    races.push(
-      new Promise<never>((_, reject) => {
-        const onAbort = () => {
-          try {
-            params.signal?.throwIfAborted();
-          } catch (error) {
-            reject(
-              error instanceof Error
-                ? error
-                : new Error("image description aborted", { cause: error }),
-            );
-          }
-        };
-        params.signal?.addEventListener("abort", onAbort, { once: true });
-        removeAbortListener = () => params.signal?.removeEventListener("abort", onAbort);
-        if (params.signal?.aborted) {
-          onAbort();
-        }
-      }),
-    );
-  }
-  try {
-    return await Promise.race(races);
-  } finally {
-    removeAbortListener?.();
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  const timeoutMs = params.timeoutMs;
+  return await raceWithTimeout(
+    params.task,
+    timeoutMs,
+    () => {
+      params.controller.abort();
+      throw params.createTimeoutError(timeoutMs);
+    },
+    {
+      signal: params.signal,
+      onAbort: (signal) => {
+        throw abortError(signal);
+      },
+    },
+  );
 }
 
-async function describeImagesWithModelInternal(
+export async function describeImagesWithModelPayloadTransformCore(
   params: ImagesDescriptionRequest,
-  options: { onPayload?: ProviderStreamOptions["onPayload"] } = {},
+  onPayload: ProviderStreamOptions["onPayload"],
 ): Promise<ImagesDescriptionResult> {
   return await runWithAsyncWorkResources(async (onAcquired) => {
     let assertResourcesOpen: (() => void) | undefined;
@@ -472,9 +450,7 @@ async function describeImagesWithModelInternal(
     const completeImage = async (retry = false) => {
       params.signal?.throwIfAborted();
       assertResourcesOpen?.();
-      const payloadHandler = retry
-        ? imageRetryPayloadHandler(options.onPayload)
-        : options.onPayload;
+      const payloadHandler = retry ? imageRetryPayloadHandler(onPayload) : onPayload;
       const timeoutMs = configuredTimeoutMs;
       const streamOptions = {
         apiKey,
@@ -557,14 +533,7 @@ function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDesc
 export async function describeImagesWithModelCore(
   params: ImagesDescriptionRequest,
 ): Promise<ImagesDescriptionResult> {
-  return await describeImagesWithModelInternal(params);
-}
-
-export async function describeImagesWithModelPayloadTransformCore(
-  params: ImagesDescriptionRequest,
-  onPayload: ProviderStreamOptions["onPayload"],
-): Promise<ImagesDescriptionResult> {
-  return await describeImagesWithModelInternal(params, { onPayload });
+  return await describeImagesWithModelPayloadTransformCore(params, undefined);
 }
 
 export async function describeImageWithModelCore(

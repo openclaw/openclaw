@@ -13,6 +13,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { deferSqlitePostCommitPublication } from "./sqlite-post-commit.js";
+import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import type {
   RetainedWorkerTransactionAdmission,
@@ -82,9 +83,12 @@ export function observeSqliteWorkerCommittedFacts(
   bind(observer);
 }
 
-/** The caller retains real source custody before invoking the synchronous grant. */
+/** The optional continuation runs under live host authority before releasing the native writer. */
 export function createSqliteWorkerOperationAdmission(
-  admit: (request: SqliteWorkerAdmissionRequest, grant: () => boolean) => void,
+  admit: (
+    request: SqliteWorkerAdmissionRequest,
+    grant: (beforeRelease?: () => void) => boolean,
+  ) => void,
   attachment?: unknown,
 ): SqliteWorkerOperationAdmission {
   const { port1, port2 } = new MessageChannel();
@@ -228,7 +232,7 @@ export function createSqliteWorkerOperationAdmission(
       );
       return;
     }
-    const grant = () => {
+    const grant = (beforeRelease?: () => void) => {
       if (closed || Atomics.load(decision, 0) !== REQUESTED) {
         return false;
       }
@@ -239,6 +243,10 @@ export function createSqliteWorkerOperationAdmission(
         refuse(decision, error, "authority");
         return false;
       }
+      if (closed || Atomics.load(decision, 0) !== REQUESTED) {
+        return false;
+      }
+      beforeRelease?.();
       const granted = Atomics.compareExchange(decision, 0, REQUESTED, GRANTED) === REQUESTED;
       if (granted) {
         Atomics.notify(decision, 0);
@@ -485,12 +493,17 @@ export function requestSqliteWorkerOperationAdmission(
     throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
   }
   const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  const startedAt = Date.now();
   scope.port.postMessage({ ...request, decision: decision.buffer }, transferList);
   // Host scheduling delay does not revoke the retained owner's authority. The
   // broker keeps this port through settlement and joins worker exit on failure;
   // only the live host owner can grant or refuse the pending request.
   while (Atomics.load(decision, 0) === REQUESTED) {
     Atomics.wait(decision, 0, REQUESTED);
+  }
+  const timing = currentSqliteOperationTiming();
+  if (timing) {
+    timing.hostAdmissionWaitMs += Date.now() - startedAt;
   }
   if (Atomics.load(decision, 0) !== GRANTED) {
     const refusal = new SqliteWorkerError("SQLite transaction admission was refused", "closed");

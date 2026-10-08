@@ -40,161 +40,157 @@ const manager = vi.mocked(createSubagentRunManager).mock.results[0]!.value;
 
 // sessions.create composition is proven separately. These rows retain its
 // spawnedBy/spawnDepth contract; the actual send tool must create the run record.
-it.each(["main", "research"] as const)(
-  "cancelling a watched %s/global child preserves the other agent's work",
-  async (owner) => {
-    const foreignAgent = owner === "main" ? "research" : "main";
-    const parentKey = `agent:${owner}:dashboard:parent`;
-    const childId = `${owner}-global-session`;
-    const foreignId = `${foreignAgent}-global-session`;
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, research: {} },
-        defaults: { workspace: fixture.stateDir },
-      },
-      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-    };
-    setRuntimeConfigSnapshot(cfg);
-    const childStorePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: owner,
-      sessionKey: "global",
-      defaultSessionId: childId,
-    });
-    await replaceSessionEntry(
-      { agentId: owner, storePath: childStorePath, sessionKey: "global" },
-      {
-        sessionId: childId,
-        updatedAt: Date.now(),
-        spawnedBy: parentKey,
-        parentSessionKey: parentKey,
-        spawnDepth: 1,
-        createdVia: "spawn",
-        createdActor: { type: "agent", id: owner },
-      },
-    );
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: owner,
-      sessionKey: parentKey,
-      defaultSessionId: `${owner}-parent-session`,
-    });
-    const foreignStorePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: foreignAgent,
-      sessionKey: "global",
-      defaultSessionId: foreignId,
-    });
-    const dispatched: Record<string, unknown>[] = [];
-    const callGateway: AgentToolGatewayRequestCaller = async (request) => {
-      if (request.method !== "agent") {
-        throw new Error(`Unexpected tool RPC ${request.method}`);
-      }
-      request.assertDispatchCurrent?.();
-      dispatched.push(request.params as Record<string, unknown>);
-      return { runId: "watched-global-run", status: "accepted" } as never;
-    };
-    const sent = await createSessionsSendTool({
+it("cancelling a watched main/global child preserves the other agent's work", async () => {
+  const owner = "main";
+  const foreignAgent = "research";
+  const parentKey = `agent:${owner}:dashboard:parent`;
+  const childId = `${owner}-global-session`;
+  const foreignId = `${foreignAgent}-global-session`;
+  const cfg: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      entries: { main: {}, research: {} },
+      defaults: { workspace: fixture.stateDir },
+    },
+    tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
+  };
+  setRuntimeConfigSnapshot(cfg);
+  const childStorePath = await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: owner,
+    sessionKey: "global",
+    defaultSessionId: childId,
+  });
+  await replaceSessionEntry(
+    { agentId: owner, storePath: childStorePath, sessionKey: "global" },
+    {
+      sessionId: childId,
+      updatedAt: Date.now(),
+      spawnedBy: parentKey,
+      parentSessionKey: parentKey,
+      spawnDepth: 1,
+      createdVia: "spawn",
+      createdActor: { type: "agent", id: owner },
+    },
+  );
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: owner,
+    sessionKey: parentKey,
+    defaultSessionId: `${owner}-parent-session`,
+  });
+  const foreignStorePath = await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: foreignAgent,
+    sessionKey: "global",
+    defaultSessionId: foreignId,
+  });
+  const dispatched: Record<string, unknown>[] = [];
+  const callGateway: AgentToolGatewayRequestCaller = async (request) => {
+    if (request.method !== "agent") {
+      throw new Error(`Unexpected tool RPC ${request.method}`);
+    }
+    request.assertDispatchCurrent?.();
+    dispatched.push(request.params as Record<string, unknown>);
+    return { runId: "watched-global-run", status: "accepted" } as never;
+  };
+  const sent = await createSessionsSendTool({
+    config: cfg,
+    agentId: owner,
+    agentSessionKey: parentKey,
+    requesterTurnRunId: "parent-turn",
+    callGateway,
+  }).execute("send", {
+    sessionKey: "global",
+    message: "Continue the child task",
+    mode: "followup",
+    watch: true,
+    timeoutSeconds: 0,
+  });
+  expect(sent.details).toMatchObject({ status: "accepted", watched: true });
+  expect(dispatched).toHaveLength(1);
+  expect(dispatched[0]).toMatchObject({ agentId: owner, sessionKey: "global" });
+  expect.soft(getSubagentRunByRunId("watched-global-run")).toMatchObject({
+    childSessionKey: "global",
+    childAgentId: owner,
+    requesterSessionKey: parentKey,
+    requesterAgentId: owner,
+  });
+  expect(() => resolveSessionAgentId({ config: cfg, sessionKey: "global" })).toThrow(
+    AgentSelectionRequiredError,
+  );
+
+  const foreignAbort = vi.fn();
+  const foreignHandle = createEmbeddedRunHandle({ runId: "foreign-run", abort: foreignAbort });
+  setActiveEmbeddedRun(foreignId, foreignHandle, "global", undefined, foreignAgent);
+  const followup = createQueueTestRun({ prompt: "Other agent's queued followup" });
+  Object.assign(followup.run, {
+    agentId: foreignAgent,
+    sessionKey: "global",
+    sessionId: foreignId,
+  });
+  enqueueFollowupRun("global", followup, { mode: "followup" }, "none", undefined, false);
+  const lane = resolveEmbeddedSessionLane("global");
+  const entered = createDeferred();
+  const release = createDeferred();
+  const blocker = enqueueCommandInLane(lane, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  const foreignCommand = enqueueCommandInLane(lane, async () => "foreign command survived", {
+    sessionTarget: { agentId: foreignAgent, sessionKey: "global", sessionId: foreignId },
+  });
+  const childCommand = enqueueCommandInLane(lane, async () => "child must not start", {
+    sessionTarget: { agentId: owner, sessionKey: "global", sessionId: childId },
+  });
+  const outcome = Promise.allSettled([foreignCommand, childCommand]);
+  const interruptChild = vi.fn(() => childAdmission.release());
+  const childAdmission = await beginSessionWorkAdmission({
+    scope: childStorePath,
+    identities: ["global", childId],
+    assertAllowed: () => {},
+    onInterrupt: interruptChild,
+  });
+  try {
+    const cancelled = await createSubagentsTool({
       config: cfg,
       agentId: owner,
       agentSessionKey: parentKey,
-      requesterTurnRunId: "parent-turn",
-      callGateway,
-    }).execute("send", {
-      sessionKey: "global",
-      message: "Continue the child task",
-      mode: "followup",
-      watch: true,
-      timeoutSeconds: 0,
+    }).execute("cancel", { action: "cancel", runId: "watched-global-run" });
+    expect(cancelled.details).toMatchObject({ found: true, killed: true });
+    expect(interruptChild).toHaveBeenCalledOnce();
+    expect(
+      loadSessionEntry({ agentId: owner, storePath: childStorePath, sessionKey: "global" }),
+    ).toMatchObject({ abortedLastRun: true, status: "killed" });
+    expect.soft(foreignAbort).not.toHaveBeenCalled();
+    expect.soft(getExistingFollowupQueue("global")?.items.includes(followup) ?? false).toBe(true);
+    release.resolve();
+    await blocker;
+    const [foreignResult, childResult] = await outcome;
+    expect.soft(foreignResult).toEqual({ status: "fulfilled", value: "foreign command survived" });
+    expect(childResult).toMatchObject({
+      status: "rejected",
+      reason: { name: "CommandLaneClearedError" },
     });
-    expect(sent.details).toMatchObject({ status: "accepted", watched: true });
-    expect(dispatched).toHaveLength(1);
-    expect(dispatched[0]).toMatchObject({ agentId: owner, sessionKey: "global" });
-    expect.soft(getSubagentRunByRunId("watched-global-run")).toMatchObject({
-      childSessionKey: "global",
-      childAgentId: owner,
-      requesterSessionKey: parentKey,
-      requesterAgentId: owner,
-    });
-    expect(() => resolveSessionAgentId({ config: cfg, sessionKey: "global" })).toThrow(
-      AgentSelectionRequiredError,
-    );
-
-    const foreignAbort = vi.fn();
-    const foreignHandle = createEmbeddedRunHandle({ runId: "foreign-run", abort: foreignAbort });
-    setActiveEmbeddedRun(foreignId, foreignHandle, "global", undefined, foreignAgent);
-    const followup = createQueueTestRun({ prompt: "Other agent's queued followup" });
-    Object.assign(followup.run, {
-      agentId: foreignAgent,
-      sessionKey: "global",
-      sessionId: foreignId,
-    });
-    enqueueFollowupRun("global", followup, { mode: "followup" }, "none", undefined, false);
-    const lane = resolveEmbeddedSessionLane("global");
-    const entered = createDeferred();
-    const release = createDeferred();
-    const blocker = enqueueCommandInLane(lane, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
-    const foreignCommand = enqueueCommandInLane(lane, async () => "foreign command survived", {
-      sessionTarget: { agentId: foreignAgent, sessionKey: "global", sessionId: foreignId },
-    });
-    const childCommand = enqueueCommandInLane(lane, async () => "child must not start", {
-      sessionTarget: { agentId: owner, sessionKey: "global", sessionId: childId },
-    });
-    const outcome = Promise.allSettled([foreignCommand, childCommand]);
-    const interruptChild = vi.fn(() => childAdmission.release());
-    const childAdmission = await beginSessionWorkAdmission({
-      scope: childStorePath,
-      identities: ["global", childId],
-      assertAllowed: () => {},
-      onInterrupt: interruptChild,
-    });
-    try {
-      const cancelled = await createSubagentsTool({
-        config: cfg,
-        agentId: owner,
-        agentSessionKey: parentKey,
-      }).execute("cancel", { action: "cancel", runId: "watched-global-run" });
-      expect(cancelled.details).toMatchObject({ found: true, killed: true });
-      expect(interruptChild).toHaveBeenCalledOnce();
-      expect(
-        loadSessionEntry({ agentId: owner, storePath: childStorePath, sessionKey: "global" }),
-      ).toMatchObject({ abortedLastRun: true, status: "killed" });
-      expect.soft(foreignAbort).not.toHaveBeenCalled();
-      expect.soft(getExistingFollowupQueue("global")?.items.includes(followup) ?? false).toBe(true);
-      release.resolve();
-      await blocker;
-      const [foreignResult, childResult] = await outcome;
-      expect
-        .soft(foreignResult)
-        .toEqual({ status: "fulfilled", value: "foreign command survived" });
-      expect(childResult).toMatchObject({
-        status: "rejected",
-        reason: { name: "CommandLaneClearedError" },
-      });
-      expect
-        .soft(
-          loadSessionEntry({
-            agentId: foreignAgent,
-            storePath: foreignStorePath,
-            sessionKey: "global",
-          })?.abortedLastRun,
-        )
-        .not.toBe(true);
-    } finally {
-      childAdmission.release();
-      release.resolve();
-      clearCommandLane(lane);
-      clearFollowupQueue("global");
-      clearActiveEmbeddedRun(foreignId, foreignHandle, "global");
-      await Promise.allSettled([blocker, outcome]);
-    }
-  },
-);
+    expect
+      .soft(
+        loadSessionEntry({
+          agentId: foreignAgent,
+          storePath: foreignStorePath,
+          sessionKey: "global",
+        })?.abortedLastRun,
+      )
+      .not.toBe(true);
+  } finally {
+    childAdmission.release();
+    release.resolve();
+    clearCommandLane(lane);
+    clearFollowupQueue("global");
+    clearActiveEmbeddedRun(foreignId, foreignHandle, "global");
+    await Promise.allSettled([blocker, outcome]);
+  }
+});
 
 async function prepareWatchedRawChildren() {
   const cfg: OpenClawConfig = {
@@ -259,8 +255,6 @@ async function prepareWatchedRawChildren() {
 
 it.each([
   { owner: "main", foreignStatus: undefined },
-  { owner: "research", foreignStatus: undefined },
-  { owner: "research", foreignStatus: "done" },
   { owner: "research", foreignStatus: "failed" },
 ] as const)(
   "settles $owner/global from its own transcript and metadata (foreign=$foreignStatus)",

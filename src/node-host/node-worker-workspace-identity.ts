@@ -306,17 +306,11 @@ export async function removeNodeWorkerWorkspaceEntry(
   }
 }
 
-export type NodeWorkerWorkspaceRetainSnapshot = {
-  controllerId: string;
-  sequence: number;
-  signature: string;
-  retainedGenerations: Set<string>;
-  manifestsBySession: Map<string, Set<string> | null>;
-};
+export type NodeWorkerWorkspaceRetainSnapshot = ReturnType<
+  typeof buildNodeWorkerWorkspaceRetainSnapshot
+>;
 
-export function buildNodeWorkerWorkspaceRetainSnapshot(
-  input: NodeWorkerWorkspaceRetainInput,
-): NodeWorkerWorkspaceRetainSnapshot {
+export function buildNodeWorkerWorkspaceRetainSnapshot(input: NodeWorkerWorkspaceRetainInput) {
   const retainedGenerations = new Set<string>();
   const manifestsBySession = new Map<string, Set<string> | null>();
   for (const entry of input.retain) {

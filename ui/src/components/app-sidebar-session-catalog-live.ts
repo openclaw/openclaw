@@ -4,6 +4,7 @@ import type {
   SessionsCatalogHostEvent,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -249,12 +250,7 @@ export class SessionCatalogLiveState {
     const progressId = generateUUID();
     const progressSequence = ++this.progressSequence;
     this.progressSequences.set(progressId, progressSequence);
-    if (this.progressSequences.size > 8) {
-      const oldest = this.progressSequences.keys().next().value;
-      if (oldest) {
-        this.progressSequences.delete(oldest);
-      }
-    }
+    pruneMapToMaxSize(this.progressSequences, 8);
     return { progressId, progressSequence, requestOwner };
   }
 

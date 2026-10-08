@@ -19,6 +19,7 @@ import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import { getChatRunOwner } from "./history-merge.ts";
+import { latestStreamBoundaryRunId } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { handlePreambleProgress } from "./tool-stream-preamble.ts";
@@ -134,6 +135,8 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     role: "assistant",
     toolCallId: entry.toolCallId,
     runId: entry.runId,
+    ...(entry.afterBoundaryRunId ? { afterBoundaryRunId: entry.afterBoundaryRunId } : {}),
+    ...(entry.boundaryRunId ? { boundaryRunId: entry.boundaryRunId } : {}),
     ...(entry.activity ? { activity: entry.activity } : {}),
     content,
     timestamp: entry.startedAt,
@@ -354,9 +357,9 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
       runId: payload.runId,
       seq: payload.seq,
       state,
-      ...(model ? { model: formatUiExternalText(model.slice(0, 256)) } : {}),
+      ...(model ? { model: formatUiExternalText(truncateText(model, 256).text) } : {}),
       ...(fallbackModel
-        ? { fallbackModel: formatUiExternalText(fallbackModel.slice(0, 256)) }
+        ? { fallbackModel: formatUiExternalText(truncateText(fallbackModel, 256).text) }
         : {}),
     };
     return true;
@@ -465,8 +468,6 @@ function applyToolReviewEvent(
     retainedReviews,
     nextOutcome && payload.seq >= newestReviewSeq ? nextOutcome : currentOutcome,
   );
-  entry.message = buildToolStreamMessage(entry);
-  scheduleToolStreamSync(host, true);
 }
 
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload): boolean {
@@ -494,19 +495,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     }
   }
 
-  if (handleUsageEvent(host, payload)) {
-    return true;
-  }
-
-  if (handleNoticeEvent(host, payload)) {
-    return true;
-  }
-
-  if (handleStreamStatus(host, payload)) {
-    return true;
-  }
-
-  if (handlePreambleProgress(host, payload)) {
+  if (
+    handleUsageEvent(host, payload) ||
+    handleNoticeEvent(host, payload) ||
+    handleStreamStatus(host, payload) ||
+    handlePreambleProgress(host, payload)
+  ) {
     return true;
   }
 
@@ -532,6 +526,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
         name: item.name ?? item.title,
         startedAt: item.startedAt ?? payload.ts,
         receivedAt: Date.now(),
+        afterBoundaryRunId:
+          payload.runId === host.chatRunId ? latestStreamBoundaryRunId(host) : undefined,
         message: {},
       };
       host.toolStreamById.set(identity, entry);
@@ -610,6 +606,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       name,
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       receivedAt: now,
+      afterBoundaryRunId:
+        payload.runId === host.chatRunId ? latestStreamBoundaryRunId(host) : undefined,
       message: {},
     };
     host.toolStreamById.set(toolStreamIdentity, entry);
@@ -647,12 +645,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (approvalReview) {
-    trimToolStream(host);
     applyToolReviewEvent(host, payload, entry, approvalReview);
-    return true;
   }
   entry.message = buildToolStreamMessage(entry);
   trimToolStream(host);
-  scheduleToolStreamSync(host, phase === "result");
+  scheduleToolStreamSync(host, phase === "result" || approvalReview !== null);
   return true;
 }

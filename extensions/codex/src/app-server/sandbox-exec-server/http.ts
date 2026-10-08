@@ -153,13 +153,153 @@ async function runSandboxHttpRequest(
     }
     embeddedAgentLog.warn("codex sandbox http/request stdin write failed", { error });
   });
-  void readSandboxHttpResponse({
-    child,
-    lifecycle,
-    terminate,
-    requestId,
-    notifications,
-    streamResponse: params.streamResponse,
+  const { streamResponse } = params;
+  void new Promise<JsonObject>((resolve, reject) => {
+    let headerResolved = false;
+    let failed = false;
+    let childFailure: string | null = null;
+    let lastBodySeq = 0;
+    let stdoutBuffer = "";
+    let stderr = "";
+    const buffered: Record<"stdout" | "stderr", { chunks: Buffer[]; bytes: number }> = {
+      stdout: { chunks: [], bytes: 0 },
+      stderr: { chunks: [], bytes: 0 },
+    };
+    const fail = (message: string) => {
+      if (failed) {
+        return;
+      }
+      failed = true;
+      lifecycle.failed = true;
+      void terminate().catch((error: unknown) => {
+        embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
+      });
+      if (headerResolved) {
+        notifications.send("http/request/bodyDelta", {
+          requestId,
+          seq: lastBodySeq + 1,
+          deltaBase64: "",
+          done: true,
+          error: message,
+        });
+        return;
+      }
+      reject(new Error(message));
+    };
+    const bufferOutput = (stream: "stdout" | "stderr", chunk: Buffer | string) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const output = buffered[stream];
+      output.bytes += buffer.byteLength;
+      if (output.bytes > SANDBOX_COMMAND_MAX_BUFFER_BYTES) {
+        fail(`sandbox http/request ${stream} exceeded ${SANDBOX_COMMAND_MAX_BUFFER_BYTES} bytes`);
+        return;
+      }
+      output.chunks.push(buffer);
+    };
+    for (const stream of ["stdout", "stderr"] as const) {
+      if (streamResponse) {
+        child[stream].setEncoding("utf8");
+      }
+      child[stream].on("data", (chunk: Buffer | string) => {
+        if (failed) {
+          return;
+        }
+        if (!streamResponse) {
+          bufferOutput(stream, chunk);
+          return;
+        }
+        const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+        if (stream === "stderr") {
+          stderr = sliceUtf16Safe(`${stderr}${text}`, -4096);
+          return;
+        }
+        stdoutBuffer += text;
+        let newline = stdoutBuffer.indexOf("\n");
+        while (newline >= 0) {
+          const line = stdoutBuffer.slice(0, newline).trim();
+          stdoutBuffer = stdoutBuffer.slice(newline + 1);
+          if (line) {
+            try {
+              const message = requireObject(JSON.parse(line) as JsonValue, "http stream message");
+              const type = requireString(message.type, "http stream message type");
+              if (type === "headers") {
+                headerResolved = true;
+                resolve({
+                  status: requireNumber(message.status, "http status"),
+                  headers: readHttpHeaders(message.headers),
+                  bodyBase64: "",
+                });
+              } else if (type === "bodyDelta") {
+                const seq = requireNumber(message.seq, "http body sequence");
+                lastBodySeq = Math.max(lastBodySeq, seq);
+                notifications.send("http/request/bodyDelta", {
+                  requestId,
+                  seq,
+                  deltaBase64: typeof message.deltaBase64 === "string" ? message.deltaBase64 : "",
+                  done: message.done === true,
+                  error: typeof message.error === "string" ? message.error : null,
+                });
+              }
+            } catch (error) {
+              fail(error instanceof Error ? error.message : String(error));
+            }
+          }
+          newline = stdoutBuffer.indexOf("\n");
+        }
+        if (stdoutBuffer.length > SANDBOX_HTTP_STREAM_LINE_MAX_CHARS) {
+          fail(
+            `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
+          );
+        }
+      });
+    }
+    child.once("error", (error) => {
+      // ChildProcess error can precede close while the helper is still alive.
+      // Keep its backend lease until close provides the terminal exit state.
+      childFailure ??= error.message;
+      lifecycle.failed = true;
+    });
+    child.once("close", (code) => {
+      const exitCode = code ?? 1;
+      if (failed) {
+        return;
+      }
+      if (childFailure) {
+        fail(childFailure);
+        return;
+      }
+      if (exitCode === 0) {
+        if (!streamResponse) {
+          try {
+            const parsed = JSON.parse(Buffer.concat(buffered.stdout.chunks).toString("utf8")) as {
+              status?: unknown;
+              headers?: unknown;
+              bodyBase64?: unknown;
+            };
+            if (typeof parsed.status !== "number" || !Array.isArray(parsed.headers)) {
+              throw new Error("sandbox http/request returned an invalid response envelope");
+            }
+            resolve({
+              status: parsed.status,
+              headers: readHttpHeaders(parsed.headers),
+              bodyBase64: typeof parsed.bodyBase64 === "string" ? parsed.bodyBase64 : "",
+            });
+          } catch (error) {
+            fail(error instanceof Error ? error.message : String(error));
+          }
+          return;
+        }
+        if (!headerResolved) {
+          lifecycle.failed = true;
+          reject(new Error("sandbox http/request exited before returning headers"));
+        }
+        return;
+      }
+      if (!streamResponse) {
+        stderr = Buffer.concat(buffered.stderr.chunks).toString("utf8");
+      }
+      fail(stderr.trim() || `sandbox http/request failed with code ${exitCode}`);
+    });
   }).then(response.resolve, response.reject);
   try {
     if (notifications.signal.aborted) {
@@ -183,169 +323,6 @@ async function runSandboxHttpRequest(
   }
 }
 
-function readSandboxHttpResponse(params: {
-  child: SandboxPipeChildOwner["process"];
-  lifecycle: { failed: boolean };
-  terminate: () => Promise<void>;
-  requestId: string;
-  notifications: CodexSandboxExecSessionNotifications;
-  streamResponse: boolean;
-}): Promise<JsonObject> {
-  return new Promise((resolve, reject) => {
-    let headerResolved = false;
-    let failed = false;
-    let childFailure: string | null = null;
-    let lastBodySeq = 0;
-    let stdoutBuffer = "";
-    let stderr = "";
-    const buffered: Record<"stdout" | "stderr", { chunks: Buffer[]; bytes: number }> = {
-      stdout: { chunks: [], bytes: 0 },
-      stderr: { chunks: [], bytes: 0 },
-    };
-    const fail = (message: string) => {
-      if (failed) {
-        return;
-      }
-      failed = true;
-      params.lifecycle.failed = true;
-      void params.terminate().catch((error: unknown) => {
-        embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
-      });
-      if (headerResolved) {
-        params.notifications.send("http/request/bodyDelta", {
-          requestId: params.requestId,
-          seq: lastBodySeq + 1,
-          deltaBase64: "",
-          done: true,
-          error: message,
-        });
-        return;
-      }
-      reject(new Error(message));
-    };
-    const bufferOutput = (stream: "stdout" | "stderr", chunk: Buffer | string) => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      const output = buffered[stream];
-      output.bytes += buffer.byteLength;
-      if (output.bytes > SANDBOX_COMMAND_MAX_BUFFER_BYTES) {
-        fail(`sandbox http/request ${stream} exceeded ${SANDBOX_COMMAND_MAX_BUFFER_BYTES} bytes`);
-        return;
-      }
-      output.chunks.push(buffer);
-    };
-    if (params.streamResponse) {
-      params.child.stdout.setEncoding("utf8");
-      params.child.stderr.setEncoding("utf8");
-    }
-    params.child.stdout.on("data", (chunk: Buffer | string) => {
-      if (failed) {
-        return;
-      }
-      if (!params.streamResponse) {
-        bufferOutput("stdout", chunk);
-        return;
-      }
-      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      stdoutBuffer += text;
-      let newline = stdoutBuffer.indexOf("\n");
-      while (newline >= 0) {
-        const line = stdoutBuffer.slice(0, newline).trim();
-        stdoutBuffer = stdoutBuffer.slice(newline + 1);
-        if (line) {
-          try {
-            const message = requireObject(JSON.parse(line) as JsonValue, "http stream message");
-            const type = requireString(message.type, "http stream message type");
-            if (type === "headers") {
-              headerResolved = true;
-              resolve({
-                status: requireNumber(message.status, "http status"),
-                headers: readHttpHeaders(message.headers),
-                bodyBase64: "",
-              });
-            } else if (type === "bodyDelta") {
-              const seq = requireNumber(message.seq, "http body sequence");
-              lastBodySeq = Math.max(lastBodySeq, seq);
-              params.notifications.send("http/request/bodyDelta", {
-                requestId: params.requestId,
-                seq,
-                deltaBase64: typeof message.deltaBase64 === "string" ? message.deltaBase64 : "",
-                done: message.done === true,
-                error: typeof message.error === "string" ? message.error : null,
-              });
-            }
-          } catch (error) {
-            fail(error instanceof Error ? error.message : String(error));
-          }
-        }
-        newline = stdoutBuffer.indexOf("\n");
-      }
-      if (stdoutBuffer.length > SANDBOX_HTTP_STREAM_LINE_MAX_CHARS) {
-        fail(
-          `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
-        );
-      }
-    });
-    params.child.stderr.on("data", (chunk: Buffer | string) => {
-      if (failed) {
-        return;
-      }
-      if (!params.streamResponse) {
-        bufferOutput("stderr", chunk);
-        return;
-      }
-      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      stderr = sliceUtf16Safe(`${stderr}${text}`, -4096);
-    });
-    params.child.once("error", (error) => {
-      // ChildProcess error can precede close while the helper is still alive.
-      // Keep its backend lease until close provides the terminal exit state.
-      childFailure ??= error.message;
-      params.lifecycle.failed = true;
-    });
-    params.child.once("close", (code) => {
-      const exitCode = code ?? 1;
-      if (failed) {
-        return;
-      }
-      if (childFailure) {
-        fail(childFailure);
-        return;
-      }
-      if (exitCode === 0) {
-        if (!params.streamResponse) {
-          try {
-            const parsed = JSON.parse(Buffer.concat(buffered.stdout.chunks).toString("utf8")) as {
-              status?: unknown;
-              headers?: unknown;
-              bodyBase64?: unknown;
-            };
-            if (typeof parsed.status !== "number" || !Array.isArray(parsed.headers)) {
-              throw new Error("sandbox http/request returned an invalid response envelope");
-            }
-            resolve({
-              status: parsed.status,
-              headers: readHttpHeaders(parsed.headers),
-              bodyBase64: typeof parsed.bodyBase64 === "string" ? parsed.bodyBase64 : "",
-            });
-          } catch (error) {
-            fail(error instanceof Error ? error.message : String(error));
-          }
-          return;
-        }
-        if (!headerResolved) {
-          params.lifecycle.failed = true;
-          reject(new Error("sandbox http/request exited before returning headers"));
-        }
-        return;
-      }
-      if (!params.streamResponse) {
-        stderr = Buffer.concat(buffered.stderr.chunks).toString("utf8");
-      }
-      fail(stderr.trim() || `sandbox http/request failed with code ${exitCode}`);
-    });
-  });
-}
-
 const SANDBOX_HTTP_REQUEST_SCRIPT = String.raw`
 tmp=$(mktemp "$TMPDIR/openclaw-http.XXXXXX.py" 2>/dev/null || mktemp "/tmp/openclaw-http.XXXXXX.py") || exit 1
 trap 'rm -f "$tmp"' EXIT
@@ -361,9 +338,6 @@ import urllib.request
 
 def emit(payload):
     print(json.dumps(payload, separators=(",", ":")), flush=True)
-
-def response_headers(response):
-    return [{"name": name, "value": value} for name, value in response.headers.items()]
 
 BLOCKED_HOSTNAMES = {
     "localhost",
@@ -400,9 +374,7 @@ def is_blocked_hostname(hostname):
     normalized = normalize_hostname(hostname)
     return (
         normalized in BLOCKED_HOSTNAMES
-        or normalized.endswith(".localhost")
-        or normalized.endswith(".local")
-        or normalized.endswith(".internal")
+        or normalized.endswith((".localhost", ".local", ".internal"))
     )
 
 def is_blocked_ip(address):
@@ -415,12 +387,9 @@ def is_blocked_ip(address):
         return True
     if str(parsed).lower() in CLOUD_METADATA_IP_ADDRESSES:
         return True
-    if isinstance(parsed, ipaddress.IPv4Address):
-        if any(parsed in network for network in BLOCKED_IPV4_NETWORKS):
-            return True
-    else:
-        if any(parsed in network for network in BLOCKED_IPV6_NETWORKS):
-            return True
+    networks = BLOCKED_IPV4_NETWORKS if isinstance(parsed, ipaddress.IPv4Address) else BLOCKED_IPV6_NETWORKS
+    if any(parsed in network for network in networks):
+        return True
     return (
         parsed.is_loopback
         or parsed.is_private
@@ -521,7 +490,7 @@ def pinned_getaddrinfo(original_getaddrinfo):
     return getaddrinfo
 
 def handle_response(input_data, response):
-    headers = response_headers(response)
+    headers = [{"name": name, "value": value} for name, value in response.headers.items()]
     status = int(getattr(response, "status", getattr(response, "code", 0)))
     if input_data.get("streamResponse"):
         emit({"type": "headers", "status": status, "headers": headers})

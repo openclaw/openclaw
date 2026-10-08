@@ -6,7 +6,6 @@ import {
   type WorkboardExecution,
 } from "@openclaw/workboard-contract";
 import {
-  compileSqliteQueryBindings,
   executeSqliteQueryTakeFirstSync,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -25,7 +24,7 @@ import type {
   WorkboardCardStatsAggregate,
   WorkboardKeyedStore,
   WorkboardOwnerClaimResult,
-  WorkboardSessionsBoardStore,
+  WorkboardPersistence,
   WorkboardSubscriptionStore,
 } from "./persistence-types.js";
 import {
@@ -45,7 +44,7 @@ import {
 } from "./sqlite-store-records.js";
 import { createWorkboardDatabase } from "./sqlite-store-schema.js";
 import { WorkboardSqliteSessionsBoardStore } from "./sqlite-store-sessions-board.js";
-import { bindNull, insertCard } from "./sqlite-store-write.js";
+import { bindNull, insertCard, prepareWorkboardUpsert } from "./sqlite-store-write.js";
 import {
   MAX_WORKER_CONTEXT_PARENTS,
   MAX_WORKER_CONTEXT_RECENT_CARDS,
@@ -57,11 +56,8 @@ type SyncStore<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => Promise<infer R> ? (...args: A) => R : never;
 };
 export type WorkboardSqliteKernel = {
-  cards: SyncStore<WorkboardCardStore>;
-  boards: SyncStore<WorkboardKeyedStore<PersistedWorkboardBoard>>;
-  sessionsBoard: SyncStore<WorkboardSessionsBoardStore>;
-  subscriptions: SyncStore<WorkboardSubscriptionStore>;
-  attachments: SyncStore<WorkboardKeyedStore<PersistedWorkboardAttachment>>;
+  [K in keyof WorkboardPersistence]: SyncStore<WorkboardPersistence[K]>;
+} & {
   dataVersion(this: void): number;
   close(this: void): void;
 };
@@ -461,45 +457,29 @@ class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<Persist
       throw new Error("invalid workboard board payload");
     }
     const board = value.board;
-    // Native preparation must precede payload getters and JSON serialization.
-    const { compiled, bind } = compileSqliteQueryBindings<void>((parameter) =>
-      getNodeSqliteKysely<{ workboard_boards: Row }>(this.db)
-        .insertInto("workboard_boards")
-        .values({
-          id: parameter(() => board.id),
-          name: parameter(() => bindNull(board.name)),
-          description: parameter(() => bindNull(board.description)),
-          icon: parameter(() => bindNull(board.icon)),
-          color: parameter(() => bindNull(board.color)),
-          kind: parameter(() => bindNull(board.kind)),
-          sessions_spec: parameter(() =>
-            board.kind === "sessions"
-              ? jsonValue(normalizeWorkboardSessionsBoardSpec(board.sessions))
-              : null,
-          ),
-          automation_job_id: parameter(() => bindNull(board.automationJobId)),
-          default_workspace_json: parameter(() => jsonValue(board.defaultWorkspace)),
-          orchestration_json: parameter(() => jsonValue(board.orchestration)),
-          created_at: parameter(() => board.createdAt),
-          updated_at: parameter(() => board.updatedAt),
-          archived_at: parameter(() => bindNull(board.archivedAt)),
-        })
-        .onConflict((conflict) =>
-          conflict.column("id").doUpdateSet((eb) => ({
-            name: eb.ref("excluded.name"),
-            description: eb.ref("excluded.description"),
-            icon: eb.ref("excluded.icon"),
-            color: eb.ref("excluded.color"),
-            automation_job_id: eb.ref("excluded.automation_job_id"),
-            default_workspace_json: eb.ref("excluded.default_workspace_json"),
-            orchestration_json: eb.ref("excluded.orchestration_json"),
-            created_at: eb.ref("excluded.created_at"),
-            updated_at: eb.ref("excluded.updated_at"),
-            archived_at: eb.ref("excluded.archived_at"),
-          })),
-        ),
+    const write = prepareWorkboardUpsert(
+      this.db,
+      "workboard_boards",
+      {
+        id: () => board.id,
+        name: () => bindNull(board.name),
+        description: () => bindNull(board.description),
+        icon: () => bindNull(board.icon),
+        color: () => bindNull(board.color),
+        kind: () => bindNull(board.kind),
+        sessions_spec: () =>
+          board.kind === "sessions"
+            ? jsonValue(normalizeWorkboardSessionsBoardSpec(board.sessions))
+            : null,
+        automation_job_id: () => bindNull(board.automationJobId),
+        default_workspace_json: () => jsonValue(board.defaultWorkspace),
+        orchestration_json: () => jsonValue(board.orchestration),
+        created_at: () => board.createdAt,
+        updated_at: () => board.updatedAt,
+        archived_at: () => bindNull(board.archivedAt),
+      },
+      ["kind", "sessions_spec"],
     );
-    const statement = this.db.prepare(compiled.sql);
     runSqliteImmediateTransactionSync(this.db, () => {
       const existing = this.lookup(key)?.board;
       if (existing && (existing.kind ?? "cards") !== (board.kind ?? "cards")) {
@@ -519,7 +499,7 @@ class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<Persist
         }
       }
       // Existing session specs are changed only by sessionsBoard.update, never an appearance upsert.
-      statement.run(...bind());
+      write();
     });
   }
 
@@ -592,43 +572,21 @@ class WorkboardSqliteSubscriptionStore implements SyncStore<WorkboardSubscriptio
       throw new Error("invalid workboard notification subscription payload");
     }
     const subscription = value.subscription;
-    // Cursor fields must bind NULL when omitted, after native preparation succeeds.
-    const { compiled, bind } = compileSqliteQueryBindings<void>((parameter) =>
-      getNodeSqliteKysely<{ workboard_notification_subscriptions: Row }>(this.db)
-        .insertInto("workboard_notification_subscriptions")
-        .values({
-          id: parameter(() => subscription.id),
-          board_id: parameter(() => subscription.boardId),
-          card_id: parameter(() => bindNull(subscription.cardId)),
-          session_key: parameter(() => bindNull(subscription.sessionKey)),
-          run_id: parameter(() => bindNull(subscription.runId)),
-          target: parameter(() => bindNull(subscription.target)),
-          event_kinds_json: parameter(() => jsonValue(subscription.eventKinds)),
-          last_event_at: parameter(() => bindNull(subscription.lastEventAt)),
-          last_event_id: parameter(() => bindNull(subscription.lastEventId)),
-          last_event_sequence: parameter(() => bindNull(subscription.lastEventSequence)),
-          delivered_event_ids_json: parameter(() => jsonValue(subscription.deliveredEventIds)),
-          created_at: parameter(() => subscription.createdAt),
-          updated_at: parameter(() => subscription.updatedAt),
-        })
-        .onConflict((conflict) =>
-          conflict.column("id").doUpdateSet((eb) => ({
-            board_id: eb.ref("excluded.board_id"),
-            card_id: eb.ref("excluded.card_id"),
-            session_key: eb.ref("excluded.session_key"),
-            run_id: eb.ref("excluded.run_id"),
-            target: eb.ref("excluded.target"),
-            event_kinds_json: eb.ref("excluded.event_kinds_json"),
-            last_event_at: eb.ref("excluded.last_event_at"),
-            last_event_id: eb.ref("excluded.last_event_id"),
-            last_event_sequence: eb.ref("excluded.last_event_sequence"),
-            delivered_event_ids_json: eb.ref("excluded.delivered_event_ids_json"),
-            created_at: eb.ref("excluded.created_at"),
-            updated_at: eb.ref("excluded.updated_at"),
-          })),
-        ),
-    );
-    this.db.prepare(compiled.sql).run(...bind());
+    prepareWorkboardUpsert(this.db, "workboard_notification_subscriptions", {
+      id: () => subscription.id,
+      board_id: () => subscription.boardId,
+      card_id: () => bindNull(subscription.cardId),
+      session_key: () => bindNull(subscription.sessionKey),
+      run_id: () => bindNull(subscription.runId),
+      target: () => bindNull(subscription.target),
+      event_kinds_json: () => jsonValue(subscription.eventKinds),
+      last_event_at: () => bindNull(subscription.lastEventAt),
+      last_event_id: () => bindNull(subscription.lastEventId),
+      last_event_sequence: () => bindNull(subscription.lastEventSequence),
+      delivered_event_ids_json: () => jsonValue(subscription.deliveredEventIds),
+      created_at: () => subscription.createdAt,
+      updated_at: () => subscription.updatedAt,
+    })();
   }
 
   lookup(key: string): PersistedWorkboardNotificationSubscription | undefined {

@@ -266,16 +266,8 @@ export function normalizeIsoDay(isoLike: string): string | null {
   return match?.[1] ?? null;
 }
 
-export function totalSignalCountForEntry(entry: {
-  recallCount?: number;
-  dailyCount?: number;
-  groundedCount?: number;
-}): number {
-  return (
-    Math.max(0, Math.floor(entry.recallCount ?? 0)) +
-    Math.max(0, Math.floor(entry.dailyCount ?? 0)) +
-    Math.max(0, Math.floor(entry.groundedCount ?? 0))
-  );
+export function totalSignalCountForEntry(entry: ShortTermRecallEntry): number {
+  return entry.recallCount + entry.dailyCount + entry.groundedCount;
 }
 
 export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): ShortTermRecallStore {

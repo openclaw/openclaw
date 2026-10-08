@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sleepWithAbort } from "@openclaw/retry";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
@@ -276,10 +277,7 @@ async function waitForAgentFollowupRun(params: {
         return { status: "observation_ended", reason: "deadline", transportErrors };
       }
       if (consecutiveTransportErrors > 1) {
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, retryDelayMs);
-          timer.unref?.();
-        });
+        await sleepWithAbort(retryDelayMs, undefined, { ref: false });
       }
       continue;
     }

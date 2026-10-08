@@ -473,36 +473,21 @@ function resolveMemoryDreamingPhaseConfig<T extends MemoryDreamingPhaseName>(
   };
 }
 
-export function resolveMemoryDeepDreamingConfig(params: {
-  pluginConfig?: Record<string, unknown>;
-  cfg?: OpenClawConfig;
-}): MemoryDeepDreamingConfig & {
-  timezone?: string;
-  verboseLogging: boolean;
-  storage: MemoryDreamingStorageConfig;
-} {
+export function resolveMemoryDeepDreamingConfig(
+  params: Parameters<typeof resolveMemoryDreamingConfig>[0],
+) {
   return resolveMemoryDreamingPhaseConfig(resolveMemoryDreamingConfig(params), "deep");
 }
 
-export function resolveMemoryLightDreamingConfig(params: {
-  pluginConfig?: Record<string, unknown>;
-  cfg?: OpenClawConfig;
-}): MemoryLightDreamingConfig & {
-  timezone?: string;
-  verboseLogging: boolean;
-  storage: MemoryDreamingStorageConfig;
-} {
+export function resolveMemoryLightDreamingConfig(
+  params: Parameters<typeof resolveMemoryDreamingConfig>[0],
+) {
   return resolveMemoryDreamingPhaseConfig(resolveMemoryDreamingConfig(params), "light");
 }
 
-export function resolveMemoryRemDreamingConfig(params: {
-  pluginConfig?: Record<string, unknown>;
-  cfg?: OpenClawConfig;
-}): MemoryRemDreamingConfig & {
-  timezone?: string;
-  verboseLogging: boolean;
-  storage: MemoryDreamingStorageConfig;
-} {
+export function resolveMemoryRemDreamingConfig(
+  params: Parameters<typeof resolveMemoryDreamingConfig>[0],
+) {
   return resolveMemoryDreamingPhaseConfig(resolveMemoryDreamingConfig(params), "rem");
 }
 

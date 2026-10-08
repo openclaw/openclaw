@@ -5,7 +5,6 @@ import {
   embeddedAgentLog,
   formatErrorMessage,
   resolveSandboxContext,
-  runAgentCleanupStep,
   type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSideQuestionResult,
   type EmbeddedRunAttemptParamsV2,
@@ -54,11 +53,7 @@ import {
   shouldEnableCodexAppServerNativeToolSurface,
   shouldRequireCodexSandboxExecServerEnvironment,
 } from "./dynamic-tool-build.js";
-import {
-  emitDynamicToolErrorDiagnostic,
-  emitDynamicToolStartedDiagnostic,
-  emitDynamicToolTerminalDiagnostic,
-} from "./dynamic-tool-diagnostics.js";
+import { createCodexDynamicToolDiagnostics } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
@@ -99,6 +94,7 @@ import {
   readCodexSupportedReasoningEfforts,
   resolveCodexAppServerReasoningEffort,
 } from "./reasoning-effort.js";
+import { runCodexCleanupStep } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
@@ -125,15 +121,15 @@ import { cleanupCodexSideQuestion } from "./side-question-cleanup.js";
 import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
 import { buildSideRunAttemptParams } from "./side-question-run-params.js";
 import {
-  buildCodexRuntimeThreadConfig,
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerThreadModelSelection,
-} from "./thread-lifecycle.js";
+} from "./thread-model-selection.js";
 import {
   assertCodexSupervisionThreadLineage,
   CodexThreadPolicyHandoffError,
   refreshCodexThreadPolicy,
 } from "./thread-policy.js";
+import { buildCodexRuntimeThreadConfig } from "./thread-requests.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 import { buildCodexTemporalAdditionalContext } from "./turn-params.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
@@ -547,7 +543,8 @@ export async function runCodexAppServerSideQuestion(
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
       };
-      emitDynamicToolStartedDiagnostic(diagnosticContext);
+      const diagnostics = createCodexDynamicToolDiagnostics(diagnosticContext);
+      diagnostics.started();
       const toolCall = handleDynamicToolCallWithTimeout({
         call,
         toolBridge,
@@ -558,18 +555,13 @@ export async function runCodexAppServerSideQuestion(
       activeDynamicToolCalls.add(toolCall);
       try {
         const response = await toolCall;
-        emitDynamicToolTerminalDiagnostic({
-          ...diagnosticContext,
-          response,
-          durationMs: Math.max(0, Date.now() - toolStartedAt),
-        });
+        diagnostics.terminal(response, Math.max(0, Date.now() - toolStartedAt));
         return toCodexDynamicToolProtocolResponse(response) as JsonValue;
       } catch (error) {
-        emitDynamicToolErrorDiagnostic({
-          ...diagnosticContext,
-          durationMs: Math.max(0, Date.now() - toolStartedAt),
-          terminalReason: signal.aborted ? resolveCodexToolAbortTerminalReason(signal) : "failed",
-        });
+        diagnostics.error(
+          Math.max(0, Date.now() - toolStartedAt),
+          signal.aborted ? resolveCodexToolAbortTerminalReason(signal) : "failed",
+        );
         throw error;
       } finally {
         activeDynamicToolCalls.delete(toolCall);
@@ -950,14 +942,8 @@ export async function runCodexAppServerSideQuestion(
         () => releaseCodexAppServerClientLease(clientLease),
         () => nativeHookRelay?.unregister(),
         () =>
-          runAgentCleanupStep({
-            runId: sideRunParams.runId,
-            sessionId: sideRunParams.sessionId,
-            step: "codex-side-native-hook-relay-release",
-            log: embeddedAgentLog,
-            cleanup: async () => {
-              await nativeHookRelay?.drain();
-            },
+          runCodexCleanupStep(sideRunParams, "codex-side-native-hook-relay-release", async () => {
+            await nativeHookRelay?.drain();
           }),
       ],
     });

@@ -25,10 +25,14 @@ import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-pla
 import { admitWorkerStopChat } from "./server-worker-placement.test-harness.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
-const routing = vi.hoisted(() => ({ load: vi.fn() }));
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: routing.load,
+const routing = vi.hoisted(() => ({
+  load: vi.fn<
+    typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+  >(),
+}));
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: routing.load,
 }));
 
 it.each(["success", "failed-write", "setup-failed-write"] as const)(
@@ -39,8 +43,8 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       outcome === "success"
         ? undefined
         : vi
-            .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
-            .mockImplementation(() => terminalWrite.promise);
+            .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
+            .mockReturnValue(() => terminalWrite.promise);
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-terminal-"));
     const target = {
       storePath: path.join(root, "sessions.json"),
@@ -85,13 +89,15 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       cancelRunBoundApprovals: vi.fn(),
       logGateway: log,
     } as unknown as import("./server-methods/types.js").GatewayRequestContext;
-    routing.load.mockImplementation(() => ({
-      ...target,
-      agentId: "main",
-      canonicalKey: target.sessionKey,
-      cfg: {},
-      entry: loadSessionEntry(target),
-    }));
+    const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
+      typeof import("./session-utils-store-worker.js")
+    >("./session-utils-store-worker.js");
+    routing.load.mockImplementation((params) =>
+      loadGatewaySessionEntryReadOnlyInWorker({
+        ...params,
+        cfg: { ...params.cfg, session: { ...params.cfg.session, store: target.storePath } },
+      }),
+    );
     let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
     let heldWriter: Promise<unknown> | undefined;
     let reclaim: Promise<unknown> | undefined;
@@ -157,7 +163,6 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       }
       await replaceSessionEntry(target, {
         ...entry,
-        status: "running",
         lifecycleRunId: runId,
         startedAt: Date.now(),
       });
@@ -185,11 +190,15 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         store: { [target.sessionKey]: entry },
       };
       const barriers = createGatewayWorkerPlacementReclaimBarriers({
-        placements: { get: () => placement as never, waitForTurnClaimRelease: async () => {} },
+        placements: {
+          get: () => placement as never,
+          getAsync: async () => placement as never,
+          waitForTurnClaimRelease: async () => {},
+        },
         loadSessionRuntime: async () =>
           ({
             managedWorktrees: {
-              findLiveByOwner: () => ({
+              findLiveByOwner: async () => ({
                 id: "terminal-worktree",
                 ownerId: target.sessionKey,
                 path: root,
@@ -221,7 +230,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       expect(context.chatAbortControllers.has(runId)).toBe(true);
       expect(owned.activeRunAbort.entry?.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
       expect(reclaimEffectStarted).toBe(false);
-      expect(loadSessionEntry(target)?.status).toBe("running");
+      expect(loadSessionEntry(target)?.status).toBeUndefined();
       const late = await admit("during-terminal-write");
       expect(late.ok).toBe(false);
       expect(
@@ -251,7 +260,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         await heldWriter;
         await rejected;
         expect(reclaimEffectStarted).toBe(false);
-        expect(loadSessionEntry(target)?.status).toBe("running");
+        expect(loadSessionEntry(target)?.status).toBeUndefined();
         return;
       }
       releaseWriter.resolve();

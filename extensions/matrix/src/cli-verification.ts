@@ -8,17 +8,10 @@ function matrixCliVerificationDmLookupOptions(options: cli.MatrixCliVerification
   verificationDmRoomId?: string;
   verificationDmUserId?: string;
 } {
-  const lookup: {
-    verificationDmRoomId?: string;
-    verificationDmUserId?: string;
-  } = {};
-  if (options.roomId !== undefined) {
-    lookup.verificationDmRoomId = options.roomId;
-  }
-  if (options.userId !== undefined) {
-    lookup.verificationDmUserId = options.userId;
-  }
-  return lookup;
+  return {
+    ...(options.roomId !== undefined ? { verificationDmRoomId: options.roomId } : {}),
+    ...(options.userId !== undefined ? { verificationDmUserId: options.userId } : {}),
+  };
 }
 
 function formatMatrixVerificationDmFollowupParts(params: {
@@ -36,20 +29,14 @@ function formatMatrixVerificationDmFollowupParts(params: {
   ];
 }
 
-function formatMatrixVerificationSummaryDmFollowupParts(
-  summary: MatrixVerificationSummary,
-): string[] {
-  return formatMatrixVerificationDmFollowupParts({
-    roomId: summary.roomId,
-    userId: summary.otherUserId,
-  });
-}
-
 function formatMatrixVerificationPreferredDmFollowupParts(
   summary: MatrixVerificationSummary,
   options: cli.MatrixCliVerificationCommandOptions,
 ): string[] {
-  const summaryParts = formatMatrixVerificationSummaryDmFollowupParts(summary);
+  const summaryParts = formatMatrixVerificationDmFollowupParts({
+    roomId: summary.roomId,
+    userId: summary.otherUserId,
+  });
   return summaryParts.length ? summaryParts : formatMatrixVerificationDmFollowupParts(options);
 }
 
@@ -100,7 +87,10 @@ function printMatrixVerificationRequestGuidance(
   accountId?: string,
 ): void {
   const requestId = formatMatrixVerificationCommandId(summary);
-  const dmParts = formatMatrixVerificationSummaryDmFollowupParts(summary);
+  const dmParts = formatMatrixVerificationDmFollowupParts({
+    roomId: summary.roomId,
+    userId: summary.otherUserId,
+  });
   cli.printGuidance([
     `Accept the verification request in another Matrix client for this account.`,
     `Then run ${formatMatrixVerificationFollowupCommand({ action: "start", requestId, accountId, dmParts })} to start SAS verification.`,
@@ -167,11 +157,11 @@ async function runMatrixCliSelfVerificationCommand(
 ): Promise<void> {
   let resolvedAccountId: string | undefined;
   await cli.runMatrixCliCommand(options, {
-    run: async () => {
+    run: () => {
       const timeoutMs = cli.parseOptionalInt(options.timeoutMs, "--timeout-ms", { min: 1 });
       const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
       resolvedAccountId = accountId;
-      return await verification.runMatrixSelfVerification({
+      return verification.runMatrixSelfVerification({
         accountId,
         cfg,
         timeoutMs,
@@ -225,7 +215,7 @@ export function registerMatrixVerificationCommands(root: Command): void {
     .action(async (options: cli.MatrixCliOptions) => {
       const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
       await cli.runMatrixCliCommand(options, {
-        run: async () => await verification.listMatrixVerifications({ accountId, cfg }),
+        run: () => verification.listMatrixVerifications({ accountId, cfg }),
         onText: (summaries) => {
           cli.printAccountLabel(accountId);
           cli.printMatrixVerificationSummaries(summaries);
@@ -263,7 +253,7 @@ export function registerMatrixVerificationCommands(root: Command): void {
       ) => {
         const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
         await cli.runMatrixCliCommand(options, {
-          run: async () => {
+          run: () => {
             if (
               options.ownUser === true &&
               (options.userId || options.deviceId || options.roomId)
@@ -272,7 +262,7 @@ export function registerMatrixVerificationCommands(root: Command): void {
                 "--own-user cannot be combined with --user-id, --device-id, or --room-id",
               );
             }
-            return await verification.requestMatrixVerification({
+            return verification.requestMatrixVerification({
               accountId,
               cfg,
               ownUser: options.ownUser === true ? true : undefined,
@@ -329,8 +319,8 @@ export function registerMatrixVerificationCommands(root: Command): void {
     .action(async (id: string, options: cli.MatrixCliVerificationCommandOptions) => {
       const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
       await cli.runMatrixCliCommand(options, {
-        run: async () =>
-          await verification.getMatrixVerificationSas(id, {
+        run: () =>
+          verification.getMatrixVerificationSas(id, {
             accountId,
             cfg,
             ...matrixCliVerificationDmLookupOptions(options),
@@ -401,8 +391,8 @@ export function registerMatrixVerificationCommands(root: Command): void {
       ) => {
         const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
         await cli.runMatrixCliCommand(options, {
-          run: async () =>
-            await verification.getMatrixVerificationStatus({
+          run: () =>
+            verification.getMatrixVerificationStatus({
               accountId,
               cfg,
               includeRecoveryKey: options.includeRecoveryKey === true,

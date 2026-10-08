@@ -4,6 +4,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { removePersistedPluginModelCatalogCredentials } from "../plugin-model-catalog-credentials.js";
@@ -20,11 +21,12 @@ import {
   type OAuthRefreshGenerationPeer,
 } from "./oauth-refresh-peers.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
+import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { preparePersonalAuthProfileUsage } from "./personal-usage.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
-import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { resolveAuthProfileDatabasePath, runAuthProfileWriteTransaction } from "./sqlite.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -38,6 +40,8 @@ import {
   resolvePersistedAuthProfileOwnerAgentDir,
   resolveRuntimeAuthProfileAgentDir,
   restoreAuthProfileStorePersistenceSnapshot,
+  applyScopedAuthReadThrough,
+  getScopedAuthProfileEnv,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { runAuthProfileUsage } from "./usage-lifecycle.js";
@@ -60,17 +64,6 @@ function listProviderAuthStateEntries<T>(
   return Object.entries(entries ?? {})
     .filter(([key]) => resolveProviderIdForAuth(key) === canonicalProvider)
     .toSorted(([left], [right]) => left.localeCompare(right));
-}
-
-function readProviderAuthState<T>(
-  entries: Record<string, T> | undefined,
-  provider: string,
-): T | undefined {
-  const canonicalProvider = resolveProviderIdForAuth(provider);
-  const matches = listProviderAuthStateEntries(entries, canonicalProvider);
-  return (
-    matches.find(([key]) => normalizeProviderId(key) === canonicalProvider)?.[1] ?? matches[0]?.[1]
-  );
 }
 
 function replaceProviderAuthState<T>(
@@ -140,7 +133,9 @@ export async function promoteAuthProfileInOrder(params: {
         return false;
       }
       const matchingOrderEntries = listProviderAuthStateEntries(store.order, providerKey);
-      const existing = readProviderAuthState(store.order, providerKey);
+      const existing =
+        matchingOrderEntries.find(([key]) => normalizeProviderId(key) === providerKey)?.[1] ??
+        matchingOrderEntries[0]?.[1];
       if (!existing?.length && !params.createIfMissing) {
         return false;
       }
@@ -444,16 +439,23 @@ async function removeAuthProfileTargetsWithLocks(
       for (const target of targets) {
         let stale = false;
         let publishRemoval: (() => boolean) | undefined;
-        const updated = await updateAuthProfileStoreWithLock({
-          agentDir: target.agentDir,
-          updater: (store) => {
+        // The compensation owner captures and saves exact rows in its own transaction.
+        const updated = runAuthProfileWriteTransaction(
+          target.agentDir,
+          (database) => {
+            const store = applyScopedAuthReadThrough(
+              loadPersistedAuthProfileStore(target.agentDir, { database }) ?? {
+                version: 1,
+                profiles: {},
+              },
+            );
             if (!authProfileRemovalTargetMatches(target, store)) {
               stale = true;
-              return false;
+              return store;
             }
             const before = captureAuthProfileStorePersistenceSnapshot(target.agentDir);
             if (!removeProfileReferences(store, target.profileIds, target.provider)) {
-              return false;
+              return store;
             }
             const saved = saveAuthProfileStoreIfPersistenceSnapshotMatches({
               store,
@@ -464,14 +466,10 @@ async function removeAuthProfileTargetsWithLocks(
               restoreAuthProfileStorePersistenceSnapshot(before, saved.owned, target.agentDir),
             );
             publishRemoval = saved.publishRuntimeSnapshots;
-            // The guarded save supplies the exact compensation receipt.
-            return false;
+            return store;
           },
-        });
-        if (updated === null) {
-          result = { kind: "contention" };
-          break;
-        }
+          { env: getScopedAuthProfileEnv() },
+        );
         if (stale) {
           result = { kind: "retry" };
           break;
@@ -480,7 +478,11 @@ async function removeAuthProfileTargetsWithLocks(
         stores.push(updated);
       }
     } catch (error) {
-      removalFailure = { error };
+      if (isSqliteLockError(error)) {
+        result = { kind: "contention" };
+      } else {
+        removalFailure = { error };
+      }
     }
     try {
       // Publication rechecks captured auth, so one scrub after deletion also
@@ -579,12 +581,14 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       params.beforeRemove || params.onIncomplete
         ? await prepareAuthProfileRemovalPeers(targets, params.cfg ?? {})
         : [];
-    const reconcileSurvivors = async () => {
+    const reconcileSurvivors = async (onlyIfPresent = false) => {
       if (!params.onIncomplete) {
         return;
       }
       const surviving = readRemovalProfileState(targets, peers, true);
-      await params.onIncomplete(surviving.profiles, surviving.scopes);
+      if (!onlyIfPresent || surviving.profiles.size > 0) {
+        await params.onIncomplete(surviving.profiles, surviving.scopes);
+      }
     };
     // Config cleanup must not make a later credential generation eligible for this removal.
     let result: AuthProfileRemovalResult;
@@ -599,13 +603,8 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       throw error;
     }
     if (result.kind === "updated") {
-      if (params.onIncomplete) {
-        const surviving = readRemovalProfileState(targets, peers, true);
-        // A captured peer may have reconnected while config cleanup was awaiting I/O.
-        if (surviving.profiles.size > 0) {
-          await params.onIncomplete(surviving.profiles, surviving.scopes);
-        }
-      }
+      // A captured peer may have reconnected while config cleanup was awaiting I/O.
+      await reconcileSurvivors(true);
       return true;
     }
     if (result.kind === "contention" || params.beforeRemove) {

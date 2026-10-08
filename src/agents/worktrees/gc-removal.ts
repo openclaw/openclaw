@@ -10,10 +10,10 @@ import {
   inspectManagedWorktreeCheckout,
 } from "./checkout-inspection.js";
 import type { WorktreeGcProgress } from "./gc-progress.js";
+import { prepareWorktreeRegistryGuard } from "./registry-read.js";
 import { deferWorktreeCleanup, retireMissingRegistryWorktree } from "./registry-retirement.js";
 import {
   createWorktreeRemovalClaimsGuard,
-  getRegistryWorktree,
   updateRegistryWorktree,
   WorktreeRemovalContentionError,
 } from "./registry.js";
@@ -23,6 +23,7 @@ import {
   WorktreeRemovalLockError,
 } from "./removal-errors.js";
 import { requireManagedWorktreeHead } from "./removal-git.js";
+import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import type {
   CreateManagedWorktreeParams,
@@ -35,13 +36,21 @@ import type {
 
 const log = createSubsystemLogger("agents/worktrees");
 
+export type WorktreeCleanupMutation = <T>(
+  run: () => Promise<T>,
+  options?: { settle?: true },
+) => Promise<T>;
+
 export type WorktreeCleanupOwnerPolicy = {
   retryDeferred?: boolean;
+  prepareOwners?: (
+    records: readonly ManagedWorktreeRecord[],
+  ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "shouldProtectOwner" | "shouldRemoveOwner">>;
   shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
   shouldRemoveOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
   withOwnerCleanup?: <T>(
     record: ManagedWorktreeRecord,
-    run: () => Promise<T>,
+    run: (withOwnerMutation: WorktreeCleanupMutation) => Promise<T>,
     signal?: AbortSignal,
   ) => Promise<T>;
 };
@@ -56,8 +65,6 @@ export async function removeWorktreeIfLossless(
     prepareRecord: (record: ManagedWorktreeRecord) => Promise<ManagedWorktreeRecord>;
     remove: (params: {
       id: string;
-      reason: "run-end";
-      requireLossless: true;
       claimToken: string;
       inspectedHead: string;
     }) => Promise<RemoveManagedWorktreeResult>;
@@ -71,14 +78,14 @@ export async function removeWorktreeIfLossless(
   let record = params.record;
   const { id } = record;
   const claimToken = randomUUID();
-  const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
+  const recordOutcome = async (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
     // Retained/failed writes happen after this remover released or aborted its
     // claim, so racing removers may have finalized the row, or removed AND
     // restored it into a new lifecycle. The live condition blocks the first;
     // conditioning on the activity stamp this remover observed blocks the
     // second (restore bumps lastActiveAt). The winning removal persists its
     // outcome atomically inside remove()'s finalization update, never here.
-    updateRegistryWorktree(
+    await updateRegistryWorktree(
       env,
       id,
       {
@@ -90,9 +97,15 @@ export async function removeWorktreeIfLossless(
             : {}),
         },
       },
-      { onlyIfLive: true, onlyIfActiveAt: record.lastActiveAt, assertCurrent },
+      {
+        onlyIfLive: true,
+        onlyIfActiveAt: record.lastActiveAt,
+        assertCurrent,
+        workerAuthority: params.workerAuthority ?? { assertCurrent },
+      },
     );
   };
+  let claimed = false;
   // Run-end cleanup must leave a durable outcome even when safety retains the checkout.
   // QA and operators observe this product-boundary fact through worktrees.list.
   try {
@@ -108,29 +121,7 @@ export async function removeWorktreeIfLossless(
         predicates: [...(params.workerAuthority?.predicates ?? []), { kind: "binding", record }],
       },
     });
-  } catch (error) {
-    if (hasSqliteWorkerOutcomeUnknown(error)) {
-      throw error;
-    }
-    if (error instanceof WorktreeRemovalContentionError) {
-      if (error.kind === "finalized") {
-        // The winning remover owns the terminal cleanup fact; a late contender
-        // must return without replacing it with a false retained/failed outcome.
-        return false;
-      }
-      // A live run lease or a competing remover holds the worktree; a lossless
-      // auto-cleanup must not race it.
-      recordOutcome("retained-busy");
-      return false;
-    }
-    try {
-      recordOutcome("failed", error);
-    } catch {
-      // Preserve the claim failure when the same infrastructure blocks recording it.
-    }
-    throw error;
-  }
-  try {
+    claimed = true;
     record = await params.prepareRecord(record);
     const inspectedHead = await requireManagedWorktreeHead(record, {
       signal: params.signal,
@@ -151,13 +142,11 @@ export async function removeWorktreeIfLossless(
           : (`retained-${inspection.retainedReason}` as const);
     if (retainedOutcome) {
       await abortWorktreeRemoval(env, id, claimToken);
-      recordOutcome(retainedOutcome);
+      await recordOutcome(retainedOutcome);
       return false;
     }
     const result = await params.remove({
       id,
-      reason: "run-end",
-      requireLossless: true,
       claimToken,
       inspectedHead,
     });
@@ -166,11 +155,22 @@ export async function removeWorktreeIfLossless(
     if (hasSqliteWorkerOutcomeUnknown(error)) {
       throw error;
     }
-    await abortWorktreeRemoval(env, id, claimToken);
+    if (claimed) {
+      await abortWorktreeRemoval(env, id, claimToken);
+    } else if (error instanceof WorktreeRemovalContentionError) {
+      // A finalized competitor owns the terminal fact; active contenders record retention.
+      if (error.kind !== "finalized") {
+        await recordOutcome("retained-busy");
+      }
+      return false;
+    }
     try {
-      recordOutcome("failed", error);
-    } catch {
-      // Exact-claim cleanup survives caller revocation; new outcome writes do not.
+      await recordOutcome("failed", error);
+    } catch (outcomeError) {
+      if (hasSqliteWorkerOutcomeUnknown(outcomeError)) {
+        throw outcomeError;
+      }
+      // Preserve the original failure when outcome writes lose admission or infrastructure.
     }
     throw error;
   }
@@ -190,18 +190,6 @@ export async function deferWorktreeGcRecord(
       `cleanup deferred for ${record.id}: ${reason}; checkout preserved at ${record.path}. After repair, run openclaw worktrees gc --retry-deferred to retry.`,
     );
   }
-}
-
-function assertOwnerAllowsCleanup(
-  env: NodeJS.ProcessEnv,
-  record: ManagedWorktreeRecord,
-  params: WorktreeCleanupOwnerPolicy,
-  retiredOwner = false,
-) {
-  if (getRegistryWorktree(env, record.id)?.lastActiveAt !== record.lastActiveAt) {
-    throw new WorktreeRemovalLockError("busy", "worktree activity changed during cleanup");
-  }
-  assertOwnerPolicyAllowsCleanup(record, params, retiredOwner);
 }
 
 function assertOwnerPolicyAllowsCleanup(
@@ -230,28 +218,55 @@ export function createWorktreeGcRemoval(context: {
       id: string;
       reason: string;
       workerAuthority?: WorktreeWorkerAuthority;
+      withOwnerMutation?: WorktreeCleanupMutation;
     },
   ) => Promise<RemoveManagedWorktreeResult>;
 }) {
   const { env, now, progress, policy, assertCurrent, signal } = context;
-  const withOwnerCleanup = <T>(record: ManagedWorktreeRecord, run: () => Promise<T>) =>
-    policy.withOwnerCleanup ? policy.withOwnerCleanup(record, run, signal) : run();
-  const assertOwnerCurrent = (record: ManagedWorktreeRecord, retiredOwner = false) => {
-    assertCurrent?.();
-    assertOwnerAllowsCleanup(env, record, policy, retiredOwner);
-  };
+  const registryContext = captureWorktreeRunEndContext(env);
+  const withOwnerCleanup = <T>(
+    record: ManagedWorktreeRecord,
+    run: (withOwnerMutation: WorktreeCleanupMutation) => Promise<T>,
+  ) =>
+    policy.withOwnerCleanup
+      ? policy.withOwnerCleanup(record, run, signal)
+      : run((mutation) => mutation());
+  const prepareOwnerCurrent = (record: ManagedWorktreeRecord, retiredOwner = false) =>
+    prepareWorktreeRegistryGuard(registryContext, {
+      predicates: [{ kind: "activity", id: record.id, lastActiveAt: record.lastActiveAt }],
+      assertCurrent: () => {
+        assertCurrent?.();
+        assertOwnerPolicyAllowsCleanup(record, policy, retiredOwner);
+      },
+    });
+  const ownerGuard = (
+    record: ManagedWorktreeRecord,
+    retiredOwner: boolean,
+    commitGuard: () => void,
+  ) => ({
+    id: record.id,
+    signal,
+    workerAuthority: {
+      assertCurrent: () => {
+        assertCurrent?.();
+        assertOwnerPolicyAllowsCleanup(record, policy, retiredOwner);
+      },
+      predicates: [{ kind: "activity", id: record.id, lastActiveAt: record.lastActiveAt }],
+    } satisfies WorktreeWorkerAuthority,
+    commitGuard,
+  });
   const handleError = async (
-    stage: "idle" | "limits",
     record: ManagedWorktreeRecord,
     initialError: unknown,
     retiredOwner = false,
+    withOwnerMutation: WorktreeCleanupMutation = (mutation) => mutation(),
   ) => {
     assertCurrent?.();
     const retainUnreadable = (error: unknown) => {
       if (!isWorktreePermissionError(error)) {
         return false;
       }
-      progress.protect(stage, record.id, "unreadable", `unreadable: ${formatErrorMessage(error)}`);
+      progress.protect("idle", record.id, "unreadable", `unreadable: ${formatErrorMessage(error)}`);
       return true;
     };
     if (retainUnreadable(initialError)) {
@@ -263,65 +278,51 @@ export function createWorktreeGcRemoval(context: {
     } else {
       try {
         if (await hasMissingManagedWorktreeGitdir(record)) {
-          await withWorktreeAllocationLease(
-            {
-              env,
-              id: record.id,
-              signal,
-              workerAuthority: {
-                assertCurrent: () => {
-                  assertCurrent?.();
-                  assertOwnerPolicyAllowsCleanup(record, policy, retiredOwner);
-                },
-                predicates: [
-                  { kind: "activity", id: record.id, lastActiveAt: record.lastActiveAt },
-                ],
-              },
-              commitGuard: () => assertOwnerCurrent(record, retiredOwner),
-            },
-            async (guard) => {
-              const token = randomUUID();
-              await claimWorktreeRemoval(env, {
-                worktreeId: record.id,
-                token,
-                assertCurrent: guard.commitGuard,
-                workerAuthority: guard.workerAuthority,
-              });
+          const token = randomUUID();
+          const assertOwnerCurrent = await prepareOwnerCurrent(record, retiredOwner);
+          const custody = { env, ...ownerGuard(record, retiredOwner, assertOwnerCurrent) };
+          await withOwnerMutation(() =>
+            claimWorktreeRemoval(env, {
+              worktreeId: record.id,
+              token,
+              assertCurrent: custody.commitGuard,
+              workerAuthority: custody.workerAuthority,
+            }),
+          );
+          try {
+            await withWorktreeAllocationLease(custody, async (guard) => {
               const assertClaim = createWorktreeRemovalClaimsGuard(env, [record.id], token);
-              try {
-                if (!(await hasMissingManagedWorktreeGitdir(record))) {
-                  throw new WorktreeRemovalLockError(
-                    "busy",
-                    "worktree Git metadata changed during cleanup",
-                  );
-                }
-                const retired = await retireMissingRegistryWorktree(env, record, now, () => {
+              if (!(await hasMissingManagedWorktreeGitdir(record))) {
+                throw new WorktreeRemovalLockError(
+                  "busy",
+                  "worktree Git metadata changed during cleanup",
+                );
+              }
+              const retired = await withOwnerMutation(() =>
+                retireMissingRegistryWorktree(env, record, now, () => {
                   guard.commitGuard?.();
                   assertClaim();
-                });
-                if (retired.protection) {
-                  progress.protect(stage, record.id, retired.protection);
-                  return;
-                }
-                if (retired.record?.removedAt !== now) {
-                  throw new WorktreeRemovalLockError(
-                    "busy",
-                    "worktree retirement was not admitted",
-                  );
-                }
-                progress.result.orphansRetired += 1;
-                progress.result.retiredCheckoutPaths.push(record.path);
-                progress.record(
-                  "orphans",
-                  "retired",
-                  `missing-gitdir; checkout files preserved at ${record.path}`,
-                  record.id,
-                );
-              } finally {
-                await abortWorktreeRemoval(env, record.id, token);
+                }),
+              );
+              if (retired.protection) {
+                progress.protect("idle", record.id, retired.protection);
+                return;
               }
-            },
-          );
+              if (retired.record?.removedAt !== now) {
+                throw new WorktreeRemovalLockError("busy", "worktree retirement was not admitted");
+              }
+              progress.result.orphansRetired += 1;
+              progress.result.retiredCheckoutPaths.push(record.path);
+              progress.record(
+                "orphans",
+                "retired",
+                `missing-gitdir; checkout files preserved at ${record.path}`,
+                record.id,
+              );
+            });
+          } finally {
+            await abortWorktreeRemoval(env, record.id, token);
+          }
           return;
         }
       } catch (retirementError) {
@@ -337,8 +338,12 @@ export function createWorktreeGcRemoval(context: {
           error = retirementError;
         }
       }
-      log.warn(`${stage} cleanup failed for ${record.id}: ${String(error)}`);
-      if (/not a git repository|^Git metadata is unavailable /u.test(formatErrorMessage(error))) {
+      log.warn(`idle cleanup failed for ${record.id}: ${String(error)}`);
+      if (
+        /not a git repository|gitfile does not point to a valid repository|^Git metadata is unavailable /u.test(
+          formatErrorMessage(error),
+        )
+      ) {
         await deferWorktreeGcRecord(
           env,
           record,
@@ -347,30 +352,30 @@ export function createWorktreeGcRemoval(context: {
         );
       }
     }
-    progress.error(stage, error, record.id);
+    progress.error("idle", error, record.id);
   };
   return {
-    remove: (record: ManagedWorktreeRecord, reason: string, retiredOwner = false) =>
-      withOwnerCleanup(record, () =>
-        context.remove({
-          id: record.id,
+    remove: (record: ManagedWorktreeRecord, reason: string, retiredOwner = false) => {
+      progress.result.eligibleCount += 1;
+      return withOwnerCleanup(record, async (withOwnerMutation) => {
+        const assertOwnerCurrent = await prepareOwnerCurrent(record, retiredOwner);
+        return context.remove({
+          ...ownerGuard(record, retiredOwner, assertOwnerCurrent),
           reason,
-          signal,
-          workerAuthority: {
-            assertCurrent: () => {
-              assertCurrent?.();
-              assertOwnerPolicyAllowsCleanup(record, policy, retiredOwner);
-            },
-            predicates: [{ kind: "activity", id: record.id, lastActiveAt: record.lastActiveAt }],
-          },
-          commitGuard: () => assertOwnerCurrent(record, retiredOwner),
-        }),
-      ),
+          withOwnerMutation,
+        });
+      });
+    },
     retireMissing: (record: ManagedWorktreeRecord) =>
-      withOwnerCleanup(record, () =>
-        retireMissingRegistryWorktree(env, record, now, () => assertOwnerCurrent(record)),
+      withOwnerCleanup(record, async (withOwnerMutation) => {
+        const assertOwnerCurrent = await prepareOwnerCurrent(record);
+        return withOwnerMutation(() =>
+          retireMissingRegistryWorktree(env, record, now, assertOwnerCurrent),
+        );
+      }),
+    onError: (record: ManagedWorktreeRecord, error: unknown, retiredOwner = false) =>
+      withOwnerCleanup(record, (withOwnerMutation) =>
+        handleError(record, error, retiredOwner, withOwnerMutation),
       ),
-    onError: (...args: Parameters<typeof handleError>) =>
-      withOwnerCleanup(args[1], () => handleError(...args)),
   };
 }

@@ -12,11 +12,11 @@ import type {
   SessionCreatedActor,
   SessionOwner,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
+import type { SessionRowAttention } from "../lib/session-attention.ts";
 import type { SessionChannelPresentation } from "../lib/session-channel.ts";
 import type { SessionWorkContext } from "../lib/session-display.ts";
 import {
@@ -41,11 +41,9 @@ type SidebarAttentionRequest = {
 };
 
 export type SidebarSessionAttention =
-  | { kind: "none" }
+  | SessionRowAttention
   | { kind: "question"; requests: readonly SidebarAttentionRequest[] }
-  | { kind: "approval"; requests: readonly SidebarAttentionRequest[] }
-  | { kind: "agent"; note: string; icon: SessionAgentAttentionIconId }
-  | { kind: "error"; reason: string; childLabel?: string };
+  | { kind: "approval"; requests: readonly SidebarAttentionRequest[] };
 
 export const SIDEBAR_SESSION_NO_ATTENTION: SidebarSessionAttention = { kind: "none" };
 
@@ -163,11 +161,14 @@ export type SidebarRecentSession = {
   ownWorkspaceConflictCount?: number;
   unreadChildCount?: number;
   queuedChildCount?: number;
+  /** Unread hidden runs folded into this row; acknowledged together with it. */
+  unreadHiddenRuns?: readonly SidebarRecentSession[];
   /** Hidden run state remains visible when persistent children are expanded. */
   subagentSummary?: Pick<
     SidebarRecentSession,
     | "attention"
     | "unreadChildCount"
+    | "unreadHiddenRuns"
     | "queuedChildCount"
     | "runningChildCount"
     | "failedChildCount"
@@ -261,8 +262,8 @@ export type SidebarSessionGroupMenuState = {
   y: number;
 };
 
-export type SidebarSessionSortMode = "created" | "updated" | "people";
-export type SidebarSessionStatusFilter = "active" | "snoozed" | "archived" | "all";
+export type SidebarSessionSortMode = (typeof SIDEBAR_SESSION_SORT_OPTIONS)[number]["mode"];
+export type SidebarSessionStatusFilter = (typeof SIDEBAR_SESSION_STATUS_OPTIONS)[number];
 export type SidebarEmptyGroupsMode = "filtering" | "always" | "never";
 export type SidebarSessionOwnerFilter = {
   ownerId: string | null;
@@ -537,17 +538,9 @@ export const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
   { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
   { mode: "people", labelKey: "sessionsView.owners" },
-] as const satisfies ReadonlyArray<{
-  mode: SidebarSessionSortMode;
-  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.owners";
-}>;
+] as const;
 
-export const SIDEBAR_SESSION_STATUS_OPTIONS = [
-  "active",
-  "snoozed",
-  "archived",
-  "all",
-] as const satisfies readonly SidebarSessionStatusFilter[];
+export const SIDEBAR_SESSION_STATUS_OPTIONS = ["active", "snoozed", "archived", "all"] as const;
 
 export function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;

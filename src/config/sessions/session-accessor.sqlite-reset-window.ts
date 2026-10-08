@@ -31,7 +31,6 @@ import {
 } from "./session-accessor.sqlite-projection-read.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import {
-  transcriptEventJsonSql,
   transcriptEventModelNavigationSql,
   transcriptEventNavigationSql,
   transcriptEventResetNavigationSql,
@@ -561,7 +560,6 @@ export function* iterateVisibleMessageRange(
         ? iterateSqliteQuerySync(
             projection.database.db,
             selectMessagePayload(
-              projection.database,
               selectMessageRows(projection.database, projection.resolved.sessionId, range),
             ),
           )
@@ -628,35 +626,6 @@ export function hasOversizedVisibleMessages(
   );
 }
 
-/** Validate the whole selected history without materializing ordinary payloads in JavaScript. */
-export function assertVisibleMessageRangeJson(
-  projection: CurrentTranscriptProjection,
-  start: number,
-  endExclusive: number,
-): void {
-  for (const range of selectVisibleMessageRanges(projection, start, endExclusive)) {
-    for (const row of iterateSqliteQuerySync(
-      projection.database.db,
-      selectMessagePayload(
-        projection.database,
-        selectMessageRows(projection.database, projection.resolved.sessionId, range),
-      ).where((eb) => {
-        // The raw check rejects extra values; the enclosing array cannot end at a NUL.
-        const event = transcriptEventJsonSql(projection.database.db, "event");
-        const enclosed = eb(eb.val("["), "||", eb(event, "||", eb.val("]")));
-        return eb.or([
-          eb(eb.fn<number>("json_valid", [event]), "=", 0),
-          eb(eb.fn<number>("json_valid", [enclosed]), "=", 0),
-        ]);
-      }),
-    )) {
-      // SQLite's nesting limit is stricter than JSON.parse. Keep readable deep
-      // rows and let the existing parser own actual malformed-row failures.
-      parseActiveTranscriptMessageRow(row);
-    }
-  }
-}
-
 /** Byte-bounded tails can stop sizing at their first excluded predecessor. */
 export function* iterateVisibleMessageMetadata(
   projection: CurrentTranscriptProjection,
@@ -664,6 +633,7 @@ export function* iterateVisibleMessageMetadata(
   endExclusive: number,
   direction: "asc" | "desc" = "asc",
 ): IterableIterator<{
+  event_seq: number;
   message_position: number;
   serialized_bytes: number;
   logicalPosition: number;
@@ -689,6 +659,7 @@ export function* iterateVisibleMessageMetadata(
           });
     for (const row of rows) {
       yield {
+        event_seq: row.event_seq,
         message_position: row.message_position,
         serialized_bytes: row.serialized_bytes,
         // Position-based mapping preserves logical holes if a joined row is absent.

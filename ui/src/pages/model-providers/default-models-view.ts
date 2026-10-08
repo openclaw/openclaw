@@ -40,7 +40,6 @@ export type DefaultModelsViewProps = {
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
   loading?: boolean;
-  /** True while the Gateway is discovering additional models. */
   catalogDiscovering?: boolean;
   /** Retryable discovery error from the current catalog publication or explicit Retry. */
   catalogDiscoveryError?: string | null;
@@ -52,7 +51,7 @@ export type DefaultModelsViewProps = {
   onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;
   onDecisionChange: (model: string | null) => void;
-  onThinkingChange: (level: string, element: HTMLElement) => void;
+  onThinkingChange: (level: string) => void;
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
@@ -95,7 +94,7 @@ function renderHelpTitle(params: {
   title: string;
   label: string;
   triggerId: string;
-  body: TemplateResult;
+  paragraphs: string[];
 }) {
   return html`
     <span class="model-providers__label-with-help">
@@ -115,7 +114,9 @@ function renderHelpTitle(params: {
           >
             ${icons.info}
           </button>
-          <div slot="content" class="settings-section__help-panel">${params.body}</div>
+          <div slot="content" class="settings-section__help-panel">
+            ${params.paragraphs.map((text) => html`<p>${text}</p>`)}
+          </div>
         </openclaw-tooltip>
       </span>
     </span>
@@ -231,10 +232,10 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           title: t("modelProviders.defaults.utility"),
           label: t("modelProviders.defaults.utilityHelpLabel"),
           triggerId: UTILITY_MODEL_HELP_ID,
-          body: html`
-            <p>${t("modelProviders.defaults.utilityHelpPurpose")}</p>
-            <p>${t("modelProviders.defaults.utilityHelpAutomatic")}</p>
-          `,
+          paragraphs: [
+            t("modelProviders.defaults.utilityHelpPurpose"),
+            t("modelProviders.defaults.utilityHelpAutomatic"),
+          ],
         }),
         control: renderModelPicker({
           id: UTILITY_MODEL_PICKER_ID,
@@ -298,10 +299,10 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           title: t("quickSettings.model.thinking"),
           label: t("modelProviders.defaults.thinkingHelpLabel"),
           triggerId: THINKING_HELP_ID,
-          body: html`
-            <p>${t("modelProviders.defaults.thinkingHelp")}</p>
-            <p>${t("modelProviders.defaults.thinkingDefaultHelp")}</p>
-          `,
+          paragraphs: [
+            t("modelProviders.defaults.thinkingHelp"),
+            t("modelProviders.defaults.thinkingDefaultHelp"),
+          ],
         }),
         control: html`
           ${renderSettingsSegmented({
@@ -320,8 +321,8 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
               })),
             ],
             disabled: saving || behaviorControlsDisabled,
-            onChange: (value, element) =>
-              value === "" ? props.onThinkingReset() : props.onThinkingChange(value, element),
+            onChange: (value) =>
+              value === "" ? props.onThinkingReset() : props.onThinkingChange(value),
             onReselect: (value) => {
               if (value === "" && props.thinkingOverridden) {
                 props.onThinkingReset();
@@ -335,10 +336,10 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           title: t("quickSettings.model.fastMode"),
           label: t("modelProviders.defaults.fastModeHelpLabel"),
           triggerId: FAST_MODE_HELP_ID,
-          body: html`
-            <p>${t("modelProviders.defaults.fastModeHelp")}</p>
-            <p>${t("modelProviders.defaults.fastModeDefaultHelp")}</p>
-          `,
+          paragraphs: [
+            t("modelProviders.defaults.fastModeHelp"),
+            t("modelProviders.defaults.fastModeDefaultHelp"),
+          ],
         }),
         control: html`
           ${renderSettingsSegmented<"" | ReturnType<typeof formatFastModeValue>>({

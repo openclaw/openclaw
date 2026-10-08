@@ -8,10 +8,13 @@ const log = createSubsystemLogger("sessions/state-events");
 // Only live prompt-read admissions are retained, never watch rows or cached grants.
 const ambientWatchReads = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionState.ambientWatchReads"),
-  () => ({ readers: new Set<{ source: string; current: boolean }>(), pruning: new Set<string>() }),
+  () => ({
+    readers: new Set<{ source: string; current: boolean }>(),
+    pruning: new Map<string, number>(),
+  }),
 );
 
-export function invalidateAmbientWatchReads(source: string) {
+function invalidateAmbientWatchReads(source: string) {
   for (const reader of ambientWatchReads.readers) {
     if (reader.source === source) {
       reader.current = false;
@@ -21,10 +24,15 @@ export function invalidateAmbientWatchReads(source: string) {
 
 /** Pruning can remove watches; newly admitted reads must also remain undisclosable until settlement. */
 export function beginAmbientWatchPrune(source: string): () => void {
-  ambientWatchReads.pruning.add(source);
+  ambientWatchReads.pruning.set(source, (ambientWatchReads.pruning.get(source) ?? 0) + 1);
   invalidateAmbientWatchReads(source);
   return () => {
-    ambientWatchReads.pruning.delete(source);
+    const pending = ambientWatchReads.pruning.get(source) ?? 0;
+    if (pending <= 1) {
+      ambientWatchReads.pruning.delete(source);
+    } else {
+      ambientWatchReads.pruning.set(source, pending - 1);
+    }
   };
 }
 

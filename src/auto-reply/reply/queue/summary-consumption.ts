@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { completeFollowupRunLifecycle } from "./lifecycle.js";
 import type { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
@@ -21,14 +20,10 @@ export function consumeQueueSummaryDelivery(
       queue.summaryLines.splice(sourceIndex, 1);
       consumedCount += 1;
     } else {
-      const elisionIndex = queue.summaryElisions.findIndex(
-        (entry) => entry.sources.includes(source) || entry.sourceRefs.has(source),
+      const entry = queue.summaryElisions.find(
+        (candidate) => candidate.sources.includes(source) || candidate.sourceRefs.has(source),
       );
-      if (elisionIndex >= 0) {
-        const entry = expectDefined(
-          queue.summaryElisions[elisionIndex],
-          "summary elisions entry at elision index",
-        );
+      if (entry) {
         const elidedSourceIndex = entry.sources.indexOf(entry.sourceRefs.get(source) ?? source);
         if (elidedSourceIndex >= 0) {
           entry.sources.splice(elidedSourceIndex, 1);
@@ -36,7 +31,7 @@ export function consumeQueueSummaryDelivery(
         }
         consumedCount += 1;
         if (entry.sources.length === 0) {
-          queue.summaryElisions.splice(elisionIndex, 1);
+          queue.summaryElisions.splice(queue.summaryElisions.indexOf(entry), 1);
         }
       }
     }

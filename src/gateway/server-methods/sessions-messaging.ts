@@ -76,16 +76,15 @@ async function createAgentMainSessionForSend(
     "sessions.create handler",
   )(createOptions);
 
-  if (!createResult) {
+  if (!createResult?.ok) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.UNAVAILABLE, "sessions.create did not respond"),
-    };
-  }
-  if (!createResult.ok) {
-    return {
-      ok: false,
-      error: createResult.error ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to create session"),
+      error:
+        createResult?.error ??
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          createResult ? "failed to create session" : "sessions.create did not respond",
+        ),
     };
   }
 
@@ -127,7 +126,6 @@ async function handleSessionSend(
   const loaded = loadSessionEntry(key, { agentId: requestedAgentId });
   const { legacyKey } = loaded;
   let { entry, canonicalKey } = loaded;
-  // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
   const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey, entry, {
     acpMetadataSessionKey: legacyKey ?? canonicalKey,
   });

@@ -68,7 +68,7 @@ import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { isSetupCredentialAccessible } from "../auth-profiles/setup-access.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store-runtime.js";
 import { resolveRuntimeAuthProfileAgentDir } from "../auth-profiles/store.js";
-import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildBootstrapBudgetState,
   buildBootstrapInjectionStats,
@@ -94,7 +94,6 @@ import {
 } from "../command/attempt-execution.helpers.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
@@ -110,12 +109,7 @@ import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../mode
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import {
-  prepareRootedExecutionCapability,
-  type PreparedRootedExecutionCapability,
-} from "../rooted-run-params.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
-import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
@@ -252,7 +246,7 @@ async function prepareCliRunContextWithinReadFence(
   const skipsTurnPreparation = isSideQuestion || isControlOperation;
   const runtimeChatType = params.chatType ?? params.sessionEntry?.chatType;
   const workspaceResolution = resolveRunWorkspaceDir({
-    workspaceDir: params.rootedExecution?.root ?? params.workspaceDir,
+    workspaceDir: params.workspaceDir,
     sessionKey: params.sessionKey,
     agentId: sessionOwner,
     config: workspaceConfig,
@@ -291,11 +285,7 @@ async function prepareCliRunContextWithinReadFence(
     config: runConfig,
     fallbackAgentId: params.runtimePolicySessionKey ? params.agentId : workspaceResolution.agentId,
   }).sessionAgentId;
-  const cwd = params.rootedExecution
-    ? resolveUserPath(params.rootedExecution.root)
-    : params.cwd
-      ? resolveUserPath(params.cwd)
-      : workspaceDir;
+  const cwd = params.cwd ? resolveUserPath(params.cwd) : workspaceDir;
   const cwdHash = hashCliSessionText(cwd);
 
   // params.agentId may identify a distinct runtime-policy requester. Backend
@@ -327,11 +317,10 @@ async function prepareCliRunContextWithinReadFence(
         workspaceDir,
         cwd,
       });
-  const rootedToolsAllow = params.rootedExecution
-    ? params.cliToolAvailability?.openClaw
-    : undefined;
   const toolPolicy = resolveCliRuntimeToolPolicy({
     params,
+    policySessionKey,
+    policyAgentId,
     backendId: backendResolved.id,
     bundleMcp: backendResolved.bundleMcp,
     canEnforceExactToolAvailability,
@@ -346,63 +335,6 @@ async function prepareCliRunContextWithinReadFence(
     execHost: params.sessionEntry?.execHost,
     execNode: params.sessionEntry?.execNode,
   });
-  let rootedExecution: PreparedRootedExecutionCapability | undefined;
-  if (params.rootedExecution) {
-    const rootedRequest = params.rootedExecution;
-    if (backendResolved.isolatesInstructionsWithExactTools !== true) {
-      throw new Error(
-        `CLI backend "${backendResolved.id}" does not declare instruction isolation with exact tools; collection review skipped`,
-      );
-    }
-    if (
-      !canEnforceExactToolAvailability ||
-      !backendResolved.bundleMcp ||
-      nodeClaudePlacement ||
-      skipsTurnPreparation ||
-      params.disableTools
-    ) {
-      throw new Error(
-        "CLI runtime cannot enforce rooted execution with mediated tools; collection review skipped",
-      );
-    }
-    params = {
-      ...params,
-      workspaceDir,
-      cwd,
-      disableCliLiveSession: true,
-      cliToolAvailability: { native: [], openClaw: params.cliToolAvailability?.openClaw ?? [] },
-    };
-    const admittedParams = await admitCliRunParams(params, workspaceResolution.agentId);
-    const assertRootedCurrent = resolveAdmittedRunActiveAssertion(
-      admittedParams.admittedRunContext,
-      params.abortSignal,
-    );
-    if (!assertRootedCurrent) {
-      throw new Error("Rooted CLI execution requires active admitted run authority");
-    }
-    params = {
-      ...admittedParams,
-      assertCurrent: () => {
-        admittedParams.assertCurrent?.();
-        admittedParams.abortSignal?.throwIfAborted();
-        assertRootedCurrent();
-      },
-    };
-    params.abortSignal?.throwIfAborted();
-    assertRootedCurrent();
-    rootedExecution = await prepareRootedExecutionCapability({
-      rootedExecution: rootedRequest,
-      config: params.config,
-      agentId: workspaceResolution.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sandboxSessionKey: policySessionKey,
-      sandboxAgentId: policyAgentId,
-      execOverrides: params.execOverrides,
-      permissionMode: params.sessionEntry?.permissionMode,
-      skillsSnapshot: params.skillsSnapshot,
-    });
-  }
   params.assertCurrent?.();
   params.abortSignal?.throwIfAborted();
   if (nodeClaudePlacement && params.cliToolAvailability) {
@@ -445,7 +377,6 @@ async function prepareCliRunContextWithinReadFence(
   let effectiveAuthProfileId =
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
   let authStore: AuthProfileStore | undefined;
-  let authCredential: AuthProfileCredential | undefined;
   let resolvedProfileAuth: ResolvedProviderAuth | undefined;
   const loadScopedAuthStore = (options: { profileId?: string; readOnly?: boolean } = {}) => {
     params.assertCurrent?.();
@@ -461,7 +392,6 @@ async function prepareCliRunContextWithinReadFence(
   };
   if (effectiveAuthProfileId) {
     authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
-    authCredential = authStore.profiles[effectiveAuthProfileId];
   } else if (
     backendResolved.autoSelectAuthProfile !== false &&
     (backendResolved.authEpochMode === "profile-only" || backendResolved.prepareExecution)
@@ -474,10 +404,10 @@ async function prepareCliRunContextWithinReadFence(
         provider: params.provider,
         includePendingOAuthRefresh: true,
       })[0]?.trim() || undefined;
-    if (effectiveAuthProfileId) {
-      authCredential = authStore.profiles[effectiveAuthProfileId];
-    }
   }
+  let authCredential = effectiveAuthProfileId
+    ? authStore?.profiles[effectiveAuthProfileId]
+    : undefined;
   if (
     effectiveAuthProfileId &&
     authCredential &&
@@ -623,8 +553,8 @@ async function prepareCliRunContextWithinReadFence(
     }) ?? normalizedCatalogModel;
   const questionRoute = { provider: modelProvider, model: modelId };
   const questionFingerprint = questionOperation
-    ? questionOperation.bindToolAuthorityRoute(questionRoute)
-    : questionSnapshot?.fingerprint(questionRoute);
+    ? await questionOperation.bindToolAuthorityRouteAsync(questionRoute)
+    : await questionSnapshot?.fingerprintAsync(questionRoute);
   if (questionOperation) {
     params = { ...params, toolAuthorityFingerprint: questionFingerprint };
   }
@@ -710,17 +640,12 @@ async function prepareCliRunContextWithinReadFence(
       // A same-name API model may have a different native window from this CLI runtime.
       allowUnscopedModelLookup: false,
     });
-  let modelContextTokens: number | undefined;
-  for (const contextModelId of contextModelIds) {
-    const candidateContextTokens = resolveContextModelTokens(contextModelId);
-    if (candidateContextTokens !== undefined) {
-      modelContextTokens =
-        modelContextTokens === undefined
-          ? candidateContextTokens
-          : Math.min(modelContextTokens, candidateContextTokens);
-    }
-  }
-  modelContextTokens ??= DEFAULT_CONTEXT_TOKENS;
+  const contextTokenCandidates = contextModelIds
+    .map((contextModelId) => resolveContextModelTokens(contextModelId))
+    .filter((tokens) => tokens !== undefined);
+  let modelContextTokens = contextTokenCandidates.length
+    ? Math.min(...contextTokenCandidates)
+    : DEFAULT_CONTEXT_TOKENS;
   // Session-selectable context windows (catalog `contextWindows`, e.g. Claude
   // CLI 200k/1m) cap the resolved window here: the fixed provider contract in
   // resolveAnthropicFixedContextWindow deliberately ignores catalog scalars,
@@ -848,12 +773,9 @@ async function prepareCliRunContextWithinReadFence(
   const systemAgentMcpConfig = internalParams.systemAgentTool
     ? buildSystemAgentToolsMcpServerConfig(internalParams.systemAgentTool)
     : undefined;
+  const canUseGatewayTools = !nodeClaudePlacement && !skipsTurnPreparation && !systemAgentMcpConfig;
   const bundleMcpEnabled =
-    !nodeClaudePlacement &&
-    !skipsTurnPreparation &&
-    !systemAgentMcpConfig &&
-    backendResolved.bundleMcp &&
-    params.disableTools !== true;
+    canUseGatewayTools && backendResolved.bundleMcp && params.disableTools !== true;
   let mcpLoopbackRuntime = bundleMcpEnabled ? getActiveMcpLoopbackRuntime() : undefined;
   if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
@@ -871,20 +793,14 @@ async function prepareCliRunContextWithinReadFence(
       "Bundled MCP is enabled, but the OpenClaw MCP loopback server did not publish a runtime after startup.",
     );
   }
-  const mcpDeliveryCaptureEnabled = bundleMcpEnabled && Boolean(mcpLoopbackRuntime);
   const { nodeWorkshopEnabled, hostOwnedTools } = mcp.resolveCliMcpToolOwnership(params, {
     backend: backendResolved,
-    enabled: mcpDeliveryCaptureEnabled,
+    enabled: bundleMcpEnabled,
     nodePlacement: nodeClaudePlacement,
-    rooted: Boolean(rootedExecution),
     skipPreparation: skipsTurnPreparation,
   });
   const shouldMaterializeRuntimePolicy =
-    runtimeToolsAllowPolicy !== undefined &&
-    !nodeClaudePlacement &&
-    !skipsTurnPreparation &&
-    !systemAgentMcpConfig &&
-    params.disableTools !== true;
+    runtimeToolsAllowPolicy !== undefined && canUseGatewayTools && params.disableTools !== true;
   const skillLibraryAuthoring: RunCliAgentParams["skillLibraryAuthoring"] =
     nodeWorkshopEnabled && params.skillLibraryAuthoring
       ? { ...params.skillLibraryAuthoring, defaultTarget: "personal" }
@@ -892,7 +808,7 @@ async function prepareCliRunContextWithinReadFence(
   const mcpContextBase =
     mcpLoopbackRuntime || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled
       ? buildCliMcpGrantContext({
-          run: params,
+          run: { ...params, workspaceDir },
           config: runConfig,
           requireExplicitMessageTarget,
           agentId: sessionAgentId,
@@ -911,25 +827,22 @@ async function prepareCliRunContextWithinReadFence(
       }
     : undefined;
   params.assertCurrent?.();
-  const mcpProjection =
-    (bundleMcpEnabled || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled) && mcpContextBase
-      ? await mcp.prepareCliMcpToolProjection(params, {
-          agentId: workspaceResolution.agentId,
-          context: mcpContextBase,
-          runtimeToolsAllowPolicy,
-          rootedToolsAllow,
-          defaultMediatedToolNames: hostOwnedTools,
-          scope: {
-            cfg: runConfig,
-            rootedExecution,
-            ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
-            ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
-            ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
-          },
-          resolvePolicyTools: resolveMcpLoopbackPolicyTools,
-          resolveScopedTools: resolveMcpLoopbackScopedTools,
-        })
-      : { params, tools: [] };
+  const mcpProjection = mcpContextBase
+    ? await mcp.prepareCliMcpToolProjection(params, {
+        agentId: workspaceResolution.agentId,
+        context: mcpContextBase,
+        runtimeToolsAllowPolicy,
+        defaultMediatedToolNames: hostOwnedTools,
+        scope: {
+          cfg: runConfig,
+          ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
+          ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
+          ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
+        },
+        resolvePolicyTools: resolveMcpLoopbackPolicyTools,
+        resolveScopedTools: resolveMcpLoopbackScopedTools,
+      })
+    : { params, tools: [] };
   params = mcpProjection.params;
   params.assertCurrent?.();
   const hookFilteredProjectedTools = applyEmbeddedAttemptToolsAllow(
@@ -949,8 +862,7 @@ async function prepareCliRunContextWithinReadFence(
     (promptBuildRestrictsTools &&
       params.cliToolAvailability === undefined &&
       backendResolved.nativeToolMode === "selectable") ||
-    (runtimeToolsAllowPolicy !== undefined && shouldMaterializeRuntimePolicy) ||
-    rootedExecution
+    shouldMaterializeRuntimePolicy
   ) {
     params = {
       ...params,
@@ -1061,7 +973,6 @@ async function prepareCliRunContextWithinReadFence(
             bindQuestionAnswerAuthority: (assertActive) =>
               bindQuestionAnswerAuthorityForSession(mcpGrant.context.sessionKey, assertActive),
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
-            rootedExecution,
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
           })
         : undefined;
@@ -1179,41 +1090,15 @@ async function prepareCliRunContextWithinReadFence(
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
         ? applyClaudeManagedMcpTimeout(rawLoopbackServerConfig)
         : rawLoopbackServerConfig;
-    const sandboxStatus = resolveSandboxRuntimeStatus({
-      cfg: runConfig,
-      sessionKey: policySessionKey,
-      agentId: policyAgentId,
-    });
-    const nativeMcpCapabilityProfile = resolveConversationCapabilityProfile({
+    const nativeMcpCapabilityProfile = mcp.resolveCliNativeMcpPolicy(params, {
       config: runConfig,
-      sessionKey: policySessionKey,
-      runSessionKey:
-        params.sessionKey && params.sessionKey !== policySessionKey ? params.sessionKey : undefined,
-      sessionId: params.sessionId,
-      runId: params.runId,
-      agentId: policyAgentId,
-      agentAccountId: params.agentAccountId,
-      messageProvider: params.messageProvider ?? params.messageChannel,
-      messageChannel: params.messageChannel,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
+      policySessionKey,
+      policyAgentId,
       modelProvider,
       modelId,
       workspaceDir,
       cwd,
-      sandboxToolPolicy: sandboxStatus.sandboxed ? sandboxStatus.toolPolicy : undefined,
-      runtimeToolAllowlist: runtimeToolsAllowPolicy,
-      inheritRuntimeToolAllowlist: true,
-      inputProvenance: params.inputProvenance,
-      trustedInternalHandoff: params.trustedInternalHandoff,
-      scheduledToolPolicy: params.scheduledToolPolicy,
+      runtimeToolsAllowPolicy,
     });
     const preparedBackend = await prepareCliBundleMcpConfig({
       enabled: bundleMcpEnabled || systemAgentMcpConfig !== undefined,
@@ -1376,7 +1261,7 @@ async function prepareCliRunContextWithinReadFence(
           }
         : undefined;
     const claudeSkillsPlugin =
-      rootedExecution || skipsTurnPreparation || nodeClaudePlacement
+      skipsTurnPreparation || nodeClaudePlacement
         ? { args: [], cleanup: async () => {} }
         : await prepareClaudeCliSkillsPlugin({
             backendId: backendResolved.id,
@@ -1437,14 +1322,12 @@ async function prepareCliRunContextWithinReadFence(
       backendId: backendResolved.id,
       execute: preparedExecution?.execute,
     });
-    const promptToolNamesHash =
-      bundleMcpEnabled && mcpLoopbackRuntime
-        ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
-        : undefined;
+    const promptToolNamesHash = bundleMcpEnabled
+      ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
+      : undefined;
     // `sessionMode: none` may still use a live transport in-process, but neither a
     // returned nor previously stored id is authority for cross-process continuity.
-    const ignoreCliSessionCandidate =
-      isSideQuestion || preparedBackendFinal.backend.sessionMode === "none";
+    const ignoreCliSessionCandidate = preparedBackendFinal.backend.sessionMode === "none";
     // Native controls target the already-owned transcript without rebuilding its turn-time MCP
     // topology. Re-validating that topology here would discard the session being compacted.
     const controlOperationCliSessionId = isControlOperation
@@ -1551,9 +1434,8 @@ async function prepareCliRunContextWithinReadFence(
           skillPreparationParams.abortSignal?.throwIfAborted();
           skillPreparationParams.preparedRunAdmission?.assertSourceCurrent();
         };
-    const preparedSkills = rootedExecution
-      ? { prompt: params.skillsSnapshot?.prompt ?? "" }
-      : skipsTurnPreparation || nodeClaudePlacement || claudeSkillsPlugin.args.length > 0
+    const preparedSkills =
+      skipsTurnPreparation || nodeClaudePlacement || claudeSkillsPlugin.args.length > 0
         ? { prompt: "" }
         : await resolveCliSkillsPrompt({
             assertCurrent: assertSkillsCurrent,
@@ -1774,9 +1656,7 @@ async function prepareCliRunContextWithinReadFence(
         warningMode: bootstrapPromptWarningMode,
         warning: bootstrapPromptWarning,
       }),
-      sandbox: rootedExecution
-        ? { mode: sandboxStatus.mode, sandboxed: Boolean(rootedExecution.sandbox) }
-        : { mode: "off", sandboxed: false },
+      sandbox: { mode: "off", sandboxed: false },
       systemPrompt,
       injectedWorkspaceFiles: bootstrapInjectionStats,
       skillsPrompt: systemPromptSkillsPrompt,
@@ -1828,7 +1708,7 @@ async function prepareCliRunContextWithinReadFence(
       promptToolNamesHash,
       ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
       cwdHash,
-      ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true as const } : {}),
+      ...(bundleMcpEnabled ? { mcpDeliveryCapture: true as const } : {}),
     });
     const admitFinalParams = () =>
       admitCliRunParams(

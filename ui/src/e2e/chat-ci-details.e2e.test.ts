@@ -268,7 +268,10 @@ suite.define(() => {
       expectedConfigRevision: "automation-v1",
       patch: { enabled: false },
     });
-    expect(await autoMerge.isDisabled()).toBe(true);
+    expect(await autoFix.isChecked()).toBe(false);
+    expect(await autoMerge.isEnabled()).toBe(true);
+    expect(await page.locator(".chat-ci__automation-status").count()).toBe(0);
+    expect(await page.getByRole("link", { name: "Open automation" }).count()).toBe(0);
     const disabledFix = { ...fix, enabled: false, configRevision: "automation-v2" };
     await gateway.setMethodResponse("cron.list", automationInventory([disabledFix, merge]));
     await gateway.resolveDeferred("cron.update", disabledFix);
@@ -416,18 +419,28 @@ suite.define(() => {
     await page.locator(".chat-pr__checks-pill").click();
     await expandLinuxJob(page);
     const menu = page.locator(".chat-pr__checks-menu");
-    const bounds = await menu.boundingBox();
-    expect(bounds).not.toBeNull();
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.y).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(height);
+    // Step text can appear before Floating UI finishes positioning the expanded popup.
+    await expect
+      .poll(() =>
+        menu.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          return (
+            bounds.width > 0 &&
+            bounds.x >= 0 &&
+            bounds.y >= 0 &&
+            bounds.right <= innerWidth &&
+            bounds.bottom <= innerHeight
+          );
+        }),
+      )
+      .toBe(true);
     expect(await menu.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
       true,
     );
     await menu.getByRole("link", { name: "Open checks on GitHub" }).click({ trial: true });
     const linuxJob = menu.locator('.chat-ci__job[data-check-id="11"]');
-    await linuxJob.locator(".chat-ci__job-link").click({ trial: true });
+    const jobLink = linuxJob.locator(".chat-ci__job-link");
+    await jobLink.click({ trial: true });
     if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
       const output = createControlUiE2eArtifactDir("ci-details-" + label);
       await writeFile(
@@ -437,6 +450,7 @@ suite.define(() => {
         ]),
       );
       const row = await page.locator(".chat-pr").first().boundingBox();
+      const bounds = await menu.boundingBox();
       if (bounds && row) {
         const x = Math.max(0, Math.floor(Math.min(bounds.x, row.x) - 14));
         const y = Math.max(0, Math.floor(bounds.y - 14));
@@ -455,6 +469,9 @@ suite.define(() => {
         });
       }
     }
+    // Trial clicks leave focus on the CI pill, whose title hint can own the first Escape.
+    await jobLink.focus();
+    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
     await page.keyboard.press("Escape");
     await expect.poll(() => page.locator(".chat-pr__checks[open]").count()).toBe(0);
     await expect.poll(() => menu.isVisible()).toBe(false);

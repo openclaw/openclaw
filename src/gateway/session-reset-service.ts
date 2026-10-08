@@ -3,13 +3,11 @@
 import { randomUUID } from "node:crypto";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
@@ -30,7 +28,8 @@ import {
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { acquireAgentRuntimeCleanupRegistries } from "../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import { readRegistryWorktree } from "../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../agents/worktrees/run-end-lifecycle.js";
 import {
   clearSessionResetRuntimeState,
   createSessionResetCleanupGuard,
@@ -88,6 +87,7 @@ import {
   handleSessionStateSessionDeleted,
   handleSessionStateSessionReset,
 } from "../sessions/session-state-events.js";
+import { finalizeDetachedSessionWorktree } from "../sessions/session-worktree-lifecycle.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
@@ -112,9 +112,10 @@ import {
 } from "./session-reset-acp.js";
 import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
-import { resolveSessionResetTarget, resolveLifecycleAgentId } from "./session-reset-target.js";
+import { resolveSessionResetTarget } from "./session-reset-target.js";
 import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
-import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
+import { loadSessionEntry } from "./session-utils.js";
 import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import {
   resolveSessionWorkerPlacementMutationError,
@@ -123,14 +124,12 @@ import {
 
 async function resetSessionAgentHarnesses(params: {
   cfg: OpenClawConfig;
-  key: string;
-  target: { agentId?: string; canonicalKey?: string };
+  target: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey">;
   entry: SessionEntry;
   reason: "reset" | "deleted";
   assertCurrent?: () => void;
 }): Promise<void> {
-  const agentId = resolveLifecycleAgentId(params.cfg, params.target.agentId);
-  const sessionKey = params.target.canonicalKey ?? params.key;
+  const { agentId, canonicalKey: sessionKey } = params.target;
   params.assertCurrent?.();
   await using owners = await acquireAgentRuntimeCleanupRegistries(
     resolveAgentDir(params.cfg, agentId),
@@ -208,7 +207,7 @@ export async function emitSessionUnboundLifecycleEvent(params: {
 async function ensureSessionRuntimeCleanup(params: {
   cfg: OpenClawConfig;
   key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  target: GatewaySessionStoreTarget;
   sessionId?: string;
   sessionLifecycleRevision?: string;
   assertCurrent?: () => void;
@@ -242,7 +241,7 @@ async function ensureSessionRuntimeCleanup(params: {
     await stopSessionResetSubagents({
       cfg: params.cfg,
       sessionKey: params.target.canonicalKey,
-      agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
+      agentId: params.target.agentId,
       assertCurrent,
     });
   } catch (error) {
@@ -265,7 +264,7 @@ async function ensureSessionRuntimeCleanup(params: {
   clearFinishedSessionsForScopes([...queueKeys, params.key]);
   clearSessionResetRuntimeState(queueKeys, {
     activeReplySessionId: params.sessionId,
-    agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
+    agentId: params.target.agentId,
     sessionKey: params.target.canonicalKey,
     assertCurrent,
   });
@@ -369,7 +368,7 @@ async function ensureSessionRuntimeCleanup(params: {
 export async function cleanupSessionBeforeMutation(params: {
   cfg: OpenClawConfig;
   key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  target: GatewaySessionStoreTarget;
   entry: SessionEntry | undefined;
   legacyKey?: string;
   canonicalKey?: string;
@@ -391,7 +390,7 @@ export async function cleanupSessionBeforeMutation(params: {
     cfg: params.cfg,
     registry: getActivePluginRegistry(),
     reason: params.reason === "session-reset" ? "reset" : "delete",
-    sessionKey: params.target.canonicalKey ?? params.key,
+    sessionKey: params.target.canonicalKey,
     // Unscoped keys can exist in several agent stores; this lifecycle owns only its target.
     sessionStoreTargets: [params.target],
     shouldCleanup: () => {
@@ -405,7 +404,7 @@ export async function cleanupSessionBeforeMutation(params: {
       `plugin host cleanup failed for ${failure.pluginId}/${failure.hookId}: ${String(failure.error)}`,
     );
   }
-  const parentSessionKey = params.target.canonicalKey ?? params.canonicalKey ?? params.key;
+  const parentSessionKey = params.target.canonicalKey;
   const parentAcpError = await closeAcpRuntimeForSession({
     cfg: params.cfg,
     sessionKey: parentSessionKey,
@@ -417,7 +416,7 @@ export async function cleanupSessionBeforeMutation(params: {
   params.assertCurrent?.();
   await closeChildAcpRuntimesForParent({
     cfg: params.cfg,
-    parentKey: params.target.canonicalKey ?? params.canonicalKey ?? params.key,
+    parentKey: parentSessionKey,
     parentAgentId: params.target.agentId,
     reason: params.reason,
     assertCurrent: params.assertCurrent,
@@ -431,7 +430,6 @@ export async function cleanupSessionBeforeMutation(params: {
     // store can expose a successor generation to a new turn.
     await resetSessionAgentHarnesses({
       cfg: params.cfg,
-      key: params.key,
       target: params.target,
       entry: params.entry,
       reason: params.reason === "session-reset" ? "reset" : "deleted",
@@ -446,7 +444,7 @@ export async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
   key: string;
   messages?: unknown[];
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  target: GatewaySessionStoreTarget;
   storePath: string;
   entry?: SessionEntry;
   reason: "new" | "reset";
@@ -456,9 +454,9 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     return;
   }
 
-  const sessionKey = params.target.canonicalKey ?? params.key;
+  const sessionKey = params.target.canonicalKey;
   const sessionId = params.entry?.sessionId;
-  const agentId = resolveLifecycleAgentId(params.cfg, params.target.agentId);
+  const agentId = params.target.agentId;
   const sessionFile = sessionId
     ? formatSqliteSessionFileMarker({ agentId, sessionId, storePath: params.storePath })
     : undefined;
@@ -549,6 +547,8 @@ export async function performGatewaySessionReset(params: {
     }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
+  const worktreeContext = captureWorktreeRunEndContext(process.env);
+  const worktreeEnv = { ...process.env, ...worktreeContext.environment };
   const resetTarget = await resolveSessionResetTarget(getRuntimeConfig(), params);
   if (!resetTarget.ok) {
     return resetTarget;
@@ -825,12 +825,18 @@ export async function performGatewaySessionReset(params: {
         return invalidSessionRequest(placementRetirementError.message);
       }
       if (entry?.worktree?.id) {
-        const record = managedWorktrees.findLiveById(entry.worktree.id);
-        if (record) {
+        const record = await readRegistryWorktree(worktreeContext, entry.worktree.id);
+        params.assertCurrent?.();
+        if (record && record.removedAt === undefined) {
           const { withSettledLocalWorkspace } =
             await import("./worker-environments/local-workspace-projection.js");
           await withSettledLocalWorkspace(
-            { worktree: record, assertCurrent: params.assertCurrent, retireRuntime: true },
+            {
+              worktree: record,
+              env: worktreeEnv,
+              assertCurrent: params.assertCurrent,
+              retireRuntime: true,
+            },
             async () => {},
           );
         }
@@ -840,7 +846,7 @@ export async function performGatewaySessionReset(params: {
         ? normalizeOptionalString(entry?.worktree?.id)
         : undefined;
       const resetLifecycleRevision = entry?.lifecycleRevision;
-      const agentId = resolveLifecycleAgentId(cfg, target.agentId);
+      const agentId = target.agentId;
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const resetPluginRegistry = getActivePluginRegistry();
       const isResetLifecycleCurrent = () => {
@@ -852,20 +858,15 @@ export async function performGatewaySessionReset(params: {
         }
       };
       let deferredAcpResetState: { sessionKey: string; meta: SessionAcpMeta } | undefined;
-      const hookEvent = createInternalHookEvent(
-        "command",
-        params.reason,
-        target.canonicalKey ?? params.key,
-        {
-          agentId,
-          sessionEntry: entry,
-          previousSessionEntry: entry,
-          commandSource: params.commandSource,
-          cfg,
-          storePath,
-          workspaceDir,
-        },
-      );
+      const hookEvent = createInternalHookEvent("command", params.reason, target.canonicalKey, {
+        agentId,
+        sessionEntry: entry,
+        previousSessionEntry: entry,
+        commandSource: params.commandSource,
+        cfg,
+        storePath,
+        workspaceDir,
+      });
       await triggerInternalHook(hookEvent);
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
@@ -887,7 +888,7 @@ export async function performGatewaySessionReset(params: {
       if (runtimeCleanupError) {
         return { ok: false, error: runtimeCleanupError };
       }
-      const parentSessionKey = target.canonicalKey ?? canonicalKey ?? params.key;
+      const parentSessionKey = target.canonicalKey;
       const parentAcpError = await closeAcpRuntimeForSession({
         cfg,
         sessionKey: parentSessionKey,
@@ -906,7 +907,7 @@ export async function performGatewaySessionReset(params: {
         cfg,
         registry: resetPluginRegistry,
         reason: "reset",
-        sessionKey: target.canonicalKey ?? params.key,
+        sessionKey: target.canonicalKey,
         skipPersistentSessionState: true,
       });
       for (const failure of pluginCleanup.failures) {
@@ -916,14 +917,13 @@ export async function performGatewaySessionReset(params: {
       }
       await closeChildAcpRuntimesForParent({
         cfg,
-        parentKey: target.canonicalKey ?? canonicalKey ?? params.key,
+        parentKey: parentSessionKey,
         parentAgentId: target.agentId,
         reason: "session-reset",
       });
       if (entry?.sessionId) {
         await resetSessionAgentHarnesses({
           cfg,
-          key: params.key,
           target,
           entry,
           reason: "reset",
@@ -931,10 +931,10 @@ export async function performGatewaySessionReset(params: {
       }
       const beforeResetMessages = getGlobalHookRunner()?.hasHooks("before_reset")
         ? await readGatewayBeforeResetPluginHookMessages({
-            agentId: resolveLifecycleAgentId(cfg, target.agentId ?? requestedAgentId),
+            agentId,
             entry,
             sessionId: entry?.sessionId,
-            sessionKey: target.canonicalKey ?? params.key,
+            sessionKey: target.canonicalKey,
             storePath,
           })
         : undefined;
@@ -1025,7 +1025,7 @@ export async function performGatewaySessionReset(params: {
         if (!deleted.ok) {
           return deleted;
         }
-        handleSessionStateSessionDeleted(target.canonicalKey, agentId);
+        await handleSessionStateSessionDeleted(target.canonicalKey, agentId);
         notifyGatewaySessionReset(target.canonicalKey, target.agentId);
         emitGatewaySessionEndPluginHook({
           cfg,
@@ -1196,9 +1196,6 @@ export async function performGatewaySessionReset(params: {
             queueDrop: currentEntry?.queueDrop,
             ...preserveSessionLineage(currentEntry),
             completionOwnerSessionKey: currentEntry?.completionOwnerSessionKey,
-            inheritedToolPolicyVersion: currentEntry?.inheritedToolPolicyVersion,
-            inheritedToolAllow: currentEntry?.inheritedToolAllow,
-            inheritedToolDeny: currentEntry?.inheritedToolDeny,
             spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
             spawnedCwd: params.clearSpawnedCwd
               ? undefined
@@ -1292,9 +1289,9 @@ export async function performGatewaySessionReset(params: {
                 reason: params.reason,
               });
             },
-            () => {
-              const resetSessionKey = target.canonicalKey ?? params.key;
-              handleSessionStateSessionReset(resetSessionKey);
+            async () => {
+              const resetSessionKey = target.canonicalKey;
+              await handleSessionStateSessionReset(resetSessionKey);
               notifyGatewaySessionReset(resetSessionKey, target.agentId);
               emitGatewaySessionEndPluginHook({
                 cfg,
@@ -1332,38 +1329,27 @@ export async function performGatewaySessionReset(params: {
           if (hadExistingEntry) {
             postCommitActions.push(() =>
               emitSessionUnboundLifecycleEvent({
-                targetSessionKey: target.canonicalKey ?? params.key,
+                targetSessionKey: target.canonicalKey,
                 reason: "session-reset",
               }),
             );
           }
           if (detachedWorktreeId) {
-            postCommitActions.push(async () => {
-              // Finalize the old checkout before the fence opens to same-key successors.
-              try {
-                if (!(await managedWorktrees.removeIfLossless(detachedWorktreeId))) {
-                  const retained = managedWorktrees.findLiveById(detachedWorktreeId);
-                  if (retained) {
-                    const safePath = truncateUtf16Safe(sanitizeForLog(retained.path), 256);
-                    reportLifecycleCleanupError(
-                      new Error(
-                        `worktree retained: branch=${retained.branch} path=${safePath} outcome=${retained.runEndCleanup?.outcome}`,
-                      ),
-                    );
-                  }
-                }
-              } catch (error) {
-                reportLifecycleCleanupError(error);
-              }
-            });
+            postCommitActions.push(() =>
+              finalizeDetachedSessionWorktree({
+                id: detachedWorktreeId,
+                env: worktreeEnv,
+                context: worktreeContext,
+              }).catch(reportLifecycleCleanupError),
+            );
           }
           clearBootstrapSnapshotOnSessionBoundary({
             boundaryAppended: resetBoundaryAppended,
-            sessionKey: target.canonicalKey ?? params.key,
+            sessionKey: target.canonicalKey,
           });
           if (createdNewEntry) {
             await recordSessionCreated(cfg, {
-              sessionKey: target.canonicalKey ?? params.key,
+              sessionKey: target.canonicalKey,
               agentId,
               entry: mutation.nextEntry,
             });

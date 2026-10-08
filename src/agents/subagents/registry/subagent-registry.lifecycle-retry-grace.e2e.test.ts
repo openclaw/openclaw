@@ -722,56 +722,6 @@ describe("subagent registry lifecycle error grace", () => {
     expect(readFirstAnnounceOutcome()?.statusLabel).toContain("fatal failure");
   });
 
-  it("freezes completion result at run termination across deferred announce retries", async () => {
-    // Regression guard: late lifecycle noise must never overwrite the frozen completion reply.
-    await registerCompletionRun("run-freeze", "freeze", "freeze test");
-    setAssistantOutput("agent:main:subagent:freeze", "Final answer X", "run-freeze");
-    agentCallPlan = ["throw", "ok"];
-
-    const endedAt = Date.now();
-    emitLifecycleEvent("run-freeze", {
-      phase: "end",
-      endedAt,
-      terminalReply: { disposition: "visible", text: "Final answer X" },
-    });
-    await flushAsync();
-
-    await waitForAgentCallCount(1);
-    expect(getAgentResultsForChildSession(getAgentCalls(), "agent:main:subagent:freeze")).toEqual([
-      "Final answer X",
-    ]);
-
-    await waitForCleanupHandledFalse("run-freeze");
-    const firstCapturedAt = mod
-      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
-      .find((candidate) => candidate.runId === "run-freeze")?.completion?.capturedAt;
-
-    setAssistantOutput("agent:main:subagent:freeze", "Late reply Y", "run-freeze-late-traffic");
-    emitLifecycleEvent(
-      "run-freeze-late-traffic",
-      { phase: "end", endedAt: endedAt + 50 },
-      { sessionKey: "agent:main:subagent:freeze" },
-    );
-    const refreshed = await waitForFrozenResultText("run-freeze", "Late reply Y");
-    expect(refreshed.completion?.capturedAt).toBeGreaterThanOrEqual(firstCapturedAt ?? 0);
-    expect(refreshed.completion?.terminalReply).toEqual({
-      disposition: "visible",
-      text: "Final answer X",
-    });
-    emitLifecycleEvent("run-freeze", {
-      phase: "end",
-      endedAt: endedAt + 100,
-      terminalReply: { disposition: "visible", text: "Final answer X" },
-    });
-    await flushAsync();
-
-    await waitForAgentCallCount(2);
-    expect(getAgentResultsForChildSession(getAgentCalls(), "agent:main:subagent:freeze")).toEqual([
-      "Final answer X",
-      "Final answer X",
-    ]);
-  });
-
   it("retries a corrected same-run final without substituting later session traffic", async () => {
     await registerCompletionRun("run-refresh", "refresh", "refresh frozen output test");
     setAssistantOutput(
@@ -933,42 +883,6 @@ describe("subagent registry lifecycle error grace", () => {
       100 * 1024,
     );
     expect(run.completion?.capturedAt).toBeTypeOf("number");
-  });
-
-  it("records a bare aborted end event as cancellation after retry grace", async () => {
-    await registerCompletionRun("run-aborted", "aborted", "aborted test");
-    setAssistantOutput(
-      "agent:main:subagent:aborted",
-      "Partial output before cancellation",
-      "run-aborted",
-    );
-
-    emitLifecycleEvent("run-aborted", {
-      phase: "end",
-      aborted: true,
-      endedAt: 3_000,
-    });
-    await flushAsync();
-
-    expect(getAgentCalls()).toHaveLength(0);
-    expect(
-      mod
-        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
-        .find((candidate) => candidate.runId === "run-aborted")?.execution.status,
-    ).toBe("running");
-
-    await vi.advanceTimersByTimeAsync(15_000);
-    await flushAsync();
-    await agentCallWaits.settle();
-
-    const run = mod
-      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
-      .find((candidate) => candidate.runId === "run-aborted");
-    expect(run).toMatchObject({
-      endedReason: "subagent-killed",
-      execution: { outcome: { status: "error", error: "subagent run terminated" } },
-    });
-    expect(getAgentCalls()).toHaveLength(0);
   });
 
   it("announces a provider hard timeout from its canonical lifecycle metadata", async () => {

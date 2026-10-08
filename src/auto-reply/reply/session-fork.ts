@@ -21,6 +21,7 @@ import {
 export { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../../sessions/model-overrides.js";
 
 type ParentForkDecisionParams = {
+  parentSessionKey?: string;
   parentEntry: SessionEntry;
   agentId?: string;
   config?: OpenClawConfig;
@@ -66,55 +67,52 @@ export async function resolveParentForkDecision(
   assertModelSelectionUnlocked(params.parentEntry, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
   return await resolveSessionParentForkDecision({
     parentEntry: params.parentEntry,
+    parentSessionKey: params.parentSessionKey,
     storePath: resolveParentForkStorePath(params),
   });
+}
+
+function resolveParentForkParams(params: ForkSessionFromParentParams) {
+  // Keep direct callers fail-closed even if they skipped the normal decision step.
+  assertModelSelectionUnlocked(params.parentEntry, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
+  return {
+    agentId: params.agentId,
+    ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
+    parentEntry: params.parentEntry,
+    parentSessionKey: params.parentSessionKey,
+    sessionKey: params.sessionKey,
+    storePath: resolveParentForkStorePath(params),
+    ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
+    ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
+  };
 }
 
 export async function forkSessionFromParent(
   params: ForkSessionFromParentParams,
 ): Promise<{ sessionId: string; sessionFile: string } | null> {
-  // Keep direct callers fail-closed even if they skipped the normal decision step.
-  assertModelSelectionUnlocked(params.parentEntry, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
-  const storePath = resolveParentForkStorePath(params);
-  const fork = await forkSessionFromParentTranscript({
-    agentId: params.agentId,
-    ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
-    parentEntry: params.parentEntry,
-    parentSessionKey: params.parentSessionKey,
-    sessionKey: params.sessionKey,
-    storePath,
-    ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
-    ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
-  });
+  const fork = await forkSessionFromParentTranscript(resolveParentForkParams(params));
   return fork.status === "created" ? fork.transcript : null;
 }
 
 export async function prepareSessionForkFromParent(params: ForkSessionFromParentParams) {
-  assertModelSelectionUnlocked(params.parentEntry, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
   return await prepareSessionForkTranscript({
-    agentId: params.agentId,
-    ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
+    ...resolveParentForkParams(params),
     enforceTokenLimit: true,
     ...(params.maxTokens ? { maxTokens: params.maxTokens } : {}),
-    parentEntry: params.parentEntry,
-    parentSessionKey: params.parentSessionKey,
-    sessionKey: params.sessionKey,
-    storePath: resolveParentForkStorePath(params),
-    ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),
-    ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
   });
 }
 
-function normalizeForkTarget(params: { canonicalKey: string; storeKeys?: readonly string[] }): {
+function normalizeForkTarget(
+  canonicalKey: string,
+  storeKeys?: readonly string[],
+): {
   canonicalKey: string;
   storeKeys: string[];
 } {
   return {
-    canonicalKey: params.canonicalKey,
+    canonicalKey,
     storeKeys: [
-      ...new Set(
-        [params.canonicalKey, ...(params.storeKeys ?? [])].map((key) => key.trim()).filter(Boolean),
-      ),
+      ...new Set([canonicalKey, ...(storeKeys ?? [])].map((key) => key.trim()).filter(Boolean)),
     ],
   };
 }
@@ -132,14 +130,8 @@ export async function forkSessionEntryFromParent(
       agentId: params.agentId,
       commitGuard: params.commitGuard,
       fallbackEntry: params.fallbackEntry,
-      parentTarget: normalizeForkTarget({
-        canonicalKey: params.parentSessionKey,
-        storeKeys: params.parentStoreKeys,
-      }),
-      sessionTarget: normalizeForkTarget({
-        canonicalKey: params.sessionKey,
-        storeKeys: params.sessionStoreKeys,
-      }),
+      parentTarget: normalizeForkTarget(params.parentSessionKey, params.parentStoreKeys),
+      sessionTarget: normalizeForkTarget(params.sessionKey, params.sessionStoreKeys),
       storePath,
     },
     params.entryPatch,

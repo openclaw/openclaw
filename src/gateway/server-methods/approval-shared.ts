@@ -1,7 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import type { ApprovalChannelReviewer } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  ApprovalChannelReviewer,
+  PluginApprovalResolveParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import { isPluginApprovalRequest, type ChannelApprovalKind } from "../../infra/approval-types.js";
@@ -64,12 +67,6 @@ type ResolvedApprovalEvent<TPayload> = {
 };
 
 type ApprovalRequestDeliveryRoute = "approval-client" | "forwarder" | "turn-source" | "none";
-
-type ApprovalResolveParams = {
-  id: string;
-  decision: string;
-  reviewer?: ApprovalChannelReviewer;
-};
 
 function isApprovalDecision(value: string): value is ExecApprovalDecision {
   return value === "allow-once" || value === "allow-always" || value === "deny";
@@ -142,7 +139,7 @@ export function buildRequestedApprovalEvent<
   };
 }
 
-export function resolveApprovalDecisionParams<TParams extends ApprovalResolveParams>(params: {
+export function resolveApprovalDecisionParams<TParams extends PluginApprovalResolveParams>(params: {
   rawParams: unknown;
   validate: Validator<TParams>;
   methodName: string;
@@ -416,9 +413,7 @@ export async function handlePendingApprovalRequest<
     if (
       params.requireDeliveryRoute !== false &&
       !params.keepPendingWithoutRoute &&
-      !hasApprovalClients &&
-      !hasTurnSourceRoute &&
-      !delivered
+      deliveryRoute === "none"
     ) {
       try {
         noRouteWon = await params.manager.expire(params.record.id, "no-approval-route");
@@ -680,6 +675,12 @@ export async function handleApprovalResolve<
     params.context.approvalEvents?.publishResolved(params.approvalKind, resolvedEvent as never);
   }
 
+  if (params.authority.isCurrent()) {
+    params.respond(true, { ok: true }, undefined);
+  } else {
+    respondUnknownOrExpiredApproval(params.respond);
+  }
+
   const followUps = [
     params.forwardResolved
       ? {
@@ -704,11 +705,5 @@ export async function handleApprovalResolve<
     } catch (err) {
       params.context.logGateway?.error?.(`${followUp.errorLabel}: ${String(err)}`);
     }
-  }
-
-  if (params.authority.isCurrent()) {
-    params.respond(true, { ok: true }, undefined);
-  } else {
-    respondUnknownOrExpiredApproval(params.respond);
   }
 }

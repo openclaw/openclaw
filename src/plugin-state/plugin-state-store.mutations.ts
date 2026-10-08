@@ -192,8 +192,7 @@ export function movePluginStateEntries(
 ): number {
   if (
     !isRetainedPluginStateNamespace(params.namespace) ||
-    isRetainedPluginStateNamespace(params.sourceNamespace) ||
-    params.sourceNamespace === params.namespace
+    isRetainedPluginStateNamespace(params.sourceNamespace)
   ) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_INVALID_INPUT",

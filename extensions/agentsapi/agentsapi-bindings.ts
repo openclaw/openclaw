@@ -14,7 +14,21 @@ import {
 export type { AgentsApiBinding } from "./agentsapi-binding-record.js";
 
 /** Native identity is plugin-owned; shared runtime owns mutation and lease coordination. */
-export function createAgentsApiBindings(runtime: PluginRuntime) {
+export function createAgentsApiBindings(
+  runtime: PluginRuntime,
+  executorCleanup?: {
+    settle: (
+      localSessionId: string,
+      binding: AgentsApiBinding,
+      assertCurrent: () => void,
+    ) => Promise<void>;
+    retire: (
+      localSessionId: string,
+      binding: AgentsApiBinding,
+      assertCurrent: () => void,
+    ) => Promise<void>;
+  },
+) {
   const stateOptions = {
     namespace: "agentsapi-sessions",
     maxEntries: 100_000,
@@ -125,6 +139,21 @@ export function createAgentsApiBindings(runtime: PluginRuntime) {
         lifecycle.withLease(
           localSessionId,
           async () => {
+            const assertLeaseCurrent = lifecycle.captureLeaseAssertion(localSessionId);
+            const assertResetCurrent = () => {
+              assertCurrent();
+              assertLeaseCurrent();
+            };
+            const binding = nativeBinding(readRecord(state.lookup(localSessionId)));
+            if (binding?.executor) {
+              if (!executorCleanup) {
+                throw new Error("Agents API self-hosted executor cleanup is unavailable");
+              }
+              await executorCleanup.settle(localSessionId, binding, assertResetCurrent);
+              assertResetCurrent();
+              await executorCleanup.retire(localSessionId, binding, assertResetCurrent);
+              assertResetCurrent();
+            }
             await lifecycle.transact(
               localSessionId,
               (current) => ({
@@ -149,7 +178,26 @@ export function createAgentsApiBindings(runtime: PluginRuntime) {
           ...acquisition(params.assertCurrent),
           assertRecordCurrent: () => params.assertCurrent(),
         },
-        (_binding, mutation) => run(mutation),
+        async (stored, mutation) => {
+          const binding = nativeBinding(stored);
+          if (binding?.executor) {
+            const assertLeaseCurrent = lifecycle.captureLeaseAssertion(params.sessionId);
+            const assertDeletionCurrent = () => {
+              params.assertCurrent();
+              assertLeaseCurrent();
+            };
+            const cleanup = executorCleanup;
+            if (!cleanup) {
+              throw new Error("Agents API self-hosted executor cleanup is unavailable");
+            }
+            await cleanup.settle(params.sessionId, binding, assertDeletionCurrent);
+            assertDeletionCurrent();
+            // Give the controller a chance to stop its executor before deleting the binding.
+            await cleanup.retire(params.sessionId, binding, assertDeletionCurrent);
+            assertDeletionCurrent();
+          }
+          return await run(mutation);
+        },
       );
     },
   };
@@ -157,6 +205,11 @@ export function createAgentsApiBindings(runtime: PluginRuntime) {
 
 function nativeBinding(row: StoredBinding | undefined): AgentsApiBinding | undefined {
   return row?.sessionId && row.configFingerprint
-    ? { sessionId: row.sessionId, configFingerprint: row.configFingerprint }
+    ? {
+        sessionId: row.sessionId,
+        configFingerprint: row.configFingerprint,
+        executorControllerPluginId: row.executorControllerPluginId,
+        executor: row.executor,
+      }
     : undefined;
 }

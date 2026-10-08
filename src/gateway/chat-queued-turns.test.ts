@@ -262,7 +262,6 @@ describe("chat-queued-turns", () => {
     });
 
     expect(retireQueuedChatTurnCancellation(map, "run-collected", controller)).toBe(true);
-    expect(getEventListeners(controller.signal, "abort")).toEqual([]);
     expect(
       abortQueuedChatTurnById(map, { runId: "run-collected", sessionKey: "main" }).aborted,
     ).toBe(false);
@@ -272,6 +271,7 @@ describe("chat-queued-turns", () => {
       [],
     );
     expect(completeQueuedChatTurn(map, "run-collected", controller)).toBe(true);
+    expect(getEventListeners(controller.signal, "abort")).toEqual([]);
   });
 
   it("refuses abort when sessionKey mismatches unless allowed", () => {

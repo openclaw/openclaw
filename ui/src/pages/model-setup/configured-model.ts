@@ -105,13 +105,8 @@ function renderModelSetupFailure(status: string, error: string): TemplateResult 
   `;
 }
 
-function modelName(modelRef: string): string {
-  const separator = modelRef.indexOf("/");
-  return separator < 0 ? modelRef : modelRef.slice(separator + 1);
-}
-
 function configuredModelDetail(candidate: Candidate | undefined, modelRef: string): string {
-  const name = modelName(modelRef);
+  const name = modelRef.slice(modelRef.indexOf("/") + 1);
   const detail = candidate?.detail.trim();
   if (!detail || candidate?.kind === "existing-model") {
     return name;
@@ -119,18 +114,12 @@ function configuredModelDetail(candidate: Candidate | undefined, modelRef: strin
   return detail.toLowerCase().includes(name.toLowerCase()) ? detail : `${name} · ${detail}`;
 }
 
-function verificationButtonLabel(verify: ModelSetupVerifyState): string {
-  switch (verify.phase) {
-    case "checking":
-      return t("modelSetup.verify.checkingButton");
-    case "failed":
-      return t("modelSetup.verify.retry");
-    case "ok":
-      return t("modelSetup.verify.checkAgain");
-    default:
-      return t("modelSetup.verify.button");
-  }
-}
+const VERIFICATION_BUTTON_LABELS = {
+  checking: "modelSetup.verify.checkingButton",
+  failed: "modelSetup.verify.retry",
+  ok: "modelSetup.verify.checkAgain",
+  idle: "modelSetup.verify.button",
+};
 
 export function renderConfiguredModel(props: {
   result: SystemAgentSetupDetectResult;
@@ -200,7 +189,7 @@ export function renderConfiguredModel(props: {
                   ?disabled=${props.actionsDisabled}
                   @click=${props.onVerify}
                 >
-                  ${verificationButtonLabel(props.verify)}
+                  ${t(VERIFICATION_BUTTON_LABELS[props.verify.phase])}
                 </button>`
               : nothing
           }

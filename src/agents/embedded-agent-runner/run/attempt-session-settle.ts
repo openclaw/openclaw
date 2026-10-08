@@ -58,7 +58,7 @@ export function createEmbeddedAttemptSessionSettleTracker(
 }
 
 type AttemptTranscriptLifecycle = ReturnType<typeof createEmbeddedAttemptTranscriptLifecycle>;
-type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
+type TrajectoryRecorder = Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 type DisposableRuntime = { dispose(): Promise<void> | void };
 
 export type EmbeddedAttemptSessionResources = {
@@ -109,8 +109,6 @@ type CleanupEmbeddedAttemptSessionInput = EmbeddedAttemptSessionResources & {
   bundleMcpRuntime?: DisposableRuntime;
   bundleLspRuntime?: DisposableRuntime;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
-  sandboxSessionKey?: string;
-  sessionAgentId: string;
   trajectoryEndRecorded: boolean;
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   emitDiagnosticRunCompleted?: EmitDiagnosticRunCompleted;
@@ -172,12 +170,9 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       cleanupState.timedOutDuringCompaction;
     const cleanupAbortLike = cleanupAborted || initialState.cleanupYieldAborted;
     await cleanupEmbeddedAttemptResources({
-      removeToolResultContextGuard: input.removeToolResultContextGuard,
-      flushPendingToolResultsAfterIdle,
-      session: input.session,
+      ...input,
       sessionManager: input.sessionManager,
-      bundleMcpRuntime: input.bundleMcpRuntime,
-      bundleLspRuntime: input.bundleLspRuntime,
+      flushPendingToolResultsAfterIdle,
       // Aborted runs skip the idle wait so teardown cannot strand the lock.
       aborted: cleanupAbortLike,
       abortSignal: attempt.abortSignal,

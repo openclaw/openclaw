@@ -15,6 +15,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { WorkerOperationContext } from "../state/worker-operation-registry.js";
 import * as grants from "./operator-approval-standing-grants.js";
+import type { CronStandingGrantRecord } from "./operator-approval-standing-grants.types.js";
 import * as store from "./operator-approval-store.kernel.js";
 import { getOperatorApprovalResolutionKey } from "./operator-approval-store.rows.js";
 import * as transitions from "./operator-approval-store.transitions.js";
@@ -22,9 +23,10 @@ import * as transitions from "./operator-approval-store.transitions.js";
 export type OperatorApprovalCommitReceipt = {
   type?: "operatorApprovals.resolve";
   resolutionKey?: string;
+  grantUse?: CronStandingGrantRecord;
   receiptAuthority?: CronReceiptAuthorityPublication;
 };
-type Context = WorkerOperationContext & {
+type Context = Pick<WorkerOperationContext, "open" | "stateOptions"> & {
   native?: {
     assertCurrent: () => void;
     receiptAuthority: CronReceiptAuthorityAttachment;
@@ -59,7 +61,7 @@ function transact<Payload, Result>(
         : prepareCronReceiptAuthorityPublication(database.db, attachment)
       : undefined;
     const receipt = { ...receiptOf?.(result), ...(receiptAuthority ? { receiptAuthority } : {}) };
-    if (receipt.resolutionKey !== undefined || receipt.receiptAuthority) {
+    if (receipt.resolutionKey !== undefined || receipt.receiptAuthority || receipt.grantUse) {
       if (!context.native) {
         deferSqliteWorkerCommitReceipt(database.db, receipt);
       } else {
@@ -111,6 +113,13 @@ export const operatorApprovalOperations = {
     input: Input<typeof transitions.consumeOperatorApprovalAllowOnceInDatabase>,
     context,
   ) => transact(input, context, transitions.consumeOperatorApprovalAllowOnceInDatabase),
+  "operatorApprovals.consumeCronGrant": (
+    input: Input<typeof grants.consumeCronStandingGrantInDatabase>,
+    context,
+  ) =>
+    transact(input, context, grants.consumeCronStandingGrantInDatabase, (result) =>
+      result.outcome === "consumed" ? { grantUse: result.grant } : undefined,
+    ),
   "operatorApprovals.revokeCronGrant": (
     input: Input<typeof grants.revokeCronStandingGrantInDatabase>,
     context,

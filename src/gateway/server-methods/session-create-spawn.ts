@@ -1,8 +1,47 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+  type SessionsCreateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { createGatewaySession } from "../session-create-service.js";
 import type { TrustedSessionCreation } from "../session-creation-provenance.js";
 import type { GatewayClient } from "./types.js";
+
+export function validateSessionCreateSpawnRequest(
+  creation: TrustedSessionCreation,
+  params: Pick<
+    SessionsCreateParams,
+    "parentSessionKey" | "fork" | "forkFrom" | "incognito" | "visibility"
+  >,
+) {
+  const parent = normalizeOptionalString(params.parentSessionKey);
+  const requester =
+    creation.via === "spawn" ? normalizeOptionalString(creation.requesterSessionKey) : undefined;
+  if (creation.inheritedToolPolicy && parent !== requester) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "spawn parent must match the trusted agent caller",
+    );
+  }
+  if (
+    creation.childSessionPublication &&
+    (creation.via !== "spawn" ||
+      requester !== parent ||
+      creation.childSessionPublication.requesterSessionKey !== parent ||
+      params.fork === true ||
+      params.forkFrom !== undefined ||
+      params.incognito === true ||
+      params.visibility === "draft")
+  ) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "Public ingress requires a fresh isolated, non-private child.",
+    );
+  }
+  return undefined;
+}
 
 export function resolveSessionCreateSpawnContext(params: {
   client: GatewayClient | null;

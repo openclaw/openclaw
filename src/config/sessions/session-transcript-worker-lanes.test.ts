@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type {
   WorkerTaskOptions,
   WorkerTaskPoolOptions,
@@ -18,6 +19,7 @@ import {
   isSessionHistoryWorkerCold,
   prewarmSessionHistoryWorker,
   retainSessionHistoryWorkerDatabase,
+  runSessionBranchSummaryWorkerRequest,
   withSessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
@@ -144,55 +146,137 @@ afterAll(() => {
   observed.clearTimeout.mockRestore();
 });
 
-it("dedupes prewarm through history custody without extending idle retirement", async () => {
-  await rotateDatabaseWorkers(historyLane);
-  observed.rotate.mockClear();
-  const request = input();
-  const reply = createDeferredCore<unknown>();
-  observed.run.mockReturnValueOnce(reply.promise);
-  expect(isSessionHistoryWorkerCold()).toBe(true);
-  const first = prewarmSessionHistoryWorker(request.database);
-  const second = prewarmSessionHistoryWorker(request.database);
-  expect(observed.run).toHaveBeenCalledOnce();
-  expect(historyLane.pending).toBe(1);
-  expect(isSessionHistoryWorkerCold()).toBe(false);
-  reply.resolve({ ok: true, value: { kind: "prewarm" } });
-  await Promise.all([first, second]);
-  expect(historyLane.pending).toBe(0);
-  expect(observed.unregister).not.toHaveBeenCalled();
+it("retains branch reads across ten-minute gaps in the maintenance owner", async () => {
+  const { database, scope } = input();
+  const request = {
+    database,
+    databaseIdentity: "synthetic-branch-owner",
+    sessionKey: scope.sessionKey,
+    sessionId: "branch-session",
+  };
+  const result = {
+    status: "ok" as const,
+    branches: [],
+    generation: "branch-generation",
+    maxSeq: 1,
+  };
+  const independentRead = vi
+    .spyOn(WorkerTaskPool.prototype, "run")
+    .mockResolvedValue({ ok: true, value: result });
+  observed.run.mockResolvedValue({ ok: true, value: { kind: "branch-summaries", result } });
+  const sequences = [historyLane.nativeSequence, projectionLane.nativeSequence];
+  const before = maintenanceLane.nativeSequence;
+  const signal = new AbortController().signal;
+  try {
+    await expect(runSessionBranchSummaryWorkerRequest(request, signal)).resolves.toEqual(result);
+    expect(maintenanceLane.nativeSequence).toBe(before + 1);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(observed.rotate).not.toHaveBeenCalled();
 
-  await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-  await prewarmSessionHistoryWorker(request.database);
-  expect(observed.run).toHaveBeenCalledOnce();
-  await vi.advanceTimersByTimeAsync(1);
-  expect(observed.rotate).toHaveBeenCalledOnce();
-  expect(observed.unregister).toHaveBeenCalledOnce();
-  expect(isSessionHistoryWorkerCold()).toBe(true);
-
-  observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
-  await prewarmSessionHistoryWorker(request.database);
-  expect(observed.run).toHaveBeenCalledTimes(2);
+    await expect(runSessionBranchSummaryWorkerRequest(request, signal)).resolves.toEqual(result);
+    expect(maintenanceLane.nativeSequence).toBe(before + 2);
+    expect([historyLane.nativeSequence, projectionLane.nativeSequence]).toEqual(sequences);
+    expect(independentRead).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    expect(observed.rotate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(observed.rotate).toHaveBeenCalledOnce();
+    expect(isSessionHistoryWorkerCold(maintenanceLane)).toBe(true);
+  } finally {
+    independentRead.mockRestore();
+  }
 });
 
-it("settles failed and revoked prewarms without rejecting callers", async () => {
-  const request = input();
-  observed.run.mockRejectedValueOnce(new Error("worker unavailable"));
-  await expect(prewarmSessionHistoryWorker(request.database)).resolves.toBeUndefined();
-  expect(historyLane.pending).toBe(0);
-  expect(observed.rotate).toHaveBeenCalledOnce();
+it.each([historyLane, maintenanceLane])(
+  "dedupes $name prewarm custody without extending idle retirement",
+  async (lane) => {
+    await rotateDatabaseWorkers(lane);
+    observed.rotate.mockClear();
+    const request = input();
+    const reply = createDeferredCore<unknown>();
+    observed.run.mockReturnValueOnce(reply.promise);
+    expect(isSessionHistoryWorkerCold(lane)).toBe(true);
+    const first = prewarmSessionHistoryWorker(request.database, lane);
+    const second = prewarmSessionHistoryWorker(request.database, lane);
+    expect(observed.run).toHaveBeenCalledOnce();
+    expect(lane.pending).toBe(1);
+    expect(isSessionHistoryWorkerCold(lane)).toBe(false);
+    reply.resolve({ ok: true, value: { kind: "prewarm" } });
+    await Promise.all([first, second]);
+    expect(lane.pending).toBe(0);
+    expect(observed.unregister).not.toHaveBeenCalled();
 
-  const reply = createDeferredCore<unknown>();
-  observed.run.mockReturnValueOnce(reply.promise);
-  const pending = prewarmSessionHistoryWorker(request.database);
-  const resource = observed.resources.at(-1)!;
-  resource.revoke();
-  reply.resolve({ ok: true, value: { kind: "prewarm" } });
-  await expect(pending).resolves.toBeUndefined();
-  await resource.close();
-  expect(historyLane.pending).toBe(0);
-  observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
-  await prewarmSessionHistoryWorker(request.database);
-  expect(observed.run).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    await prewarmSessionHistoryWorker(request.database, lane);
+    expect(observed.run).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(observed.rotate).toHaveBeenCalledOnce();
+    expect(observed.unregister).toHaveBeenCalledOnce();
+    expect(isSessionHistoryWorkerCold(lane)).toBe(true);
+
+    observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+    await prewarmSessionHistoryWorker(request.database, lane);
+    expect(observed.run).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.each([historyLane, maintenanceLane])(
+  "settles failed and revoked $name prewarms without rejecting callers",
+  async (lane) => {
+    const request = input();
+    observed.run.mockRejectedValueOnce(new Error("worker unavailable"));
+    await expect(prewarmSessionHistoryWorker(request.database, lane)).resolves.toBeUndefined();
+    expect(lane.pending).toBe(0);
+    expect(observed.rotate).toHaveBeenCalledOnce();
+
+    const reply = createDeferredCore<unknown>();
+    observed.run.mockReturnValueOnce(reply.promise);
+    const pending = prewarmSessionHistoryWorker(request.database, lane);
+    const resource = observed.resources.at(-1)!;
+    resource.revoke();
+    reply.resolve({ ok: true, value: { kind: "prewarm" } });
+    await expect(pending).resolves.toBeUndefined();
+    await resource.close();
+    expect(lane.pending).toBe(0);
+    observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+    await prewarmSessionHistoryWorker(request.database, lane);
+    expect(observed.run).toHaveBeenCalledTimes(3);
+  },
+);
+
+it("joins only the matching lane prewarm and prepares its replacement after retirement", async () => {
+  const request = input();
+  const history = createDeferredCore<unknown>();
+  const maintenance = createDeferredCore<unknown>();
+  observed.run.mockReturnValueOnce(history.promise).mockReturnValueOnce(maintenance.promise);
+  const preparingHistory = prewarmSessionHistoryWorker(request.database);
+  const preparingMaintenance = prewarmSessionHistoryWorker(request.database, maintenanceLane);
+  const joiningMaintenance = prewarmSessionHistoryWorker(request.database, maintenanceLane);
+  try {
+    expect(observed.run).toHaveBeenCalledTimes(2);
+    expect(historyLane.pending).toBe(1);
+    expect(maintenanceLane.pending).toBe(1);
+
+    history.resolve({ ok: true, value: { kind: "prewarm" } });
+    await preparingHistory;
+    expect(historyLane.pending).toBe(0);
+    expect(maintenanceLane.pending).toBe(1);
+    maintenance.resolve({ ok: true, value: { kind: "prewarm" } });
+    await Promise.all([preparingMaintenance, joiningMaintenance]);
+
+    await rotateDatabaseWorkers(maintenanceLane);
+    await prewarmSessionHistoryWorker(request.database);
+    expect(observed.run).toHaveBeenCalledTimes(2);
+    expect(isSessionHistoryWorkerCold(maintenanceLane)).toBe(true);
+    observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+    await prewarmSessionHistoryWorker(request.database, maintenanceLane);
+    expect(observed.run).toHaveBeenCalledTimes(3);
+    expect(isSessionHistoryWorkerCold(maintenanceLane)).toBe(false);
+  } finally {
+    history.resolve({ ok: true, value: { kind: "prewarm" } });
+    maintenance.resolve({ ok: true, value: { kind: "prewarm" } });
+    await Promise.all([preparingHistory, preparingMaintenance, joiningMaintenance]);
+  }
 });
 
 it("maintenance cleanup preserves foreground custody with an older sequence", async () => {
@@ -234,13 +318,126 @@ it("maintenance cleanup preserves foreground custody with an older sequence", as
     maintenanceLane,
   );
   expect(historyLane.nativeSequence).toBeLessThan(maintenanceLane.nativeSequence);
-  expect(observed.unregister).toHaveBeenCalledTimes(1);
+  expect(observed.unregister).toHaveBeenCalledOnce();
   const retained = observed.resources.find((resource) => resource.agentId === "main");
   assert(retained);
   await retained.close();
   expect(observed.rotate).not.toHaveBeenCalled();
-  expect(observed.closeResources).toHaveBeenCalledTimes(2);
+  expect(observed.closeResources).toHaveBeenCalledTimes(3);
   expect(observed.unregister).toHaveBeenCalledTimes(2);
+});
+
+it("accepts a missing reader settling during discovery cleanup", async () => {
+  const request = input();
+  const target = {
+    kind: "session-store-target" as const,
+    logicalAgentId: "main",
+    sourcePath: request.database.path,
+    database: request.database,
+  };
+  const readerReply = createDeferredCore<unknown>();
+  const cleanupStarted = createDeferredCore();
+  const cleanupFinished = createDeferredCore();
+  observed.run
+    .mockResolvedValueOnce({ ok: true, value: target })
+    .mockReturnValueOnce(readerReply.promise);
+  observed.closeResources.mockImplementationOnce(async () => {
+    cleanupStarted.resolve();
+    await cleanupFinished.promise;
+  });
+  let missingRead: Promise<boolean> | undefined;
+  const discovery = withSessionHistoryWorkerReadCandidates(
+    [{ path: request.database.path, physicalPath: request.database.path }],
+    async (owner) => {
+      const selected = await owner.readStoreTarget({
+        agentId: "main",
+        storePath: request.database.path,
+        env: {},
+        registeredDatabases: [],
+      });
+      missingRead = withSessionHistoryWorkerDatabase(request.database, (reader) =>
+        reader.readEntryPresence(request.scope),
+      );
+      return selected;
+    },
+  );
+  try {
+    await cleanupStarted.promise;
+    readerReply.resolve({ ok: true, value: false, closedHistoryDatabase: request.database });
+    await expect(missingRead).resolves.toBe(false);
+    cleanupFinished.resolve();
+    await expect(discovery).resolves.toEqual(target);
+    expect(observed.rotate).not.toHaveBeenCalled();
+  } finally {
+    readerReply.resolve({ ok: true, value: false, closedHistoryDatabase: request.database });
+    cleanupFinished.resolve();
+    await Promise.allSettled([discovery, missingRead]);
+  }
+});
+
+it("joins full retirement if retained reader custody is revoked during discovery cleanup", async () => {
+  const request = input();
+  observed.run.mockResolvedValue({ ok: true, value: false });
+  await withSessionHistoryWorkerDatabase(request.database, (owner) =>
+    owner.readEntryPresence(request.scope),
+  );
+  const resource = observed.resources.find((entry) => entry.agentId === "main");
+  assert(resource);
+  const closing = createDeferredCore();
+  const started = createDeferredCore();
+  const retiring = createDeferredCore();
+  const retired = createDeferredCore();
+  observed.closeResources.mockImplementationOnce(async () => {
+    started.resolve();
+    await closing.promise;
+  });
+  observed.run.mockResolvedValueOnce({
+    ok: true,
+    value: {
+      kind: "session-store-target",
+      logicalAgentId: "main",
+      sourcePath: request.database.path,
+      database: request.database,
+    },
+  });
+  const discovery = withSessionHistoryWorkerReadCandidates(
+    [{ path: request.database.path, physicalPath: request.database.path }],
+    (owner) =>
+      owner.readStoreTarget({
+        agentId: "main",
+        storePath: request.database.path,
+        env: {},
+        registeredDatabases: [],
+      }),
+  );
+  const rejected = expect(discovery).rejects.toThrow("custody was revoked");
+  try {
+    await started.promise;
+    observed.rotate.mockImplementationOnce(() => {
+      retiring.resolve();
+      return retired.promise;
+    });
+    resource.revoke();
+    closing.resolve();
+    let settled = false;
+    void discovery.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await retiring.promise;
+    expect(settled).toBe(false);
+    retired.resolve();
+    await rejected;
+    expect(observed.rotate).toHaveBeenCalled();
+  } finally {
+    closing.resolve();
+    retired.resolve();
+    await discovery.catch(() => {});
+  }
 });
 
 it.each([

@@ -1,6 +1,8 @@
 import { channel } from "node:diagnostics_channel";
+import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
+import { encodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import {
   captureSqliteWorkerClosePolicy,
   ensureSqliteLibrarySelected,
@@ -36,6 +38,7 @@ import {
   unwrapSessionTranscriptWorkerReply,
 } from "./session-history-worker-errors.js";
 import {
+  isSessionStoreReadCandidateCurrent,
   measureSessionStoreTargetInventoryInputBytes,
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
@@ -130,9 +133,9 @@ export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
 
 export type SessionDatabaseCleanup = { run: () => Promise<void> };
 
-/** Physical path for work; the caller's lexical requestedPath selects the owner for cleanup. */
+/** Physical path for work; callers' lexical paths select the same owner for cleanup. */
 export type SessionHistoryDatabaseTarget = OpenClawAgentDatabaseOptions & {
-  requestedPath?: string;
+  requestedPaths?: readonly string[];
 };
 
 export type HistoryDatabaseResource = {
@@ -420,8 +423,8 @@ export function acquireHistoryDatabaseResource(
     created = true;
   }
   try {
-    if (options.requestedPath !== undefined) {
-      const alias = resolveOpenClawAgentSqlitePath({ ...options, path: options.requestedPath });
+    for (const requestedPath of options.requestedPaths ?? []) {
+      const alias = resolveOpenClawAgentSqlitePath({ ...options, path: requestedPath });
       if (alias !== database.path) {
         resource.retainAlias(alias);
       }
@@ -455,8 +458,8 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   }) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
-  const capturedCandidates = candidates.map(({ path, physicalPath, scope }) => ({
-    path,
+  const capturedCandidates = candidates.map(({ path: requestedPath, physicalPath, scope }) => ({
+    path: requestedPath,
     physicalPath,
     scope,
   }));
@@ -482,7 +485,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     };
     const releases: Array<() => void> = [];
     const release = () => {
-      for (const unregister of releases.toReversed()) {
+      for (const unregister of releases.splice(0).toReversed()) {
         unregister();
       }
     };
@@ -500,20 +503,69 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     };
     const settleCandidates = async () => {
       // Failed discovery can retain handles outside candidate custody even on a proven worker.
-      if (discoveryFailed || !lane.pool.canCloseNativeResources()) {
+      if (discoveryFailed || revoked || !lane.pool.canCloseNativeResources()) {
         await retire();
         return;
       }
       const through = lane.nativeSequence;
       candidateCleanupPending = true;
       try {
-        await lane.pool.closeResources(JSON.stringify(selected));
+        const retained = new Map<string, HistoryDatabaseResource>();
+        for (const resource of historyDatabases.values()) {
+          if (resource.revoked || resource.closing || !resource.nativeSequences.has(lane)) {
+            continue;
+          }
+          for (const candidate of capturedCandidates) {
+            if (
+              !matchesAgentDatabaseReadCandidatePath(
+                { ...candidate, path: candidate.physicalPath },
+                resource.database.path,
+              )
+            ) {
+              continue;
+            }
+            const alias = candidate.scope
+              ? path.join(path.dirname(candidate.path), path.basename(resource.database.path))
+              : candidate.path;
+            if (
+              !isSessionStoreReadCandidateCurrent({
+                path: alias,
+                physicalPath: resource.database.path,
+              })
+            ) {
+              throw new Error("Session discovery alias changed before reader custody transfer");
+            }
+            // The known owner must retain lexical close custody before discovery releases it.
+            if (alias !== resource.database.path) {
+              resource.retainAlias(alias);
+            }
+            retained.set(resource.database.path, resource);
+          }
+        }
+        await lane.pool.closeResources(
+          encodeAgentDatabaseReaderRequest({
+            kind: "close",
+            candidates: selected,
+            retainedPaths: [...retained.keys()],
+            deleted: false,
+          }),
+        );
+        if (
+          revoked ||
+          [...retained.values()].some((resource) => resource.revoked || Boolean(resource.closing))
+        ) {
+          throw new WorkerTaskError(
+            "Session reader custody was revoked during discovery cleanup",
+            "unavailable",
+          );
+        }
         candidateCleanupPending = false;
         for (const resource of historyDatabases.values()) {
           const sequence = resource.nativeSequences.get(lane);
           if (
             sequence !== undefined &&
             sequence <= through &&
+            !retained.has(resource.database.path) &&
             selected.some((candidate) =>
               matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
             )

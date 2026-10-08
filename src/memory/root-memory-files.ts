@@ -28,8 +28,11 @@ export async function exactWorkspaceEntryExists(dir: string, name: string): Prom
   try {
     const entries = await fs.readdir(dir);
     return entries.includes(name);
-  } catch {
-    return false;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return false;
+    }
+    throw error;
   }
 }
 

@@ -67,11 +67,6 @@ export type ModelAccountsSectionProps = {
   onConnectCheck: () => void;
 };
 
-function inputValue(event: Event): string {
-  // SAFETY: each @input listener below is bound to its own text input element.
-  return (event.target as HTMLInputElement).value;
-}
-
 function gatewayEndpoint(gatewayUrl: string): string {
   const url = URL.parse(gatewayUrl);
   return url ? `${url.origin}${url.pathname}` : t("profilePage.modelAccounts.gatewayUnavailable");
@@ -256,7 +251,9 @@ function renderManualLinkRow(props: ModelAccountsSectionProps) {
           .value=${props.linkDraft}
           placeholder=${t("profilePage.modelAccounts.inputPlaceholder")}
           ?disabled=${props.busy}
-          @input=${(event: Event) => props.onLinkDraftInput(inputValue(event))}
+          @input=${(event: Event) =>
+            // SAFETY: This listener is bound to the native text input above.
+            props.onLinkDraftInput((event.target as HTMLInputElement).value)}
         />
         <button
           type="submit"
@@ -296,20 +293,16 @@ function renderModelAccountRows(props: ModelAccountsSectionProps) {
         : ""
     }
     ${renderSignIn(props)} ${props.showManualLink ? renderManualLinkRow(props) : ""}
-    ${
-      props.notice
-        ? html`<div class="settings-row model-accounts-notice" role="status">
-            <span class="settings-row__desc">${props.notice}</span>
+    ${(["notice", "error"] as const).map((kind) =>
+      props[kind]
+        ? html`<div
+            class="settings-row model-accounts-${kind}"
+            role=${kind === "notice" ? "status" : "alert"}
+          >
+            <span class="settings-row__desc">${props[kind]}</span>
           </div>`
-        : ""
-    }
-    ${
-      props.error
-        ? html`<div class="settings-row model-accounts-error" role="alert">
-            <span class="settings-row__desc">${props.error}</span>
-          </div>`
-        : ""
-    }
+        : "",
+    )}
     ${
       props.inventoryError
         ? html`<div class="settings-row model-accounts-error" role="alert">

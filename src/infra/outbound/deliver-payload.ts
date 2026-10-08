@@ -8,6 +8,7 @@ import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capabili
 import { formatErrorMessage } from "../errors.js";
 import type {
   ChannelHandler,
+  ChannelHandlerParams,
   DeliverOutboundPayloadsCoreParams,
   NormalizedPayloadForChannelDelivery,
 } from "./deliver-contracts.js";
@@ -52,19 +53,14 @@ export function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPa
 export function normalizeTransformedPayloadForDelivery(
   payload: ReplyPayload,
   handler: ChannelHandler,
-  copyMetadata: (
-    source: ReplyPayload,
-    payload: ReplyPayload,
-  ) => ReplyPayload = copyReplyPayloadMetadata,
+  copyMetadata: (source: ReplyPayload, payload: ReplyPayload) => ReplyPayload,
 ): ReplyPayload | null {
   const normalizedPayload = handler.normalizePayload ? handler.normalizePayload(payload) : payload;
   if (!normalizedPayload) {
     return null;
   }
   const normalized = copyMetadata(payload, normalizedPayload);
-  const stripped = copyMetadata(normalized, stripInternalRuntimeScaffoldingFromPayload(normalized));
-  const nonEmpty = normalizeEmptyPayloadForDelivery(stripped);
-  return nonEmpty ? copyMetadata(stripped, nonEmpty) : null;
+  return normalizeEmptyPayloadForDelivery(stripInternalRuntimeScaffoldingFromPayload(normalized));
 }
 
 export function normalizePayloadsForChannelDelivery(
@@ -75,10 +71,7 @@ export function normalizePayloadsForChannelDelivery(
   const copyMetadata = copyPayloadMetadata ?? copyReplyPayloadMetadata;
   const normalizedPayloads: NormalizedPayloadForChannelDelivery[] = [];
   for (const entry of plan) {
-    let sanitizedPayload = copyMetadata(
-      entry.payload,
-      stripInternalRuntimeScaffoldingFromPayload(entry.payload),
-    );
+    let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(entry.payload);
     if (!handler.preserveMarkdownDetails && sanitizedPayload.text) {
       const text = flattenMarkdownDetails(sanitizedPayload.text);
       if (text !== sanitizedPayload.text) {
@@ -169,7 +162,6 @@ export function collectPayloadMediaSources(payloads: readonly ReplyPayload[]): s
  */
 export function resolveOutboundMediaAccessForSend(
   params: DeliverOutboundPayloadsCoreParams,
-  channel: string,
   mediaSources: readonly string[],
 ): OutboundMediaAccess {
   if (mediaSources.length === 0) {
@@ -181,13 +173,41 @@ export function resolveOutboundMediaAccessForSend(
     mediaSources,
     mediaAccess: params.mediaAccess,
     sessionKey: params.session?.policyKey ?? params.session?.key,
-    messageProvider: params.session?.key ? undefined : channel,
+    messageProvider: params.session?.key ? undefined : params.channel,
     accountId: params.session?.requesterAccountId ?? params.accountId,
     requesterSenderId: params.session?.requesterSenderId,
     requesterSenderName: params.session?.requesterSenderName,
     requesterSenderUsername: params.session?.requesterSenderUsername,
     requesterSenderE164: params.session?.requesterSenderE164,
   });
+}
+
+export function resolveChannelHandlerParams(
+  params: DeliverOutboundPayloadsCoreParams,
+  reply: DeliverOutboundPayloadsCoreParams["reply"],
+  mediaSources: readonly string[],
+): ChannelHandlerParams {
+  return {
+    cfg: params.cfg,
+    agentId: params.session?.agentId,
+    channel: params.channel,
+    to: params.to,
+    deps: params.deps,
+    accountId: params.accountId,
+    replyToId: reply?.replyToId,
+    replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
+    formatting: params.formatting,
+    threadId: params.threadId,
+    identity: params.identity,
+    gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
+    silent: params.silent,
+    mediaAccess: resolveOutboundMediaAccessForSend(params, mediaSources),
+    gatewayClientScopes: params.gatewayClientScopes,
+    conversationReadOrigin: params.conversationReadOrigin,
+    preparedMessageId: params.preparedMessageId,
+    requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
+  };
 }
 
 export function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload): ReplyPayload {

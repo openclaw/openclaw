@@ -54,8 +54,20 @@ describe("Doctor workspace persistence", () => {
               },
             },
           },
+          models: {
+            providers: {
+              custom: {
+                api: "openai-codex-responses",
+                models: [{ id: "legacy-model", api: "openai-codex-responses" }],
+              },
+            },
+          },
           session: { typingMode: "thinking", parentForkMaxTokens: 200_000 },
-          browser: { relayBindHost: "127.0.0.1", ssrfPolicy: { allowPrivateNetwork: true } },
+          browser: {
+            relayBindHost: "127.0.0.1",
+            ssrfPolicy: { allowPrivateNetwork: true },
+            profiles: { relay: { driver: "extension", cdpUrl: "http://127.0.0.1:18792" } },
+          },
           messages: {
             queue: {
               mode: "queue",
@@ -87,6 +99,9 @@ describe("Doctor workspace persistence", () => {
           "agents.entries.ops.subagents.model.timeoutMs",
           "parentForkMaxTokens",
           "relayBindHost",
+          "browser.profiles.relay.cdpUrl",
+          "models.providers.custom.api",
+          "models.providers.custom.models.0.api",
           "allowPrivateNetwork",
           "messages.queue.mode",
           "messages.queue.byChannel.discord",
@@ -155,10 +170,7 @@ describe("Doctor workspace persistence", () => {
     });
   });
 
-  it.each([
-    ["entries", false],
-    ["list", true],
-  ] as const)(
+  it.each([["list", true]] as const)(
     "persists per-agent migrations with explicit ownership (%s, writable update: %s)",
     async (shape, writableUpdate) => {
       await withDoctorConfigPreflightHome(async (home) => {
@@ -186,13 +198,7 @@ describe("Doctor workspace persistence", () => {
                   embeddedAgent: { projectSettingsPolicy: "trusted" },
                   sandbox: { scope: "shared" },
                 },
-                ...(shape === "entries"
-                  ? { entries }
-                  : {
-                      list: Object.entries(entries).map(([id, entry]) =>
-                        Object.assign({ id }, entry),
-                      ),
-                    }),
+                list: Object.entries(entries).map(([id, entry]) => Object.assign({ id }, entry)),
               },
               gateway: { mode: "local" },
               plugins: { enabled: false },
@@ -233,10 +239,7 @@ describe("Doctor workspace persistence", () => {
     },
   );
 
-  it.each([
-    { kind: "implicit", legacyId: "main" },
-    { kind: "shared", legacyId: " Main " },
-  ])(
+  it.each([{ kind: "shared", legacyId: " Main " }])(
     "preserves the markerless $legacyId agent's $kind workspace through Doctor persistence",
     async ({ kind, legacyId }) => {
       await withDoctorConfigPreflightHome(async (home) => {
@@ -432,7 +435,7 @@ describe("Doctor workspace persistence", () => {
     });
   });
 
-  it.each(["parsed", "prefixed"])(
+  it.each(["prefixed"])(
     "refuses retired Talk selectors in %s config before recovery",
     async (kind) => {
       await withDoctorConfigPreflightHome(async (home) => {

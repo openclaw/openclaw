@@ -29,9 +29,11 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
+import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { runWithChatAbortExecution } from "../chat-abort-lifecycle-internal.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
@@ -57,9 +59,9 @@ import {
   resolveAgentRestartRecoveryContext,
   resolveAgentRestartRecoveryExecutionIdentityAdmission,
 } from "./agent-restart-recovery-context.js";
+import { dispatchAgentRunWithCommentaryMedia } from "./agent-run-commentary-media.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
-import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
@@ -170,21 +172,23 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         );
       }
     };
+    let dispatched = false;
     const dispatchAdmittedAgentRun = (
-      dispatch: Parameters<typeof dispatchAgentRunFromGateway>[0],
+      dispatch: Parameters<typeof dispatchAgentRunWithCommentaryMedia>[0],
     ) => {
-      const run = () =>
-        withPreparedModelRuntimePluginGenerationScope(
+      const run = () => {
+        const execution = withPreparedModelRuntimePluginGenerationScope(
           replyDispatchRuntime.pluginGeneration,
-          () => dispatchAgentRunFromGateway(dispatch),
+          () => dispatchAgentRunWithCommentaryMedia(dispatch, params),
           () => (leaseActive ? preparedModelRuntimeLease?.snapshot : undefined),
         );
-      const recorder = prepared.userTurn.recorder;
-      return recorder?.withPendingInput ? recorder.withPendingInput(run) : run();
+        dispatched = true;
+        return execution;
+      };
+      return withCurrentUserTurnInput(prepared.userTurn.recorder, run);
     };
     return await prepared.activeGatewayWorkAdmission.run(async () => {
       await yieldAfterAgentAcceptedAck();
-      let dispatched = false;
       let publishFinalAfterCleanup: (() => void) | undefined;
       let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
       const settleUnstartedFollowup = (outcome: AgentRunTerminalOutcome) =>
@@ -610,6 +614,11 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 }),
                 onSessionIdChanged: (sessionId) => {
                   if (prepared.activeRunAbort.entry) {
+                    adoptExecRequestSession({
+                      runId: params.runId,
+                      previousSessionId: prepared.activeRunAbort.entry.sessionId,
+                      sessionId,
+                    });
                     prepared.activeRunAbort.entry.sessionId = sessionId;
                   }
                 },
@@ -652,7 +661,6 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             executionIdentitySpawnFacts,
           ),
         );
-        dispatched = true;
         await execution;
       } catch (err) {
         if (prepared.activeRunAbort.controller.signal.aborted && isAbortError(err)) {

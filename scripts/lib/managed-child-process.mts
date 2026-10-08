@@ -99,6 +99,16 @@ type ManagedCommandOutcome =
   | { type: "aborted" }
   | { type: "signal"; signal: NodeJS.Signals };
 
+type ManagedChildStopRequest = {
+  signal: NodeJS.Signals;
+  forceKillDelayMs?: number;
+  forceKillOnLeaderExit: boolean;
+};
+type ManagedChildStopControl = {
+  signal: AbortSignal;
+  getRequest: () => ManagedChildStopRequest | undefined;
+};
+
 const managedChildren = new Set<(signal: NodeJS.Signals) => void>();
 const signalHandlers = new Map<NodeJS.Signals, () => void>();
 const windowsJobs = new WeakMap<object, ManagedWindowsJob>();
@@ -470,15 +480,20 @@ export async function waitForManagedProcessGroupExit(
   {
     clampPollToDeadline = false,
     pollIntervalMs = PROCESS_GROUP_POLL_MS,
+    signal,
     ...groupOptions
   }: ManagedProcessGroupOptions & {
     clampPollToDeadline?: boolean;
     pollIntervalMs?: number;
+    signal?: AbortSignal;
   },
 ): Promise<boolean> {
   const deadlineAt = Math.min(Date.now() + timeoutMs, groupOptions.deadlineAt ?? Infinity);
   const boundedGroupOptions = { ...groupOptions, deadlineAt };
   while (Date.now() < deadlineAt) {
+    if (signal?.aborted) {
+      return false;
+    }
     if (inspectManagedProcessGroup(child, boundedGroupOptions) === "dead") {
       return true;
     }
@@ -487,11 +502,20 @@ export async function waitForManagedProcessGroupExit(
       break;
     }
     const waitMs = clampPollToDeadline ? Math.min(pollIntervalMs, remainingMs) : pollIntervalMs;
-    await new Promise((resolve) => {
-      setTimeout(resolve, waitMs);
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, waitMs);
+      signal?.addEventListener("abort", finish, { once: true });
+      if (signal?.aborted) {
+        finish();
+      }
     });
   }
-  return inspectManagedProcessGroup(child, boundedGroupOptions) === "dead";
+  return !signal?.aborted && inspectManagedProcessGroup(child, boundedGroupOptions) === "dead";
 }
 
 /** Run a child command while forwarding termination signals to its process group. */
@@ -669,6 +693,12 @@ async function runManagedCommandInner(
   });
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   let finalization: Promise<{ type: "failed"; error: unknown } | undefined> | undefined;
+  const stopController = new AbortController();
+  let stopRequest: ManagedChildStopRequest | undefined;
+  const stopControl: ManagedChildStopControl = {
+    signal: stopController.signal,
+    getRequest: () => stopRequest,
+  };
   let cancellation: ManagedCommandOutcome | undefined;
   let notifyOutcome!: (outcome: ManagedCommandOutcome) => void;
   const completion = new Promise<ManagedCommandOutcome>((resolve) => {
@@ -679,6 +709,10 @@ async function runManagedCommandInner(
     forceKillDelayMs?: number,
     forceKillOnLeaderExit = false,
   ) => {
+    if (stopSignal && !stopRequest) {
+      stopRequest = { signal: stopSignal, forceKillDelayMs, forceKillOnLeaderExit };
+      stopController.abort();
+    }
     // Observe eager rejection even when cancellation starts inside onReady.
     // Physical release stays in onTerminated: strict cleanup can release, then fail.
     return (finalization ??= finalizeManagedChild(child, stopSignal, {
@@ -689,6 +723,7 @@ async function runManagedCommandInner(
       drainTimeoutMs: cleanupDrainTimeoutMs,
       areOutputPipesClosed: () => pendingOutputCloses.size === 0,
       onTerminated: releaseOwnership,
+      stopControl,
     }).then(
       () => undefined,
       (error: unknown) => ({ type: "failed" as const, error }),
@@ -805,16 +840,17 @@ async function runManagedCommandInner(
 
 export async function finalizeManagedChild(
   child: ChildProcess,
-  signal: NodeJS.Signals | undefined,
+  initialSignal: NodeJS.Signals | undefined,
   {
     platform,
     runTaskkill,
     forceKillDelayMs = FORCE_KILL_DELAY_MS,
-    forceKillOnLeaderExit = false,
+    forceKillOnLeaderExit: initialForceKillOnLeaderExit = false,
     drainTimeoutMs = PROCESS_GROUP_DRAIN_TIMEOUT_MS,
     retainOutputOnFailure = false,
     areOutputPipesClosed,
     onTerminated = () => {},
+    stopControl,
   }: {
     platform: NodeJS.Platform;
     runTaskkill: TaskkillRunner;
@@ -824,13 +860,21 @@ export async function finalizeManagedChild(
     retainOutputOnFailure?: boolean;
     areOutputPipesClosed?: () => boolean;
     onTerminated?: () => void;
+    stopControl?: ManagedChildStopControl;
   },
 ) {
+  let signal = initialSignal;
+  let forceKillOnLeaderExit = initialForceKillOnLeaderExit;
   // Nested wrappers own detached groups. Let them forward the signal before
   // killing their leader, then join inherited pipes as well as our own group.
-  // POSIX normal exit has no grace period: surviving group members are a failure.
+  // Normal exit can close a helper's stdin before that helper finishes exiting.
+  // Reserve half the existing drain budget for natural exit, half for cleanup.
   const startedAt = Date.now();
   const forceDelay = signal ? forceKillDelayMs : 0;
+  const naturalForceAt = startedAt + Math.floor(drainTimeoutMs / 2);
+  let forceAt = startedAt + forceDelay;
+  let deadline = forceAt + drainTimeoutMs;
+  let forced = !signal || platform === "win32";
   const signalErrors: unknown[] = [];
   const recordSignalError = (error: unknown) => {
     if (!isMissingProcessError(error)) {
@@ -852,7 +896,35 @@ export async function finalizeManagedChild(
     (() => [child.stdout, child.stderr].every((pipe) => !pipe || pipe.closed));
   let joined = false;
   const failures: unknown[] = [];
+  let termination: ManagedChildTermination | undefined;
+  let stopForwarded = false;
+  let naturalCleanupRequired = false;
+  const interruptNaturalDrain = () => {
+    const request = stopControl?.getRequest();
+    if (!request || signal || naturalCleanupRequired) {
+      return;
+    }
+    signal = request.signal;
+    forceKillOnLeaderExit = request.forceKillOnLeaderExit;
+    // A late cancellation keeps the original total deadline and reserves its
+    // recovery half; it cannot restart either allowance from the abort time.
+    forceAt = Math.min(
+      Date.now() + (request.forceKillDelayMs ?? FORCE_KILL_DELAY_MS),
+      naturalForceAt,
+    );
+    forced = false;
+    stopForwarded = true;
+    termination = terminateManagedChild(child, signal, {
+      ...terminationOptions,
+      deadlineAt: Date.now(),
+    });
+  };
+  const interruptSignal = !signal && platform !== "win32" ? stopControl?.signal : undefined;
+  interruptSignal?.addEventListener("abort", interruptNaturalDrain, { once: true });
   try {
+    if (interruptSignal?.aborted) {
+      interruptNaturalDrain();
+    }
     if (normalJobExit && !outputClosed()) {
       // Give terminal writers half the existing allowance to drain naturally;
       // reserve the rest for Job termination and verified output closure.
@@ -866,15 +938,27 @@ export async function finalizeManagedChild(
         child.once("close", finish);
       });
     }
-    const termination: ManagedChildTermination | undefined =
+    const exitedNaturally =
       !signal &&
-      inspectManagedProcessGroup(child, {
-        deadlineAt: startedAt + forceDelay + drainTimeoutMs,
-        errorPolicy: "indeterminate",
-        platform,
-      }) === "dead"
+      (platform === "win32"
+        ? inspectManagedProcessGroup(child, {
+            deadlineAt: startedAt + drainTimeoutMs,
+            errorPolicy: "indeterminate",
+            platform,
+          }) === "dead"
+        : await waitForManagedProcessGroupExit(child, Math.floor(drainTimeoutMs / 2), {
+            deadlineAt: naturalForceAt,
+            clampPollToDeadline: true,
+            errorPolicy: "indeterminate",
+            platform,
+            signal: interruptSignal,
+          }));
+    if (!stopForwarded) {
+      naturalCleanupRequired = !signal && !exitedNaturally;
+      termination = exitedNaturally
         ? { processTreeState: "terminated" }
         : terminateManagedChild(child, signal ?? "SIGKILL", terminationOptions);
+    }
     if (platform === "win32" && termination?.processTreeState !== "terminated" && !job) {
       throw createManagedCommandCleanupError(
         "Windows taskkill could not verify managed process tree exit",
@@ -886,9 +970,10 @@ export async function finalizeManagedChild(
     }
     // Normal Job output drainage shares the original budget. Windows cancellation
     // retains its existing post-taskkill allowance; POSIX probes remain bounded too.
-    const forceAt = (platform === "win32" && !normalJobExit ? Date.now() : startedAt) + forceDelay;
-    const deadline = forceAt + drainTimeoutMs;
-    let forced = !signal || platform === "win32";
+    if (platform === "win32" && !normalJobExit) {
+      forceAt = Date.now() + forceDelay;
+      deadline = forceAt + drainTimeoutMs;
+    }
     let groupState: "dead" | "indeterminate" | "live" = "indeterminate";
     let survivingPids: number[] | undefined;
     let observationError: Error | undefined;
@@ -989,6 +1074,8 @@ export async function finalizeManagedChild(
     }
   } catch (error) {
     failures.push(error);
+  } finally {
+    interruptSignal?.removeEventListener("abort", interruptNaturalDrain);
   }
   if (job) {
     // Closing a kill-on-close Job is recovery, not proof that its members exited.

@@ -27,7 +27,7 @@ import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import {
   discoverAllSessions,
-  loadCostUsageSummaryFromCache,
+  loadCostUsageSummary,
   loadSessionCostSummary,
   loadSessionCostSummariesFromCache,
   loadSessionUsageTimeSeries,
@@ -476,11 +476,10 @@ if (!isMainThread) {
       sessions.map((session) => session.sessionFile),
     );
     await probe.run(async () => {
-      const warmed = await loadCostUsageSummaryFromCache({
+      const warmed = await loadCostUsageSummary({
         agentId: "main",
         startMs: Date.UTC(2026, 1, 5),
         endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
-        refreshMode: "sync-when-empty",
       });
       expect(warmed.cacheStatus?.status).toBe("fresh");
       expect(warmed.totals.missingCostByModel).toEqual({ "custom/unpriced-batch": 2 });

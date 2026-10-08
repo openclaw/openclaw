@@ -235,6 +235,7 @@ describe("tui last session state", () => {
           { databasePath: context.admission.databasePath },
           open,
           open,
+          open,
         ),
       ),
     ).toBe(0);

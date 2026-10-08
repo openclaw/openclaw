@@ -176,18 +176,11 @@ export function resolveGatewayModelThinkingProfile(
   return resolveGatewayModelThinkingFacts(params).metadata;
 }
 
-type GatewaySessionThinkingProjectionParams = {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-  agentId: string;
-  sessionKey: string;
-  entry?: SessionEntry;
-  preparedAcpMeta?: SessionEntry["acp"] | null;
+type GatewaySessionThinkingProjectionParams = Parameters<
+  typeof resolveGatewaySessionRuntimeProjection
+>[0] & {
   modelCatalog?: ModelCatalogEntry[];
   modelCatalogRouteVariants?: readonly ModelCatalogEntry[];
-  metadataSnapshot?: PluginMetadataSnapshot | null;
-  rowContext?: SessionListRowContext;
   providerPolicySource?: ThinkingProviderPolicySource;
 };
 
@@ -345,7 +338,7 @@ export function getSessionDefaults(
   return {
     modelProvider: displayModel.provider ?? resolved.provider,
     model: displayModel.model ?? resolved.model,
-    contextTokens: contextTokens ?? null,
+    contextTokens,
     contextWindow: contextWindowProfile.contextWindow,
     contextWindows: contextWindowProfile.contextWindows,
     contextWindowDefault: contextWindowProfile.contextWindowDefault,
@@ -626,13 +619,16 @@ export function projectSessionPatchResult(params: {
     catalogEntry: thinking.catalogEntry,
     selected: params.entry.contextWindow,
   });
+  const entry = projectPublicSessionEntry(params.entry);
+  delete entry.skillsSnapshot;
+  delete entry.systemPromptReport;
   return {
     ok: true,
     path: resolveSqliteTargetFromSessionStorePath(params.storePath, {
       agentId: params.targetAgentId,
     }).path,
     key: params.canonicalKey,
-    entry: projectPublicSessionEntry(params.entry),
+    entry,
     resolved: {
       modelProvider: displayModel.provider,
       model: displayModel.model,

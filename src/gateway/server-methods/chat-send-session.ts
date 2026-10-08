@@ -306,6 +306,7 @@ async function loadChatSendSessionContext(params: {
 
 /** Load and validate the session/model facts shared by later admission and dispatch phases. */
 export async function prepareChatSendSession(params: {
+  isDirectExternalUser?: boolean;
   request: NormalizedChatSendRequest;
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
@@ -368,7 +369,7 @@ export async function prepareChatSendSession(params: {
     goalRequestFingerprint: request.goalOperation?.requestFingerprint,
     cfg,
     eligible:
-      isBrowserOperatorUiClient(request.clientInfo) &&
+      (isBrowserOperatorUiClient(request.clientInfo) || params.isDirectExternalUser === true) &&
       turnKind === "main" &&
       normalizedAttachments.length === 0 &&
       !request.reconnectResumeRequested &&
@@ -591,12 +592,12 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
   ]);
   await (params.assertCurrentAsync ? params.assertCurrentAsync() : params.assertCurrent?.());
   const scope = { agentId, sessionKey, storePath: session.storePath };
-  const snapshot = loadReplySessionInitializationSnapshot(scope);
+  const snapshot = await loadReplySessionInitializationSnapshot(scope);
+  await (params.assertCurrentAsync ? params.assertCurrentAsync() : params.assertCurrent?.());
+  const sessionChanged = () =>
+    errorShape(ErrorCodes.INVALID_REQUEST, "Session changed before native confirmation. Retry.");
   if (snapshot.currentEntry) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "Session changed before native confirmation. Retry.",
-    );
+    return sessionChanged();
   }
   const prepared = await prepareChatSendSessionEntry({
     cfg,
@@ -661,10 +662,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
     },
   });
   if (!committed.ok) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "Session changed before native confirmation. Retry.",
-    );
+    return sessionChanged();
   }
   await recordSessionCreated(cfg, { agentId, sessionKey, entry: committed.sessionEntry });
   emitSessionsChanged(context, { agentId, sessionKey, reason: "create" });

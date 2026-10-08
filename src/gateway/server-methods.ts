@@ -1,4 +1,8 @@
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -22,14 +26,18 @@ import {
 import { errorShapeFromError } from "./error-shape.js";
 import { createExpectedProfileBinding } from "./expected-profile.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
+import type { GatewayMethodRegistryView } from "./methods/descriptor.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
   createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptors,
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
+import {
+  bindChatSendDiagnostics,
+  startChatSendDiagnostics,
+} from "./server-methods/chat-send-diagnostics.js";
 import {
   coreGatewayHandlers,
   gatewayRouterUploadPolicyError,
@@ -62,6 +70,7 @@ import { sessionLog } from "./session-log.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import { resolveRuntimeSessionParticipantRequest } from "./session-tool-participant.js";
+import { dispatchSharedRead } from "./shared-read-responses.js";
 import {
   startSlowRequestDiagnostics,
   type SessionSubscribePhase,
@@ -70,7 +79,6 @@ import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 export { coreGatewayHandlers };
 
-/** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
 export function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
@@ -95,7 +103,7 @@ export function createRequestGatewayMethodRegistry(
   return createGatewayMethodRegistry(
     [
       ...createCoreGatewayMethodDescriptors(coreDescriptorHandlers),
-      ...(gatewayPluginRegistry ? createPluginGatewayMethodDescriptors(gatewayPluginRegistry) : []),
+      ...(gatewayPluginRegistry?.gatewayMethodDescriptors ?? []),
       ...createGatewayMethodDescriptorsFromHandlers({
         handlers: Object.fromEntries(auxHandlers),
         owner: { kind: "aux", area: "gateway-extra" },
@@ -110,7 +118,7 @@ type GatewayRequestEnvelopeOptions<T> = Pick<
   GatewayRequestOptions,
   "context" | "isWebchatConnect" | "signal" | "hasCurrentClientAuthority"
 > & {
-  methodRegistry: GatewayMethodRegistry;
+  methodRegistry: GatewayMethodRegistryView;
   requestParams?: unknown;
   admission?: "continuation";
   reject: (error: ReturnType<typeof errorShape>) => T | Promise<T>;
@@ -270,6 +278,9 @@ export async function handleGatewayRequest(
   let respondCancelled = opts.respond;
   const dispatch = async (retainRoot?: () => void) => {
     const observationSignal = observation ? getAsyncWorkSignal() : undefined;
+    using chatSendDiagnostics =
+      req.method === "chat.send" ? startChatSendDiagnostics(context.logGateway) : undefined;
+    const chatSendPhase = chatSendDiagnostics?.scope("authority");
     using subscribeDiagnostics =
       req.method === "sessions.messages.subscribe"
         ? startSlowRequestDiagnostics<SessionSubscribePhase>(
@@ -315,11 +326,11 @@ export async function handleGatewayRequest(
       : respondUnobserved;
     const sessionMutationCommitGuard =
       profileBinding || runtimeParticipant
-        ? () => {
-            profileBinding?.assertCurrent();
-            runtimeParticipant?.assertCurrent();
-            opts.sessionMutationCommitGuard?.();
-          }
+        ? composeSessionSourceAssertion([
+            profileBinding?.assertCurrent,
+            runtimeParticipant?.assertCurrent,
+            captureExternalSessionCommitGuard(opts.sessionMutationCommitGuard),
+          ])
         : opts.sessionMutationCommitGuard;
     const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
     const releaseForegroundWork = retainSessionListForegroundWork();
@@ -410,11 +421,11 @@ export async function handleGatewayRequest(
       }
       const sessionMutationAuthorization = withSessionMutationCommitGuard(
         authorization.sessionMutationAuthorization,
-        () => {
-          runtimeParticipant?.assertCurrent();
-          assertOperatorCurrent();
-          requestMutationAuthority.assertCurrent();
-        },
+        composeSessionSourceAssertion([
+          runtimeParticipant?.assertCurrent,
+          assertOperatorCurrent,
+          requestMutationAuthority.assertCurrent,
+        ]),
         profileBinding?.assertCurrent,
         requestMutationAuthority.assertAdmittedInputCurrent
           ? () => {
@@ -441,6 +452,7 @@ export async function handleGatewayRequest(
       const invokeHandler = async () => {
         retainRoot?.();
         subscribeDiagnostics?.mark("handlerPreparation");
+        chatSendPhase?.mark("preparation");
         const preparedHandler = await prepareGatewayRequestHandler(handler, entry, opts);
         // Lazy preparation may yield across a hot config change. Keep the router fence
         // unless the canonical owner reconciles accepted input before new admission.
@@ -472,6 +484,7 @@ export async function handleGatewayRequest(
           profileBinding,
           authorization.sessionScope,
         );
+        bindChatSendDiagnostics(handlerOptions, chatSendDiagnostics);
         sessionMutationCommitGuard?.();
         assertOperatorCurrent();
         authorization.sessionAccessAuthority?.assertCurrent();
@@ -484,7 +497,25 @@ export async function handleGatewayRequest(
         // Long polls and shutdown initiators must never remain preparation leases.
         entry?.release();
         profileBinding?.markInvoked();
-        return GatewayRpcDiagnostics.runHandler(() => preparedHandler(handlerOptions), diagnostics);
+        const sharing = opts.acceptsSerializedJson
+          ? methodRegistry.getReadSharing?.(req.method)
+          : undefined;
+        chatSendPhase?.finish();
+        return GatewayRpcDiagnostics.runHandler(
+          () =>
+            sharing
+              ? dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {
+                  runtimeParticipant?.assertCurrent();
+                  profileBinding?.assertCurrent();
+                  assertOperatorCurrent();
+                  requestMutationAuthority.assertCurrent();
+                  authorization.sessionAccessAuthority?.assertCurrent();
+                  sessionMutationAuthorization?.assertCurrent();
+                  signal?.throwIfAborted();
+                })
+              : preparedHandler(handlerOptions),
+          diagnostics,
+        );
       };
       if (req.method === "question.get" || req.method === "question.resolve") {
         // Draining admission consults the pending owner before handler entry.

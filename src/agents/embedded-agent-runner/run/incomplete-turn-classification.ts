@@ -4,6 +4,7 @@ import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
+import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
 import { extractEmbeddedAssistantText } from "../../embedded-agent-utils.js";
 import {
   isStrictAgenticSupportedProviderModel,
@@ -45,7 +46,9 @@ export type IncompleteTurnAttempt = Pick<
   | "terminal"
   | "toolMetas"
 > &
-  Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">>;
+  Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">> & {
+    keptAnswer?: CompletedAssistantAnswer;
+  };
 
 function readAssistantSnapshotText(message: AgentMessage): string {
   return message.role === "assistant"
@@ -94,7 +97,11 @@ export function countSettledTurnDeliveryPayloads(params: {
   const hasNoAssistantText = params.attempt.assistantTexts.every(
     (text) => !parseReplyDirectives(text).text.trim(),
   );
-  const hasComposedVisibleAnswer = hasComposedVisibleAnswerAfterSettledTools(params.attempt);
+  // A completed answer the subscriber kept for a later silent stop is this turn's answer, even
+  // though it precedes the tool results that settled after it.
+  const hasComposedVisibleAnswer =
+    params.attempt.keptAnswer !== undefined ||
+    hasComposedVisibleAnswerAfterSettledTools(params.attempt);
   const canFinalizeProviderError =
     params.attempt.settledTurnFinalizationContext && !hasComposedVisibleAnswer;
   return (params.payloads ?? []).filter((payload) => {
@@ -194,25 +201,16 @@ export function shouldApplyNonVisibleTurnRetryGuard(params: {
   // These guards use provider output structure, never user or assistant prose.
   return (
     params.executionContract === "strict-agentic" ||
-    isIncompleteTurnRecoverySupportedProviderModel(params) ||
+    isStrictAgenticSupportedProviderModel(params) ||
+    (GEMINI_INCOMPLETE_TURN_PROVIDER_IDS.has(
+      normalizeLowercaseStringOrEmpty(params.provider ?? ""),
+    ) &&
+      GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(
+        stripProviderPrefix(typeof params.modelId === "string" ? params.modelId : ""),
+      )) ||
     RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? "")) ||
     isOllamaIncompleteTurnProvider(params.provider)
   );
-}
-
-function isIncompleteTurnRecoverySupportedProviderModel(params: {
-  provider?: string;
-  modelId?: string;
-}): boolean {
-  if (isStrictAgenticSupportedProviderModel(params)) {
-    return true;
-  }
-  const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
-  if (!GEMINI_INCOMPLETE_TURN_PROVIDER_IDS.has(provider)) {
-    return false;
-  }
-  const modelId = typeof params.modelId === "string" ? params.modelId : "";
-  return GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(modelId));
 }
 
 export function classifyAssistantTurn(params: {

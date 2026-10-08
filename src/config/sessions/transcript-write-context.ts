@@ -11,14 +11,23 @@ import { getCliHistoryWriter, runWithCliHistoryWriter } from "./cli-history-boun
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
-  TranscriptAppendRefusal,
 } from "./session-accessor.sqlite-contract.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "./session-source-authority.js";
+import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import {
   captureSessionTranscriptStorageEnvironment,
   sameSessionTranscriptStorageEnvironment,
   sameSessionTranscriptTargetBinding,
   type SessionTranscriptTargetBinding,
 } from "./transcript-target-binding.js";
+import type { SessionEntry } from "./types.js";
+
+export { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 
 export type SessionMetadataChange =
   | Pick<ModelChangeEntry, "type" | "provider" | "modelId">
@@ -83,7 +92,59 @@ type SessionTranscriptWriteRequest = Pick<
   "sessionFile" | "sessionKey" | "sessionTarget"
 >;
 
-const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscriptWriteContext>();
+type TranscriptSourcePublication = {
+  target: SessionTranscriptWriteTarget;
+  claimed: boolean;
+  publish?: (source: CapturedSessionEntryReadSource, entry: SessionEntry) => void;
+};
+
+const ownedTranscriptWriteContext = new AsyncLocalStorage<
+  OwnedSessionTranscriptWriteContext & { sourcePublication?: TranscriptSourcePublication }
+>();
+
+/** Bind an initiating write's acknowledged source before fallible publication observers. */
+export async function withSessionTranscriptSourcePublication<T>(
+  target: SessionTranscriptWriteTarget,
+  publish: NonNullable<TranscriptSourcePublication["publish"]>,
+  run: () => Promise<T>,
+): Promise<T> {
+  const parent = ownedTranscriptWriteContext.getStore();
+  const publication: TranscriptSourcePublication = {
+    target: captureWriteTarget(target),
+    claimed: false,
+    publish,
+  };
+  try {
+    return await ownedTranscriptWriteContext.run(
+      {
+        ...parent,
+        withTranscriptWrite: parent ? (write) => parent.withTranscriptWrite(write) : trackAsyncWork,
+        sourcePublication: publication,
+      },
+      run,
+    );
+  } finally {
+    publication.publish = undefined;
+  }
+}
+
+export function captureSessionTranscriptSourcePublication(
+  target: SessionTranscriptWriteTarget,
+): TranscriptSourcePublication["publish"] {
+  const publication = ownedTranscriptWriteContext.getStore()?.sourcePublication;
+  if (
+    !publication ||
+    publication.claimed ||
+    !contextMatches({
+      context: { sessionTarget: publication.target, withTranscriptWrite: trackAsyncWork },
+      sessionTarget: captureWriteTarget(target),
+    })
+  ) {
+    return undefined;
+  }
+  publication.claimed = true;
+  return (source, entry) => publication.publish?.(source, entry);
+}
 
 function captureWriteTarget(target: SessionTranscriptWriteTarget): SessionTranscriptWriteTarget {
   const storePath = target.storePath?.trim();
@@ -282,10 +343,10 @@ export function withSessionTranscriptWriteAssertion<T>(
     {
       ...parent,
       sessionTarget: parent?.sessionTarget ?? target,
-      assertCommitAllowed: () => {
-        parent?.assertCommitAllowed?.();
-        assertCurrent();
-      },
+      assertCommitAllowed: composeSessionSourceAssertion([
+        captureExternalSessionCommitGuard(parent?.assertCommitAllowed),
+        captureExternalSessionCommitGuard(assertCurrent),
+      ]),
       withTranscriptWrite: parent ? (write) => parent.withTranscriptWrite(write) : trackAsyncWork,
     },
     run,
@@ -378,6 +439,7 @@ export function getOwnedSessionTranscriptInitialWriter(
 function assertTranscriptWriteContext(
   context: OwnedSessionTranscriptWriteContext | undefined,
   scope: SessionTranscriptWriteTarget,
+  assertCommitAllowed = context?.assertCommitAllowed,
 ): void {
   if (!context?.assertCommitAllowed && !context?.initialWriter) {
     return;
@@ -389,7 +451,7 @@ function assertTranscriptWriteContext(
   ) {
     throw new SessionTranscriptWriterClaimReboundError();
   }
-  context.assertCommitAllowed?.();
+  assertCommitAllowed?.();
   context.initialWriter?.assertActive();
 }
 
@@ -401,10 +463,13 @@ export function assertOwnedTranscriptWriteCommit(scope: SessionTranscriptWriteTa
 /** Retained post-commit work must revalidate its original owner, not its invocation context. */
 export function captureOwnedTranscriptWriteAssertion(
   scope: SessionTranscriptWriteTarget,
-): () => void {
+): SessionSourceAssertion {
   const context = ownedTranscriptWriteContext.getStore();
   const target = captureWriteTarget(scope);
-  return () => assertTranscriptWriteContext(context, target);
+  return composeSessionSourceAssertion(
+    [captureExternalSessionCommitGuard(context?.assertCommitAllowed)],
+    (assertSources) => assertTranscriptWriteContext(context, target, assertSources),
+  );
 }
 
 /** Applies the admitted-run fence inherited by a matching writer. */
@@ -422,13 +487,6 @@ export function withOwnedSessionTranscriptWriterFence<T extends SessionTranscrip
     return { ...scope, ...fence, expectedOwner: { ...expectedOwner } };
   }
   return fence ? { ...scope, ...fence } : scope;
-}
-
-export class SessionTranscriptWriterClaimReboundError extends Error {
-  constructor(cause?: TranscriptAppendRefusal) {
-    super("session writer claim changed before transcript persistence", { cause });
-    this.name = "SessionTranscriptWriterClaimReboundError";
-  }
 }
 
 export async function runWithOwnedSessionTranscriptWrite<T>(

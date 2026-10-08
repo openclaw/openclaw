@@ -47,14 +47,15 @@ vi.mock("../../auto-reply/reply/queue/drain.js", () => ({
     throw new Error("Unexpected followup drain");
   },
 }));
-vi.mock("../../auto-reply/reply/queue/delivery-context.js", () => ({
+vi.mock("../../auto-reply/reply/queue/delivery-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/reply/queue/delivery-context.js")>()),
   createOverflowSummaryRetrySource: () => {
     throw new Error("Unexpected queue overflow");
   },
   resolveFollowupAuthorizationKey: () => {
     throw new Error("Unexpected queue overflow");
   },
-  resolveFollowupDeliveryContextKey: () => {
+  resolveFollowupDeliveryStorageKey: () => {
     throw new Error("Unexpected queue overflow");
   },
 }));

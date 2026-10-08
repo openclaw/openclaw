@@ -5,10 +5,8 @@ import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { readSessionEntrySummariesInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
-import type { AssembleResult } from "../../../context-engine/types.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
-import type { AgentMessage } from "../../runtime/index.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -16,16 +14,10 @@ import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.j
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 
-type PreparedEmbeddedAttemptHistory = {
-  contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
-  contextEngineAssemblySucceeded: boolean;
-  unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
-};
-
 export async function prepareEmbeddedAttemptHistory(
   input: EmbeddedAttemptExecutionPhaseInput,
   assertActive: () => void,
-): Promise<PreparedEmbeddedAttemptHistory> {
+) {
   const { attempt, activeContextEngine, isRawModelRun } = input;
   const {
     agentSession: { activeSession, settingsManager, setActiveSessionSystemPrompt },
@@ -95,14 +87,11 @@ export async function prepareEmbeddedAttemptHistory(
           storePath,
         });
         assertActive();
-        const subagents = entries
-          .map(({ entry }) => entry)
-          .filter((entry) => entry.spawnedBy === sessionEntry.sessionId)
-          .map((entry) => ({
-            sessionId: entry.sessionId,
-            role: entry.subagentRole,
-            lastStatus: entry.status,
-          }));
+        const subagents = entries.flatMap(({ entry }) =>
+          entry.spawnedBy === sessionEntry.sessionId
+            ? [{ sessionId: entry.sessionId, role: entry.subagentRole, lastStatus: entry.status }]
+            : [],
+        );
         validated.push(
           buildHierarchyReinforcementMessage({
             summary: suspension.summary ?? "No recovery briefing was captured.",
@@ -128,10 +117,8 @@ export async function prepareEmbeddedAttemptHistory(
       }
     }
 
-    const limited = (() => {
-      if (isSettledTurnFinalization) {
-        return validated;
-      }
+    let limited = validated;
+    if (!isSettledTurnFinalization) {
       const heartbeatSummary =
         attempt.config && sessionAgentId
           ? resolveHeartbeatSummaryForAgent(attempt.config, sessionAgentId)
@@ -160,10 +147,10 @@ export async function prepareEmbeddedAttemptHistory(
       );
       // Truncation can orphan tool_result blocks by removing the assistant message
       // that contained the matching tool_use, so repair the pairs once more.
-      return transcriptPolicy.repairToolUseResultPairing
+      limited = transcriptPolicy.repairToolUseResultPairing
         ? sanitizeToolUseResultPairingForModel(truncated, isOpenAIResponsesApi)
         : truncated;
-    })();
+    }
     cacheTrace?.recordStage("session:limited", { messages: limited });
     if (limited.length > 0 || prior.length > 0) {
       activeSession.agent.state.messages = limited;

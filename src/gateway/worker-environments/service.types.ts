@@ -62,9 +62,10 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
     inferenceStore?: WorkerInferenceStore;
     createGatewayTools?: (params: {
       identity: WorkerConnectionIdentity;
+      inheritedToolPolicySource?: "sender";
       skillWorkshop?: AnyAgentTool;
       portalAvailable?: boolean;
-      prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[];
+      prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
     }) => Promise<AnyAgentTool[]>;
   };
 

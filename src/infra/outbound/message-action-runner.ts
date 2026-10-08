@@ -1,4 +1,3 @@
-// Stable facade for message-action normalization, routing, and execution.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -251,34 +250,29 @@ async function handleBroadcastAction(
         }
         const interruption =
           err instanceof OutboundHandoffRejectedError ? err : captureInterruption();
+        let sentBeforeError: boolean | undefined;
         if (interruption) {
-          const sentBeforeError = errorSentBefore(err);
+          sentBeforeError = errorSentBefore(err);
           if (!hadAcceptedResult && !sentBeforeError) {
             throw err;
           }
           interrupted = true;
-          results.push({
-            channel: targetChannel,
-            to: target,
-            ok: false,
-            ...(!sentBeforeError && err instanceof OutboundHandoffRejectedError
-              ? {
-                  attempted: false as const,
-                  error: "Broadcast canceled before this target was attempted.",
-                }
-              : {
-                  error: formatErrorMessage(err),
-                  ...(sentBeforeError ? { sentBeforeError: true as const } : {}),
-                }),
-          });
-          continue;
         }
         results.push({
           channel: targetChannel,
           to: target,
           ok: false,
-          error: formatErrorMessage(err),
-          ...(errorSentBefore(err) ? { sentBeforeError: true as const } : {}),
+          ...(interruption && !sentBeforeError && err instanceof OutboundHandoffRejectedError
+            ? {
+                attempted: false as const,
+                error: "Broadcast canceled before this target was attempted.",
+              }
+            : {
+                error: formatErrorMessage(err),
+                ...((sentBeforeError ?? errorSentBefore(err))
+                  ? { sentBeforeError: true as const }
+                  : {}),
+              }),
         });
       }
     }
@@ -300,11 +294,7 @@ async function handleInternalSourceReplySendAction(
 ): Promise<MessageActionResult> {
   throwIfAborted(input.abortSignal);
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
-  const agentId =
-    input.agentId ??
-    (input.sessionKey
-      ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
-      : undefined);
+  const agentId = input.agentId;
   let recommendations:
     | Awaited<
         ReturnType<typeof import("./clawhub-recommendations.js").resolveClawHubRecommendations>
@@ -326,7 +316,7 @@ async function handleInternalSourceReplySendAction(
         input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
     });
     throwIfAborted(input.abortSignal);
-    if (!recommendations.cards.length || !normalizeOptionalString(params.message)) {
+    if (!normalizeOptionalString(params.message)) {
       params.message = recommendations.text;
     }
   }
@@ -363,7 +353,6 @@ async function handleInternalSourceReplySendAction(
     }),
   });
   const sourceReply = await buildMessagePayload({
-    cfg: input.cfg,
     actionParams: params,
     input,
     agentId,
@@ -389,7 +378,7 @@ async function handleInternalSourceReplySendAction(
       throw new Error("Current-source media requires an agent workspace.");
     }
     const { createReplyMediaPathNormalizer } =
-      await import("../../auto-reply/reply/reply-media-paths.runtime.js");
+      await import("../../auto-reply/reply/reply-media-paths.js");
     sourceReplyPayload = await createReplyMediaPathNormalizer({
       cfg: input.cfg,
       sessionKey: input.sessionKey,
@@ -481,20 +470,24 @@ async function handleInternalSourceReplySendAction(
     ...(sourceReplyMediaUrls.length ? { mediaUrls: sourceReplyMediaUrls } : {}),
     dryRun,
   };
-  const action = payload.dryRun ? "Prepared" : "Sent";
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
+  // A WebChat user turn shows this transcript to its user. An inter-session result turn may
+  // have no viewer here, so claim no visible delivery.
+  const receipt = input.sourceReplyTranscriptOnly
+    ? payload.dryRun
+      ? "Prepared reply for the current session transcript."
+      : `Recorded reply in the current session transcript${sink}. This send did not deliver it to an external channel.`
+    : `${payload.dryRun ? "Prepared" : "Sent"} visible reply to the current source conversation${sink}.`;
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);
   // The model sees content, not private details. Report verified state even when it supplied prose.
   const recommendationSummary = cards.length
     ? cards
         .map((card) => `${card.name}: ${card.installed ? "Installed" : "Available to install"}.`)
         .join("\n")
-    : payload.sourceReply.channelData?.[CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]
-      ? payload.sourceReply.text
-      : undefined;
+    : recommendations?.text;
   const { sourceReplyDeliveryMode, ...details } = payload;
   const toolResult = textResult(
-    `${action} visible reply to the current source conversation${sink}.${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
+    `${receipt}${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
     {
       ...details,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),

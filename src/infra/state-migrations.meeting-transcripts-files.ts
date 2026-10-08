@@ -22,7 +22,6 @@ const LEGACY_UTTERANCE_STAGE_BATCH_SIZE = 256;
 export type LegacyMeetingTranscriptSnapshot = {
   sourceDir: string;
   relativeDir: string;
-  stageKey: string;
   session: TranscriptSessionDescriptor;
   utteranceCount: number;
   summary?: TranscriptsSummary;
@@ -160,7 +159,7 @@ function legacyTranscriptRelativeDir(session: TranscriptSessionDescriptor): stri
   }
   const legacySegment =
     session.sessionId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
-  return path.normalize(path.join(date, legacySegment));
+  return path.join(date, legacySegment);
 }
 
 async function optionalRegularFile(filePath: string): Promise<boolean> {
@@ -287,13 +286,12 @@ export function readStagedMeetingTranscriptUtterances(params: {
   stageDatabase: DatabaseSync;
   stageKey: string;
   start: number;
-  limit: number;
 }): TranscriptUtterance[] {
   return params.stageDatabase
     .prepare(
       "SELECT utterance_json FROM staged_utterances WHERE stage_key = ? AND sequence >= ? ORDER BY sequence ASC LIMIT ?",
     )
-    .all(params.stageKey, params.start, params.limit)
+    .all(params.stageKey, params.start, LEGACY_UTTERANCE_INSERT_CHUNK_SIZE)
     .map((row) => JSON.parse(String(row.utterance_json)) as TranscriptUtterance);
 }
 
@@ -378,7 +376,6 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
   return {
     sourceDir,
     relativeDir: params.relativeDir,
-    stageKey: params.relativeDir,
     session,
     utteranceCount,
     summary,

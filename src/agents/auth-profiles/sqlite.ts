@@ -16,10 +16,8 @@ import {
 } from "../../state/openclaw-agent-db-schema-helpers.js";
 import {
   runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseAsync,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -28,11 +26,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
-import {
-  resolveSharedAuthStoreOwnership,
-  resolveSharedAuthStorePath,
-  type SharedAuthStoreOwnership,
-} from "./path-resolve.js";
+import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
 import { prepareFreshSharedAuthStoreWrite } from "./shared-store-bootstrap.js";
 import {
   inspectAuthProfileJsonCell,
@@ -46,20 +40,15 @@ import {
   closeAuthProfileReadPool,
   isMissingDatabasePath,
 } from "./sqlite-read-pool.js";
-import type { PersistedAuthProfileStoreInspection } from "./types.js";
+import type {
+  AuthProfileStoreOwner,
+  PersistedAuthProfileStoreInspection,
+  PreparedAuthProfileStoreOwner,
+} from "./types.js";
 
 export { closeAuthProfileReadPool };
 
 export type AuthProfileDatabase = OpenClawAgentDatabase | OpenClawStateDatabase;
-
-/** Internal prepared ownership, carried through commit publication and compensation. */
-export type AuthProfileStoreOwner = {
-  databasePath: string;
-  sharedDatabasePath: string;
-  location: SharedAuthStoreOwnership["location"];
-};
-
-export type PreparedAuthProfileStoreOwner = AuthProfileStoreOwner & { env: NodeJS.ProcessEnv };
 
 export function resolveAuthProfileStoreOwner(
   database: AuthProfileDatabase,
@@ -332,14 +321,7 @@ export function writePersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): void {
-  const kind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const write = (target: AuthProfileDatabase) =>
-    writeAuthProfileJsonCell(target.db, "store", kind, payload);
-  if (database) {
-    write(database);
-  } else {
-    runAuthProfileWriteTransaction(agentDir, write);
-  }
+  mutateAuthProfileCell("store", payload, agentDir, database);
 }
 
 /** Deletes the persisted secrets-store row while leaving runtime state intact. */
@@ -347,14 +329,7 @@ export function deletePersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): void {
-  const kind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const remove = (target: AuthProfileDatabase) =>
-    deleteAuthProfileJsonCell(target.db, "store", kind);
-  if (database) {
-    remove(database);
-  } else {
-    runAuthProfileWriteTransaction(agentDir, remove);
-  }
+  mutateAuthProfileCell("store", undefined, agentDir, database, true);
 }
 
 /** Writes or deletes the persisted runtime-state payload. */
@@ -363,11 +338,21 @@ export function writePersistedAuthProfileStateRaw(
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): void {
+  mutateAuthProfileCell("state", payload, agentDir, database, !payload);
+}
+
+function mutateAuthProfileCell(
+  target: "store" | "state",
+  payload: unknown,
+  agentDir: string | undefined,
+  database: AuthProfileDatabase | undefined,
+  deleteRow = false,
+): void {
   const kind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const write = (target: AuthProfileDatabase) =>
-    payload
-      ? writeAuthProfileJsonCell(target.db, "state", kind, payload)
-      : deleteAuthProfileJsonCell(target.db, "state", kind);
+  const write = (owner: AuthProfileDatabase) =>
+    deleteRow
+      ? deleteAuthProfileJsonCell(owner.db, target, kind)
+      : writeAuthProfileJsonCell(owner.db, target, kind, payload);
   if (database) {
     write(database);
   } else {
@@ -379,6 +364,7 @@ type AuthProfileWriteOptions = {
   env?: NodeJS.ProcessEnv;
   sharedStoreWrite?: boolean;
   stateDir?: string;
+  assertEnvironment?: (env: NodeJS.ProcessEnv) => void;
 };
 
 export function prepareAuthProfileWriteTransaction(
@@ -391,6 +377,7 @@ export function prepareAuthProfileWriteTransaction(
     env.OPENCLAW_AGENT_DIR = undefined;
   }
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  options.assertEnvironment?.(env);
   const sharedStoreWrite = prepareFreshSharedAuthStoreWrite({
     agentDir,
     allowExplicitMain: options.sharedStoreWrite === true,
@@ -413,41 +400,6 @@ export function runAuthProfileWriteTransaction<T>(
   return runPreparedAuthProfileWriteTransaction(
     prepareAuthProfileWriteTransaction(agentDir, options),
     operation,
-  );
-}
-
-/** Queue the physical agent owner; relocated shared-state auth retains its own coordinator. */
-export async function runAuthProfileWriteTransactionAsync<T>(
-  agentDir: string | undefined,
-  operation: (database: AuthProfileDatabase, owner: PreparedAuthProfileStoreOwner) => T,
-  options: AuthProfileWriteOptions = {},
-): Promise<T> {
-  const prepared = prepareAuthProfileWriteTransaction(agentDir, options);
-  const { databaseTarget } = prepared;
-  if (databaseTarget.kind === "shared-state") {
-    return runPreparedAuthProfileWriteTransaction(prepared, operation);
-  }
-  const assertCurrent = () => {
-    // Doctor can relocate the shared base while this writer waits or validates.
-    if (
-      resolveSharedAuthStorePath(prepared.sharedOwner.env) !==
-        prepared.sharedOwner.sharedDatabasePath ||
-      resolveSharedAuthStoreOwnership(prepared.sharedOwner.env).location !==
-        prepared.sharedOwner.location
-    ) {
-      throw new Error("Auth profile shared owner changed before write admission");
-    }
-  };
-  return runOpenClawAgentWriteAdmission(
-    databaseTarget,
-    () =>
-      withOpenClawAgentDatabaseAsync(
-        databaseTarget,
-        // The async owner retains the cached handle through this synchronous transaction.
-        () => runPreparedAuthProfileWriteTransaction(prepared, operation),
-        assertCurrent,
-      ),
-    true,
   );
 }
 

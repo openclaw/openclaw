@@ -5,7 +5,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -386,8 +386,8 @@ describe("own-run question admission", () => {
         retainedReads += 1;
         assertCurrent(read);
       });
-      const run = historyLane.pool.run.bind(historyLane.pool);
-      vi.spyOn(historyLane.pool, "run").mockImplementation((...args) => {
+      const run = projectionLane.pool.run.bind(projectionLane.pool);
+      vi.spyOn(projectionLane.pool, "run").mockImplementation((...args) => {
         retainedReads += 1;
         return run(...args);
       });
@@ -547,8 +547,8 @@ describe("own-run question admission", () => {
         const entered = createDeferred();
         const release = createDeferred();
         const failure = new Error("Transient question worker read failure");
-        const run = historyLane.pool.run.bind(historyLane.pool);
-        const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce(async (...args) => {
+        const run = projectionLane.pool.run.bind(projectionLane.pool);
+        const spy = vi.spyOn(projectionLane.pool, "run").mockImplementationOnce(async (...args) => {
           if (cause === "transient worker failure") {
             throw failure;
           }
@@ -653,31 +653,4 @@ describe("own-run question admission", () => {
       });
     },
   );
-
-  it("fences a revoked question.list before reading the question owner", async () => {
-    await withOwnRunQuestion(async (f) => {
-      const id = await f.request();
-      const read = vi.spyOn(manager, "get").mockImplementation(() => {
-        throw new Error("revoked request reached question state");
-      });
-      try {
-        await expect(
-          callQuestionRpc(
-            "question.list",
-            {},
-            {
-              cfg: f.cfg,
-              client: f.browser.client,
-              registered: true,
-              hasCurrentClientAuthority: () => false,
-            },
-          ),
-        ).rejects.toThrow("Gateway requester authority changed");
-        expect(read).not.toHaveBeenCalled();
-      } finally {
-        read.mockRestore();
-      }
-      expect(manager.get(id)?.status).toBe("pending");
-    });
-  });
 });

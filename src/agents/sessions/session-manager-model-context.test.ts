@@ -8,9 +8,11 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
   replaceTranscriptEvents,
+  replaceTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -517,6 +519,9 @@ it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (i
     expect(SessionManager.readSessionContext(scope, (messages) => Array.from(messages))).toEqual(
       [],
     );
+    expect(
+      await SessionManager.readSessionContextAsync(scope, (messages) => [...messages]),
+    ).toEqual([]);
     expect(fs.existsSync(scope.storePath)).toBe(false);
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
@@ -655,15 +660,14 @@ it.each(
       };
       const spy = incognito
         ? undefined
-        : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
-            this: WorkerTaskPool<unknown, unknown>,
-            ...args
-          ) {
-            spy!.mockRestore();
-            const result = await this.run(...args);
-            mutate();
-            return result;
-          });
+        : vi
+            .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+            .mockImplementationOnce(async (...args) => {
+              spy!.mockRestore();
+              const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+              mutate();
+              return result;
+            });
       try {
         const pending = SessionManager.openModelContextAsync(scope, { admission });
         if (incognito) {
@@ -683,7 +687,9 @@ it.each(
 
 it.each(
   [false, true].flatMap((incognito) =>
-    (["append", "rewrite", "other-session"] as const).map((mutation) => ({ incognito, mutation })),
+    (
+      ["append", "rewrite", "delete", "branch", "compaction", "reset", "other-session"] as const
+    ).map((mutation) => ({ incognito, mutation })),
   ),
 )(
   "validates unadmitted context before acceptance (incognito=$incognito mutation=$mutation)",
@@ -699,7 +705,10 @@ it.each(
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const source = SessionManager.open(scope);
-      source.appendMessage({ role: "user", content: "before", timestamp: 1 });
+      const first = source.appendMessage({ role: "user", content: "before", timestamp: 1 });
+      if (mutation === "branch") {
+        source.appendMessage(makeUserMessage("branch tip", 2));
+      }
       const expected = source.buildSessionContext();
       let mutationSource = source;
       if (mutation === "other-session") {
@@ -717,6 +726,21 @@ it.each(
       const mutate = () => {
         if (mutation === "rewrite") {
           expect(
+            replaceTranscriptEventsSync(scope, [
+              source.getHeader(),
+              ...source
+                .getEntries()
+                .map((entry) =>
+                  entry.type === "message"
+                    ? Object.assign({}, entry, { message: makeUserMessage("rewritten prefix", 1) })
+                    : entry,
+                ),
+            ]),
+          ).toBe(true);
+          return;
+        }
+        if (mutation === "delete") {
+          expect(
             source.removeTrailingEntries(
               (entry) =>
                 entry.type === "message" &&
@@ -724,26 +748,33 @@ it.each(
                 entry.message.content === "before",
             ),
           ).toBe(1);
+          return;
+        }
+        if (mutation === "branch") {
+          source.branch(first);
+        } else if (mutation === "compaction") {
+          source.appendCompaction("summary", first, 1);
+        } else if (mutation === "reset") {
+          source.resetLeaf();
         }
         mutationSource.appendMessage({ role: "user", content: "after", timestamp: 2 });
       };
       const spy = incognito
         ? undefined
-        : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
-            this: WorkerTaskPool<unknown, unknown>,
-            ...args
-          ) {
-            spy!.mockRestore();
-            const result = await this.run(...args);
-            mutate();
-            return result;
-          });
+        : vi
+            .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+            .mockImplementationOnce(async (...args) => {
+              spy!.mockRestore();
+              const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+              mutate();
+              return result;
+            });
       try {
         const pending = SessionManager.openModelContextAsync(scope);
         if (incognito) {
           mutate();
         }
-        if (mutation === "other-session") {
+        if (mutation === "other-session" || mutation === "append") {
           expect((await pending).buildSessionContext()).toEqual(expected);
         } else {
           await expect(pending).rejects.toThrow("Session transcript changed during context read");

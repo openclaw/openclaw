@@ -14,7 +14,10 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
-import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
+import {
+  normalizeInputProvenance,
+  shouldPreserveUserFacingSessionStateForInputProvenance,
+} from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { truncateUtf16Safe } from "../../../utils.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
@@ -88,6 +91,10 @@ export async function resolvePromptBuildHookResult(params: {
   }
   // Hook ordering mirrors the prompt assembly boundary: queued injections first,
   // then prepare/heartbeat contributions, then prompt-build hooks.
+  const logHookFailure = (hookName: string) => (hookErr: unknown) => {
+    log.warn(`${hookName} hook failed: ${String(hookErr)}`);
+    return undefined;
+  };
   const turnPrepareResult =
     params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare")
       ? await params.hookRunner
@@ -99,10 +106,7 @@ export async function resolvePromptBuildHookResult(params: {
             },
             params.hookCtx,
           )
-          .catch((hookErr: unknown) => {
-            log.warn(`agent_turn_prepare hook failed: ${String(hookErr)}`);
-            return undefined;
-          })
+          .catch(logHookFailure("agent_turn_prepare"))
       : undefined;
   const heartbeatContribution =
     params.hookCtx.trigger === "heartbeat" &&
@@ -117,10 +121,7 @@ export async function resolvePromptBuildHookResult(params: {
             },
             params.hookCtx,
           )
-          .catch((hookErr: unknown) => {
-            log.warn(`heartbeat_prompt_contribution hook failed: ${String(hookErr)}`);
-            return undefined;
-          })
+          .catch(logHookFailure("heartbeat_prompt_contribution"))
       : undefined;
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
@@ -131,10 +132,7 @@ export async function resolvePromptBuildHookResult(params: {
           },
           params.hookCtx,
         )
-        .catch((hookErr: unknown) => {
-          log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
-          return undefined;
-        })
+        .catch(logHookFailure("before_prompt_build"))
     : undefined;
   const decisionPromptBuildFields = promptBuildResult
     ? Object.fromEntries(
@@ -153,14 +151,12 @@ export async function resolvePromptBuildHookResult(params: {
         ),
       )
     : undefined;
+  const pendingContext = [queuedContext, turnPrepareResult, heartbeatContribution];
+  const joinContext = (key: "prependContext" | "appendContext") =>
+    joinPresentTextSegments([...pendingContext, promptBuildResult].map((source) => source?.[key]));
   return {
-    hasPendingNonPromptBuildContext: Boolean(
-      queuedContext.prependContext?.trim() ||
-      queuedContext.appendContext?.trim() ||
-      turnPrepareResult?.prependContext?.trim() ||
-      turnPrepareResult?.appendContext?.trim() ||
-      heartbeatContribution?.prependContext?.trim() ||
-      heartbeatContribution?.appendContext?.trim(),
+    hasPendingNonPromptBuildContext: pendingContext.some(
+      (source) => source?.prependContext?.trim() || source?.appendContext?.trim(),
     ),
     ...(decisionPromptBuildFields && Object.keys(decisionPromptBuildFields).length > 0
       ? { decisionPromptBuildFields }
@@ -169,18 +165,8 @@ export async function resolvePromptBuildHookResult(params: {
     ...(promptBuildResult?.toolsAllow !== undefined
       ? { toolsAllow: promptBuildResult.toolsAllow }
       : {}),
-    prependContext: joinPresentTextSegments([
-      queuedContext.prependContext,
-      turnPrepareResult?.prependContext,
-      heartbeatContribution?.prependContext,
-      promptBuildResult?.prependContext,
-    ]),
-    appendContext: joinPresentTextSegments([
-      queuedContext.appendContext,
-      turnPrepareResult?.appendContext,
-      heartbeatContribution?.appendContext,
-      promptBuildResult?.appendContext,
-    ]),
+    prependContext: joinContext("prependContext"),
+    appendContext: joinContext("appendContext"),
     prependSystemContext: wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
     appendSystemContext: wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
   };
@@ -198,6 +184,9 @@ export function shouldWarnOnOrphanedUserRepair(
 }
 
 const QUEUED_USER_MESSAGE_MARKER =
+  "[Earlier unanswered user message. Address this request alongside the current input; " +
+  "follow the latest user instruction if they conflict.]";
+const QUEUED_INTER_SESSION_MESSAGE_MARKER =
   "[Queued user message from a previous active turn; preserved as context only. " +
   "Continue with the active prompt below.]";
 const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;
@@ -377,10 +366,9 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
  * Merges a trailing user message that was queued in transcript history but not
  * present in the active prompt.
  *
- * External user leaves are eligible to remain canonical (`removeLeaf: false`).
- * Session repair preserves them only for producer-tagged main-session restart
- * recovery; ordinary repair replaces them with the merged prompt. Empty or stale
- * internal leaves are always detached.
+ * External user leaves are eligible to remain canonical (`removeLeaf: false`);
+ * the session boundary owns whether the prompt replaces their transcript leaf.
+ * Empty or stale internal leaves are always detached.
  */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
@@ -401,8 +389,13 @@ export function mergeOrphanedTrailingUserPrompt(params: {
     return { prompt: params.prompt, merged: false, removeLeaf: false };
   }
 
+  const provenance = normalizeInputProvenance(params.leafMessage.provenance);
+  const marker =
+    !provenance || provenance.kind === "external_user"
+      ? QUEUED_USER_MESSAGE_MARKER
+      : QUEUED_INTER_SESSION_MESSAGE_MARKER;
   return {
-    prompt: [QUEUED_USER_MESSAGE_MARKER, orphanText, "", params.prompt].join("\n"),
+    prompt: [marker, orphanText, "", params.prompt].join("\n"),
     merged: true,
     removeLeaf: false,
   };
@@ -496,43 +489,24 @@ export function buildAfterTurnRuntimeContext(params: {
   const tokenBudget = normalizeContextTokenBudget(params.tokenBudget);
   const currentTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
   return {
-    ...buildEmbeddedCompactionRuntimeContext({
-      sessionKey: params.attempt.sessionKey,
-      sandboxSessionKey: params.attempt.sandboxSessionKey,
-      sandboxAgentId: params.attempt.sandboxAgentId,
-      messageChannel: params.attempt.messageChannel,
-      messageProvider: params.attempt.messageProvider,
-      agentAccountId: params.attempt.agentAccountId,
-      currentChannelId: params.attempt.currentChannelId,
-      currentThreadTs: params.attempt.currentThreadTs,
-      currentMessageId: params.attempt.currentMessageId,
-      authProfileId: params.attempt.authProfileId,
-      authProfileIdSource: params.attempt.authProfileIdSource,
-      runtimeAuthPlan: params.attempt.runtimePlan?.auth,
-      workspaceDir: params.workspaceDir,
-      cwd: params.cwd,
-      agentDir: params.agentDir,
-      config: params.attempt.config,
-      toolsAllow: params.attempt.toolsAllow,
-      skillsSnapshot: params.attempt.skillsSnapshot,
-      senderId: params.attempt.senderId,
-      provider: params.attempt.provider,
-      modelId: params.attempt.modelId,
-      harnessRuntime: params.attempt.agentHarnessId,
-      modelSelectionLocked: params.attempt.modelSelectionLocked,
-      thinkLevel: params.attempt.thinkLevel,
-      reasoningLevel: params.attempt.reasoningLevel,
-      bashElevated: params.attempt.bashElevated,
-      extraSystemPrompt: params.attempt.extraSystemPrompt,
-      ownerNumbers: params.attempt.ownerNumbers,
-      activeProcessSessions: listActiveProcessSessionReferences({
-        scopeKey: resolveProcessToolScopeKey({
-          sessionKey: params.attempt.sessionKey,
-          sessionId: params.attempt.sessionId,
-          agentId: params.activeAgentId,
+    ...buildEmbeddedCompactionRuntimeContext(
+      {
+        ...params.attempt,
+        runtimeAuthPlan: params.attempt.runtimePlan?.auth,
+        workspaceDir: params.workspaceDir,
+        cwd: params.cwd,
+        agentDir: params.agentDir,
+        harnessRuntime: params.attempt.agentHarnessId,
+        activeProcessSessions: listActiveProcessSessionReferences({
+          scopeKey: resolveProcessToolScopeKey({
+            sessionKey: params.attempt.sessionKey,
+            sessionId: params.attempt.sessionId,
+            agentId: params.activeAgentId,
+          }),
         }),
-      }),
-    }),
+      },
+      "after-turn",
+    ),
     ...resolveContextEngineCapabilities({
       config: params.attempt.config,
       sessionKey: params.attempt.sessionKey,

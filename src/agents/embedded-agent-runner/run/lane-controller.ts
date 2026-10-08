@@ -1,4 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { createAbortError } from "../../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -211,12 +212,10 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     if (reason instanceof Error) {
       throw reason;
     }
-    const abortError =
-      reason !== undefined
-        ? new Error("Operation aborted", { cause: reason })
-        : new Error("Operation aborted");
-    abortError.name = "AbortError";
-    throw abortError;
+    throw createAbortError(
+      "Operation aborted",
+      reason === undefined ? undefined : { cause: reason },
+    );
   };
   const withLaneTimeout = (
     opts?: CommandQueueEnqueueOptions,
@@ -335,12 +334,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       if (lifecycleGeneration !== currentLifecycleGeneration) {
         const wasQueuedBeforeRotation =
           options.initialQueuedLifecycleGeneration === lifecycleGeneration;
-        const canResumeAcrossRotation = sessionLanePolicy.canResumeAcrossRotation;
         const newerSameIdExecutionOwnsContext =
           existingContext?.lifecycleGeneration === currentLifecycleGeneration;
         if (
           !wasQueuedBeforeRotation ||
-          !canResumeAcrossRotation ||
+          !sessionLanePolicy.canResumeAcrossRotation ||
           newerSameIdExecutionOwnsContext
         ) {
           assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
@@ -446,11 +444,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         releaseQueuedContext("abandoned");
         throw error;
       }
-      return await queuedRun
-        .finally(() => {
-          releaseQueuedContext("abandoned");
-        })
-        .catch(rethrowQueueError);
+      return await queuedRun.finally(abandonQueuedContext).catch(rethrowQueueError);
     } finally {
       releaseForeground?.();
     }

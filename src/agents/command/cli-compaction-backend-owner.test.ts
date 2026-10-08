@@ -1,4 +1,3 @@
-// Covers CLI backend lookup for native compaction ownership.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -43,7 +42,10 @@ describe("runCliTurnCompactionLifecycle backend ownership", () => {
       tmpDir,
       provider: "anthropic",
       model: "claude-opus-5-5",
-      deps: { resolveCliBackendConfig: resolveBackend as never },
+      sessionEntry: {
+        cliSessionBindings: { "claude-cli": { sessionId: "native-session" } },
+      },
+      deps: { resolveCliBackendConfig: resolveBackend },
     });
     const updatedEntry = await scenario.run({ cliBackendId: "claude-cli" });
 
@@ -51,6 +53,7 @@ describe("runCliTurnCompactionLifecycle backend ownership", () => {
     expect(scenario.compactCalls).toHaveLength(0);
     expect(scenario.recordCliCompactionInStore).not.toHaveBeenCalled();
     expect(updatedEntry).toBe(scenario.sessionEntry);
+    expect(updatedEntry?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("native-session");
   });
 
   it("keeps embedded compaction when no CLI backend ran the turn", async () => {
@@ -60,7 +63,7 @@ describe("runCliTurnCompactionLifecycle backend ownership", () => {
       tmpDir,
       provider: "openai",
       model: "gpt-5.5",
-      deps: { resolveCliBackendConfig: resolveBackend as never },
+      deps: { resolveCliBackendConfig: resolveBackend },
     });
     await scenario.run();
 

@@ -587,7 +587,6 @@ describe("installed replay repair ownership", () => {
         transcriptLifecycle: lifecycle,
         trajectoryRecorder: null,
         trajectoryEndRecorded: false,
-        sessionAgentId: "main",
         buildAbortSettlePromise: tracker.buildAbortSettlePromise,
         state: {
           terminal: { kind: "aborted", source: "external" },

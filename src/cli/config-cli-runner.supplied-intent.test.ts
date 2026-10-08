@@ -61,7 +61,6 @@ vi.mock("../runtime.js", () => ({
   ExitError: class ExitError extends Error {},
   writeRuntimeJson: vi.fn(),
 }));
-vi.mock("./config-cli-input.js", () => ({ formatPluginInstallConfigSetError: vi.fn() }));
 vi.mock("./config-cli-model-normalization.js", () => ({
   normalizeConfigMutationModelRefs: (value: unknown) => value,
   normalizeConfigMutationExplicitSetPath: (path: string[]) => path,

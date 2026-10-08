@@ -130,22 +130,13 @@ describe("fetchThreadReplies", () => {
     vi.mocked(fetchGraphJson).mockReset();
   });
 
-  it("clamps limit to 50 maximum", async () => {
+  it("requests the provider's maximum page of 50 replies", async () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] });
 
-    await fetchThreadReplies("tok", "g", "c", "m", 200);
+    await fetchThreadReplies("tok", "g", "c", "m");
 
     const [request] = expectDefined(vi.mocked(fetchGraphJson).mock.calls[0], "Graph fetch call");
     expect(request.path).toBe("/teams/g/channels/c/messages/m/replies?$top=50");
-  });
-
-  it("clamps limit to 1 minimum", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] });
-
-    await fetchThreadReplies("tok", "g", "c", "m", 0);
-
-    const [request] = expectDefined(vi.mocked(fetchGraphJson).mock.calls[0], "Graph fetch call");
-    expect(request.path).toContain("$top=1");
   });
 
   it("returns empty array when value is missing", async () => {

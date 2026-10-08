@@ -1,4 +1,3 @@
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { sleepWithAbort } from "@openclaw/retry";
 import type { ChatMetadataParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
@@ -9,24 +8,18 @@ import {
   isAgentDatabaseInspectionPendingError,
   resolveGatewayReadRetryDelayMs,
 } from "../gateway-availability.ts";
-import {
-  invalidateModelCatalogCache,
-  getModelCatalogCache,
-  modelCatalogKey,
-  modelCatalogParams,
-} from "../model-catalog-cache.ts";
+import { modelCatalogKey, modelCatalogParams } from "../model-catalog-cache.ts";
 import {
   loadModelCatalog,
   peekModelCatalog,
-  pendingModelCatalogResult,
   settleModelCatalogRequests,
   subscribeModelCatalogCache,
 } from "../model-catalog-store.ts";
 import { uiConversationMatches, type UiSessionDefaultsHost } from "../sessions/session-key.ts";
 import {
   chatMetadataCache,
-  isSessionMetadataInvalidation,
   type ChatMetadataEntry,
+  type ChatMetadataInvalidation,
   type ChatMetadataPublication,
   type ChatMetadataRequest,
   type ChatMetadataRefresh,
@@ -47,7 +40,6 @@ function metadataScopeKey({ agentId, sessionKey, authProfileId }: ChatMetadataPa
 }
 
 const MAX_CACHED_CHAT_METADATA = 64;
-const SESSION_METADATA_DEBOUNCE_MS = 2_500;
 
 function metadataEntryFor(
   client: GatewayBrowserClient,
@@ -60,31 +52,17 @@ function metadataEntryFor(
     const invalidate = (
       scope?: ChatMetadataParams,
       sessionDefaults?: UiSessionDefaultsHost,
-      sessionEvent?: Record<string, unknown> | null,
+      {
+        sessionOnly = false,
+        matchesCatalog,
+        commandsChanged = true,
+        delayMs = 0,
+      }: ChatMetadataInvalidation = {},
     ) => {
-      if (
-        sessionEvent !== undefined &&
-        sessionEvent?.catalogChanged !== true &&
-        ((!scope && sessionEvent?.reason !== "delete" && sessionEvent?.reason !== "cleanup") ||
-          (sessionEvent?.phase !== "reset" &&
-            ![
-              "reset",
-              "patch",
-              "command-metadata",
-              "create",
-              "new",
-              "delete",
-              "recovery",
-              "cleanup",
-            ].some((reason) => reason === sessionEvent?.reason)))
-      ) {
-        return;
-      }
       const invalidated = Array.from(entries.values()).filter(
         (entry) =>
-          (sessionEvent === undefined ||
-            scope !== undefined ||
-            entry.scope.sessionKey !== undefined) &&
+          (!matchesCatalog || matchesCatalog(entry.scope)) &&
+          (!sessionOnly || scope !== undefined || entry.scope.sessionKey !== undefined) &&
           (sessionDefaults && scope?.sessionKey
             ? uiConversationMatches(
                 sessionDefaults,
@@ -98,29 +76,20 @@ function metadataEntryFor(
           (!scope?.authProfileId || entry.scope.authProfileId === scope.authProfileId),
       );
       // Retire every affected writer before subscribers can synchronously start replacements.
-      const sessionOnly =
-        scope?.sessionKey !== undefined && isSessionMetadataInvalidation(sessionEvent);
-      const catalog = sessionOnly ? getModelCatalogCache(client) : undefined;
-      const validation =
-        catalog &&
-        new Set(
-          Array.from(catalog.requests.values()).flatMap((lanes) =>
-            Array.from(lanes.values()).flatMap(({ active }) => (active ? active.read : [])),
-          ),
-        );
       for (const entry of invalidated) {
         entry.refreshRevision += 1;
-        entry.refreshAfter = sessionOnly ? Date.now() + SESSION_METADATA_DEBOUNCE_MS : undefined;
-        entry.validateCatalog = entry.listeners.size > 0 ? validation : undefined;
-        entry.result = undefined;
-        entry.writer = undefined;
-        entry.activeRequest?.controller.abort();
+        entry.refreshAfter = delayMs ? Date.now() + delayMs : undefined;
+        if (!sessionOnly && commandsChanged) {
+          entry.invalidated = true;
+          entry.writer = undefined;
+          entry.activeRequest?.controller.abort();
+        }
       }
       for (const entry of invalidated) {
         notifyChatMetadataListeners(entry, {
           type: "invalidated",
           scope: sessionOnly ? "session" : "full",
-          refreshSessionFacts: sessionOnly || (sessionEvent === undefined && !scope?.sessionKey),
+          refreshSessionFacts: sessionOnly || !scope?.sessionKey,
         });
         entry.release();
       }
@@ -177,71 +146,38 @@ function metadataEntryFor(
   return entry;
 }
 
-function catalogProjectionKey(projection: Partial<ModelCatalogResult>) {
-  // Metadata omits direct-picker policy, including on alternate runtime choices.
-  return stableStringify([
-    projection.models?.map(({ manualSelectionAllowed: _manual, runtimeChoices, ...model }) => ({
-      ...model,
-      runtimeChoices: runtimeChoices?.map(
-        ({ manualSelectionAllowed: _choiceManual, ...choice }) => choice,
-      ),
-    })),
-    projection.accountSelection,
-    projection.modelSelectionPolicy,
-  ]);
-}
-
-function preparePublication(
-  client: GatewayBrowserClient,
-  entry: ChatMetadataEntry,
-): ChatMetadataPublication {
+function preparePublication(entry: ChatMetadataEntry): ChatMetadataPublication {
   const writer = {};
   entry.writer = writer;
   const isCurrent = () => entry.writer === writer;
   return {
     isCurrent,
     publish: (result) => {
-      // Legacy/startup responses can carry models. The direct catalog is their only UI owner.
-      const { models, accountSelection, modelSelectionPolicy, ...metadata } = result;
-      if (isCurrent()) {
-        let catalogChanged = false;
-        const validateCatalog = entry.validateCatalog;
-        if (validateCatalog) {
-          entry.validateCatalog = undefined;
-          const catalogRevision = entry.catalogRevision;
-          const catalog = peekModelCatalog(client, entry.scope);
-          const hasCatalogChanged = (validatedCatalog: ModelCatalogResult | undefined) =>
-            !validatedCatalog ||
-            catalogRevision !== entry.catalogRevision ||
-            catalogProjectionKey({ models, accountSelection, modelSelectionPolicy }) !==
-              catalogProjectionKey(validatedCatalog);
-          const pending = !catalog
-            ? pendingModelCatalogResult(client, entry.scope, validateCatalog)
-            : undefined;
-          if (pending) {
-            // Commands are ready now; only catalog validation waits for its existing producer.
-            void pending.then((validatedCatalog) => {
-              if (isCurrent() && hasCatalogChanged(validatedCatalog)) {
-                invalidateModelCatalogCache(client, entry.scope);
-                notifyChatMetadataListeners(entry, {
-                  type: "result",
-                  result: metadata,
-                  catalogChanged: true,
-                });
-              }
-            });
-          } else {
-            catalogChanged = hasCatalogChanged(catalog);
-          }
-          if (catalogChanged) {
-            invalidateModelCatalogCache(client, entry.scope);
-          }
+      // Startup responses may include a catalog; models.list owns its UI publication.
+      const metadata =
+        "unchanged" in result
+          ? entry.result
+          : result.commands === undefined
+            ? undefined
+            : {
+                commands: result.commands,
+                ...(result.revision ? { revision: result.revision } : {}),
+              };
+      if (!metadata) {
+        if (isCurrent()) {
+          entry.invalidated = true;
         }
+        throw new Error("Chat commands are unavailable. Retry the metadata request.");
+      }
+      if ("unchanged" in result && metadata.revision !== result.revision) {
+        throw new Error("Chat metadata was unchanged without a retained revision.");
+      }
+      if (isCurrent()) {
         entry.result = metadata;
+        entry.invalidated = false;
         notifyChatMetadataListeners(entry, {
           type: "result",
           result: metadata,
-          ...(catalogChanged ? { catalogChanged: true } : {}),
         });
       }
       entry.release();
@@ -261,7 +197,7 @@ function beginChatMetadataRequest(
   entry: ChatMetadataEntry,
   revalidation: boolean,
 ): Promise<ChatMetadataResult> {
-  const publication = preparePublication(client, entry);
+  const publication = preparePublication(entry);
   const queued = entry.queuedRequest;
   if (queued) {
     // Pending demand adopts the latest writer, but never adds another queued read.
@@ -296,7 +232,11 @@ function beginChatMetadataRequest(
                 request.controller.signal.throwIfAborted();
               }
               try {
-                result = await client.request<ChatMetadataResponse>("chat.metadata", entry.scope);
+                result = await client.request<ChatMetadataResponse>("chat.metadata", {
+                  agentId: entry.scope.agentId,
+                  includeModels: false,
+                  ...(entry.result?.revision ? { ifRevision: entry.result.revision } : {}),
+                });
                 break;
               } catch (error) {
                 if (!isAgentDatabaseInspectionPendingError(error)) {
@@ -345,7 +285,8 @@ export function peekChatMetadata(
   client: GatewayBrowserClient,
   scope: ChatMetadataParams,
 ): ChatMetadataResult | undefined {
-  return chatMetadataCache.get(client)?.entries.get(metadataScopeKey(scope))?.result;
+  const entry = chatMetadataCache.get(client)?.entries.get(metadataScopeKey(scope));
+  return entry?.invalidated ? undefined : entry?.result;
 }
 
 export function subscribeChatMetadata(
@@ -366,10 +307,6 @@ export function subscribeChatMetadata(
     if ((scope.sessionKey || scope.authProfileId) && entry.listeners.size === 0) {
       entry.refreshRevision += 1;
       entry.writer = undefined;
-      if (entry.validateCatalog) {
-        entry.validateCatalog = undefined;
-        invalidateModelCatalogCache(client, scope);
-      }
     }
     entry.refresh?.start();
     entry.release();
@@ -381,7 +318,7 @@ export function loadChatMetadata(
   scope: ChatMetadataParams,
 ): Promise<ChatMetadataResult> {
   const entry = metadataEntryFor(client, scope);
-  if (entry.result) {
+  if (entry.result && !entry.invalidated) {
     return Promise.resolve(entry.result);
   }
   const request = entry.queuedRequest ?? entry.activeRequest;
@@ -413,7 +350,7 @@ export function beginChatMetadataPublication(
   scope: ChatMetadataParams,
 ) {
   const entry = metadataEntryFor(client, scope);
-  const { isCurrent, publish } = preparePublication(client, entry);
+  const { isCurrent, publish } = preparePublication(entry);
   notifyChatMetadataListeners(entry, { type: "loading" });
   return { isCurrent, publish };
 }

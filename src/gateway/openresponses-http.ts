@@ -48,12 +48,10 @@ import {
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import {
   CreateResponseBodySchema,
-  type CreateResponseBody,
   type OutputItem,
   type ResponseResource,
   type StreamingEvent,
@@ -75,7 +73,6 @@ import {
 } from "./openai-tool-choice.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { lookupResponseSession, rememberResponseSession } from "./openresponses-session-store.js";
-import type { ResponseSessionScope } from "./openresponses-session-store.types.js";
 import {
   createAssistantOutputItem,
   createFunctionCallOutputItem,
@@ -105,35 +102,8 @@ function resolveResponseSessionAuthSubject(params: {
   return `gateway-auth:${params.auth.mode}`;
 }
 
-function createResponseSessionScope(params: {
-  req: IncomingMessage;
-  auth: ResolvedGatewayAuth;
-  requestAuth: AuthorizedGatewayHttpRequest;
-  agentId: string;
-  resolveGatewayContext?: GatewayContextResolver;
-}): ResponseSessionScope {
-  return {
-    authSubject: resolveResponseSessionAuthSubject(params).trim(),
-    agentId: params.agentId,
-    requestedSessionKey: getHeader(params.req, "x-openclaw-session-key")?.trim() || undefined,
-  };
-}
-
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-}
-
-function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
-  // Normalize from Responses API flat format to the internal wrapped format.
-  return (body.tools ?? []).map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-      strict: tool.strict,
-    },
-  }));
 }
 
 function extractUsageFromResult(result: unknown): Usage {
@@ -153,9 +123,6 @@ export async function handleOpenResponsesHttpRequest(
     ...opts,
     pathname: "/v1/responses",
     requiredOperatorMethod: "chat.send",
-    // Compat HTTP uses a different scope model from generic HTTP helpers:
-    // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes,
   });
   if (handled === false) {
@@ -321,7 +288,15 @@ export async function handleOpenResponsesHttpRequest(
   if (rejectDisabledGatewayUpload(res, hasMedia)) {
     return true;
   }
-  const clientTools = extractClientTools(payload);
+  const clientTools: ClientToolDefinition[] = (payload.tools ?? []).map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: tool.strict,
+    },
+  }));
   let toolChoice: ReturnType<typeof applyToolChoice>;
   try {
     toolChoice = applyToolChoice(clientTools, resolveResponsesToolChoice(payload.tool_choice));
@@ -345,13 +320,16 @@ export async function handleOpenResponsesHttpRequest(
     }
     throw err;
   }
-  const responseSessionScope = createResponseSessionScope({
-    req,
-    auth: opts.auth,
-    requestAuth: handled.requestAuth,
+  const responseSessionScope = {
+    authSubject: resolveResponseSessionAuthSubject({
+      req,
+      auth: opts.auth,
+      requestAuth: handled.requestAuth,
+      resolveGatewayContext: opts.resolveGatewayContext,
+    }).trim(),
     agentId: resolved.agentId,
-    resolveGatewayContext: opts.resolveGatewayContext,
-  });
+    requestedSessionKey: getHeader(req, "x-openclaw-session-key")?.trim() || undefined,
+  };
   // Resolve session key: reuse previous_response_id only when it matches the
   // same auth-subject/agent/requested-session scope as the current request.
   const previousSessionKey = payload.previous_response_id

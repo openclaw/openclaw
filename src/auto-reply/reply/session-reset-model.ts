@@ -24,12 +24,6 @@ import {
 } from "./model-selection-directive.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 
-type ResetModelResult = {
-  selection?: ModelDirectiveSelection;
-  cleanedBody?: string;
-};
-
-/** Applies a valid reset model override to session state and returns the cleaned body. */
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -48,7 +42,7 @@ export async function applyResetModelOverride(params: {
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
   modelCatalog?: ModelCatalogEntry[];
-}): Promise<ResetModelResult> {
+}): Promise<{ selection?: ModelDirectiveSelection; cleanedBody?: string }> {
   if (!params.resetTriggered) {
     return {};
   }
@@ -57,7 +51,7 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const tokens = rawBody.split(/\s+/).filter(Boolean);
+  const tokens = rawBody.split(/\s+/);
   const [first, second] = tokens;
   if (!first) {
     return {};
@@ -124,7 +118,7 @@ export async function applyResetModelOverride(params: {
   };
 
   let selection: ModelDirectiveSelection | undefined;
-  let consumed = 0;
+  let consumed = 1;
 
   if (providers.has(normalizeProviderId(first)) && second) {
     // Inventory disambiguates `provider model prompt` from `provider prompt`.
@@ -138,16 +132,13 @@ export async function applyResetModelOverride(params: {
 
   if (!selection) {
     selection = resolveSelection(first, first.includes("/"));
-    if (selection) {
-      consumed = 1;
-    }
   }
 
   if (!selection) {
     return {};
   }
 
-  const cleanedBody = tokens.slice(consumed).join(" ").trim();
+  const cleanedBody = tokens.slice(consumed).join(" ");
   params.sessionCtx.commandText = cleanedBody;
   params.sessionCtx.agentText = cleanedBody;
   params.sessionCtx.BodyStripped = cleanedBody;

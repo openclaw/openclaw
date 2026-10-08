@@ -6,7 +6,6 @@ import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { BackupProgressInfo, DatabaseSync } from "node:sqlite";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import {
   getPublishFileExclusiveFailureDetails,
   isHardlinkFallbackError,
@@ -170,12 +169,7 @@ async function assertMutationFingerprintUnchanged(
 ): Promise<void> {
   const current = await handle.stat({ bigint: true });
   if (!sameFileMutationFingerprint(current, expected)) {
-    if (
-      current.dev !== expected.dev ||
-      current.ino !== expected.ino ||
-      current.birthtimeNs !== expected.birthtimeNs ||
-      current.size !== expected.size
-    ) {
+    if (!sameFileStatFingerprint(current, expected)) {
       throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
     }
     // Re-read the pinned snapshot when FUSE timestamps settle after copying or hashing.
@@ -551,6 +545,8 @@ async function publishSqliteFile(
  *
  * The source and output both receive full structural, index, and foreign-key
  * checks. Only a fully verified, synced snapshot is published to the target.
+ * SQLite copies and checks vec0 shadow tables without loading sqlite-vec;
+ * native extension loading here can crash backups on unsupported CPUs.
  */
 export async function createVerifiedSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
@@ -605,7 +601,6 @@ async function verifyAndPublishSqliteSnapshot(
           await fs.rm(stagedPath, { force: true });
         }
         const source = openNodeSqliteDatabase(snapshotSourcePath, {
-          allowExtension: true,
           readOnly: true,
         });
         try {
@@ -613,7 +608,6 @@ async function verifyAndPublishSqliteSnapshot(
           try {
             // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
             source.prepare("PRAGMA schema_version;").get();
-            await loadSqliteVecExtension({ db: source });
             assertSqliteIntegrity(source, options.sourcePath);
             options.validate?.(source, options.sourcePath);
             if (!privateSourcePath) {
@@ -631,12 +625,9 @@ async function verifyAndPublishSqliteSnapshot(
     );
 
     await fs.chmod(stagedPath, 0o600);
-    const snapshot = openNodeSqliteDatabase(stagedPath, {
-      allowExtension: true,
-    });
+    const snapshot = openNodeSqliteDatabase(stagedPath);
     try {
       snapshot.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
-      await loadSqliteVecExtension({ db: snapshot });
       // Online backup preserves WAL mode. Switch the private copy to rollback
       // journaling so verification and restore need only the published file.
       snapshot.exec("PRAGMA journal_mode = DELETE;");
@@ -663,14 +654,12 @@ async function verifyAndPublishSqliteSnapshot(
           expectedContent,
           beforePublish: options.beforePublish,
           afterPublish: options.afterPublish,
-          validatePublished: async (publishedPath) => {
+          validatePublished: (publishedPath) => {
             const published = openNodeSqliteDatabase(publishedPath, {
-              allowExtension: true,
               readOnly: true,
             });
             try {
               published.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
-              await loadSqliteVecExtension({ db: published });
               assertSqliteIntegrity(published, options.targetPath);
               options.validate?.(published, options.targetPath);
               const publishedUserVersion = readSqliteUserVersion(published);

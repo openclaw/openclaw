@@ -125,26 +125,8 @@ type WhatsAppReconnectAttemptDecision = {
   healthState: "stopped" | "reconnecting";
 };
 
-type LoginSocketRestartKind = "post-pairing" | "timeout";
-
 function createNeverResolvePromise<T>(): Promise<T> {
   return new Promise<T>(() => {});
-}
-
-function getLoginSocketRestartKind(statusCode: number | undefined): LoginSocketRestartKind | null {
-  if (statusCode === POST_PAIRING_RESTART_STATUS) {
-    return "post-pairing";
-  }
-  if (statusCode === TIMED_OUT_STATUS) {
-    return "timeout";
-  }
-  return null;
-}
-
-function getLoginSocketRestartMessage(kind: LoginSocketRestartKind): string {
-  return kind === "timeout"
-    ? WHATSAPP_LOGIN_TIMEOUT_RESTART_MESSAGE
-    : WHATSAPP_LOGIN_RESTART_MESSAGE;
 }
 
 type SocketActivityEmitter = {
@@ -152,34 +134,6 @@ type SocketActivityEmitter = {
   off?: (event: string, listener: (...args: unknown[]) => void) => void;
   removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
 };
-
-function createLiveConnection(params: {
-  connectionId: string;
-  sock: WASocket;
-  listener: ManagedWhatsAppListener;
-  openedAfterRecentInbound: boolean;
-}): WhatsAppLiveConnection {
-  const close = createDeferred<WebListenerCloseReason>();
-
-  return {
-    connectionId: params.connectionId,
-    startedAt: Date.now(),
-    sock: params.sock,
-    listener: params.listener,
-    heartbeat: null,
-    watchdogTimer: null,
-    lastInboundAt: null,
-    lastTransportActivityAt: Date.now(),
-    handledMessages: 0,
-    unregisterUnhandled: null,
-    unregisterTransportActivity: null,
-    openedAfterRecentInbound: params.openedAfterRecentInbound,
-    backgroundTasks: new Set<Promise<unknown>>(),
-    closePromise: close.promise,
-    resolveClose: close.resolve,
-    socketClosed: false,
-  };
-}
 
 async function closeWebSocketBestEffort(sock: { ws?: { close?: () => void | Promise<void> } }) {
   try {
@@ -305,9 +259,7 @@ export async function waitForWhatsAppLoginResult(params: {
   const wait = params.waitForConnection ?? waitForWaConnection;
   const createSocket = params.createSocket ?? createWaSocket;
   let currentSock = params.sock;
-  let postPairingRestarted = false;
-  let timeoutRestarted = false;
-  let loggedOutRestarted = false;
+  const restartedStatuses = new Set<number>();
 
   const replaceLoginSocket = async (
     opts: { closeCurrent?: boolean } = {},
@@ -363,22 +315,23 @@ export async function waitForWhatsAppLoginResult(params: {
       }
       return {
         outcome: "connected",
-        restarted: postPairingRestarted || timeoutRestarted || loggedOutRestarted,
+        restarted: restartedStatuses.size > 0,
         sock: currentSock,
       };
     } catch (err) {
       const statusCode = getStatusCode(err);
-      const restartKind = getLoginSocketRestartKind(statusCode);
-      const canRestart =
-        (restartKind === "post-pairing" && !postPairingRestarted) ||
-        (restartKind === "timeout" && !timeoutRestarted);
-      if (restartKind && canRestart) {
-        if (restartKind === "post-pairing") {
-          postPairingRestarted = true;
-        } else {
-          timeoutRestarted = true;
-        }
-        params.runtime.log(info(getLoginSocketRestartMessage(restartKind)));
+      if (
+        (statusCode === POST_PAIRING_RESTART_STATUS || statusCode === TIMED_OUT_STATUS) &&
+        !restartedStatuses.has(statusCode)
+      ) {
+        restartedStatuses.add(statusCode);
+        params.runtime.log(
+          info(
+            statusCode === TIMED_OUT_STATUS
+              ? WHATSAPP_LOGIN_TIMEOUT_RESTART_MESSAGE
+              : WHATSAPP_LOGIN_RESTART_MESSAGE,
+          ),
+        );
         const replacementFailure = await replaceLoginSocket();
         if (replacementFailure) {
           return replacementFailure;
@@ -387,7 +340,7 @@ export async function waitForWhatsAppLoginResult(params: {
       }
 
       if (statusCode === LOGGED_OUT_STATUS) {
-        if (loggedOutRestarted) {
+        if (restartedStatuses.has(LOGGED_OUT_STATUS)) {
           return {
             outcome: "logged-out",
             message: WHATSAPP_LOGGED_OUT_RELINK_MESSAGE,
@@ -419,7 +372,7 @@ export async function waitForWhatsAppLoginResult(params: {
             };
           }
         }
-        loggedOutRestarted = true;
+        restartedStatuses.add(LOGGED_OUT_STATUS);
         const replacementFailure = await replaceLoginSocket({ closeCurrent: false });
         if (replacementFailure) {
           return replacementFailure;
@@ -656,12 +609,29 @@ export class WhatsAppConnectionController {
       this.throwIfSetupStopped();
       this.socketRef.current = sock;
       const placeholderListener = {} as ManagedWhatsAppListener;
-      connection = createLiveConnection({
+      const openedAfterRecentInbound =
+        this.reconnectAttempts > 0 &&
+        this.lastHandledInboundAt !== null &&
+        Date.now() - this.lastHandledInboundAt <= this.appSilenceTimeoutMs;
+      const close = createDeferred<WebListenerCloseReason>();
+      connection = {
         connectionId: params.connectionId,
+        startedAt: Date.now(),
         sock,
         listener: placeholderListener,
-        openedAfterRecentInbound: this.isOpeningAfterRecentInbound(),
-      });
+        heartbeat: null,
+        watchdogTimer: null,
+        lastInboundAt: null,
+        lastTransportActivityAt: Date.now(),
+        handledMessages: 0,
+        unregisterUnhandled: null,
+        unregisterTransportActivity: null,
+        openedAfterRecentInbound,
+        backgroundTasks: new Set<Promise<unknown>>(),
+        closePromise: close.promise,
+        resolveClose: close.resolve,
+        socketClosed: false,
+      };
       const listenerTask = params.createListener({ sock, connection });
       let listener: ManagedWhatsAppListener;
       try {
@@ -1056,13 +1026,6 @@ export class WhatsAppConnectionController {
       }
       ws.removeListener?.("frame", noteActivity);
     };
-  }
-
-  private isOpeningAfterRecentInbound(): boolean {
-    if (this.reconnectAttempts <= 0 || this.lastHandledInboundAt === null) {
-      return false;
-    }
-    return Date.now() - this.lastHandledInboundAt <= this.appSilenceTimeoutMs;
   }
 
   private stopDisconnectRetries(): void {

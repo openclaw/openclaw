@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
@@ -332,7 +333,8 @@ export function readAgentDeletionJournal(
   // Worker commit guards must read current authority without joining the worker's writer lock.
   return withExistingOpenClawStateDatabaseCurrentReadOnly(
     (database) => readAgentDeletionJournalInDatabase(database, agentId, purpose),
-    options,
+    // Workers can read the live fence directly; repeated inspection children would block their actor.
+    purpose === "runtime" && !isMainThread ? { ...options, allowNativeRead: true } : options,
   );
 }
 

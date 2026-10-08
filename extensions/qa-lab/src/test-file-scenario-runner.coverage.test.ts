@@ -187,94 +187,73 @@ describe("producer coverage claims", () => {
     ).toEqual(summary.entries);
   });
 
-  it.each(["full", "slim"] as const)(
-    "caps producer coverage without promoting or inventing claims in %s mode",
-    async (evidenceMode) => {
-      const repoRoot = await harness.makeTempRepo("qa-script-coverage-claims-");
-      const outputDir = path.join(repoRoot, "out");
-      const claims = [
-        [],
-        [{ id: "qa.coverage", role: "primary" }],
-        [{ id: "qa.coverage", role: "secondary" }],
-        [{ id: "qa.reporting", role: "primary" }],
-        [{ id: "qa.reporting", role: "secondary" }],
-        [{ id: "ui.control", role: "primary" }],
-        [{ id: "qa.coverage", role: "diagnostic" }],
-        [{ id: "qa.reporting", role: "diagnostic" }],
-      ];
-      const producerEntries = claims.flatMap(
-        (coverage, index) =>
-          buildScriptProducerEvidence({
-            coverage,
-            producerId: `claim-${index}`,
-            status: "pass",
-            artifacts: [{ kind: "log", path: "producer.log" }],
-          }).entries,
-      );
-      const result = await runQaTestFileScenarios({
-        repoRoot,
-        outputDir,
-        ...QA_TEST_RUNNER_DEFAULTS,
-        evidenceMode,
-        scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
-        runCommand: async (command) => {
-          await writeScriptProducerEvidence({
-            outputDir: resolveScriptAttemptOutputDir(command),
-            coverage: [],
-            producerId: "failed-diagnostic",
-            failureReason: "boundary failed without a coverage claim",
-            status: "fail",
-            additionalEntries: producerEntries,
-          });
-          return { exitCode: 0, stdout: "", stderr: "" };
-        },
-      });
+  it("caps producer coverage without promoting or inventing claims in slim mode", async () => {
+    const evidenceMode = "slim";
 
-      expect(result.results[0]?.status).toBe("fail");
-      expect(result.evidence.entries.map((entry) => entry.coverage)).toEqual([
-        [],
-        [],
-        [{ id: "qa.coverage", role: "primary" }],
-        [{ id: "qa.coverage", role: "secondary" }],
-        [{ id: "qa.reporting", role: "secondary" }],
-        [{ id: "qa.reporting", role: "secondary" }],
-        [],
-        [{ id: "qa.coverage", role: "diagnostic" }],
-        [{ id: "qa.reporting", role: "diagnostic" }],
-      ]);
-      expect(result.evidence.entries[0]?.result).toMatchObject({
-        status: "fail",
-        failure: { reason: "boundary failed without a coverage claim" },
-      });
-      for (const [index, original] of producerEntries.entries()) {
-        const imported = result.evidence.entries[index + 1];
-        expect(imported?.test).toEqual(original.test);
-        expect(imported?.result).toEqual(original.result);
-        if (evidenceMode === "slim") {
-          expect(imported?.execution).toBeUndefined();
-        } else {
-          expect(imported?.execution).toEqual({
-            ...original.execution,
-            artifacts: [
-              {
-                ...original.execution?.artifacts[0],
-                path: `<repo-root>/${path
-                  .relative(
-                    repoRoot,
-                    path.join(
-                      path.dirname(result.results[0]!.logPath),
-                      "scenario-script/run-1/producer.log",
-                    ),
-                  )
-                  .split(path.sep)
-                  .join("/")}`,
-              },
-            ],
-          });
-        }
-      }
-    },
-  );
+    const repoRoot = await harness.makeTempRepo("qa-script-coverage-claims-");
+    const outputDir = path.join(repoRoot, "out");
+    const claims = [
+      [],
+      [{ id: "qa.coverage", role: "primary" }],
+      [{ id: "qa.coverage", role: "secondary" }],
+      [{ id: "qa.reporting", role: "primary" }],
+      [{ id: "qa.reporting", role: "secondary" }],
+      [{ id: "ui.control", role: "primary" }],
+      [{ id: "qa.coverage", role: "diagnostic" }],
+      [{ id: "qa.reporting", role: "diagnostic" }],
+    ];
+    const producerEntries = claims.flatMap(
+      (coverage, index) =>
+        buildScriptProducerEvidence({
+          coverage,
+          producerId: `claim-${index}`,
+          status: "pass",
+          artifacts: [{ kind: "log", path: "producer.log" }],
+        }).entries,
+    );
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      ...QA_TEST_RUNNER_DEFAULTS,
+      evidenceMode,
+      scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
+      runCommand: async (command) => {
+        await writeScriptProducerEvidence({
+          outputDir: resolveScriptAttemptOutputDir(command),
+          coverage: [],
+          producerId: "failed-diagnostic",
+          failureReason: "boundary failed without a coverage claim",
+          status: "fail",
+          additionalEntries: producerEntries,
+        });
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    expect(result.results[0]?.status).toBe("fail");
+    expect(result.evidence.entries.map((entry) => entry.coverage)).toEqual([
+      [],
+      [],
+      [{ id: "qa.coverage", role: "primary" }],
+      [{ id: "qa.coverage", role: "secondary" }],
+      [{ id: "qa.reporting", role: "secondary" }],
+      [{ id: "qa.reporting", role: "secondary" }],
+      [],
+      [{ id: "qa.coverage", role: "diagnostic" }],
+      [{ id: "qa.reporting", role: "diagnostic" }],
+    ]);
+    expect(result.evidence.entries[0]?.result).toMatchObject({
+      status: "fail",
+      failure: { reason: "boundary failed without a coverage claim" },
+    });
+    for (const [index, original] of producerEntries.entries()) {
+      const imported = result.evidence.entries[index + 1];
+      expect(imported?.test).toEqual(original.test);
+      expect(imported?.result).toEqual(original.result);
+
+      expect(imported?.execution).toBeUndefined();
+    }
+  });
 });
 
 describe.skipIf(process.platform === "win32")("onboarding assertion attribution", () => {

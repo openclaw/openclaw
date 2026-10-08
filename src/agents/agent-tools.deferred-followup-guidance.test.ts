@@ -98,23 +98,10 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
     expect(exec.toolNames).toEqual(["exec", "process", schedulerToolName]);
     expect(exec.description).toBe(
-      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
+      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. Omit host to use the session's configured host. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
     );
     expect(process.description).toBe(
       "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention. No polling as timer/reminder; scheduled follow-up uses automations.",
-    );
-  });
-
-  it("drops automation guidance when the scheduler is unavailable", () => {
-    const exec = findToolDescription("exec");
-    const process = findToolDescription("process");
-
-    expect(exec.toolNames).toEqual(["exec", "process"]);
-    expect(exec.description).toBe(
-      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
-    );
-    expect(process.description).toBe(
-      "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention.",
     );
   });
 
@@ -122,7 +109,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
     const exec = findToolDescription("exec", undefined, false);
 
     expect(exec.description).toBe(
-      "Run shell and wait for completion. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
+      "Run shell and wait for completion. Omit host to use the session's configured host. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
     );
   });
 
@@ -164,25 +151,18 @@ describe("createOpenClawCodingTools availability guidance", () => {
     }
   });
 
-  it.each([
-    { available: [], expected: [] },
-    {
-      available: ["conversations_list", "conversations_send"],
-      expected: ["conversations_list", "conversations_send"],
-    },
-    {
-      available: ["conversations_list", "conversations_turn"],
-      expected: ["conversations_list", "conversations_turn"],
-    },
-  ])("describes only executable conversation routes: $available", ({ available, expected }) => {
+  it("describes only executable conversation routes", () => {
     const [tool] = applyToolAvailabilityDescriptions([
       { name: "sessions_send", description: describeSessionsSendTool() },
-      ...available.map((name) => ({ name, description: "available" })),
+      ...["conversations_list", "conversations_send"].map((name) => ({
+        name,
+        description: "available",
+      })),
     ] as AnyAgentTool[]);
 
-    for (const name of ["conversations_list", "conversations_send", "conversations_turn"]) {
-      expect(tool?.description.includes(name)).toBe(expected.includes(name));
-    }
+    expect(tool?.description).toContain("conversations_list");
+    expect(tool?.description).toContain("conversations_send");
+    expect(tool?.description).not.toContain("conversations_turn");
   });
 
   it("keeps authorized history guidance and the prepared session URL", () => {

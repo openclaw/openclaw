@@ -55,10 +55,8 @@ import {
   listSessionEntryRows,
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
-import {
-  observeSessionMaintenanceChanges,
-  observeSessionMaintenanceCompletion,
-} from "./session-accessor.sqlite-maintenance.test-support.js";
+import { observeSessionMaintenanceCompletion } from "./session-accessor.sqlite-maintenance-completion.test-support.js";
+import { observeSessionMaintenanceChanges } from "./session-accessor.sqlite-maintenance.test-support.js";
 import { forkSessionEntryFromParentTarget } from "./session-accessor.sqlite-parent-session.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
@@ -1359,7 +1357,7 @@ describe("sqlite session normalization", () => {
       chatType: "group",
       displayName: "telegram:g-bucephalus-+-topics",
       sessionId: newSessionId,
-      status: "running",
+      status: undefined,
       updatedAt: 1_782_997_881_018,
     });
     await appendTranscriptEvent(

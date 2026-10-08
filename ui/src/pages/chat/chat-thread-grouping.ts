@@ -133,10 +133,8 @@ function stampReplyAttribution(
         : item.kind === "stream"
           ? stateBefore.get(item.key)
           : undefined;
-    states[index] = known ?? next;
-    if (known) {
-      next = known;
-    }
+    next = known ?? next;
+    states[index] = next;
   }
   for (const [index, item] of items.entries()) {
     const { sender, message, turnSource } = states[index]!;
@@ -412,6 +410,20 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   );
 }
 
+function groupHasFailedResult(group: MessageGroup): boolean {
+  return group.messages.some(({ message }) =>
+    extractToolCardsCached(message).some(isToolCardError),
+  );
+}
+
+/** A group holding the message that ended its run in failure; it marks where the run stopped. */
+export function groupEndsRunInFailure(group: MessageGroup): boolean {
+  return group.messages.some(
+    ({ message }) =>
+      assistantMessageIsInterrupted(message) || asRecord(message)?.stopReason === "error",
+  );
+}
+
 function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
   return group.visibleContent === "non-text" || (includeText && group.visibleContent === "text");
 }
@@ -549,6 +561,33 @@ export function collapseCompletedTurnWork(
     while (segmentStart > 0 && isTurnOutputGroup(turn[segmentStart - 1]!)) {
       segmentStart -= 1;
     }
+    // A turn that handed off keeps its work in place: while it waits, between
+    // the wait ending and the resume, and once the resumed run has answered in
+    // the same block. Its closing line reports the whole request instead of a
+    // rollup timed for the last run.
+    if (turn.some((item) => item.kind === "notice" && item.handoffBoundary)) {
+      // Work the answering run recorded after its answer, such as the step
+      // that sent it, still goes above that answer, where a rollup puts it, so
+      // the answer stays last. Nothing moves past a handoff, which keeps a
+      // handoff's own sentence above its work, and nothing moves when any of
+      // it failed or ended the run: that stays where it happened.
+      const answer = finalReplyIndex >= 0 ? terminalReply : undefined;
+      const trailing = turn.slice(finalReplyIndex + 1);
+      const answerLast =
+        answer?.runId !== undefined &&
+        trailing.length > 0 &&
+        trailing.every(
+          (item) =>
+            isCollapsibleWorkGroup(item) &&
+            item.runId === answer.runId &&
+            !groupHasFailedResult(item) &&
+            !groupEndsRunInFailure(item),
+        );
+      result.push(
+        ...(answerLast ? [...turn.slice(0, finalReplyIndex), ...trailing, answer] : turn),
+      );
+      continue;
+    }
     // Independent reply-less runs retain their own activity rollup, rather than
     // becoming work for an earlier answer merely because no user spoke between them.
     const replyRunIds = runIdsWithVisibleReplies(turn);
@@ -570,11 +609,7 @@ export function collapseCompletedTurnWork(
       if (
         index !== finalReplyIndex &&
         isCollapsibleWorkGroup(item) &&
-        (finalReplyIndex < 0 ||
-          index < finalReplyIndex ||
-          !item.messages.some(({ message }) =>
-            extractToolCardsCached(message).some(isToolCardError),
-          ))
+        (finalReplyIndex < 0 || index < finalReplyIndex || !groupHasFailedResult(item))
       ) {
         groups.push(item);
         if (precedingAnswerKey) {
@@ -667,6 +702,61 @@ function runIdsWithVisibleReplies(items: CompletedTurnRenderItem[]): Set<string>
   return replyRunIds;
 }
 
+// Adjacent activity is one disclosure even when automatic continuations use
+// new run IDs. Visible content, not other output elsewhere in those runs,
+// bounds the log. Reuse prepared visibility and cached cards in this pass.
+function isActivityGroup(group: MessageGroup): boolean {
+  if (group.isStreaming || group.visibleContent === "non-text" || hasForwardedSource(group)) {
+    return false;
+  }
+  // Tool-call content is normalized to the tool role. Its original assistant
+  // envelope still owns narration and terminal outcomes; do not hide those.
+  if (
+    group.messages.some(({ message, hasVisibleContent }) => {
+      const record = asRecord(message);
+      return (
+        record?.role === "assistant" &&
+        (hasVisibleContent ||
+          resolveAssistantReplyPhase(message) === "final_answer" ||
+          assistantMessageIsInterrupted(message) ||
+          record.stopReason === "error")
+      );
+    })
+  ) {
+    return false;
+  }
+  const role = group.role.toLowerCase();
+  return (
+    role === "tool" ||
+    (role === "assistant" &&
+      group.visibleContent === "none" &&
+      group.messages.some(({ message }) => extractToolCardsCached(message).length > 0))
+  );
+}
+
+function activityRun(groups: MessageGroup[]): ActivityRunRenderItem {
+  return { kind: "activity-run", key: `activity:${groups[0]!.key}`, groups };
+}
+
+/**
+ * One log for two operation rows that nothing visible separates, keeping the
+ * first row's identity. Undefined when either side is not an operation row.
+ */
+export function joinActivityRuns(
+  first: CompletedTurnRenderItem | ActivityRunRenderItem,
+  next: CompletedTurnRenderItem | ActivityRunRenderItem,
+): ActivityRunRenderItem | undefined {
+  const groupsOf = (item: CompletedTurnRenderItem | ActivityRunRenderItem) =>
+    item.kind === "activity-run"
+      ? item.groups
+      : item.kind === "group" && isActivityGroup(item)
+        ? [item]
+        : undefined;
+  const before = groupsOf(first);
+  const after = groupsOf(next);
+  return before && after ? activityRun([...before, ...after]) : undefined;
+}
+
 /** Presentation-only rollup for tool groups separated by projected turn boundaries. */
 export function coalesceActivityRuns(
   items: CompletedTurnRenderItem[],
@@ -675,37 +765,6 @@ export function coalesceActivityRuns(
   if (opts.searchActive) {
     return items;
   }
-  // Adjacent activity is one disclosure even when automatic continuations use
-  // new run IDs. Visible content, not other output elsewhere in those runs,
-  // bounds the log. Reuse prepared visibility and cached cards in this pass.
-  const isActivity = (group: MessageGroup): boolean => {
-    if (group.isStreaming || group.visibleContent === "non-text" || hasForwardedSource(group)) {
-      return false;
-    }
-    // Tool-call content is normalized to the tool role. Its original assistant
-    // envelope still owns narration and terminal outcomes; do not hide those.
-    if (
-      group.messages.some(({ message, hasVisibleContent }) => {
-        const record = asRecord(message);
-        return (
-          record?.role === "assistant" &&
-          (hasVisibleContent ||
-            resolveAssistantReplyPhase(message) === "final_answer" ||
-            assistantMessageIsInterrupted(message) ||
-            record.stopReason === "error")
-        );
-      })
-    ) {
-      return false;
-    }
-    const role = group.role.toLowerCase();
-    return (
-      role === "tool" ||
-      (role === "assistant" &&
-        group.visibleContent === "none" &&
-        group.messages.some(({ message }) => extractToolCardsCached(message).length > 0))
-    );
-  };
   const result: Array<CompletedTurnRenderItem | ActivityRunRenderItem> = [];
   let groups: MessageGroup[] = [];
   const flush = () => {
@@ -713,13 +772,11 @@ export function coalesceActivityRuns(
     if (!first) {
       return;
     }
-    result.push(
-      groups.length === 1 ? first : { kind: "activity-run", key: `activity:${first.key}`, groups },
-    );
+    result.push(groups.length === 1 ? first : activityRun(groups));
     groups = [];
   };
   for (const item of items) {
-    if (item.kind === "group" && isActivity(item)) {
+    if (item.kind === "group" && isActivityGroup(item)) {
       groups.push(item);
       continue;
     }

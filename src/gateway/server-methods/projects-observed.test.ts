@@ -17,7 +17,8 @@ vi.mock("../session-utils.js", () => ({
   loadCombinedSessionStoreForGatewayCore: () => ({ store: seededSessions.store }),
 }));
 
-vi.mock("../../config/sessions/combined-store-gateway.js", () => ({
+// mock-isolation: Supply observed session rows without opening real session stores.
+vi.mock("../../config/sessions/combined-store-gateway-read.js", () => ({
   loadCombinedSessionStoreForGatewayCoreAsync: async () => ({ store: seededSessions.store }),
 }));
 

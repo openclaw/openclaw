@@ -92,10 +92,7 @@ export async function resolveAgentTurnAttachments(params: {
   const resultIndexes: number[] = [];
   const resolvedHistoryImages: RecentInboundHistoryImage[] = [];
   const resolveImageAttachment = async (attachment: MediaAttachment): Promise<boolean> => {
-    if (!runtime.isImageAttachment(attachment)) {
-      return false;
-    }
-    if (!normalizeOptionalString(attachment.path)) {
+    if (!runtime.isImageAttachment(attachment) || !normalizeOptionalString(attachment.path)) {
       return false;
     }
     try {

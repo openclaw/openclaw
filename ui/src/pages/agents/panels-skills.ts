@@ -15,32 +15,30 @@ import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
   computeSkillMissing,
   computeSkillReasons,
+  isWorkshopSkill,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
+import { renderAgentConfigActions, type AgentConfigActions } from "./config-actions.ts";
 
 registerSettingsEnglish();
 
-export function renderAgentSkills(params: {
-  agentId: string;
-  report: SkillStatusReport | null;
-  loading: boolean;
-  error: string | null;
-  activeAgentId: string | null;
-  configForm: Record<string, unknown> | null;
-  configLoading: boolean;
-  configSaving: boolean;
-  configDirty: boolean;
-  filter: string;
-  canPatchConfig: boolean;
-  canUpdateConfig: boolean;
-  onFilterChange: (next: string) => void;
-  onRefresh: () => void;
-  onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
-  onClear: (agentId: string) => void;
-  onDisableAll: (agentId: string) => void;
-  onConfigReload: () => void;
-  onConfigSave: () => void;
-}) {
+export function renderAgentSkills(
+  params: AgentConfigActions & {
+    agentId: string;
+    report: SkillStatusReport | null;
+    loading: boolean;
+    error: string | null;
+    activeAgentId: string | null;
+    configForm: Record<string, unknown> | null;
+    filter: string;
+    canPatchConfig: boolean;
+    onFilterChange: (next: string) => void;
+    onRefresh: () => void;
+    onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
+    onClear: (agentId: string) => void;
+    onDisableAll: (agentId: string) => void;
+  },
+) {
   const editable =
     params.canUpdateConfig &&
     Boolean(params.configForm) &&
@@ -72,7 +70,7 @@ export function renderAgentSkills(params: {
     : rawSkills;
   const groups = groupSkills(filtered);
   const enabledCount = usingAllowlist
-    ? rawSkills.filter((skill) => allowSet.has(skill.name)).length
+    ? rawSkills.filter((skill) => isWorkshopSkill(skill) || allowSet.has(skill.name)).length
     : rawSkills.length;
   const totalCount = rawSkills.length;
 
@@ -119,23 +117,14 @@ export function renderAgentSkills(params: {
           >
             ${t("common.reset")}
           </button>
-          <button
-            class="btn btn--sm"
-            ?disabled=${params.configLoading}
-            @click=${params.onConfigReload}
-          >
-            ${t("common.reloadConfig")}
-          </button>
-          <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? t("common.loading") : t("common.refresh")}
-          </button>
-          <button
-            class="btn btn--sm primary"
-            ?disabled=${!params.canUpdateConfig || params.configSaving || !params.configDirty}
-            @click=${params.onConfigSave}
-          >
-            ${params.configSaving ? t("common.saving") : t("common.save")}
-          </button>
+          ${renderAgentConfigActions(
+            params,
+            html`
+              <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
+                ${params.loading ? t("common.loading") : t("common.refresh")}
+              </button>
+            `,
+          )}
         `,
       },
       html`
@@ -176,7 +165,8 @@ export function renderAgentSkills(params: {
                         </summary>
                         <div class="list skills-grid">
                           ${group.skills.map((skill) => {
-                            const enabled = !usingAllowlist || allowSet.has(skill.name);
+                            const learned = isWorkshopSkill(skill);
+                            const enabled = learned || !usingAllowlist || allowSet.has(skill.name);
                             const missing = computeSkillMissing(skill);
                             const reasons = computeSkillReasons(skill);
                             return html`
@@ -201,11 +191,18 @@ export function renderAgentSkills(params: {
                                         </span>`
                                       : nothing
                                   }
+                                  ${
+                                    learned
+                                      ? html`<span class="settings-row__desc">
+                                          ${t("agents.skillsPanel.learnedAlwaysOn")}
+                                        </span>`
+                                      : nothing
+                                  }
                                 </div>
                                 <div class="settings-row__control">
                                   ${renderSettingsToggle({
                                     checked: enabled,
-                                    disabled: !editable,
+                                    disabled: learned || !editable,
                                     ariaLabel: skill.name,
                                     onChange: (checked) =>
                                       params.onToggle(params.agentId, skill.name, checked),

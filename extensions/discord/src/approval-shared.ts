@@ -17,12 +17,9 @@ import { getDiscordExecApprovalApprovers } from "./exec-approvals.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 
-function isDiscordApprovalAccountEligible(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  request: ApprovalRequest;
-  configOverride?: DiscordExecApprovalConfig | null;
-}): boolean {
+function isDiscordApprovalAccountEligible(
+  params: Parameters<typeof shouldHandleDiscordApprovalRequest>[0],
+): boolean {
   const account = resolveDiscordAccount(params);
   const config = params.configOverride ?? account.config.execApprovals;
   return (

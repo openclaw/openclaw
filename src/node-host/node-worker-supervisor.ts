@@ -49,7 +49,6 @@ import {
   createNodeWorkerLaunchRecovery,
   type NodeWorkerRecovery,
 } from "./node-worker-supervisor-recovery.js";
-import { joinNodeWorkerTurnCancellation } from "./node-worker-turn-lifecycle.js";
 import { NodeWorkerTurnStore, type NodeWorkerTurnReceipt } from "./node-worker-turn-store.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
@@ -76,14 +75,18 @@ class NodeWorkerSupervisor {
 
   constructor(options: NodeWorkerSupervisorOptions = {}) {
     const env = options.env ?? process.env;
+    const startup = {
+      nativeInferenceSnapshot: options.nativeInferenceSnapshot,
+      workerEnv: snapshotNodeWorkerEnv(env),
+      engineEnv: { ...process.env, ...env },
+    };
     const bundleRoot = path.resolve(
       options.bundleRoot ?? path.join(resolveStateDir(env), "node-host"),
     );
     this.journal = new NodeWorkerJournalWorker({ env });
     this.store = new NodeWorkerLaunchStore(this.journal);
     this.turns = new NodeWorkerTurnStore(this.journal);
-    this.workerEnv = snapshotNodeWorkerEnv(env);
-    const engineEnv = { ...process.env, ...env };
+    this.workerEnv = startup.workerEnv;
     const containerEngine = options.containerEngine;
     this.containerLifecycle = options.containerEngine
       ? new NodeWorkerContainerLifecycle(options.containerEngine, bundleRoot, this.store)
@@ -102,7 +105,7 @@ class NodeWorkerSupervisor {
     });
     this.children = new NodeWorkerChildLifecycle({
       bundleRoot,
-      engineEnv,
+      ...startup,
       store: this.store,
       turns: this.turns,
       capacity: this.capacity,
@@ -353,7 +356,6 @@ class NodeWorkerSupervisor {
       workerEnv: homeDir ? snapshotNodeWorkerEnv(this.workerEnv, homeDir) : this.workerEnv,
       input,
       descriptor,
-      planHash: claimInput.planHash,
       supervisor,
       signal,
       claim: claimInput,
@@ -470,12 +472,24 @@ class NodeWorkerSupervisor {
   async cancel(
     expected: NodeWorkerSupervisorIdentity,
   ): Promise<NodeWorkerLaunchReceipt | undefined> {
-    return await joinNodeWorkerTurnCancellation({
-      expected,
-      admissions: this.admissions,
-      cancelTurn: () => this.cancelTurn(expected),
-      readReceipt: () => this.turns.getMatching(expected),
-    });
+    const admission = [...this.admissions.values()].find((pending) =>
+      nodeWorkerTurnMatchesIdentity(pending.identity, expected),
+    );
+    const cancellation = this.cancelTurn(expected);
+    if (!admission) {
+      return cancellation;
+    }
+    const [cancelled, admitted] = await Promise.allSettled([cancellation, admission.done]);
+    if (cancelled.status === "rejected") {
+      throw cancelled.reason;
+    }
+    if (
+      admitted.status === "rejected" &&
+      (!admission.signal.aborted || admitted.reason !== admission.signal.reason)
+    ) {
+      throw admitted.reason;
+    }
+    return this.turns.getMatching(expected);
   }
 
   observeProcesses(input: NodeWorkerProcessInput, signal?: AbortSignal) {

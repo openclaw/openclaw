@@ -7,10 +7,11 @@ import {
   withSessionPendingInputPersistence,
   publishTranscriptUpdate,
   resolveSessionTranscriptRuntimeTarget,
-  rewriteTranscriptMessageAtAnchor,
   type TranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
+import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
+import { createDynamicSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
@@ -146,7 +147,7 @@ async function persistUserTurnTranscript(
     assertCurrent();
     appended = anchor ? { ...appended, anchor } : appended;
   }
-  if (!appended.anchor || appended.message.role !== "user") {
+  if (!appended.anchor) {
     return undefined;
   }
   if (committedWithoutAnchor && appended.appended) {
@@ -186,7 +187,7 @@ async function confirmPersistedSteerTargetRunId(params: {
     }
   | undefined
 > {
-  const rewritten = await rewriteTranscriptMessageAtAnchor(params.admission, (message) => {
+  const rewritten = await rewritePreparedTranscriptMessageAtAnchor(params.admission, (message) => {
     if (!isUserMessage(message)) {
       return undefined;
     }
@@ -423,18 +424,13 @@ export function createUserTurnTranscriptRecorder(
     await admissionWrite;
   };
 
-  const persistPrepared = async (options: {
-    waitForRuntime: boolean;
-    skipWhenBlocked: boolean;
-    message?: PersistedUserTurnMessage;
-    target?: UserTurnTranscriptTargetResolver;
-    updateMode?: UserTurnTranscriptUpdateMode;
-    cwd?: string;
-    expectedSessionId?: string;
-    expectedSessionState?: SessionTranscriptTurnPersistOptions["expectedSessionState"];
-    sessionLifecyclePatch?: SessionTranscriptTurnPersistOptions["sessionLifecyclePatch"];
-    retryIfUnpersisted?: boolean;
-  }): Promise<UserTurnTranscriptPersistResult | undefined> => {
+  const persistPrepared = async (
+    options: NonNullable<Parameters<UserTurnTranscriptRecorder["persistApproved"]>[0]> & {
+      waitForRuntime: boolean;
+      skipWhenBlocked: boolean;
+      message?: PersistedUserTurnMessage;
+    },
+  ): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (options.skipWhenBlocked && blocked) {
       return undefined;
     }
@@ -559,11 +555,15 @@ export function createUserTurnTranscriptRecorder(
     },
     resolveMessage: resolveMessageForPersistence,
     assertOriginalInputCommit: params.assertOriginalInputCommit
-      ? () => {
-          if (!blocked && !persisted && !runtimePersisted && !pendingInput) {
-            params.assertOriginalInputCommit!();
-          }
-        }
+      ? createDynamicSessionSourceAssertion(
+          () =>
+            !blocked && !persisted && !runtimePersisted && !pendingInput
+              ? params.assertOriginalInputCommit
+              : undefined,
+          () => {
+            throw new Error("Original input custody changed before transcript commit");
+          },
+        )
       : undefined,
     stageApproved: (options) => {
       staging ??= (async () => {

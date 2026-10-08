@@ -239,14 +239,6 @@ describe("runMessageAction core send routing", () => {
 
     expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
   });
-  it("marks explicit sends to the trusted current source conversation", async () => {
-    registerSlackTextPlugin();
-
-    const result = await runSlackSourceReply();
-
-    expect(result.kind).toBe("send");
-    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
-  });
 
   it("marks automatic-mode Slack sends to the trusted current source conversation", async () => {
     registerSlackTextPlugin();

@@ -37,7 +37,13 @@ import {
   normalizeOptionalString,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveUserPath, sleep } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  isTerminalComfyHistory,
+  type ComfyHistoryEntry,
+  type ComfyOutputFile,
+  type ComfyOutputKind,
+} from "./workflow-history.js";
 
 const DEFAULT_COMFY_LOCAL_BASE_URL = "http://127.0.0.1:8188";
 const DEFAULT_COMFY_CLOUD_BASE_URL = "https://cloud.comfy.org";
@@ -50,23 +56,12 @@ export const DEFAULT_COMFY_MODEL = "workflow";
 
 type ComfyMode = "local" | "cloud";
 type ComfyCapability = "image" | "music" | "video";
-type ComfyOutputKind = "audio" | "gifs" | "images" | "videos";
 type ComfyWorkflow = Record<string, unknown>;
 type ComfyProviderConfig = Record<string, unknown>;
 type ComfyFetchGuardParams = Parameters<typeof fetchWithSsrFGuard>[0];
 type ComfyDispatcherPolicy = ComfyFetchGuardParams["dispatcherPolicy"];
 type ComfyPromptResponse = {
   prompt_id?: string;
-};
-type ComfyOutputFile = {
-  filename?: string;
-  name?: string;
-  subfolder?: string;
-  type?: string;
-};
-type ComfyHistoryOutputEntry = Partial<Record<ComfyOutputKind, ComfyOutputFile[]>>;
-type ComfyHistoryEntry = {
-  outputs?: Record<string, ComfyHistoryOutputEntry>;
 };
 type ComfyUploadResponse = {
   name?: string;
@@ -432,14 +427,12 @@ async function waitForComfyHistory(params: {
         requestTimeoutMs,
       );
       const entry = extractHistoryEntry(history, params.promptId);
-      if (entry?.outputs && Object.keys(entry.outputs).length > 0) {
+      if (entry && isTerminalComfyHistory(entry, params.headers)) {
         return entry;
       }
     }
     const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
-    await new Promise((resolve) => {
-      setTimeout(resolve, pollDelayMs);
-    });
+    await sleep(pollDelayMs);
   }
 }
 

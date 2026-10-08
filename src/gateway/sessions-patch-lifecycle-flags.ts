@@ -1,7 +1,7 @@
 // Applies archive, pin, snooze, and unread facts to the projected session entry.
 import type { ErrorShape, SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
 
 export function applySessionPatchLifecycleFlags(params: {

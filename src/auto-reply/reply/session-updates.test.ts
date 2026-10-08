@@ -34,6 +34,16 @@ const {
 // mock-isolation: Session classification is outside skill snapshot publication.
 vi.mock("../../agents/sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatus: () => ({ sandboxed: false, sandboxRequired: false }),
+  withSandboxRuntimeStatusInWorker: async (
+    _params: unknown,
+    source: { assertCurrent: () => void },
+    consume: (sandbox: { sandboxed: boolean; sandboxRequired: boolean }) => Promise<unknown>,
+  ) => {
+    source.assertCurrent();
+    const result = await consume({ sandboxed: false, sandboxRequired: false });
+    source.assertCurrent();
+    return result;
+  },
 }));
 
 // mock-isolation: Use a fixed policy while testing skill ownership and publication.
@@ -67,8 +77,7 @@ vi.mock("../../config/sessions.js", () => ({
 
 // mock-isolation: Skill-refresh cases control persistence acknowledgments without opening SQLite.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: vi.fn(),
-  updateSessionEntry: async (...args: unknown[]) => {
+  patchSessionEntryCore: async (...args: unknown[]) => {
     const entry = await updateSessionEntryMock(...args);
     loadSessionEntryMock.mockReturnValue(entry ?? undefined);
     return entry;
@@ -167,6 +176,7 @@ describe("ensureSkillSnapshot", () => {
         sessionKey,
       },
       expect.any(Function),
+      expect.any(Object),
     );
     expect(result.sessionEntry).toBeUndefined();
     expect(result.systemSent).toBe(false);

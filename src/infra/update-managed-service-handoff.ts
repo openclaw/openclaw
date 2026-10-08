@@ -26,6 +26,7 @@ import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { resolveInstallationTarget } from "./installation-target-context.js";
 import { resolveNodeSqliteLocation } from "./node-sqlite.js";
+import { resolveOpenClawCliEntryPath } from "./openclaw-cli-invocation.js";
 import { probePortUsage } from "./ports-probe.js";
 import type { GatewayRestartIntent } from "./restart-intent.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
@@ -39,6 +40,7 @@ import { applyDevUpdateTargetEnv } from "./update-dev-target.js";
 import { resolvePnpmGlobalInstallOwner, verifyPackageUpdateRecovery } from "./update-global.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
+import { MANAGED_HANDOFF_COMMAND_SOURCE } from "./update-managed-service-handoff-command-source.js";
 import {
   formatManagedServiceUpdateCommand,
   resolveManagedServiceCliArgv,
@@ -290,34 +292,7 @@ function openStateDatabase() {
 
 ${MANAGED_HANDOFF_RESULT_SOURCE}
 
-function runServiceCommand(command, args, onSpawn, deadline, timeoutCap) {
-  if (!hasManagedUpdateLease()) return Promise.resolve({ code: 1, stdout: "", stderr: "" });
-  return new Promise((resolve) => {
-    const remaining = deadline === undefined ? params.recoveryTimeoutMs : deadline - Date.now();
-    if (remaining <= 0) return resolve({ code: 1, stdout: "", stderr: "" });
-    let stdout = "",
-      stderr = "";
-    const child = spawn(command, args, {
-      env: params.serviceManagerEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-      killSignal: "SIGKILL",
-      timeout: Math.min(timeoutCap ?? remaining, remaining),
-    });
-    child.stdout?.on("data", (chunk) => {
-      stdout = (stdout + chunk).slice(-8192);
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr = (stderr + chunk).slice(-8192);
-    });
-    child.once("spawn", () => onSpawn?.());
-    child.once("error", (error) => {
-      stderr = String(error);
-    });
-    child.once("close", (code) =>
-      resolve({ code: typeof code === "number" ? code : 1, stdout, stderr }),
-    );
-  });
-}
+${MANAGED_HANDOFF_COMMAND_SOURCE}
 
 ${MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE}
 
@@ -1322,7 +1297,7 @@ async function spawnManagedServiceUpdateHandoff(
   };
   const commandRuntime = {
     execPath: handoffNodeExecutable,
-    argv1: params.argv1 ?? process.argv[1],
+    argv1: resolveOpenClawCliEntryPath(params.argv1 ?? process.argv[1]),
   };
   const commandArgv = params.action
     ? [
@@ -1384,7 +1359,6 @@ async function spawnManagedServiceUpdateHandoff(
     spawnCommand = systemdRun;
   }
   const stateDatabasePath = resolveOpenClawStateSqlitePath(serviceEnv);
-  const parentExitTimeoutMs = owner.parentExitTimeoutMs;
   const preparedEnv = resolveManagedHandoffCommandEnv(serviceEnv, metaPath, metaFile.meta.runId);
   const { nodeExecArgv, readyEnv } = prepareManagedHandoffCliRuntime(
     commandArgv,
@@ -1407,9 +1381,9 @@ async function spawnManagedServiceUpdateHandoff(
     systemdRun: systemdRunPath,
     parentPid,
     parentStartIdentity,
-    parentExitTimeoutMs,
+    parentExitTimeoutMs: owner.parentExitTimeoutMs,
     restartDelayMs: Math.max(0, Math.min(60_000, params.restartDelayMs ?? 0)),
-    parentExitDeadlineAt: Date.now() + parentExitTimeoutMs,
+    parentExitDeadlineAt: Date.now() + owner.parentExitTimeoutMs,
     cwd: dir,
     invocationCwd: params.invocationCwd,
     commandArgv,

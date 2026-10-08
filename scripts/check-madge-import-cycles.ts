@@ -14,7 +14,6 @@ import {
   resolveInstalledNativeTypeScriptCompiler,
   type NativeTypeScriptProject,
 } from "./lib/native-typescript.mts";
-import { visitModuleSpecifiers } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = ["src", "extensions", "ui"] as const;
@@ -23,20 +22,39 @@ const ignoredPathPartPattern =
   /(^|\/)(node_modules|dist|build|coverage|\.artifacts|\.git|assets)(\/|$)/;
 
 function collectStaticModuleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteral[] {
-  const specifiers: ts.StringLiteral[] = [];
-  visitModuleSpecifiers(sourceFile, ({ kind, specifierNode }) => {
-    if ((kind === "import" || kind === "export") && ts.isStringLiteral(specifierNode)) {
-      specifiers.push(specifierNode);
+  return sourceFile.imports.filter((specifier): specifier is ts.StringLiteral => {
+    // Compiler-injected helpers are not source imports.
+    if (!ts.isStringLiteral(specifier) || specifier.pos < 0) {
+      return false;
     }
+    const parent = specifier.parent;
+    return (
+      (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) &&
+      parent.moduleSpecifier === specifier
+    );
   });
-  return specifiers;
 }
 
 async function createImportGraph(files: readonly string[]): Promise<Map<string, string[]>> {
-  const configFileName = path.join(repoRoot, "tsconfig.madge-import-cycles.json");
+  const configFileName = path
+    .join(repoRoot, "tsconfig.madge-import-cycles.json")
+    .split(path.sep)
+    .join("/");
   const absoluteToRepoPath = new Map(
     files.map((file): [string, string] => [path.resolve(repoRoot, file), file]),
   );
+  // Keep one compiler, but release each batch's source trees before loading the next.
+  const batchSize = 256;
+  let batchFiles = files.slice(0, batchSize);
+  const readConfig = () =>
+    JSON.stringify({
+      extends: "./tsconfig.json",
+      // Resolve edges without adding their transitive source trees to the batch.
+      compilerOptions: { noResolve: true },
+      files: batchFiles.map((file) => path.resolve(repoRoot, file)),
+      include: [],
+      exclude: [],
+    });
   const executable = resolveInstalledNativeTypeScriptCompiler().executable;
   const observed: ChildProcess[] = [];
   const compilers: { child: ChildProcess; closed: Promise<void> }[] = [];
@@ -58,13 +76,9 @@ async function createImportGraph(files: readonly string[]): Promise<Map<string, 
       session = createNativeTypeScriptProject({
         cwd: repoRoot,
         configFileName,
-        files: {
-          [configFileName]: JSON.stringify({
-            extends: "./tsconfig.json",
-            files: [...absoluteToRepoPath.keys()],
-            include: [],
-            exclude: [],
-          }),
+        fs: {
+          readFile: (file) => (file === configFileName ? readConfig() : undefined),
+          fileExists: (file) => (file === configFileName ? true : undefined),
         },
       });
     } finally {
@@ -96,33 +110,61 @@ async function createImportGraph(files: readonly string[]): Promise<Map<string, 
     if (compilers.length !== 1 || compilers[0]?.child.pid === undefined) {
       throw new Error("Native TypeScript did not expose exactly one compiler process");
     }
-    const { project } = session;
-    const diagnostics = project.program.getConfigFileParsingDiagnostics();
-    if (diagnostics.length) {
-      throw new Error(formatNativeTypeScriptDiagnostics(diagnostics));
-    }
-    const repoPaths = new Map<ts.Path, string>();
-    const importedPaths = new Map<string, ts.Path[]>();
-    for (const file of files) {
-      const absoluteFile = path.resolve(repoRoot, file);
-      const sourceFile = project.program.getSourceFile(absoluteFile);
-      if (!sourceFile) {
-        throw new Error(`Native TypeScript did not load import-cycle input ${file}`);
+    let snapshot = session.snapshot;
+    const repoPaths = new Map<string, string>();
+    const importedPaths = new Map<string, string[]>();
+    // Empty inventories still validate the project configuration.
+    for (let offset = 0; offset === 0 || offset < files.length; offset += batchSize) {
+      if (offset > 0) {
+        batchFiles = files.slice(offset, offset + batchSize);
+        const previous = snapshot;
+        // A config notification reloads the root list; invalidating files alone does not.
+        snapshot = previous.update({
+          fileNotifications: { changed: [configFileName] },
+          ensurePrograms: true,
+        });
+        previous.dispose();
+        session.api.clearSourceFileCache();
       }
-      const repoPath = absoluteToRepoPath.get(path.resolve(sourceFile.fileName));
-      if (repoPath) {
-        repoPaths.set(sourceFile.path, repoPath);
+      const project = snapshot.getConfiguredProject(configFileName);
+      if (!project) {
+        throw new Error("Native TypeScript did not open the import-cycle batch");
       }
-      const specifiers = collectStaticModuleSpecifiers(sourceFile);
-      const imports = project.checker.getSymbolAtLocation(specifiers).flatMap((symbol) => {
-        const declaration = symbol?.declarations.find(
-          (candidate) => candidate.kind === ts.SyntaxKind.SourceFile,
+      const diagnostics = project.program.getConfigFileParsingDiagnostics();
+      if (diagnostics.length) {
+        throw new Error(formatNativeTypeScriptDiagnostics(diagnostics));
+      }
+      for (const file of batchFiles) {
+        const sourceFile = project.program.getSourceFile(path.resolve(repoRoot, file));
+        if (!sourceFile) {
+          throw new Error(`Native TypeScript did not load import-cycle input ${file}`);
+        }
+        const repoPath = absoluteToRepoPath.get(path.resolve(sourceFile.fileName));
+        if (repoPath) {
+          repoPaths.set(sourceFile.path, repoPath);
+        }
+        const resolved = session.api.batch(
+          ...collectStaticModuleSpecifiers(sourceFile).map((specifier) =>
+            project.program.getResolvedModuleFromModuleSpecifier.gen(
+              specifier,
+              sourceFile.fileName,
+            ),
+          ),
         );
-        return declaration ? [declaration.path] : [];
-      });
-      importedPaths.set(file, imports);
-      // Keep graph edges across files, not every decoded importer and target AST.
-      session.api.clearSourceFileCache();
+        importedPaths.set(
+          file,
+          resolved.flatMap((module) =>
+            module
+              ? [
+                  project.program.getCanonicalFileName(
+                    path.resolve(module.resolvedFileName).split(path.sep).join("/"),
+                  ),
+                ]
+              : [],
+          ),
+        );
+        session.api.clearSourceFileCache();
+      }
     }
     return new Map(
       [...importedPaths].map(([file, imports]) => [

@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
@@ -13,6 +14,10 @@ import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import {
+  groupPresenceConnections,
+  presenceConnectionDescriptions,
+} from "../../lib/presence-connections.ts";
 import {
   presenceViewerActivity,
   presenceActivityLabel,
@@ -380,20 +385,20 @@ function renderDaySessions(
   props: SessionActivityViewProps,
   day: ReturnType<typeof projectSessionActivity>["days"][number],
 ) {
-  if (props.filters.query || props.filters.personId) {
-    return day.sessions.map((row) => renderSessionLink(props.context, row, props.onSummaryRetry));
-  }
+  const renderRow = (row: GatewaySessionRow) =>
+    renderSessionLink(props.context, row, props.onSummaryRetry);
   // GatewaySessionRow.hasAutomation records that an enabled cron job is bound to the session;
   // grouping must consume that fact directly rather than infer automation from titles or keys.
-  const automation = day.sessions.filter((row) => row.hasAutomation === true);
+  const automation =
+    props.filters.query || props.filters.personId
+      ? []
+      : day.sessions.filter((row) => row.hasAutomation === true);
   if (automation.length < 2) {
-    return day.sessions.map((row) => renderSessionLink(props.context, row, props.onSummaryRetry));
+    return day.sessions.map(renderRow);
   }
   const expanded = props.expandedAutomationDays.has(day.key);
   return html`
-    ${day.sessions
-      .filter((row) => row.hasAutomation !== true)
-      .map((row) => renderSessionLink(props.context, row, props.onSummaryRetry))}
+    ${day.sessions.filter((row) => row.hasAutomation !== true).map(renderRow)}
     <button
       type="button"
       class="activity-feed__session activity-feed__automation-group"
@@ -407,11 +412,7 @@ function renderDaySessions(
         >${icons.chevronRight}</span
       >
     </button>
-    ${
-      expanded
-        ? automation.map((row) => renderSessionLink(props.context, row, props.onSummaryRetry))
-        : nothing
-    }
+    ${expanded ? automation.map(renderRow) : nothing}
   `;
 }
 
@@ -423,7 +424,8 @@ function renderIdentityHeader(
   const online = (identity.entries?.length ?? 0) > 0;
   const activity = presenceViewerActivity(identity);
   const status = online ? presenceActivityLabel(activity) : t("activityFeed.offline");
-  const devices = identity.entries ?? [];
+  const entries = identity.entries ?? [];
+  const descriptions = presenceConnectionDescriptions(entries);
   const viewing = resolveViewingNow(identity, rows);
   return html`
     <section class="activity-feed__identity" data-activity-identity=${identity.id}>
@@ -440,37 +442,7 @@ function renderIdentityHeader(
         </div>
         ${renderSettingsStatus({ kind: online && activity !== "unknown" ? (activity === "idle" ? "warn" : "ok") : "muted", label: status })}
       </div>
-      ${
-        devices.length > 0
-          ? html`<div class="activity-feed__devices">
-              ${devices.map((entry) => {
-                const device = [entry.deviceFamily, entry.platform, entry.ip, entry.timeZone]
-                  .filter(Boolean)
-                  .join(" · ");
-                return html`<div class="activity-feed__device">
-                  <span class="activity-feed__device-name"
-                    >${entry.host ?? t("activityFeed.unknownDevice")}</span
-                  >
-                  ${device ? html`<span>${device}</span>` : nothing}
-                  ${
-                    entry.ip
-                      ? html`<openclaw-ip-location .ip=${entry.ip}></openclaw-ip-location>`
-                      : nothing
-                  }
-                  ${
-                    entry.lastInputSeconds !== undefined
-                      ? html`<span
-                          >${t("activityFeed.lastInput", {
-                            time: formatTimeAgo(entry.lastInputSeconds * 1000, { suffix: false }),
-                          })}</span
-                        >`
-                      : nothing
-                  }
-                </div>`;
-              })}
-            </div>`
-          : nothing
-      }
+      ${descriptions.length ? html`<div class="activity-feed__connection-summary">${descriptions.map((description) => html`<span>${description}</span>`)}</div>` : nothing}
       <div class="activity-feed__viewing">
         <h3>${t("activityFeed.viewingNow")}</h3>
         ${
@@ -481,6 +453,32 @@ function renderIdentityHeader(
             : html`<p class="activity-feed__empty-note">${t("activityFeed.notViewing")}</p>`
         }
       </div>
+      ${
+        entries.length
+          ? html`<details class="activity-feed__connection-details">
+              <summary>
+                ${t("activityFeed.connectionDetails", { count: String(entries.length) })}
+              </summary>
+              <div class="activity-feed__connections">
+                ${groupPresenceConnections(entries).map(
+                  ({ description, entry, count }) => html`<div class="activity-feed__connection">
+                    <strong
+                      >${description || entry.host || t("activityFeed.unknownConnection")}</strong
+                    >
+                    <span
+                      >${t(count === 1 ? "activityFeed.connectionOne" : "activityFeed.connectionMany", { count: String(count) })}</span
+                    >
+                    <span
+                      >${[entry.host, entry.platform, entry.ip, entry.timeZone].filter(Boolean).join(" · ")}</span
+                    >
+                    ${entry.ip ? html`<openclaw-ip-location .ip=${entry.ip}></openclaw-ip-location>` : nothing}
+                    ${entry.lastInputSeconds !== undefined ? html`<span>${t("activityFeed.lastInput", { time: formatTimeAgo(entry.lastInputSeconds * 1000, { suffix: false }) })}</span>` : nothing}
+                  </div>`,
+                )}
+              </div>
+            </details>`
+          : nothing
+      }
     </section>
   `;
 }
@@ -588,7 +586,10 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         ${
           props.result && props.filters.personId
             ? identity
-              ? renderIdentityHeader(props.context, identity, projection.sessions)
+              ? keyed(
+                  identity.id,
+                  renderIdentityHeader(props.context, identity, projection.sessions),
+                )
               : html`<section class="activity-feed__not-found" role="status">
                   <h2>${t("activityFeed.notFoundTitle")}</h2>
                   <p>${t("activityFeed.notFoundDescription")}</p>

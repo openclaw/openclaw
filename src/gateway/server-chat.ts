@@ -18,7 +18,6 @@ import {
 } from "../agents/agent-run-terminal-outcome.js";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
-import { isMainSessionRecoveryLifecycleEvent } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
@@ -51,6 +50,7 @@ import type {
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
 } from "./server-broadcast-types.js";
+import { createAgentEventAdmission } from "./server-chat-event-admission.js";
 import {
   normalizeHeartbeatChatFinalText,
   resolveHeartbeatFlag,
@@ -104,7 +104,6 @@ const CHAT_STATE_BY_TERMINAL_CLASSIFICATION = {
   cancellation: "aborted",
   failure: "error",
 } as const;
-const RESTART_RECOVERY_LIFECYCLE_PHASES = new Set(["start", "end", "error"]);
 // Canvas document retention and native Quick Chat both keep at most 32 widgets.
 // Keep the newest handles, independently of tool-progress verbosity and eviction.
 const MAX_LIVE_CANVAS_BLOCKS = 32;
@@ -172,22 +171,6 @@ export function resolveChatErrorKindFromError(error: unknown): ChatErrorKind | u
   return isTimeoutError(error) ? "timeout" : undefined;
 }
 
-function excludeConnIds(
-  connIds: ReadonlySet<string>,
-  excludedConnIds: ReadonlySet<string> | undefined,
-): ReadonlySet<string> {
-  if (!excludedConnIds || excludedConnIds.size === 0 || connIds.size === 0) {
-    return connIds;
-  }
-  const filtered = new Set<string>();
-  for (const connId of connIds) {
-    if (!excludedConnIds.has(connId)) {
-      filtered.add(connId);
-    }
-  }
-  return filtered;
-}
-
 export type AgentEventHandlerOptions = {
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -235,8 +218,8 @@ export type AgentEventHandlerOptions = {
   resolveSessionActiveRunState?: SessionEventSnapshotDependencies["resolveSessionActiveRunState"];
 };
 
-type AgentEventHandler = ((event: AgentEventPayload) => void) & {
-  dispose: () => void;
+type AgentEventHandler = ((event: AgentEventPayload) => void | Promise<void>) & {
+  dispose: () => Promise<void>;
 };
 
 type ChatRunRecord = ReturnType<ChatRunState["getOrCreate"]>;
@@ -304,6 +287,7 @@ export function createAgentEventHandler({
   };
 
   type TerminalLifecycleOptions = {
+    publishLifecycle?: boolean;
     skipChatErrorFinal?: boolean;
     suppressRestartRecoveryProjection?: boolean;
     restartRecoveryState?: { suppress: boolean };
@@ -337,22 +321,6 @@ export function createAgentEventHandler({
     }
     clearTimeout(pending.timer);
     pendingTerminalLifecycleErrors.delete(runId);
-  };
-
-  const resolveRestartRecoveryLifecycleState = (
-    sessionKey: string,
-    agentId: string | undefined,
-    event: AgentEventPayload,
-  ): { suppress: boolean } => {
-    try {
-      const { entry } = loadGatewaySessionEntryReadOnly(sessionKey, {
-        ...(agentId ? { agentId } : {}),
-        clone: false,
-      });
-      return { suppress: isMainSessionRecoveryLifecycleEvent({ entry, event }) };
-    } catch {
-      return { suppress: false };
-    }
   };
 
   const resolveSpawnedBy = (sessionKey: string): string | null => {
@@ -440,15 +408,13 @@ export function createAgentEventHandler({
     const currentLifecycleGeneration =
       activeLifecycleGeneration ?? currentRunContext?.lifecycleGeneration;
 
-    const { chatLink, sessionAgentId, eventSessionKey, sessionKey } = resolveEventSession(evt);
+    const { chatLink, sessionAgentId, sessionKey } = resolveEventSession(evt);
     const isControlUiVisible =
       evt.controlUiVisible ?? currentRunContext?.isControlUiVisible ?? true;
     const projectSessionLifecycle =
       evt.projectSessionLifecycle ?? currentRunContext?.projectSessionLifecycle ?? true;
     const projectSessionMessages =
       evt.projectSessionMessages ?? currentRunContext?.projectSessionMessages ?? true;
-    const restartRecoverySessionKey = eventSessionKey ?? sessionKey;
-    const restartRecoveryAgentId = evt.agentId ?? sessionAgentId;
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
     const isAborted =
       isChatAbortMarkerCurrent(chatRunState.runs.get(clientRunId)?.abortMarker, chatLink) ||
@@ -458,15 +424,6 @@ export function createAgentEventHandler({
     const deliverySessionKeys = sessionKey
       ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId)
       : [];
-    const restartRecoveryState =
-      opts?.restartRecoveryState ??
-      (restartRecoverySessionKey
-        ? resolveRestartRecoveryLifecycleState(
-            restartRecoverySessionKey,
-            restartRecoveryAgentId,
-            evt,
-          )
-        : undefined);
     const suppressRestartRecoveryProjection =
       opts?.suppressRestartRecoveryProjection === true ||
       Boolean(
@@ -474,7 +431,7 @@ export function createAgentEventHandler({
         activeLifecycleGeneration &&
         evt.lifecycleGeneration !== activeLifecycleGeneration,
       ) ||
-      restartRecoveryState?.suppress === true;
+      opts?.restartRecoveryState?.suppress === true;
     const isSupersededRestartRecoveryEvent =
       suppressRestartRecoveryProjection &&
       Boolean(
@@ -493,6 +450,7 @@ export function createAgentEventHandler({
       chatLink && !replyDispatchOwnsCompletion ? chatRunState.registry.shift(evt.runId) : undefined;
 
     if (
+      opts?.publishLifecycle !== false &&
       !replyDispatchOwnsCompletion &&
       !suppressRestartRecoveryProjection &&
       sessionKey &&
@@ -597,7 +555,7 @@ export function createAgentEventHandler({
           snapshotEvent?: AgentEventPayload,
           read?: SessionRowReadView,
         ) => {
-          if (parseCronRunScopeSuffix(sessionKey).runId) {
+          if (opts?.publishLifecycle === false || parseCronRunScopeSuffix(sessionKey).runId) {
             return;
           }
           const sessionEventConnIds = sessionEventSubscribers.getAll();
@@ -718,6 +676,7 @@ export function createAgentEventHandler({
       "chat",
       sessionKey,
       agentId,
+      run.assistantScope?.itemId,
       opts?.controlUiVisible ?? true,
     ]);
     const canvasBlocks = run.canvasBlocks;
@@ -728,8 +687,7 @@ export function createAgentEventHandler({
       ...(spawnedBy && { spawnedBy }),
       seq,
       state: "delta" as const,
-      deltaText: broadcastDelta.deltaText,
-      ...(broadcastDelta.replace ? { replace: true as const } : {}),
+      ...broadcastDelta,
       message: appendChatCanvasBlocksToMessage(
         { role: "assistant", content: [{ type: "text", text }], timestamp: now },
         canvasBlocks ?? [],
@@ -1238,7 +1196,7 @@ export function createAgentEventHandler({
     nodeSendToSession(firstDeliveryKey, "agent", nodePayload, { sessionKeys: deliveryKeys });
   };
 
-  const handleEvent = (event: AgentEventPayload) => {
+  const handleEvent = (event: AgentEventPayload, restartRecoveryState?: { suppress: boolean }) => {
     const evt = event as AgentEventRuntimePayload;
     const isCurrent = shouldProcessOwnedEvent.bind(
       null,
@@ -1252,7 +1210,7 @@ export function createAgentEventHandler({
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
 
-    const { chatLink, sessionAgentId, eventSessionKey, sessionKey } = resolveEventSession(evt);
+    const { chatLink, sessionAgentId, sessionKey } = resolveEventSession(evt);
     const runContext = getAgentRunContext(evt.runId);
     const activeLifecycleGeneration = resolveActiveLifecycleGenerationForRun(evt.runId);
     const isControlUiVisible = evt.controlUiVisible ?? runContext?.isControlUiVisible ?? true;
@@ -1260,10 +1218,6 @@ export function createAgentEventHandler({
       evt.projectSessionLifecycle ?? runContext?.projectSessionLifecycle ?? true;
     const projectSessionMessages =
       evt.projectSessionMessages ?? runContext?.projectSessionMessages ?? true;
-    const restartRecoverySessionKey = RESTART_RECOVERY_LIFECYCLE_PHASES.has(lifecyclePhase ?? "")
-      ? (eventSessionKey ?? sessionKey)
-      : undefined;
-    const restartRecoveryAgentId = evt.agentId ?? sessionAgentId;
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
     const isHeartbeat = runContext?.isHeartbeat ?? evt.isHeartbeat;
     const heartbeatPolicy = resolveHeartbeatFlag(clientRunId, evt.runId, evt.isHeartbeat);
@@ -1281,9 +1235,6 @@ export function createAgentEventHandler({
     const recordsInFlightProgress =
       (Boolean(chatLink) && isControlUiVisible) || recordsEmbeddedProgress;
 
-    const restartRecoveryState = restartRecoverySessionKey
-      ? resolveRestartRecoveryLifecycleState(restartRecoverySessionKey, restartRecoveryAgentId, evt)
-      : undefined;
     const suppressRestartRecoveryLifecycle =
       lifecyclePhase !== null &&
       (Boolean(
@@ -1305,6 +1256,7 @@ export function createAgentEventHandler({
     if (lifecyclePhase !== null && lifecyclePhase !== "error") {
       clearPendingTerminalLifecycleError(evt.runId);
     }
+    const publishLifecycle = evt.admitLifecyclePublication?.() ?? true;
 
     // Include sessionKey so Control UI can filter tool streams per session.
     const spawnedBy = sessionKey ? resolveSpawnedBy(sessionKey) : null;
@@ -1330,7 +1282,7 @@ export function createAgentEventHandler({
     const isToolEvent = evt.stream === "tool";
     const isItemEvent = evt.stream === "item";
     const suppressHeartbeatToolEvents = isToolEvent && heartbeatPolicy === true;
-    if (last > 0 && evt.seq !== last + 1) {
+    if (publishLifecycle && last > 0 && evt.seq !== last + 1) {
       flushBufferedAgentDeltaIfNeeded(clientRunId);
       if (isControlUiVisible) {
         broadcast(
@@ -1374,7 +1326,7 @@ export function createAgentEventHandler({
         ...(explanation ? { explanation } : {}),
       };
     }
-    if (recordsInFlightProgress && !isAborted && !suppressHeartbeatToolEvents) {
+    if (recordsInFlightProgress && !isAborted && !suppressHeartbeatToolEvents && publishLifecycle) {
       // Persist the client-facing identity after run/session remapping. Route
       // changes discard transient UI rows, so history replay must use the same
       // payload identity as live delivery or tool results cannot reconcile.
@@ -1494,10 +1446,10 @@ export function createAgentEventHandler({
       // tool recipients. Mirror tool lifecycle onto a session-scoped event so
       // they can render live pending tool cards without polling history.
       if (isControlUiVisible && sessionKey && !suppressHeartbeatToolEvents) {
-        const sessionSubscribers = excludeConnIds(
-          sessionEventSubscribers.getAll(),
-          runToolRecipients,
-        );
+        const sessionSubscribers = new Set(sessionEventSubscribers.getAll());
+        for (const connId of runToolRecipients ?? []) {
+          sessionSubscribers.delete(connId);
+        }
         if (sessionSubscribers.size > 0) {
           broadcastToConnIds(
             "session.tool",
@@ -1514,6 +1466,7 @@ export function createAgentEventHandler({
       const itemPhase = isItemEvent && typeof evt.data?.phase === "string" ? evt.data.phase : "";
       // The runtime error frame drains this text before retry cleanup retires its group.
       if (
+        publishLifecycle &&
         (itemPhase === "start" ||
           (lifecyclePhase === "error" && evt.data.completionSource !== "reply-dispatch")) &&
         (isControlUiVisible || hasSessionMessageSubscribers) &&
@@ -1535,16 +1488,17 @@ export function createAgentEventHandler({
         flushBufferedAgentDeltaIfNeeded(clientRunId);
       }
       if (
-        isControlUiVisible ||
-        (sessionKey &&
-          hasSessionMessageSubscribers &&
-          (isItemEvent ||
-            evt.stream === "thinking" ||
-            evt.stream === "approval" ||
-            evt.stream === "lifecycle" ||
-            (!isAborted &&
-              evt.stream === "assistant" &&
-              shouldMirrorAssistantEventToHiddenSessionMessages(evt.data))))
+        publishLifecycle &&
+        (isControlUiVisible ||
+          (sessionKey &&
+            hasSessionMessageSubscribers &&
+            (isItemEvent ||
+              evt.stream === "thinking" ||
+              evt.stream === "approval" ||
+              evt.stream === "lifecycle" ||
+              (!isAborted &&
+                evt.stream === "assistant" &&
+                shouldMirrorAssistantEventToHiddenSessionMessages(evt.data)))))
       ) {
         sendOrBufferAgentTextEvent(
           clientRunId,
@@ -1637,24 +1591,29 @@ export function createAgentEventHandler({
       if (isAborted || definitiveTerminal || lifecycleErrorRetryGraceMs <= 0) {
         // finalizeLifecycleEvent clears the buffer itself, after emitChatTerminal
         // has flushed the throttled tail and resolved the terminal message.
-        finalizeLifecycleEvent(evt, { skipChatErrorFinal, restartRecoveryState });
+        finalizeLifecycleEvent(evt, { skipChatErrorFinal, publishLifecycle, restartRecoveryState });
       } else {
         if (evt.data.completionSource !== "reply-dispatch") {
           // Runtime retries isolate failed text; reply-dispatch retains its
           // post-hook payloads and abort state until its own completion settles.
           chatRunState.clearRun(clientRunId);
         }
-        scheduleTerminalLifecycleError(evt, { skipChatErrorFinal, restartRecoveryState });
+        scheduleTerminalLifecycleError(evt, {
+          skipChatErrorFinal,
+          publishLifecycle,
+          restartRecoveryState,
+        });
       }
       return;
     }
 
     if (lifecyclePhase === "end") {
-      finalizeLifecycleEvent(evt, { restartRecoveryState });
+      finalizeLifecycleEvent(evt, { publishLifecycle, restartRecoveryState });
       return;
     }
 
     if (
+      publishLifecycle &&
       projectSessionLifecycle &&
       sessionKey &&
       (lifecyclePhase === "start" ||
@@ -1671,10 +1630,13 @@ export function createAgentEventHandler({
     }
   };
 
-  return Object.assign(handleEvent, {
+  return createAgentEventAdmission({
+    handleEvent,
+    resolveEventSession,
+    isCurrent: (evt) =>
+      shouldProcessOwnedEvent(evt.runId, evt.contextClaimId, evt.lifecycleGeneration),
     dispose: () => {
-      // Deferred provider errors belong to this gateway subscription. Letting
-      // them outlive shutdown can project stale terminal state into a successor.
+      // Deferred provider errors cannot project into a successor subscription.
       for (const pending of pendingTerminalLifecycleErrors.values()) {
         clearTimeout(pending.timer);
       }

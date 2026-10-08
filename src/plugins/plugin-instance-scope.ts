@@ -9,7 +9,7 @@ import type {
   PluginInstanceDisposalResult,
   PluginInstanceExecution,
 } from "./plugin-instance.types.js";
-import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry, PluginRegistryGatewayOwner } from "./registry-types.js";
 
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
 export interface PluginInstanceHandle extends PluginInvocationInstance, PluginInstanceExecution {
@@ -21,7 +21,10 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
   adopt<T>(value: T): T;
-  admitFactory(factory: (...args: never[]) => unknown): void;
+  admitFactory(
+    factory: (...args: never[]) => unknown,
+    resultCallbacks?: readonly PropertyKey[],
+  ): void;
   retainWork(): () => void;
   readonly retainedWorkCount: number;
   readonly ordinaryCallCount: number;
@@ -29,6 +32,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
     signal: AbortSignal,
     options?: { includeConsumers?: boolean; includeCalls?: boolean },
   ): Promise<void>;
+  waitForIdle(signal: AbortSignal): Promise<void>;
   reserveReplacement(): () => void;
   retainConsumer(
     invoke?: <T>(run: () => T) => T,
@@ -57,10 +61,13 @@ export type PluginInvocationContext = {
 
 export type PluginInstanceOwner = {
   record: PluginRecord;
-  registry: PluginRegistry;
-  revoked: boolean;
+  /** Recovery follows the live Gateway without retaining a disposed registry. */
+  retiredGatewayOwner?: WeakRef<PluginRegistryGatewayOwner>;
   instance?: PluginInstanceHandle;
-};
+} & (
+  | { revoked: false; registry: PluginRegistry }
+  | { revoked: true; registry: PluginRegistry | undefined }
+);
 // SDK source transforms and native core chunks must observe the same exact owner.
 export const pluginInstanceState = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInstanceState"),

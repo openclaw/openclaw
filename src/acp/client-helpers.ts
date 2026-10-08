@@ -15,34 +15,11 @@ import {
 } from "../secrets/provider-env-vars.js";
 import { classifyAcpToolApproval } from "./approval-classifier.js";
 
-type PermissionOption = RequestPermissionRequest["options"][number];
-
 type PermissionResolverDeps = {
   prompt?: (toolName: string | undefined, toolTitle?: string) => Promise<boolean>;
   log?: (line: string) => void;
   cwd?: string;
 };
-
-function pickOption(
-  options: PermissionOption[],
-  kinds: PermissionOption["kind"][],
-): PermissionOption | undefined {
-  for (const kind of kinds) {
-    const match = options.find((option) => option.kind === kind);
-    if (match) {
-      return match;
-    }
-  }
-  return undefined;
-}
-
-function selectedPermission(optionId: string): RequestPermissionResponse {
-  return { outcome: { outcome: "selected", optionId } };
-}
-
-function cancelledPermission(): RequestPermissionResponse {
-  return { outcome: { outcome: "cancelled" } };
-}
 
 function promptUserPermission(toolName: string | undefined, toolTitle?: string): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stderr.isTTY) {
@@ -102,18 +79,22 @@ export async function resolvePermissionRequest(
 
   if (options.length === 0) {
     log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
-    return cancelledPermission();
+    return { outcome: { outcome: "cancelled" } };
   }
 
-  const allowOption = pickOption(options, ["allow_once", "allow_always"]);
-  const rejectOption = pickOption(options, ["reject_once", "reject_always"]);
+  const allowOption =
+    options.find((option) => option.kind === "allow_once") ??
+    options.find((option) => option.kind === "allow_always");
+  const rejectOption =
+    options.find((option) => option.kind === "reject_once") ??
+    options.find((option) => option.kind === "reject_always");
   if (classification.autoApprove) {
     if (!allowOption) {
       log(`[permission cancelled] ${toolName ?? "unknown"}: missing allow option`);
-      return cancelledPermission();
+      return { outcome: { outcome: "cancelled" } };
     }
     log(`[permission auto-approved] ${toolName} (${toolKind ?? "unknown"})`);
-    return selectedPermission(allowOption.optionId);
+    return { outcome: { outcome: "selected", optionId: allowOption.optionId } };
   }
 
   log(
@@ -122,16 +103,16 @@ export async function resolvePermissionRequest(
   const approved = await prompt(toolName, toolTitle);
 
   if (approved && allowOption) {
-    return selectedPermission(allowOption.optionId);
+    return { outcome: { outcome: "selected", optionId: allowOption.optionId } };
   }
   if (!approved && rejectOption) {
-    return selectedPermission(rejectOption.optionId);
+    return { outcome: { outcome: "selected", optionId: rejectOption.optionId } };
   }
 
   log(
     `[permission cancelled] ${toolName ?? "unknown"}: missing ${approved ? "allow" : "reject"} option`,
   );
-  return cancelledPermission();
+  return { outcome: { outcome: "cancelled" } };
 }
 
 type AcpClientSpawnEnvOptions = {

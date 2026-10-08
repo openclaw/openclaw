@@ -50,7 +50,7 @@ import type { WorkerSessionPlacementRecord } from "../worker-environments/placem
 import {
   identifiedClient,
   initializeSessionReadContext,
-  listSessions,
+  listSessions as readList,
   requestContext,
   sessionReadHandlers,
   seedSessions,
@@ -59,6 +59,8 @@ import {
 import type { GatewayRequestContext } from "./types.js";
 
 const { emitSessionsChanged } = await import("./session-change-event.js");
+const listSessions = (params: Parameters<typeof readList>[0]) =>
+  readList({ ...params, acceptsSerializedJson: true });
 
 function rowFacts(rows: readonly GatewaySessionRow[]) {
   return rows.map(({ snapshotAt: _snapshotAt, ...row }) => row);
@@ -494,10 +496,9 @@ describe("resident sessions.list", () => {
         ).toBe("active reply"),
       );
       const healed = await listSessions({ client, context, request });
-      expect(healed.sessions.find((session) => session.key === sessionKey)).toMatchObject({
-        derivedTitle: undefined,
-        lastMessagePreview: "active reply",
-      });
+      const healedRow = healed.sessions.find((session) => session.key === sessionKey);
+      expect(healedRow?.derivedTitle).toBeUndefined();
+      expect(healedRow?.lastMessagePreview).toBe("active reply");
 
       expect((await listSessions({ client, context, request })).sessions).toEqual(healed.sessions);
       expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(storedEntry);
@@ -601,7 +602,7 @@ describe("resident sessions.list", () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const parentSessionKey = "agent:main:active";
       const childSessionKey = "agent:main:zzz-child";
-      await upsertSessionEntryCore(
+      await replaceSessionEntry(
         { agentId: "main", sessionKey: childSessionKey },
         {
           sessionId: "completed-hidden-child",
@@ -776,6 +777,7 @@ describe("resident sessions.list", () => {
       await sessionReadHandlers["sessions.list"]?.({
         req: { type: "req", id: "session-list-test", method: "sessions.list" },
         params: { activeMinutes: 0 },
+        acceptsSerializedJson: true,
         client: identifiedClient("owner@example.com"),
         context: requestContext(config),
         respond,

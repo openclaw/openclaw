@@ -1,3 +1,5 @@
+import { captureWorktreeRegistryReadGuard } from "../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../agents/worktrees/run-end-lifecycle.js";
 import type { managedWorktrees } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
@@ -34,11 +36,26 @@ export type WorkerPlacementSessionRuntime = {
   managedWorktrees: {
     findLiveByOwner: (
       ...args: Parameters<typeof managedWorktrees.findLiveByOwner>
-    ) => Pick<ManagedWorktreeRecord, "id" | "ownerId" | "path"> | undefined;
+    ) => Promise<Pick<ManagedWorktreeRecord, "id" | "ownerId" | "path"> | undefined>;
   };
   resolveCanonicalSessionEntryFromStoreKeys: typeof sessionUtils.resolveCanonicalSessionEntryFromStoreKeys;
   resolveGatewaySessionStoreTargetWithStore: typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore;
 };
+
+export function resolveWorkerPlacementSessionStoreTarget(
+  runtime: WorkerPlacementSessionRuntime,
+  cfg: OpenClawConfig,
+  identity: Pick<WorkerSessionPlacementIdentity, "sessionKey" | "agentId">,
+) {
+  return runtime.resolveGatewaySessionStoreTargetWithStore({
+    cfg,
+    key: identity.sessionKey,
+    agentId: identity.agentId,
+    preserveQualifiedAddress: true,
+    clone: false,
+    exactRead: true,
+  });
+}
 
 export function createWorkerWorkspaceRecoveryPreparer(options: {
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>;
@@ -102,6 +119,7 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
         storePath: target.readSource.path,
         env: binding.env,
         sessionKeys: [identity.sessionKey],
+        snapshotFields: [],
       });
       assertSourceCurrent();
       const preparedEntry = prepared.entries.find(
@@ -127,6 +145,7 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
           lifecycleRevision: preparedEntry.lifecycleRevision,
           activeWriterRunId: preparedEntry.activeWriterRunId,
         }),
+        "read",
       );
       assertCurrent();
       resolved.assertCurrent(options.getConfig());
@@ -162,14 +181,11 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
   signal?: AbortSignal;
   run: (workspace: WorkerSessionWorkspace, assertCurrent: () => void) => T | Promise<T>;
 }): Promise<T> {
-  const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-    cfg: params.getConfig(),
-    key: params.sessionKey,
-    agentId: params.agentId,
-    preserveQualifiedAddress: true,
-    clone: false,
-    exactRead: true,
-  });
+  const target = resolveWorkerPlacementSessionStoreTarget(
+    params.sessionRuntime,
+    params.getConfig(),
+    params,
+  );
   const operation = params.action === "activation" ? "placement-activate" : "placement-recover";
   return await runExclusiveSessionLifecycleMutation(operation, {
     scope: target.storePath,
@@ -230,17 +246,19 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   sessionKey: string;
   agentId: string;
   expectedTarget?: ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore>;
+  expectedEntry?: Pick<
+    NonNullable<ReturnType<typeof loadSessionEntryReadOnly>>,
+    "lifecycleRevision" | "worktree" | "repositoryWorkspaceId"
+  >;
   errorMessage: string;
+  readTarget?: (
+    cfg: OpenClawConfig,
+  ) => ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore>;
 }) {
+  const worktreeContext = captureWorktreeRunEndContext(process.env);
   const resolveTarget = (cfg: OpenClawConfig) =>
-    params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-      cfg,
-      key: params.sessionKey,
-      agentId: params.agentId,
-      preserveQualifiedAddress: true,
-      clone: false,
-      exactRead: true,
-    });
+    params.readTarget?.(cfg) ??
+    resolveWorkerPlacementSessionStoreTarget(params.sessionRuntime, cfg, params);
   const initialTarget = resolveTarget(params.config);
   const initialEntry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
     initialTarget.store,
@@ -256,7 +274,11 @@ export async function resolveWorkerPlacementSessionTarget(params: {
     initialTarget.canonicalKey !== expected.canonicalKey ||
     initialTarget.agentId !== expected.agentId ||
     !initialEntry ||
-    initialEntry.sessionId !== params.sessionId
+    initialEntry.sessionId !== params.sessionId ||
+    (params.expectedEntry !== undefined &&
+      (initialEntry.lifecycleRevision !== params.expectedEntry.lifecycleRevision ||
+        initialEntry.worktree?.id !== params.expectedEntry.worktree?.id ||
+        initialEntry.repositoryWorkspaceId !== params.expectedEntry.repositoryWorkspaceId))
   ) {
     throw targetChangedError();
   }
@@ -266,6 +288,16 @@ export async function resolveWorkerPlacementSessionTarget(params: {
     worktreeId: initialEntry.worktree?.id,
     repositoryWorkspaceId: initialEntry.repositoryWorkspaceId,
   };
+  const acceptWorktree = captureWorktreeRegistryReadGuard(worktreeContext, "source-owner");
+  const worktree = initialIdentity.repositoryWorkspaceId
+    ? undefined
+    : await params.sessionRuntime.managedWorktrees.findLiveByOwner(
+        "session",
+        initialTarget.canonicalKey,
+      );
+  const assertWorktreeCurrent = acceptWorktree(
+    worktree ? { ...worktree, ownerKind: "session" } : undefined,
+  );
   const prepared = initialIdentity.repositoryWorkspaceId
     ? await getSessionRepositoryWorkspaceStore().prepare(initialIdentity.repositoryWorkspaceId)
     : undefined;
@@ -278,11 +310,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
     if (
       target.storePath !== expected.storePath ||
       target.canonicalKey !== expected.canonicalKey ||
-      target.agentId !== expected.agentId
-    ) {
-      throw targetChangedError();
-    }
-    if (
+      target.agentId !== expected.agentId ||
       !entry ||
       entry.sessionId !== params.sessionId ||
       entry.lifecycleRevision !== initialIdentity.lifecycleRevision ||
@@ -312,10 +340,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
         workspace: { kind: "repository", repository } satisfies WorkerSessionWorkspace,
       };
     }
-    const worktree = params.sessionRuntime.managedWorktrees.findLiveByOwner(
-      "session",
-      target.canonicalKey,
-    );
+    assertWorktreeCurrent();
     if (
       !entry.worktree?.id ||
       !worktree ||
@@ -416,11 +441,11 @@ export async function prepareWorkerPlacementRepositoryManifestRefs(
 }
 
 export function createWorkerPlacementNodeWorkspaceBindingResolver(options: {
-  placements: Pick<WorkerSessionPlacementStore, "get">;
+  placements: Pick<WorkerSessionPlacementStore, "get" | "getAsync">;
   resolveWorkspace: (identity: WorkerSessionPlacementIdentity) => Promise<WorkerSessionWorkspace>;
 }) {
   return async (binding: { environmentId: string; ownerEpoch: number; sessionId: string }) => {
-    const placement = options.placements.get(binding.sessionId);
+    const placement = await options.placements.getAsync(binding.sessionId);
     if (
       !placement ||
       (placement.state !== "active" &&

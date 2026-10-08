@@ -29,7 +29,6 @@ import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
-import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
   createSessionMaintenanceStatisticsOperation,
@@ -190,7 +189,8 @@ function maintenancePreparationFixture(state: OpenClawTestState) {
       storePath,
     },
   } satisfies SqliteSessionReclamationPlan;
-  return { active, stale, database, plan };
+  const archivedEntries = [{ sessionKey: stale.sessionKey, sessionId: "stale" }];
+  return { active, stale, database, plan, archivedEntries };
 }
 
 export function registerSessionMaintenancePreparationTests() {
@@ -241,7 +241,7 @@ export function registerSessionMaintenancePreparationTests() {
           expect(sql.queries).toEqual([]);
           if (result.kind === "maintenance-plan") {
             expect(result.value.archived).toBe(1);
-            expect(result.value.archivedSessionKeys).toEqual([fixture.stale.sessionKey]);
+            expect(result.value.archivedEntries).toEqual(fixture.archivedEntries);
             expect(result.value.entryRemovals).toEqual([]);
           } else if (result.kind === "maintenance-statistics") {
             expect(result.value).toBe(true);
@@ -274,7 +274,8 @@ export function registerSessionMaintenancePreparationTests() {
     signal,
   }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { active, stale, database, plan } = maintenancePreparationFixture(state);
+      const { active, stale, database, plan, archivedEntries } =
+        maintenancePreparationFixture(state);
       const prepared = createDeferredCore();
       const continuePreparation = createDeferredCore();
       const preparations: string[] = [];
@@ -342,7 +343,7 @@ export function registerSessionMaintenancePreparationTests() {
         retry = runSqliteSessionReclamation({ forceInProcess: false, plan });
         await expect(retry).resolves.toMatchObject({
           kind: "maintenance-plan",
-          value: { archived: 1, archivedSessionKeys: [stale.sessionKey], entryRemovals: [] },
+          value: { archived: 1, archivedEntries, entryRemovals: [] },
         });
         expect(preparations).toHaveLength(2);
         expect(preparations[0]).not.toBe(preparations[1]);
@@ -365,7 +366,7 @@ export function registerSessionMaintenancePreparationTests() {
     "joins preparation cleanup after %s without discarding another caller's preparation",
     async (failure, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const { stale, plan } = maintenancePreparationFixture(state);
+        const { stale, plan, archivedEntries } = maintenancePreparationFixture(state);
         const firstPrepared = createDeferredCore();
         const secondPrepared = createDeferredCore();
         const releaseEntered = createDeferredCore();
@@ -469,7 +470,7 @@ export function registerSessionMaintenancePreparationTests() {
           continueSecond.resolve();
           await expect(second).resolves.toMatchObject({
             kind: "maintenance-plan",
-            value: { archived: 1, archivedSessionKeys: [stale.sessionKey] },
+            value: { archived: 1, archivedEntries },
           });
           expect(released).toEqual([refusedId, ...preparations]);
           expect(published).not.toHaveBeenCalled();
@@ -489,7 +490,7 @@ export function registerSessionMaintenancePreparationTests() {
     "joins the prepared native owner on path replacement before rejecting its caller",
     async ({ signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const { stale, database, plan } = maintenancePreparationFixture(state);
+        const { stale, database, plan, archivedEntries } = maintenancePreparationFixture(state);
         const successorPath = state.statePath("successor", "store.sqlite");
         replaceSessionEntrySync(
           { sessionKey: stale.sessionKey, storePath: successorPath },
@@ -580,7 +581,7 @@ export function registerSessionMaintenancePreparationTests() {
           runSqliteSessionReclamation({ forceInProcess: false, plan }),
         ).resolves.toMatchObject({
           kind: "maintenance-plan",
-          value: { archivedSessionKeys: [stale.sessionKey] },
+          value: { archivedEntries },
         });
         expect(
           loadSessionEntry({ sessionKey: stale.sessionKey, storePath: successorPath }),
@@ -596,7 +597,7 @@ export function registerSessionMaintenancePreparationTests() {
     signal,
   }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { stale, plan } = maintenancePreparationFixture(state);
+      const { stale, plan, archivedEntries } = maintenancePreparationFixture(state);
       const nativeClosed = createDeferredCore();
       const continueClose = createDeferredCore();
       const published = vi.fn();
@@ -649,7 +650,7 @@ export function registerSessionMaintenancePreparationTests() {
         continueClose.resolve();
         await expect(pending).resolves.toMatchObject({
           kind: "maintenance-plan",
-          value: { archived: 1, archivedSessionKeys: [stale.sessionKey] },
+          value: { archived: 1, archivedEntries },
         });
         expect(sql.queries).toEqual([]);
       } finally {
@@ -664,23 +665,6 @@ export function registerSessionMaintenancePreparationTests() {
       expect(loadSessionEntry(stale)?.archivedAt).toEqual(expect.any(Number));
     });
   });
-}
-
-/** Row changes precede archive publication; join the owner's complete finalization. */
-export function observeSessionMaintenanceCompletion(databasePath: string) {
-  const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
-  const completed = createDeferredCore<Awaited<ReturnType<typeof finalize>>>();
-  const observer = vi
-    .spyOn(maintenance, "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort")
-    .mockImplementation((scope, ...args) => {
-      const result = finalize(scope, ...args);
-      if (scope.path === databasePath) {
-        completed.resolve(result);
-      }
-      return result;
-    });
-  onTestFinished(() => observer.mockRestore());
-  return completed.promise;
 }
 
 /** Observe committed maintenance rows without imposing a worker-startup deadline. */

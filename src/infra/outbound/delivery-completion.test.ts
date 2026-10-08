@@ -8,7 +8,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js";
-import { rejectDurableDelivery, settlePendingFinalDelivery } from "./delivery-completion.js";
+import { settleDurableDelivery, settlePendingFinalDelivery } from "./delivery-completion.js";
 
 const recoveryMocks = vi.hoisted(() => ({
   scheduleMainSessionRecoveryPendingTarget: vi.fn(),
@@ -39,7 +39,7 @@ describe("pending-final delivery completion", () => {
     completion.storePath = storePath;
     const entry: InternalSessionEntry = {
       sessionId: completion.sessionId,
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       updatedAt: Date.now(),
       mainRestartRecovery: {
@@ -180,9 +180,9 @@ describe("pending-final delivery completion", () => {
     await installContextOnPendingFinal();
     await settlePendingFinalDelivery(completion, "unknown", ["prepared", "queued"]);
 
-    await expect(rejectDurableDelivery(completion, "payload rejected")).resolves.toEqual({
-      state: "suppressed",
-    });
+    await expect(
+      settleDurableDelivery(completion, { rejectionError: "payload rejected" }),
+    ).resolves.toEqual({ state: "suppressed" });
 
     const entry = loadSessionEntry({ sessionKey, storePath });
     expect(entry?.pendingDeliveryNotice).toBeUndefined();

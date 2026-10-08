@@ -80,6 +80,7 @@ import {
   type ChannelAccountLifetime,
   type ChannelAccountStopOutcome,
 } from "./server-channel-account-lifetime.js";
+import { createChannelAutostartRecovery } from "./server-channel-autostart-recovery.js";
 import type {
   ChannelAccountStartOutcome,
   ChannelRuntimeSnapshot,
@@ -155,7 +156,7 @@ type ChannelManagerOptions = {
   deferStartupAccountStartsUntil?: Promise<void>;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
   ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
-  tryRecoverAutostartSuppression?: () => boolean;
+  tryRecoverAutostartSuppression?: (signal: AbortSignal) => Promise<number | undefined>;
   isClosing?: () => boolean;
 };
 
@@ -205,7 +206,7 @@ export type ChannelManager = {
   releaseChannelRouteHandoffs: (channel: ChannelId, accountId?: string) => void;
   setAutostartSuppression: (suppression: ChannelAutostartSuppression | null) => void;
   getAutostartSuppression: () => ChannelAutostartSuppression | null;
-  recoverAutostartSuppression: () => Promise<boolean>;
+  recoverAutostartSuppression: (signal?: AbortSignal) => Promise<number | undefined> | undefined;
   setAmbientAutostartSuppressedChannelIds: (channelIds: ReadonlySet<string>) => void;
   isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
@@ -893,27 +894,25 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               if (abort.signal.aborted || manuallyStopped.has(rKey) || opts.isClosing?.()) {
                 return;
               }
-              const runStartAccount = () => {
+              const runStartAccount = async () => {
                 const startedAt = Date.now();
-                const recordDuration = () => {
-                  channelRunDurationMs = Date.now() - startedAt;
-                };
                 try {
-                  return withGatewayNativeApprovalRuntime(opts.getNativeApprovalRuntime?.(), () =>
-                    startAccount({
-                      ...accountContext,
-                      setStatus: (next) =>
-                        isCurrentTask()
-                          ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
-                          : getRuntime(channelId, id),
-                      invalidateDirectoryCache: () =>
-                        resetDirectoryCache({ cfg, channel: channelId, accountId: id }),
-                      ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
-                    }),
-                  ).finally(recordDuration);
-                } catch (error) {
-                  recordDuration();
-                  throw error;
+                  return await withGatewayNativeApprovalRuntime(
+                    opts.getNativeApprovalRuntime?.(),
+                    () =>
+                      startAccount({
+                        ...accountContext,
+                        setStatus: (next) =>
+                          isCurrentTask()
+                            ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
+                            : getRuntime(channelId, id),
+                        invalidateDirectoryCache: () =>
+                          resetDirectoryCache({ cfg, channel: channelId, accountId: id }),
+                        ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
+                      }),
+                  );
+                } finally {
+                  channelRunDurationMs = Date.now() - startedAt;
                 }
               };
               startAccountTask = withPluginHttpRouteRegistry(
@@ -1454,21 +1453,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
-  const recoverAutostartSuppression = async (): Promise<boolean> => {
-    if (
-      !autostartSuppression ||
-      opts.isClosing?.() ||
-      !opts.tryRecoverAutostartSuppression?.() ||
-      opts.isClosing?.()
-    ) {
-      return false;
-    }
-    autostartSuppression = null;
-    // Recovery resumes the autostart attempt that safe mode deferred. Preserve
-    // explicit operator stops while still covering health-monitor opt-outs.
-    await startChannelsWithOptions({ preserveManualStop: true });
-    return true;
-  };
+  const recoverAutostartSuppression = createChannelAutostartRecovery({
+    getSuppression: () => autostartSuppression,
+    clearSuppression: () => {
+      autostartSuppression = null;
+    },
+    tryRecover: opts.tryRecoverAutostartSuppression,
+    signal: opts.scheduler.signal,
+    isClosing: opts.isClosing,
+    // Resuming deferred autostart preserves explicit operator stops.
+    startChannels: () => startChannelsWithOptions({ preserveManualStop: true }),
+  });
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {
     const plugin = getChannelPlugin(channelId);

@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { isRosettaTranslatedProcess } from "../../shared/rosetta-translation.js";
 import type { ProcessCommand } from "./service-child-group-ownership.js";
 
 let native: ReturnType<typeof loadNative> | undefined;
@@ -66,6 +67,12 @@ function parseArguments(bytes: Buffer, pid: number): ProcessCommand {
 
 /** Exact argv, or observed foreign ownership when Darwin denies argument inspection. */
 export function readDarwinProcessCommand(pid: number, uid?: number): ProcessCommand | undefined {
+  // Koffi's sysctl call segfaults under Rosetta; fail visibly instead of crashing.
+  if (isRosettaTranslatedProcess()) {
+    throw new Error(
+      "Cannot inspect Darwin process arguments under Rosetta; run OpenClaw with native arm64 Node.js.",
+    );
+  }
   native ??= loadNative();
   const result = native.readArguments(pid);
   if ("bytes" in result) {

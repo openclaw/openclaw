@@ -51,13 +51,7 @@ type UserModelLinks = z.infer<typeof linksSchema>;
 type AccountRecordName = "model-accounts" | `model-account:${string}`;
 
 export type UserProfileAuthLink = { provider: string; authProfileId: string; updatedAt: number };
-export type UserModelAccount = {
-  authProfileId: string;
-  provider: string;
-  label: string;
-  authType: AuthProfileCredential["type"];
-  selected: boolean;
-};
+export type UserModelAccount = ReturnType<typeof accountSummary>;
 
 const MODEL_ACCOUNTS_PAGE_SIZE = 50;
 
@@ -221,42 +215,7 @@ function credentialOwner(db: DatabaseSync, authProfileId: string): string | unde
   return locator ? resolveOwner(db, locator.ownerProfileId) : undefined;
 }
 
-/** A locator identifies a record; only its current identity owner can newly select it. */
-export function isUserModelAuthProfileOwner(
-  params: { profileId: string; authProfileId: string },
-  options: OpenClawStateDatabaseOptions = {},
-): boolean {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const owner = resolveOwner(db, params.profileId);
-      if (
-        !owner ||
-        credentialOwner(db, params.authProfileId) !== owner ||
-        !tableExists(db, "secret_store_entries")
-      ) {
-        return false;
-      }
-      return Boolean(
-        executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<Pick<DB, "secret_store_entries">>(db)
-            .selectFrom("secret_store_entries")
-            .select("name")
-            .where("scope_kind", "=", "identity")
-            .where("scope_id", "=", owner)
-            .where("name", "=", `model-account:${params.authProfileId}`)
-            .where("deleted_at_ms", "is", null),
-        ),
-      );
-    }, options) ?? false
-  );
-}
-
-function accountSummary(
-  authProfileId: string,
-  value: string,
-  links: UserModelLinks,
-): UserModelAccount {
+function accountSummary(authProfileId: string, value: string, links: UserModelLinks) {
   const { credential } = parseRecord(value, profileSchema);
   const identity = [credential.email?.trim(), credential.displayName?.trim()].filter(Boolean);
   return {
@@ -334,10 +293,18 @@ export function readUserModelAuthProfile(
   authProfileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UserModelAuthProfile | undefined {
-  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-    const owner = credentialOwner(db, authProfileId);
-    return owner ? readProfile(db, owner, authProfileId) : undefined;
-  }, options);
+  return withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) => readUserModelAuthProfileInDatabase(db, authProfileId),
+    options,
+  );
+}
+
+export function readUserModelAuthProfileInDatabase(
+  db: DatabaseSync,
+  authProfileId: string,
+): UserModelAuthProfile | undefined {
+  const owner = credentialOwner(db, authProfileId);
+  return owner ? readProfile(db, owner, authProfileId) : undefined;
 }
 
 /** The canonical OAuth/usage owners mutate one exact private credential under the DB lock. */
@@ -584,11 +551,7 @@ export function setUserProfileAuthLink(
 }
 
 export function clearUserProfileAuthLink(
-  params: {
-    profileId: string;
-    provider: string;
-    assertCurrent?: (stage: "transaction" | "commit") => void;
-  },
+  params: Omit<Parameters<typeof setUserProfileAuthLink>[0], "authProfileId">,
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileAuthLink[] {
   return runOpenClawStateWriteTransaction(

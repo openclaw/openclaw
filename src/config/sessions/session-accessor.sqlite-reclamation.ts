@@ -27,10 +27,7 @@ import {
 } from "./session-accessor.sqlite-deletion-plan.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import {
-  deleteLifecycleTargetRows,
-  readSessionEntryCount,
-} from "./session-accessor.sqlite-entry-store.js";
+import { deleteLifecycleTargetRows } from "./session-accessor.sqlite-entry-store.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
   deleteMaterializedSessionStatePlans,
@@ -185,17 +182,14 @@ function reclaimSqliteRowsInTransaction(
       { operationLabel: "session.deletion.plan" },
     );
   }
-  if (plan.kind === "lifecycle-projection-plan" || plan.kind === "lifecycle-projection-count") {
+  if (plan.kind === "lifecycle-projection-plan") {
     return runOpenClawAgentWriteTransaction(
       (database) => {
         callbacks.beforeMutation?.();
-        const result: SqliteSessionReclamationResult =
-          plan.kind === "lifecycle-projection-plan"
-            ? {
-                kind: plan.kind,
-                value: projectSessionEntryLifecycleRemovalsInDatabase(database, plan.input),
-              }
-            : { kind: plan.kind, value: readSessionEntryCount(database) };
+        const result: SqliteSessionReclamationResult = {
+          kind: plan.kind,
+          value: projectSessionEntryLifecycleRemovalsInDatabase(database, plan.input),
+        };
         callbacks.onCommit?.(database);
         return result;
       },
@@ -207,14 +201,35 @@ function reclaimSqliteRowsInTransaction(
     const value = runSqliteSessionDeletionTransaction(
       (database) => {
         callbacks.beforeMutation?.();
-        if (plan.input.projected.upsertedEntries.length > 0) {
-          throw new Error("Worker lifecycle removal cannot contain upserts");
-        }
+        const progressCardResetKeys: string[] = [];
+        const projectionReconcileSessionIds: string[] = [];
         const result = commitPreparedSessionEntryLifecycleMutationInDatabase(
           database,
           plan.input,
           plan.materializedPlans,
+          {
+            resetScope: {
+              agentId: plan.agentId,
+              path: database.path,
+              env: plan.databaseOptions.env,
+            },
+            onResetBoundary: ({
+              sessionKey,
+              sessionId,
+              progressCardReset,
+              projectionNeedsReconcile,
+            }) => {
+              if (progressCardReset) {
+                progressCardResetKeys.push(sessionKey);
+              }
+              if (projectionNeedsReconcile) {
+                projectionReconcileSessionIds.push(sessionId);
+              }
+            },
+          },
         );
+        result.progressCardResetKeys = progressCardResetKeys;
+        result.projectionReconcileSessionIds = projectionReconcileSessionIds;
         callbacks.onCommit?.(database, { kind: plan.kind, value: result });
         return result;
       },
@@ -337,7 +352,6 @@ function reclaimSqliteRowsInTransaction(
         plan.materializedPlans,
         protectedSessionIds,
         excludedSessionKeys,
-        undefined,
         diskBudget,
       );
       const db = getSessionKysely(transactionDb.db);

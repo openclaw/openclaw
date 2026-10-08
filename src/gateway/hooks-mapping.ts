@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -7,7 +8,7 @@ import {
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/types.hooks.js";
 import { resolveGmailHookMaxBytes } from "../hooks/gmail.js";
-import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import { resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { HookMessageChannel } from "./hooks.types.js";
@@ -409,7 +410,10 @@ function mergeAction(base: HookAction, override: HookTransformResult): HookMappi
   if (kind === "wake") {
     const baseWake = base.kind === "wake" ? base : undefined;
     const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");
-    const mode = override.mode === "next-heartbeat" ? "next-heartbeat" : (baseWake?.mode ?? "now");
+    const mode =
+      override.mode === "now" || override.mode === "next-heartbeat"
+        ? override.mode
+        : (baseWake?.mode ?? "now");
     return validateAction({
       kind: "wake",
       mappingId: base.mappingId,
@@ -424,7 +428,9 @@ function mergeAction(base: HookAction, override: HookTransformResult): HookMappi
   const message =
     typeof override.message === "string" ? override.message : (baseAgent?.message ?? "");
   const wakeMode =
-    override.wakeMode === "next-heartbeat" ? "next-heartbeat" : (baseAgent?.wakeMode ?? "now");
+    override.wakeMode === "now" || override.wakeMode === "next-heartbeat"
+      ? override.wakeMode
+      : (baseAgent?.wakeMode ?? "now");
   return validateAction({
     kind: "agent",
     mappingId: base.mappingId,
@@ -510,11 +516,9 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
     return cached;
   }
   const generation = transformCacheBustVersion;
-  const mod = await importFileModule({
-    modulePath: transform.modulePath,
-    cacheBust: true,
-    nowMs: generation,
-  });
+  const mod: Record<string, unknown> = await import(
+    `${pathToFileURL(transform.modulePath).href}?t=${generation}`
+  );
   const fn = resolveFunctionModuleExport<HookTransformFn>({
     mod,
     exportName: transform.exportName,

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import {
+  hasMainSessionRecoveryClaim,
+  isMainRestartRecoveryCandidate,
+} from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
@@ -7,7 +11,6 @@ import {
   scheduleMainSessionRecoveryMutation,
 } from "./main-session-recovery-lifecycle.js";
 import {
-  isMainRestartRecoveryCandidate,
   isMainSessionRecoveryPending,
   transitionMainSessionRecovery,
   type MainSessionRecoveryCommand,
@@ -154,6 +157,8 @@ export async function commitMainSessionRecovery(params: {
       }
       const entry = candidate.entry;
       const previousRecoveryState = entry.mainRestartRecovery;
+      const previousRecoveryRuns = entry.restartRecoveryRuns;
+      const previousDeliveryRunId = entry.restartRecoveryDeliveryRunId;
       const command =
         (params.command.kind === "claim_foreground" ||
           params.command.kind === "observe" ||
@@ -164,6 +169,8 @@ export async function commitMainSessionRecovery(params: {
       const transition = transitionMainSessionRecovery(entry, command);
       const changed =
         previousRecoveryState !== entry.mainRestartRecovery ||
+        previousRecoveryRuns !== entry.restartRecoveryRuns ||
+        previousDeliveryRunId !== entry.restartRecoveryDeliveryRunId ||
         (transition.kind !== "foreground_validated" &&
           transition.kind !== "no_change" &&
           transition.kind !== "observed" &&
@@ -242,11 +249,11 @@ export async function claimMainSessionRecoveryOwner(params: {
     // also lose its predecessor before admission. Either way, no row remains to fence.
     return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
   }
-  // A healthy completion may clear recovery between the caller's read and this
-  // transaction. Only that fully clean same-session state can proceed unclaimed.
+  // Stop retains its outcome flag after recovery custody settles. Admit that
+  // same-session row without mistaking its cancelled outcome for unfinished work.
   const healthyExpectedSession =
     claim.entry &&
-    claim.entry.abortedLastRun !== true &&
+    (claim.entry.abortedLastRun !== true || !hasMainSessionRecoveryClaim(claim.entry)) &&
     claim.entry.restartRecoveryRuns === undefined &&
     claim.entry.mainRestartRecovery === undefined &&
     (claim.entry.sessionId === params.sessionId ||

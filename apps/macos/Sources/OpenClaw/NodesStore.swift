@@ -33,7 +33,6 @@ struct NodeInfo: Identifiable, Decodable {
 }
 
 private struct NodeListResponse: Decodable {
-    let ts: Double?
     let nodes: [NodeInfo]
 }
 
@@ -56,18 +55,8 @@ final class NodesStore {
         var message: String?
     }
 
-    private final class Refresh {
-        let revision: UInt64?
-        var lease: GatewayConnection.ServerLease?
-        var task: Task<Void, Never>?
-
-        init(revision: UInt64?) {
-            self.revision = revision
-        }
-    }
-
     private var gatewayState: GatewayState?
-    private var refreshOperation: Refresh?
+    private var refreshOperation: GatewayStoreRefresh?
     private var eventTask: Task<Void, Never>?
 
     /// AppKit reads cached rows before starting a refresh. Project their captured
@@ -186,15 +175,13 @@ final class NodesStore {
 
     private func scheduleLocalNodeIdentityPreparation() {
         guard self.localNodeIdentityPreparationTask == nil else { return }
-        guard case .available = self.localNodeIdentityState else {
-            // Retry on the node refresh lifecycle so transient storage failures recover
-            // without moving identity I/O back into SwiftUI view evaluation.
-            self.localNodeIdentityPreparationTask = Task { [weak self] in
-                guard let self else { return }
-                await self.prepareLocalNodeIdentity()
-                self.localNodeIdentityPreparationTask = nil
-            }
-            return
+        if case .available = self.localNodeIdentityState { return }
+        // Retry on the node refresh lifecycle so transient storage failures recover
+        // without moving identity I/O back into SwiftUI view evaluation.
+        self.localNodeIdentityPreparationTask = Task { [weak self] in
+            guard let self else { return }
+            await self.prepareLocalNodeIdentity()
+            self.localNodeIdentityPreparationTask = nil
         }
     }
 
@@ -236,7 +223,7 @@ final class NodesStore {
         if let refresh = self.refreshOperation, self.isCurrent(refresh), let task = refresh.task { return task }
         self.cancelRefresh()
         self.scheduleLocalNodeIdentityPreparation()
-        let refresh = Refresh(revision: self.gateway.selectedEndpointRevision)
+        let refresh = GatewayStoreRefresh(revision: self.gateway.selectedEndpointRevision)
         self.gatewayState = self.currentState ?? GatewayState(revision: refresh.revision)
         self.gatewayState?.message = nil
         let task = Task<Void, Never> { [weak self] in await self?.performRefresh(refresh) }
@@ -250,13 +237,11 @@ final class NodesStore {
         self.refreshOperation = nil
     }
 
-    private func isCurrent(_ refresh: Refresh) -> Bool {
-        self.refreshOperation === refresh && refresh.task?.isCancelled != true &&
-            refresh.revision == self.gateway.selectedEndpointRevision &&
-            refresh.lease.map(self.gateway.serverLeaseMatchesCurrentState) != false
+    private func isCurrent(_ refresh: GatewayStoreRefresh) -> Bool {
+        self.refreshOperation === refresh && refresh.isCurrent(on: self.gateway)
     }
 
-    private func performRefresh(_ refresh: Refresh) async {
+    private func performRefresh(_ refresh: GatewayStoreRefresh) async {
         defer {
             if self.refreshOperation === refresh { self.refreshOperation = nil }
         }

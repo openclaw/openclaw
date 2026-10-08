@@ -1,4 +1,3 @@
-// Collects raw data needed to render `openclaw status --all`.
 // This file performs local read-only probes; formatting stays in report-line builders.
 
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
@@ -31,15 +30,12 @@ import {
 } from "../status.scan-overview.ts";
 
 type StatusServiceSummaries = Awaited<ReturnType<typeof resolveStatusServiceSummaries>>;
-type StatusGatewayServiceSummary = StatusServiceSummaries[0];
-type StatusNodeServiceSummary = StatusServiceSummaries[1];
 
 type StatusAllProgress = {
   setLabel(label: string): void;
   tick(): void;
 };
 
-/** Collects local diagnosis inputs that are not part of the shared overview scan. */
 async function resolveStatusAllLocalDiagnosis(params: {
   overview: StatusScanOverviewResult;
   progress: StatusAllProgress;
@@ -97,31 +93,29 @@ async function resolveStatusAllLocalDiagnosis(params: {
     env: process.env,
   });
   const defaultWorkspace = controlPlaneWorkspace.workspaceDir ?? null;
-  const skillReadiness =
-    defaultWorkspace != null
-      ? (() => {
-          try {
-            // Skill eligibility depends on whether the default agent may request node exec.
-            const nodeSkills = resolveNodeExecEligibility({
-              cfg: overview.cfg,
-              execApprovals: loadExecApprovalsReadOnly(),
-              agentId: controlPlaneWorkspace.agentId,
-            });
-            return buildWorkspaceSkillReadiness(defaultWorkspace, {
-              config: overview.cfg,
-              agentId: controlPlaneWorkspace.agentId,
-              eligibility: {
-                nodeSkills,
-                remote: getRemoteSkillEligibility({
-                  advertiseExecNode: nodeSkills.canExec,
-                }),
-              },
-            });
-          } catch {
-            return null;
-          }
-        })()
-      : null;
+  let skillReadiness: ReturnType<typeof buildWorkspaceSkillReadiness> | null = null;
+  if (defaultWorkspace != null) {
+    try {
+      // Skill eligibility depends on whether the default agent may request node exec.
+      const nodeSkills = resolveNodeExecEligibility({
+        cfg: overview.cfg,
+        execApprovals: loadExecApprovalsReadOnly(),
+        agentId: controlPlaneWorkspace.agentId,
+      });
+      skillReadiness = buildWorkspaceSkillReadiness(defaultWorkspace, {
+        config: overview.cfg,
+        agentId: controlPlaneWorkspace.agentId,
+        eligibility: {
+          nodeSkills,
+          remote: getRemoteSkillEligibility({
+            advertiseExecNode: nodeSkills.canExec,
+          }),
+        },
+      });
+    } catch {
+      // Preserve a partial report when local skill inspection fails.
+    }
+  }
   const pluginCompatibility = await withPluginDiagnosticsReport(
     { config: overview.cfg },
     (report) => buildPluginCompatibilityNotices({ report }),
@@ -158,11 +152,10 @@ async function resolveStatusAllLocalDiagnosis(params: {
   };
 }
 
-/** Builds the full status-all report data model from a completed overview scan. */
 export async function buildStatusAllReportData(params: {
   overview: StatusScanOverviewResult;
-  daemon: StatusGatewayServiceSummary;
-  nodeService: StatusNodeServiceSummary;
+  daemon: StatusServiceSummaries[0];
+  nodeService: StatusServiceSummaries[1];
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
   progress: StatusAllProgress;
   timeoutMs?: number;
@@ -170,13 +163,7 @@ export async function buildStatusAllReportData(params: {
 }) {
   const gatewaySnapshot = params.overview.gatewaySnapshot;
   const [{ configPath, diagnosis }, summary] = await Promise.all([
-    resolveStatusAllLocalDiagnosis({
-      overview: params.overview,
-      progress: params.progress,
-      nodeOnlyGateway: params.nodeOnlyGateway,
-      timeoutMs: params.timeoutMs,
-      gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
-    }),
+    resolveStatusAllLocalDiagnosis(params),
     params.overview.runtimeDegradation ??
       resolveStatusSummaryFromOverview({ overview: params.overview }),
   ]);

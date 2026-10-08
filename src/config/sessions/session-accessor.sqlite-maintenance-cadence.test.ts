@@ -1,6 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -33,7 +33,7 @@ import { applySessionEntryMaintenance } from "./session-accessor.sqlite-maintena
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sqlite-replacement-state.js";
-import { captureSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
+import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import * as maintenanceRuntime from "./store-maintenance-runtime.js";
 import {
   resolveMaintenanceConfigFromInput,
@@ -63,10 +63,12 @@ function createStore(entryCount: number, updatedAt = Date.now()) {
   return { database, options, storePath };
 }
 
-function createPlanningOperation(
+async function createPlanningOperation(
   options: ReturnType<typeof createStore>["options"],
   input: Partial<SessionEntryMaintenanceInput> = {},
-): Extract<SqliteSessionReclamationPlan, { kind: "maintenance-plan" }> {
+): Promise<Extract<SqliteSessionReclamationPlan, { kind: "maintenance-plan" }>> {
+  const preservation = await prepareSessionMaintenancePreservation(options.path);
+  onTestFinished(preservation.dispose);
   return {
     kind: "maintenance-plan",
     databaseOptions: resolveSessionReclamationDatabaseOptions(options),
@@ -75,48 +77,53 @@ function createPlanningOperation(
       maintenance: resolveMaintenanceConfigFromInput(),
       storePath: options.path,
       archiveDirectory: path.join(path.dirname(options.path), "archives"),
-      preservation: captureSessionMaintenancePreservation(options.path),
+      preservation: preservation.capture(),
       ...input,
     },
   };
 }
 
 function renameEntry(storePath: string, index: number, label: string) {
-  replaceEntryInDatabase(storePath, index, (entry) => ({ ...entry, label }));
+  return replaceEntryInDatabase(storePath, index, (entry) => ({ ...entry, label }));
 }
 
 // Observe the same SQL owner used by the worker, with its clock and connection in this isolate.
-function replaceEntryInDatabase(
+async function replaceEntryInDatabase(
   storePath: string,
   index: number,
   update: (entry: SessionEntry) => SessionEntry,
 ) {
-  return runOpenClawAgentWriteTransaction(
-    (database) => {
-      const sessionKey = key(index);
-      const row = readExactSessionEntryRow(database, sessionKey);
-      if (!row) {
-        throw new Error("Missing cadence fixture entry");
-      }
-      return commitSessionEntryReplacementsInDatabase(
-        database,
-        {
-          expectedRows: new Map([[sessionKey, row]]),
-          labelOwnerKeys: [],
-          validationKeys: [sessionKey],
-          replacements: [{ sessionKey, entry: update(row.entry) }],
-          maintenance: {
-            archiveDirectory: path.join(path.dirname(storePath), "archives"),
-            maintenance: maintenanceRuntime.resolveMaintenanceConfig(),
-            preservation: captureSessionMaintenancePreservation(storePath),
-            storePath,
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  try {
+    return runOpenClawAgentWriteTransaction(
+      (database) => {
+        const sessionKey = key(index);
+        const row = readExactSessionEntryRow(database, sessionKey);
+        if (!row) {
+          throw new Error("Missing cadence fixture entry");
+        }
+        return commitSessionEntryReplacementsInDatabase(
+          database,
+          {
+            expectedRows: new Map([[sessionKey, row]]),
+            labelOwnerKeys: [],
+            validationKeys: [sessionKey],
+            replacements: [{ sessionKey, entry: update(row.entry) }],
+            maintenance: {
+              archiveDirectory: path.join(path.dirname(storePath), "archives"),
+              maintenance: maintenanceRuntime.resolveMaintenanceConfig(),
+              preservation: preservation.capture(),
+              storePath,
+            },
           },
-        },
-        () => {},
-      );
-    },
-    { agentId: "main", path: storePath },
-  );
+          () => {},
+        );
+      },
+      { agentId: "main", path: storePath },
+    );
+  } finally {
+    preservation.dispose();
+  }
 }
 
 function writeMetadata(storePath: string, kind: "participant" | "owner", sequence: number) {
@@ -136,7 +143,7 @@ function writeMetadata(storePath: string, kind: "participant" | "owner", sequenc
 
 it.each(["participant", "owner"] as const)(
   "retains maintenance age facts across %s metadata writes",
-  (kind) => {
+  async (kind) => {
     const { database, storePath } = createStore(24);
     writeMetadata(storePath, kind, 0);
     const factReads = vi.spyOn(ageFacts, "recordSessionEntryMaintenanceAgeFact");
@@ -160,13 +167,13 @@ it.each(["participant", "owner"] as const)(
     const expectedProbes = { after: 1, dashboards: 1, pending: 1, unexpected: 0 };
     const expectedRows = { after: 1, dashboards: 0, pending: 0, unexpected: 0 };
     try {
-      renameEntry(storePath, 0, "warm age facts");
+      await renameEntry(storePath, 0, "warm age facts");
       expect(factReads).toHaveBeenCalledTimes(1);
       expect(queries.counts).toEqual(expectedProbes);
       expect(queries.rowCounts).toEqual(expectedRows);
       for (let sequence = 1; sequence <= 3; sequence += 1) {
         writeMetadata(storePath, kind, sequence);
-        renameEntry(storePath, 0, `renamed-${sequence}`);
+        await renameEntry(storePath, 0, `renamed-${sequence}`);
       }
       expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
         label: "renamed-3",
@@ -201,7 +208,7 @@ it.each(["participant", "owner"] as const)(
 it.each([
   { scenario: "4,000 fresh entries with foreign commits", count: 4_000, ageDays: 0 },
   { scenario: "eight-day entries with a protected primary", count: 2, ageDays: 8 },
-])("does not rescan $scenario across 20 writes", ({ count, ageDays }) => {
+])("does not rescan $scenario across 20 writes", async ({ count, ageDays }) => {
   const { database, options, storePath } = createStore(count, Date.now() - ageDays * DAY_MS);
   if (ageDays) {
     runOpenClawAgentWriteTransaction((owner) => {
@@ -210,7 +217,7 @@ it.each([
         updatedAt: Date.now() - 100 * DAY_MS,
       });
     }, options);
-    renameEntry(storePath, 0, "warm age facts");
+    await renameEntry(storePath, 0, "warm age facts");
   }
   const writer = ageDays ? undefined : new DatabaseSync(database.path);
   writer?.exec("CREATE TABLE maintenance_cadence_noise (value INTEGER)");
@@ -221,7 +228,7 @@ it.each([
   try {
     for (let index = 0; index < writes; index += 1) {
       writer?.prepare("INSERT INTO maintenance_cadence_noise VALUES (?)").run(index);
-      renameEntry(storePath, index % count, `renamed-${index}`);
+      await renameEntry(storePath, index % count, `renamed-${index}`);
     }
   } finally {
     writer?.close();
@@ -250,15 +257,18 @@ it.each([
     maxEntries: 50,
     force: true,
   },
-])("enforces the cap when $scenario", ({ count, maxEntries, force }) => {
+])("enforces the cap when $scenario", async ({ count, maxEntries, force }) => {
   const { options, storePath } = createStore(count);
   const maintenanceConfig = { ...resolveMaintenanceConfigFromInput(), maxEntries };
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  onTestFinished(preservation.dispose);
   const maintain = (trigger = false) =>
     runOpenClawAgentWriteTransaction((database) => {
       if (trigger && !force) {
         writeSessionEntry(database, key(2), { sessionId: "cadence-2", updatedAt: Date.now() });
       }
       return applySessionEntryMaintenance(database, {
+        preservation: preservation.capture,
         archiveDirectory: path.join(path.dirname(storePath), "archives"),
         maintenanceConfig,
         forceMaintenance: trigger && force,
@@ -292,7 +302,7 @@ it.each(["foreign backdate", "managed backdate", "shorter age policy"] as const)
       2,
       mutation === "shorter age policy" ? now - 2 * DAY_MS : now,
     );
-    renameEntry(storePath, 0, "warm age facts");
+    await renameEntry(storePath, 0, "warm age facts");
     if (mutation === "managed backdate") {
       await applySessionEntryReplacements({
         storePath,
@@ -328,7 +338,7 @@ it.each(["foreign backdate", "managed backdate", "shorter age policy"] as const)
           archiveDashboardAfterMs: null,
         });
       }
-      renameEntry(storePath, 0, "reconsider after invalidation");
+      await renameEntry(storePath, 0, "reconsider after invalidation");
     }
     expect(loadSessionEntry({ storePath, sessionKey: key(1) })).toMatchObject({
       archiveReason: "age-retention",
@@ -336,7 +346,7 @@ it.each(["foreign backdate", "managed backdate", "shorter age policy"] as const)
   },
 );
 
-it("keeps an age boundary due when it passes between planning and recording the fact", () => {
+it("keeps an age boundary due when it passes between planning and recording the fact", async () => {
   const now = Date.now();
   const { storePath } = createStore(1, now);
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -352,18 +362,21 @@ it("keeps an age boundary due when it passes between planning and recording the 
     vi.setSystemTime(now + 1_001);
     return record(...args);
   });
-  renameEntry(storePath, 0, "boundary passed during planning");
+  await renameEntry(storePath, 0, "boundary passed during planning");
   expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
-  renameEntry(storePath, 0, "reconsider the elapsed boundary");
+  await renameEntry(storePath, 0, "reconsider the elapsed boundary");
   expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
     archiveReason: "age-retention",
   });
 });
 
-it("does not retain an age fact from a rolled-back archive", () => {
+it("does not retain an age fact from a rolled-back archive", async () => {
   const { options, storePath } = createStore(1, Date.now() - 31 * DAY_MS);
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  onTestFinished(preservation.dispose);
   const maintain = (database: ReturnType<typeof openOpenClawAgentDatabase>) =>
     applySessionEntryMaintenance(database, {
+      preservation: preservation.capture,
       archiveDirectory: path.join(path.dirname(storePath), "archives"),
       maintenanceConfig: resolveMaintenanceConfigFromInput(),
       storePath,
@@ -382,11 +395,11 @@ it("does not retain an age fact from a rolled-back archive", () => {
   });
 });
 
-it("keeps age facts scoped to the store that produced them", () => {
+it("keeps age facts scoped to the store that produced them", async () => {
   const fresh = createStore(1);
   const old = createStore(1, Date.now() - 31 * DAY_MS);
-  renameEntry(fresh.storePath, 0, "fresh store");
-  renameEntry(old.storePath, 0, "old store");
+  await renameEntry(fresh.storePath, 0, "fresh store");
+  await renameEntry(old.storePath, 0, "old store");
   expect(loadSessionEntry({ storePath: old.storePath, sessionKey: key(0) })).toMatchObject({
     archiveReason: "age-retention",
   });
@@ -395,14 +408,14 @@ it("keeps age facts scoped to the store that produced them", () => {
   ).toBeUndefined();
 });
 
-it("reconsiders a session unarchived without changing its timestamp", () => {
+it("reconsiders a session unarchived without changing its timestamp", async () => {
   const { storePath } = createStore(1, Date.now() - 31 * DAY_MS);
-  renameEntry(storePath, 0, "archive old session");
-  renameEntry(storePath, 0, "warm archived-only facts");
+  await renameEntry(storePath, 0, "archive old session");
+  await renameEntry(storePath, 0, "warm archived-only facts");
   const archivedEntry = loadSessionEntry({ storePath, sessionKey: key(0) });
   expect(archivedEntry?.archivedAt).toEqual(expect.any(Number));
   const ageReads = vi.spyOn(candidates, "readSessionMaintenanceAgeCandidates");
-  replaceEntryInDatabase(storePath, 0, (entry) => ({
+  await replaceEntryInDatabase(storePath, 0, (entry) => ({
     ...entry,
     archivedAt: undefined,
     archiveReason: undefined,
@@ -529,7 +542,7 @@ it.each([
   "lifecycle-id",
 ] as const)(
   "discards a prepared maintenance snapshot after %s changes its admission",
-  (mutation) => {
+  async (mutation) => {
     const entryChanged = mutation === "local entry" || mutation === "foreign entry";
     const candidateChanged = mutation === "transcript append" || mutation === "protected parent";
     const { database, options, storePath } = createStore(
@@ -544,7 +557,7 @@ it.each([
         ...(candidateChanged ? {} : { parentSessionKey: key(0) }),
       });
     }
-    const operation = createPlanningOperation(
+    const operation = await createPlanningOperation(
       options,
       entryChanged
         ? {}
@@ -625,9 +638,9 @@ it.each([
   },
 );
 
-it("commits a prepared plan after an unrelated foreign write", () => {
+it("commits a prepared plan after an unrelated foreign write", async () => {
   const { database, options } = createStore(1, Date.now() - 31 * DAY_MS);
-  const operation = createPlanningOperation(options);
+  const operation = await createPlanningOperation(options);
   const prepared = prepareSessionMaintenanceInWorker(operation);
   const writer = new DatabaseSync(database.path);
   try {

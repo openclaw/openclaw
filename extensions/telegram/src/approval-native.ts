@@ -52,21 +52,14 @@ function resolveTurnSourceTelegramOriginTarget(
   };
 }
 
-function resolveSessionTelegramOriginTarget(sessionTarget: {
-  to: string;
-  threadId?: string | number | null;
-}): TelegramOriginTarget {
-  return {
-    to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
-    threadId: parseTelegramThreadId(sessionTarget.threadId),
-  };
-}
-
 const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolver({
   channel: "telegram",
   shouldHandleRequest: shouldHandleTelegramExecApprovalRequest,
   resolveTurnSourceTarget: resolveTurnSourceTelegramOriginTarget,
-  resolveSessionTarget: resolveSessionTelegramOriginTarget,
+  resolveSessionTarget: (sessionTarget) => ({
+    to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
+    threadId: parseTelegramThreadId(sessionTarget.threadId),
+  }),
 });
 
 const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolver({

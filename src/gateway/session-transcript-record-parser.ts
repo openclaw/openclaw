@@ -2,11 +2,7 @@ import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import {
-  extractJsonNullableStringFieldPrefix,
-  extractJsonNumberFieldPrefix,
-  extractJsonStringFieldPrefix,
-} from "./session-transcript-json.js";
+import { escapeRegExp } from "../shared/regexp.js";
 
 export type TranscriptRecord = {
   byteLength: number;
@@ -21,6 +17,59 @@ const OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS = 64 * 1024;
 const OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS = 64 * 1024;
 const MAX_OVERSIZED_TRANSCRIPT_RECOVERY_CANDIDATES = 32;
 const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
+
+// Transcript readers repeatedly extract a fixed set of metadata fields from
+// oversized JSONL prefixes. Keep the compiled regexes process-local instead of
+// rebuilding them for every field on every oversized record.
+const TRANSCRIPT_FIELD_REGEX_CACHE = new Map<
+  string,
+  { stringRe: RegExp; nullRe: RegExp; numberRe: RegExp }
+>();
+
+function getTranscriptFieldRegexes(field: string): {
+  stringRe: RegExp;
+  nullRe: RegExp;
+  numberRe: RegExp;
+} {
+  let cached = TRANSCRIPT_FIELD_REGEX_CACHE.get(field);
+  if (!cached) {
+    const escapedField = escapeRegExp(field);
+    cached = {
+      stringRe: new RegExp(`"${escapedField}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`),
+      nullRe: new RegExp(`"${escapedField}"\\s*:\\s*null`),
+      numberRe: new RegExp(`"${escapedField}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)`),
+    };
+    TRANSCRIPT_FIELD_REGEX_CACHE.set(field, cached);
+  }
+  return cached;
+}
+
+function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
+  const match = getTranscriptFieldRegexes(field).stringRe.exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  return readNonBlankString(safeParseJson(`"${match[1]}"`));
+}
+
+function extractJsonNullableStringFieldPrefix(
+  prefix: string,
+  field: string,
+): string | null | undefined {
+  if (getTranscriptFieldRegexes(field).nullRe.test(prefix)) {
+    return null;
+  }
+  return extractJsonStringFieldPrefix(prefix, field);
+}
+
+function extractJsonNumberFieldPrefix(prefix: string, field: string): number | undefined {
+  const match = getTranscriptFieldRegexes(field).numberRe.exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  const decoded = Number(match[1]);
+  return Number.isFinite(decoded) ? decoded : undefined;
+}
 
 function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
   for (let index = tokenIndex - 1; index >= 0; index--) {

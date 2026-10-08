@@ -2,6 +2,8 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../../agents/embedded-agent-runner/run-state.js";
 import { isEmbeddedRunHandleCompacting } from "../../agents/embedded-agent-runner/runs.probes.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { notifyGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   resolveRunStaleThresholdMs,
@@ -151,14 +153,6 @@ export const evictReplyOperationByOperation =
   replyRunState.evictOperationByOperation ??
   (replyRunState.evictOperationByOperation = new WeakMap<ReplyOperation, () => void>());
 
-function clearWaitSessionIds(sessionKey: string): void {
-  for (const [sessionId, mappedKey] of replyRunState.waitKeysBySessionId) {
-    if (mappedKey === sessionKey) {
-      replyRunState.waitKeysBySessionId.delete(sessionId);
-    }
-  }
-}
-
 export function notifyReplyRunEnded(sessionKey: string): void {
   // Rekey departures invalidate reads without granting destination-lane lineage.
   for (const observation of replyRunCompletionObservations.get(sessionKey) ?? []) {
@@ -219,6 +213,7 @@ const executionStartedOperations =
   (replyRunState.executionStartedOperations = new WeakSet<ReplyOperation>());
 export function markReplyOperationExecutionStarted(operation: ReplyOperation): void {
   executionStartedOperations.add(operation);
+  notifyGatewayWorkMetricsChanged();
 }
 export function hasReplyOperationExecutionStarted(operation: ReplyOperation): boolean {
   return executionStartedOperations.has(operation);
@@ -226,6 +221,7 @@ export function hasReplyOperationExecutionStarted(operation: ReplyOperation): bo
 export const abortFrozenOperations = new WeakSet<ReplyOperation>();
 export const operationsByUpstreamAbortSignal = new WeakMap<AbortSignal, ReplyOperation>();
 export const producerCompletionByOperation = new WeakMap<ReplyOperation, Promise<void>>();
+export const backendReadyByOperation = new WeakMap<ReplyOperation, Promise<void>>();
 export const retainStateUntilCompleteOperations = new WeakSet<ReplyOperation>();
 type ReplyOperationAfterClear = {
   callbacks: Set<(sessionId: string) => void>;
@@ -255,6 +251,33 @@ export const expireReplyOperationByOperation = new WeakMap<
 
 export function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
   return attachedBackendByOperation.get(operation);
+}
+
+/** Wait for this startup owner, without following a replacement or canceling its work. */
+export async function waitForReplyOperationBackend(
+  operation: ReplyOperation,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const key = operation.key;
+  const isCurrent = () =>
+    operation.key === key &&
+    replyRunState.activeRunsByKey.get(key) === operation &&
+    !operation.result &&
+    !operation.abortSignal.aborted;
+  signal?.throwIfAborted();
+  if (!isCurrent()) {
+    return false;
+  }
+  const ready = backendReadyByOperation.get(operation);
+  if (ready) {
+    await racePromiseWithAbortSignal(ready, signal);
+  }
+  return (
+    backendReadyByOperation.get(operation) === ready &&
+    isCurrent() &&
+    operation.phase === "running" &&
+    getAttachedBackend(operation) !== undefined
+  );
 }
 
 export function expireStaleReplyOperation(
@@ -559,13 +582,8 @@ export function waitForReplyBarrierSettlement(
 ): Promise<void> {
   // Owners may extend this for bounded retry envelopes; all barriers retain a failsafe.
   return new Promise<void>((resolve) => {
-    let settled = false;
     let timer: ReturnType<typeof setTimeout>;
     const finish = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       clearTimeout(timer);
       resolve();
     };
@@ -668,7 +686,12 @@ export function clearReplyRunState(params: {
   if (replyRunState.activeKeysBySessionId.get(params.sessionId) === params.sessionKey) {
     replyRunState.activeKeysBySessionId.delete(params.sessionId);
   }
-  clearWaitSessionIds(params.sessionKey);
+  for (const [sessionId, mappedKey] of replyRunState.waitKeysBySessionId) {
+    if (mappedKey === params.sessionKey) {
+      replyRunState.waitKeysBySessionId.delete(sessionId);
+    }
+  }
+  notifyGatewayWorkMetricsChanged();
   notifyReplyRunEnded(params.sessionKey);
 }
 

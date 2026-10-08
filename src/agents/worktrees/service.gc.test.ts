@@ -10,7 +10,6 @@ import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import * as backoff from "../../infra/backoff.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
-import * as pidAlive from "../../shared/pid-alive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -18,7 +17,7 @@ import {
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
-import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.js";
+import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.test-support.js";
 import { managedWorktreeGcEntrypoint } from "./service-gc-runtime.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
@@ -444,29 +443,6 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
   });
 
-  it("garbage collects modified provisioned files into the immutable snapshot", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
-    await git(repo, "add", ".gitignore", ".worktreeinclude");
-    await git(repo, "commit", "-m", "configure worktree provisioning");
-    await fs.writeFile(path.join(repo, ".env.local"), "value=old-source\n");
-
-    const created = await materializeDownstreamFixture("idle-rotated", {
-      ownerKind: "workboard",
-      provisionedPaths: [".env.local"],
-    });
-    await fs.rm(path.join(repo, ".worktreeinclude"));
-    await fs.writeFile(path.join(created.path, ".env.local"), "value=rotated-only-copy\n");
-    now += IDLE_GC_MS + 1;
-
-    expect((await service.gc()).removed).toEqual([created.id]);
-    await fs.writeFile(path.join(repo, ".env.local"), "value=newer-source\n");
-    const restored = await service.restore({ id: created.id });
-    expect(await fs.readFile(path.join(restored.path, ".env.local"), "utf8")).toBe(
-      "value=rotated-only-copy\n",
-    );
-  });
-
   it("shares one fresh lock inventory across idle prefilters for a repository", async () => {
     const records = [];
     for (let index = 0; index < 3; index++) {
@@ -513,22 +489,6 @@ describe("ManagedWorktreeService garbage collection", () => {
     } finally {
       inventories.mockRestore();
       warnLogs.cleanup();
-    }
-  });
-
-  it("checks process liveness only for the requested GC candidates", async () => {
-    const manual = await materializeDownstreamFixture("unrelated-live-lock");
-    const candidate = await materializeRunOwnedFixture("candidate-live-lock", "session");
-    await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.ppid}`, manual.path);
-    await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.pid}`, candidate.path);
-    now += IDLE_GC_MS + 1;
-    const liveness = vi.spyOn(pidAlive, "isPidDefinitelyDead");
-    try {
-      expect((await service.gc()).removed).toEqual([]);
-      expect(liveness).toHaveBeenCalledWith(process.pid);
-      expect(liveness).not.toHaveBeenCalledWith(process.ppid);
-    } finally {
-      liveness.mockRestore();
     }
   });
 

@@ -1,5 +1,5 @@
 import type { CommittedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.js";
-import { captureSessionManagerIncognitoActor } from "../../agents/sessions/session-manager-incognito-scope.js";
+import { captureSessionManagerIncognitoBinding } from "../../agents/sessions/session-manager-incognito-scope.js";
 import {
   receiveSessionManagerCommit,
   SessionEntryCommittedError,
@@ -9,7 +9,7 @@ import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { withOpenClawAgentDatabaseAsync } from "../../state/openclaw-agent-db.js";
+import { withOpenClawAgentDatabaseRuntime } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
@@ -66,7 +66,7 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
     initialWriter?.assertActive();
   };
   const options = toDatabaseOptions(resolveSqliteTranscriptScope(captured));
-  const actor = captureSessionManagerIncognitoActor(captured);
+  const actor = captureSessionManagerIncognitoBinding(captured)?.actor;
   const transcriptByteCompactionLatch = { ...params.transcriptByteCompactionLatch };
   return await trackAsyncWork(() =>
     runOpenClawAgentWriteAdmission(
@@ -141,7 +141,7 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
           });
         return actor
           ? await persist(actor)
-          : await withOpenClawAgentDatabaseAsync(options, persist, assertCurrent);
+          : await withOpenClawAgentDatabaseRuntime(options, persist, assertCurrent);
       },
       true,
     ),

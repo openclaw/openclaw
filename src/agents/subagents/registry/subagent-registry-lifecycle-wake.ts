@@ -1,11 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
+import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
+import { AgentDatabaseAdmissionError } from "../../../state/agent-database-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
+import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-announce-result.js";
+import {
+  deferRequesterSettleWakePreparation,
+  readSharedBatchState,
+} from "../announce/subagent-announce.requester-settle-state.js";
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
@@ -309,7 +316,8 @@ export function scheduleRequesterSettleWake(
     return;
   }
   let entry = publishedAtAdmission ?? observedEntry;
-  if (context.cancelledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
+  const runtimeKey = getSubagentRunRuntimeKey(entry);
+  if (context.cancelledRequesterSettleWakeRuns.has(runtimeKey)) {
     return;
   }
   const pendingAtAdmission = getPendingWakeCommit(context, entry);
@@ -328,7 +336,7 @@ export function scheduleRequesterSettleWake(
     (!pendingAtAdmission?.initialTransfer &&
       entry.requesterTurnRunId &&
       entry.expectsCompletionMessage === true) ||
-    context.scheduledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))
+    context.scheduledRequesterSettleWakeRuns.has(runtimeKey)
   ) {
     return;
   }
@@ -346,7 +354,7 @@ export function scheduleRequesterSettleWake(
       assertSubagentRegistryWriteSourceCurrent(stateContext);
       entry = currentSubagentRunOrObserved(params.runs, entry);
       return (
-        !context.cancelledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry)) &&
+        !context.cancelledRequesterSettleWakeRuns.has(runtimeKey) &&
         isDeepStrictEqual(captureRequesterSettleRunIdentity(entry), admittedIdentity) &&
         hasRequesterWakeOwner(context, entry)
       );
@@ -372,7 +380,7 @@ export function scheduleRequesterSettleWake(
     const member = params.runs.get(id);
     return member ? [member] : [];
   });
-  context.scheduledRequesterSettleWakeRuns.add(getSubagentRunRuntimeKey(entry));
+  context.scheduledRequesterSettleWakeRuns.add(runtimeKey);
   runWithoutOwnedSessionTranscriptWrites(() => {
     void context
       .runRequesterSettleWake(
@@ -393,10 +401,10 @@ export function scheduleRequesterSettleWake(
                 getPendingWakeCommit(context, entry) === undefined
               ) {
                 pending.needsWakeContinuation = false;
-                context.pendingRequesterSettleWakeRearms.add(getSubagentRunRuntimeKey(entry));
+                context.pendingRequesterSettleWakeRearms.add(runtimeKey);
               }
               if (pending.initialTransfer?.completed) {
-                context.pendingRequesterSettleWakeRearms.add(getSubagentRunRuntimeKey(entry));
+                context.pendingRequesterSettleWakeRearms.add(runtimeKey);
               }
               return;
             }
@@ -500,8 +508,16 @@ export function scheduleRequesterSettleWake(
             if (isGatewayRestartDrainError(error)) {
               return;
             }
+            const retryPreparation =
+              (error instanceof AgentDatabaseAdmissionError &&
+                error.refusal.code === "agent-database-inspection-pending") ||
+              error instanceof SubagentAnnouncePreparationConflictError ||
+              (error instanceof WorkerTaskError && error.code === "overloaded");
             const safeError = buildSafeLifecycleErrorMeta(error);
-            if (shouldReportRequesterSettleWakeFailure(context, entry, safeError)) {
+            if (
+              !retryPreparation &&
+              shouldReportRequesterSettleWakeFailure(context, entry, safeError)
+            ) {
               params.warn("requester settle wake failed", {
                 error: safeError,
                 runId: maskLifecycleIdentifier(runId, "run"),
@@ -509,33 +525,48 @@ export function scheduleRequesterSettleWake(
               });
             }
             const current = params.runs.get(runId);
+            const currentWake = current?.requesterSettleWake;
             if (
               getPendingWakeCommit(context, entry) ||
+              !currentWake ||
               !admittedWake ||
               !isSameSubagentRunOwner(current, entry) ||
-              current?.requesterSettleWake?.rearmGeneration !== admittedWake.rearmGeneration ||
+              currentWake.rearmGeneration !== admittedWake.rearmGeneration ||
               !isSourceCurrent()
             ) {
               return;
             }
+            // Deferred preparation is not a delivery attempt. Keep the same cohort,
+            // replay identity, and counters; the existing durable timer retries it.
+            const retryState = retryPreparation
+              ? deferRequesterSettleWakePreparation(readSharedBatchState(admittedBatch))
+              : undefined;
             try {
               await commitRequesterWake(
                 context,
                 admittedBatch,
                 admittedWake.rearmGeneration,
                 (members, episode) =>
-                  completeRequesterSettleWakeBatch(
-                    context,
-                    members,
-                    stateContext,
-                    episode,
-                    admittedWake.rearmGeneration,
-                    {
-                      delivered: false,
-                      path: "none",
-                      error: safeError.message,
-                    },
-                  ),
+                  retryState
+                    ? commitRequesterSettleWakeMutation(
+                        context,
+                        members,
+                        { kind: "transition", state: retryState },
+                        stateContext,
+                        episode,
+                      )
+                    : completeRequesterSettleWakeBatch(
+                        context,
+                        members,
+                        stateContext,
+                        episode,
+                        admittedWake.rearmGeneration,
+                        {
+                          delivered: false,
+                          path: "none",
+                          error: safeError.message,
+                        },
+                      ),
                 true,
                 false,
                 stateContext,
@@ -561,9 +592,7 @@ export function scheduleRequesterSettleWake(
       .finally(() => {
         entry = currentSubagentRunOrObserved(params.runs, entry);
         context.unmarkRequesterSettleWakeRunScheduled(entry);
-        const wasRearmedWhileRunning = context.pendingRequesterSettleWakeRearms.delete(
-          getSubagentRunRuntimeKey(entry),
-        );
+        const wasRearmedWhileRunning = context.pendingRequesterSettleWakeRearms.delete(runtimeKey);
         if (hasRetainedWake(context, entry)) {
           if (wasRearmedWhileRunning) {
             scheduleRequesterSettleWake(context, runId, entry, stateContext);

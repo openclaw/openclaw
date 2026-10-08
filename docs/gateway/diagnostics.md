@@ -169,15 +169,20 @@ The `cpuCoreRatio` in phase and liveness events is measured in core equivalents
 and can exceed `1`. See
 [CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay).
 
-With diagnostics enabled, `sessions.patch` and `sessions.patchMany` calls lasting
-at least one second add an info-level `slow session patch` file-log record. Its
-`elapsedMs`, `phaseDurationsMs`, and `phaseCounts` distinguish lifecycle admission,
-snapshot reads, catalog preparation, projection, commit, runtime acknowledgements,
-effects, and response work. Records inherit the request's diagnostic trace when
-available and contain fixed phase names and numbers, not patch values or session
-keys. Repeated stage visits contribute to the counts and totals. Parallel and
-nested stages can overlap, so their totals are neither an exclusive breakdown
-of request time nor CPU measurements.
+`sessions.patch` and `sessions.patchMany` calls lasting at least one second add
+an info-level `slow session patch` record even when diagnostics are disabled.
+The message includes total elapsed milliseconds, the method, and fixed phase
+durations, for example `slow session patch 1176ms method=sessions.patch catalog=1100ms response=20ms`.
+Replacement snapshots use the metadata reader for bounded exact-key selections
+and the maintenance reader for larger or label-owner selections, independently of
+the transcript-history reader. Snapshot time includes worker preparation and reads.
+Phases distinguish lifecycle admission, snapshot reads, catalog preparation,
+projection, commit, runtime acknowledgements, effects, and response work. Keeping
+timings in the message makes them visible in transports that omit structured
+fields. Records inherit the request's diagnostic trace when available and contain
+no patch values or session keys. Repeated stage visits add to each phase's total.
+Parallel and nested stages can overlap, so their totals are neither an exclusive
+breakdown of request time nor CPU measurements.
 
 Session collaboration reads emit queued `diagnostic.phase.completed` events to
 interested diagnostic listeners. `session.members.list` and
@@ -186,6 +191,9 @@ waits; `session.discussion.info` and `session.discussion.open` report `provider`
 time, including remote provider requests. Phase names use the method as their
 prefix and contain no session keys or response data. Membership evidence uses
 the existing projection worker lane so full transcript reads do not block it.
+The membership `projection` phase prepares creator selection metadata without
+waiting for unrelated session display rows or worker-placement details. The
+`evidence` phase reads membership and current management metadata in one snapshot.
 
 With diagnostics and warning logs enabled, `sessions.create` calls lasting at
 least one second emit `slow session create`. Its `elapsedMs` and
@@ -196,6 +204,19 @@ These are elapsed times, including waits, with fixed phase names and no session
 keys or request values. Worktree preparation measures only work required before
 the response; provisioning already deferred to an initial turn stays with that
 turn's lifecycle.
+
+Managed worktree preparation emits one info-level `managed worktree preparation`
+record on return or failure. `kind=managed` covers checkout creation;
+`kind=sandbox` covers a managed guest projection through backend readiness,
+including workspace/skill layout and container provisioning. `durationMs` measures
+the whole operation. `phaseDurationsMs` attributes allocation admission, checkout,
+setup execution, template preparation and application, snapshot capture, synchronization in each
+direction, workspace layout, and container startup. Phases include nested work
+and asynchronous waits, so do not add them to the total. Unentered phases are
+absent. `template` is `warm`, `cold`, `unavailable`, or `reused` for an existing
+projection; records contain no repository paths, session keys, or setup output.
+With diagnostics enabled, the same observation feeds the
+[worktree preparation histogram](/gateway/prometheus#worktree-preparation).
 
 Two related info-level records help attribute slow worktree cleanup:
 `slow managed worktree removal` separates allocation admission, callback work,
@@ -324,20 +345,28 @@ over the WebSocket or enter the diagnostics export. Worker isolates are excluded
 **Take snapshots in a quiet window.** A 3 GB heap snapshot can block the main
 thread for tens of seconds. V8 may need roughly twice the heap's memory while
 capturing; sufficient memory and disk headroom remain the operator's responsibility.
-The RPC refuses heaps above 6 GiB, overlapping captures, and another capture within
-60 seconds of a native attempt finishing. These admission guards do not impose a
+The RPC refuses heaps above 6 GiB, overlapping CPU/heap captures, and another snapshot within
+60 seconds of a native attempt finishing. It also shares the profiling RPCs' refusal
+of known debuggers, profiling flags, coverage, and active Node tracing. These admission guards do not impose a
 hard duration, output-size, or memory limit: synchronous `writeHeapSnapshot()`
 cannot be interrupted by a timeout, disconnection, or shutdown once started.
 A client timeout does not mean capture stopped; inspect the host directory before
-retrying. Failed captures remove partial files when possible; `cleanupFailed`
-reports whether removal failed.
+retrying. After capture, the diagnostic owner disables the heap profiler and
+disconnects its inspector session, releasing V8's object-ID map and object-move
+tracking so later garbage collections do not keep paying snapshot tracking costs.
+Failed captures remove partial files when possible; `cleanupFailed`
+reports whether profiler cleanup or file removal failed.
 
 Snapshots are **unredacted** and can contain credentials, prompts, and private
 messages. Keep them on the host, review any transfer separately, and delete them
 manually after analysis. Successful snapshots are retained until removed; there
 is no automatic snapshot collection or retention job.
 
-Capture two points in the same process, then compare them from a source checkout:
+RPC snapshots reset object IDs after each capture. Inspect their retaining paths
+individually; do not correlate their object IDs or use them as inputs to the
+identity-based diff below. For an identity-based comparison, capture two points
+through the same continuously attached debugger on an isolated analysis process,
+then compare them from a source checkout:
 
 ```bash
 node scripts/heap-snapshot-diff.mjs before.heapsnapshot after.heapsnapshot
@@ -349,7 +378,7 @@ and analyzes snapshots sequentially, but still needs memory proportional to the
 object graph; run large diffs on a separate analysis host with enough memory.
 Weak and shortcut edges are excluded. Class totals count nested instances of the
 same class once; totals across different classes can overlap. Object IDs match
-only within the same isolate/process. Use Chrome DevTools for interactive retaining
+only while the same isolate's object-ID map remains active. Use Chrome DevTools for interactive retaining
 paths and V8-specific weak/ephemeron semantics; the script is a strong-edge graph
 summary. `--json` produces machine-readable output. Treat diff output as sensitive
 too: it contains unredacted heap names.
@@ -360,7 +389,7 @@ object in the later snapshot. A shortest root path shows reachability;
 the separate dominator chain identifies exclusive retention in that graph.
 
 From a built source checkout, an isolated synthetic workload can collect a
-comparable pair without connecting to an existing Gateway:
+pair of standalone RPC snapshots without connecting to an existing Gateway:
 
 ```bash
 node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90
@@ -515,9 +544,19 @@ diagnostic event collection:
 Disabling diagnostics reduces bug-report detail; it does not affect normal
 Gateway logging.
 
-Memory pressure events record RSS, heap, threshold, and growth facts
-(`rss_threshold`, `heap_threshold`, `rss_growth`) without performing a
-file-system scan or writing a pre-OOM snapshot.
+Memory pressure warnings start at 80% of a measured limit; critical pressure starts
+at 90%. The main thread's V8 `heap_size_limit` is the primary signal
+(`heap_threshold`). Each fresh worker sample is compared with that worker's own V8
+limit (`worker_heap_threshold`), including process-wide heap flag overrides. RSS
+includes every worker and native allocation, so `rss_threshold` uses the smaller of
+physical RAM and the process/cgroup memory constraint, independently of V8 heap
+limits. Unknown limits are omitted; Bun's compatibility heap metadata is not treated
+as a V8 limit. RSS growth alone does not indicate pressure.
+
+Warning and critical journal lines and diagnostic events retain the measured
+`usedBytes`, `limitBytes`, and `thresholdBytes`; worker pressure also identifies
+`workerThreadId`. The detector performs no file-system scan, forced main-thread GC,
+or pre-OOM snapshot. `openclaw_memory_bytes` remains unchanged.
 
 Persistent database workers collect garbage after a completed operation when their
 used heap has grown by 32 MiB since the last idle collection. This uses the runtime's
@@ -527,7 +566,7 @@ history, transcript, and reclamation workers request a 512 MiB V8 old-generation
 limit; an explicit process-wide `--max-old-space-size` overrides Node's worker
 resource limit. These limits do not cover native allocations or transferred buffers.
 Memory diagnostics report each sampled direct worker by script and thread ID,
-including its heap and external memory. Task workers also publish ArrayBuffer
+including its heap, measured heap limit, and external memory. Task workers also publish ArrayBuffer
 bytes from inside their isolate; ArrayBuffers are already included in external
 memory, so do not add those values together. Other direct workers use native heap
 statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
@@ -545,8 +584,10 @@ until the worker responds. Memory pressure warnings include these counters and t
 limit caveat; Node does not provide a worker limit for external/native allocations.
 
 Critical memory pressure retires idle workers through their existing cleanup owners,
-including when diagnostic event collection is disabled. Active operations keep
-their custody and the usual 30-minute database retention window resumes after use.
+including when diagnostic event collection is disabled. Warnings do not retire
+workers. Retirement requests are asynchronous, skip active work, and keep native
+close/checkpoint operations off the main thread. Active operations keep their
+custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
 
 When a task pool recreates an idle-retired Worker within five minutes, it keeps

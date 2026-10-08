@@ -2,22 +2,42 @@ import type {
   AcpSessionEntryMutationInput,
   AcpSessionEntryMutationResult,
 } from "../../acp/runtime/session-meta-entry.types.js";
+import type {
+  BoardReadOperations,
+  BoardWriteOperations,
+} from "../../boards/sqlite-board-operations.js";
 import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
+import type { MessageToolRunOutcomeInsert } from "../../infra/message-tool-run-outcome-store.kernel.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { readSessionProgressCard } from "../../session-cards/progress-card-store.js";
+import type { ProgressCardWorkerOperations } from "../../session-cards/progress-card-store.worker.js";
+import type {
+  TrajectoryRuntimeRetentionInput,
+  TrajectoryRuntimeRetentionPlan,
+} from "../../trajectory/runtime-retention.contract.js";
+import type { deleteTrajectoryRuntimeRetention } from "../../trajectory/runtime-retention.sqlite.js";
+import type { SqliteTrajectoryRuntimeAppend } from "../../trajectory/runtime-store.sqlite.js";
 import type { readLegacyAcpMigrationContextInDatabase } from "./session-accessor.sqlite-acp-provenance.js";
 import type { SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
+import type { SessionEntrySummary } from "./session-accessor.types.js";
+import type { SessionTitleFields } from "./session-history-read.types.js";
 import type { SessionMembershipFact } from "./session-membership-facts.types.js";
 import type { listSessionReactionsInDatabase } from "./session-reaction-store.read.js";
 import type {
   SetSessionReactionParams,
   SessionReactionWrite,
 } from "./session-reaction-store.types.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
-import type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
+import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
+import type { SessionMembersSnapshot } from "./session-sharing-store.kernel.js";
+import type {
+  SessionCollaborationMutation,
+  SessionSharingWorkerOperations,
+  SessionSuggestionListParams,
+  StoredSessionSuggestion,
+} from "./session-sharing-store.types.js";
 
 type SharingOperations = {
-  [Key in "add" | "remove" | "participant"]: {
+  [Key in SessionCollaborationMutation]: {
     input: Omit<SessionSharingWorkerOperations[Key]["input"], "scope"> & { sessionKey: string };
     output: SessionSharingWorkerOperations[Key]["output"];
   };
@@ -27,6 +47,21 @@ type SharingOperations = {
 export type IncognitoSideDataOperations = {
   [Key in keyof SharingOperations as `session.sharing.${Key}`]: SharingOperations[Key];
 } & {
+  [
+    Key in keyof (BoardReadOperations & BoardWriteOperations) as `session.${Key}`
+  ]: (BoardReadOperations & BoardWriteOperations)[Key];
+} & {
+  "session.row.read": {
+    input: { sessionKey: string };
+    output:
+      | {
+          row: SessionRowDatabaseFacts;
+          children: SessionEntrySummary[];
+          titleFields: SessionTitleFields;
+          terminalModel?: { modelProvider: string; model: string };
+        }
+      | undefined;
+  };
   "session.acp.source": {
     input: { sessionKey: string };
     output: ReturnType<typeof readLegacyAcpMigrationContextInDatabase>;
@@ -40,7 +75,11 @@ export type IncognitoSideDataOperations = {
     output: SessionSharingWorkerOperations["category.apply"]["output"];
   };
   "session.category.keys": { input: { name: string }; output: string[] };
-  "session.members.read": { input: { sessionKey: string }; output: SessionMember[] };
+  "session.members.read": { input: { sessionKey: string }; output: SessionMembersSnapshot };
+  "session.suggestions.read": {
+    input: { sessionKey: string; params: SessionSuggestionListParams };
+    output: StoredSessionSuggestion[];
+  };
   "session.participants.read": {
     input: { sessionKey: string };
     output: SessionParticipantRecord[];
@@ -56,9 +95,31 @@ export type IncognitoSideDataOperations = {
   };
   "session.heartbeat.persist": HeartbeatOutcomeWorkerOperations["persist"];
   "session.heartbeat.claim": HeartbeatOutcomeWorkerOperations["claim"];
+  "session.messageToolOutcome.record": { input: MessageToolRunOutcomeInsert; output: void };
+  "session.trajectory.append": {
+    input: SqliteTrajectoryRuntimeAppend & { sessionKey: string; lifecycleRevision?: string };
+    output: void;
+  };
+  "session.trajectory.retention.prepare": {
+    input: TrajectoryRuntimeRetentionInput & { sessionKey: string; now: number };
+    output: { sweepId: string; snapshot: TrajectoryRuntimeRetentionPlan } | undefined;
+  };
+  "session.trajectory.retention.delete": {
+    input: {
+      sessionKey: string;
+      now: number;
+      sweepId: string;
+      snapshot?: TrajectoryRuntimeRetentionPlan;
+    };
+    output: ReturnType<typeof deleteTrajectoryRuntimeRetention>;
+  };
   "session.progressCard.get": {
     input: { sessionKey: string };
     output: ReturnType<typeof readSessionProgressCard>;
+  };
+  "session.progressCard.put": {
+    input: ProgressCardWorkerOperations["put"]["input"];
+    output: Extract<ProgressCardWorkerOperations["put"]["output"], { ok: true }>["value"];
   };
 };
 
@@ -67,6 +128,13 @@ export function isIncognitoSideDataWrite(type: keyof IncognitoSideDataOperations
     type === "session.acp.entry" ||
     type === "session.category.apply" ||
     type === "session.reaction.set" ||
+    type === "session.messageToolOutcome.record" ||
+    type === "session.trajectory.append" ||
+    type === "session.trajectory.retention.delete" ||
+    type === "session.progressCard.put" ||
+    type === "session.boards.applyOps" ||
+    type === "session.boards.putWidget" ||
+    type === "session.boards.grant" ||
     type.startsWith("session.sharing.") ||
     type.startsWith("session.heartbeat.")
   );
@@ -75,7 +143,10 @@ export function isIncognitoSideDataWrite(type: keyof IncognitoSideDataOperations
 export function incognitoSideDataKeys(
   command: SqliteWorkerCommand<IncognitoSideDataOperations>,
 ): string[] {
-  if (command.type === "session.heartbeat.persist") {
+  if (
+    command.type === "session.heartbeat.persist" ||
+    command.type === "session.messageToolOutcome.record"
+  ) {
     return [command.input.session_key];
   }
   if (command.type === "session.catalog.read") {

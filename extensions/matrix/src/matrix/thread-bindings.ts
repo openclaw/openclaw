@@ -28,7 +28,6 @@ import {
   resolveBindingKey,
   setBindingRecord,
   setMatrixThreadBindingManagerEntry,
-  toMatrixBindingTargetKind,
   toSessionBindingRecord,
   type MatrixThreadBindingManager,
   type MatrixThreadBindingRecord,
@@ -294,7 +293,8 @@ export async function createMatrixThreadBindingManager(params: {
   };
   const updateBindingsBySessionKey = (input: {
     targetSessionKey: string;
-    update: (entry: MatrixThreadBindingRecord, now: number) => MatrixThreadBindingRecord;
+    field: "idleTimeoutMs" | "maxAgeMs";
+    value: number;
     persistReason: string;
   }): MatrixThreadBindingRecord[] => {
     const targetSessionKey = input.targetSessionKey.trim();
@@ -304,7 +304,12 @@ export async function createMatrixThreadBindingManager(params: {
     const now = Date.now();
     const nextBindings = listBindingsForAccount(params.accountId)
       .filter((entry) => entry.targetSessionKey === targetSessionKey)
-      .map((entry) => input.update(entry, now));
+      .map((entry) =>
+        Object.assign({}, entry, {
+          [input.field]: Math.max(0, Math.floor(input.value)),
+          lastActivityAt: now,
+        }),
+      );
     if (nextBindings.length === 0) {
       return [];
     }
@@ -353,28 +358,20 @@ export async function createMatrixThreadBindingManager(params: {
       schedulePersist(TOUCH_PERSIST_DELAY_MS);
       return nextRecord;
     },
-    setIdleTimeoutBySessionKey: ({ targetSessionKey, idleTimeoutMs }) => {
-      return updateBindingsBySessionKey({
+    setIdleTimeoutBySessionKey: ({ targetSessionKey, idleTimeoutMs }) =>
+      updateBindingsBySessionKey({
         targetSessionKey,
+        field: "idleTimeoutMs",
+        value: idleTimeoutMs,
         persistReason: "idle-timeout-update",
-        update: (entry, now) => ({
-          ...entry,
-          idleTimeoutMs: Math.max(0, Math.floor(idleTimeoutMs)),
-          lastActivityAt: now,
-        }),
-      });
-    },
-    setMaxAgeBySessionKey: ({ targetSessionKey, maxAgeMs }) => {
-      return updateBindingsBySessionKey({
+      }),
+    setMaxAgeBySessionKey: ({ targetSessionKey, maxAgeMs }) =>
+      updateBindingsBySessionKey({
         targetSessionKey,
+        field: "maxAgeMs",
+        value: maxAgeMs,
         persistReason: "max-age-update",
-        update: (entry, now) => ({
-          ...entry,
-          maxAgeMs: Math.max(0, Math.floor(maxAgeMs)),
-          lastActivityAt: now,
-        }),
-      });
-    },
+      }),
     stop: async () => {
       if (sweepTimer) {
         clearInterval(sweepTimer);
@@ -414,8 +411,8 @@ export async function createMatrixThreadBindingManager(params: {
     reason: string | ((record: MatrixThreadBindingRecord) => string | undefined),
   ) => {
     await Promise.all(
-      removed.map(async (record) => {
-        await sendFarewellMessage({
+      removed.map((record) =>
+        sendFarewellMessage({
           cfg: params.cfg,
           client: params.client,
           accountId: params.accountId,
@@ -423,8 +420,8 @@ export async function createMatrixThreadBindingManager(params: {
           defaultIdleTimeoutMs: defaults.idleTimeoutMs,
           defaultMaxAgeMs: defaults.maxAgeMs,
           reason: typeof reason === "function" ? reason(record) : reason,
-        });
-      }),
+        }),
+      ),
     );
   };
   const unbindRecords = async (records: MatrixThreadBindingRecord[], reason: string) => {
@@ -477,7 +474,7 @@ export async function createMatrixThreadBindingManager(params: {
         accountId: params.accountId,
         conversationId: boundConversationId,
         ...(boundParentConversationId ? { parentConversationId: boundParentConversationId } : {}),
-        targetKind: toMatrixBindingTargetKind(input.targetKind),
+        targetKind: input.targetKind === "subagent" ? "subagent" : "acp",
         targetSessionKey,
         agentId:
           normalizeOptionalString(input.metadata?.agentId) ??
@@ -522,7 +519,7 @@ export async function createMatrixThreadBindingManager(params: {
       manager.touchBinding(bindingId, at);
     },
     unbind: async (input) => {
-      const removed = await unbindRecords(
+      return unbindRecords(
         listBindingsForAccount(params.accountId).filter((record) => {
           if (input.bindingId?.trim()) {
             return resolveBindingKey(record) === input.bindingId.trim();
@@ -534,7 +531,6 @@ export async function createMatrixThreadBindingManager(params: {
         }),
         input.reason,
       );
-      return removed;
     },
   };
 

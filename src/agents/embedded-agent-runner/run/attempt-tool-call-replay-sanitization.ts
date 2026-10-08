@@ -28,7 +28,7 @@ import {
 } from "../../tool-call-id.js";
 import { createCompletedToolCallPredicate } from "../../tool-call-shared.js";
 import type { TranscriptPolicy } from "../../transcript-policy.types.js";
-import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
+import { isRunnerToolCallBlock, type RunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
 
 const REPLAY_TOOL_CALL_NAME_MAX_CHARS = 64;
@@ -49,13 +49,12 @@ function isReplaySafeThinkingTurn(
       continue;
     }
     const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
-    if (!hasToolCallInput(block) || !toolCallId || seenToolCallIds.has(toolCallId)) {
+    if (!toolCallId || seenToolCallIds.has(toolCallId)) {
       return false;
     }
     seenToolCallIds.add(toolCallId);
-    const rawName = typeof block.name === "string" ? block.name : "";
     const resolvedName = resolveReplayToolCallName(
-      rawName,
+      block,
       toolCallId,
       isCompleted(block) ? undefined : allowedToolNames,
     );
@@ -96,10 +95,14 @@ function collectFollowingToolResults(
 }
 
 function resolveReplayToolCallName(
-  rawName: string,
-  rawId: string,
+  block: RunnerToolCallBlock,
+  rawId: unknown,
   allowedToolNames?: Set<string>,
 ): string | null {
+  if (!hasToolCallInput(block) || !hasNonEmptyString(rawId)) {
+    return null;
+  }
+  const rawName = typeof block.name === "string" ? block.name : "";
   if (rawName.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS * 2) {
     return null;
   }
@@ -173,14 +176,8 @@ function sanitizeReplayToolCallInputs(
         continue;
       }
 
-      if (!hasToolCallInput(block) || !hasNonEmptyString(block.id)) {
-        messageChanged = true;
-        continue;
-      }
-
-      const rawName = typeof block.name === "string" ? block.name : "";
       const resolvedName = resolveReplayToolCallName(
-        rawName,
+        block,
         block.id,
         isCompleted(block) ? undefined : allowedToolNames,
       );

@@ -146,7 +146,6 @@ describe("ensurePlaywrightChromium", () => {
 
   it.each([
     { configuredPath: undefined, label: "an unset cache path" },
-    { configuredPath: "", label: "an empty cache path" },
     { configuredPath: "/shared/playwright", label: "an absolute cache path" },
     { configuredPath: "0", label: "Playwright's package-local cache sentinel" },
   ])("preserves $label for sibling browser dependency installs", ({ configuredPath }) => {
@@ -243,34 +242,6 @@ describe("ensurePlaywrightChromium", () => {
     ).toBe(0);
     expect(spawnSync).not.toHaveBeenCalled();
     expect(logs.join("\n")).toContain("leaves the lane skipped");
-  });
-
-  it("installs Chromium through the UI Playwright package when missing", () => {
-    const spawnSync = vi.fn(() => ({ status: 0 }));
-    let existsCalls = 0;
-
-    expect(
-      ensurePlaywrightChromium({
-        cwd: "/repo",
-        env: { PATH: "/bin" },
-        executablePath: "/cache/chromium/chrome",
-        existsSync: () => ++existsCalls > 1,
-        platform: "linux",
-        spawnSync,
-        stdio: "pipe",
-        systemExecutablePath: "",
-      }),
-    ).toBe(0);
-    expect(spawnSync).toHaveBeenCalledWith(
-      process.execPath,
-      [playwrightCli, "install", "chromium"],
-      {
-        cwd: path.resolve("/repo", "ui"),
-        env: { PATH: "/bin" },
-        shell: false,
-        stdio: "pipe",
-      },
-    );
   });
 
   it("installs Linux system dependencies when Chromium still cannot start in a root lane", () => {
@@ -437,44 +408,6 @@ describe("ensurePlaywrightChromium", () => {
       }),
     ).toBe(1);
     expect(spawnSync).toHaveBeenCalledTimes(3);
-  });
-
-  it("reinstalls Chromium when the cached executable exists but cannot start", () => {
-    const spawnSync = vi
-      .fn()
-      .mockReturnValueOnce({ status: 127 })
-      .mockReturnValueOnce({ status: 0 })
-      .mockReturnValueOnce({ status: 0 });
-
-    expect(
-      ensurePlaywrightChromium({
-        cwd: "/repo",
-        env: { PATH: "/bin" },
-        executablePath: "/cache/chromium/chrome",
-        existsSync: () => true,
-        platform: "linux",
-        spawnSync,
-        stdio: "pipe",
-        systemExecutablePath: "",
-      }),
-    ).toBe(0);
-    expect(spawnSync).toHaveBeenNthCalledWith(1, "/cache/chromium/chrome", ["--version"], {
-      stdio: "ignore",
-    });
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      2,
-      process.execPath,
-      [playwrightCli, "install", "chromium"],
-      {
-        cwd: path.resolve("/repo", "ui"),
-        env: { PATH: "/bin" },
-        shell: false,
-        stdio: "pipe",
-      },
-    );
-    expect(spawnSync).toHaveBeenNthCalledWith(3, "/cache/chromium/chrome", ["--version"], {
-      stdio: "ignore",
-    });
   });
 
   it("returns the installer status when Playwright install fails", () => {

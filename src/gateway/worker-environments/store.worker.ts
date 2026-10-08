@@ -198,10 +198,7 @@ export const workerEnvironmentOperations = {
       for (const row of approved) {
         touch(row.environment_id);
       }
-      return pruneObservedTerminalWorkerEnvironments({
-        observed: approved,
-        write: (operation) => operation(db),
-      });
+      return pruneObservedTerminalWorkerEnvironments(db, approved);
     },
   ),
 } satisfies WorkerOperationHandlers;

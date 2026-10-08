@@ -19,8 +19,8 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
-  readSessionTranscriptWatermark,
 } from "../config/sessions/session-accessor.js";
+import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
@@ -381,6 +381,7 @@ export function createSessionActivitySummaries(deps: {
             assertRequestCurrent();
             const result = await (deps.completeModel ?? defaultCompleteModel)({
               ...prepared,
+              purpose: "session-activity-summary",
               config: deps.getConfig(),
               systemPrompt: SYSTEM_PROMPT,
               prompt: JSON.stringify({
@@ -454,12 +455,13 @@ export function createSessionActivitySummaries(deps: {
         state.dirty = true;
         return;
       }
+      const latest = await readSessionTranscriptWatermarkAsync(transcriptScope);
+      assertCurrentOwner(state, ref);
       state.failures = 0;
       if (modelBackoffs.get(ref) === priorBackoff) {
         modelBackoffs.delete(ref);
       }
       partial = summary.coveredMessages < summary.totalMessages;
-      const latest = readSessionTranscriptWatermark(transcriptScope);
       state.dirty ||= latest.generation !== summary.generation || latest.maxSeq !== summary.maxSeq;
       publish(state, partial || state.dirty ? "updating" : "current", true);
     } catch (error) {

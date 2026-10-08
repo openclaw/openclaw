@@ -293,8 +293,7 @@ export async function sendPayload(
     const result = await (turn.telegramDeps.deliverStructuredReplies ?? deliverStructuredReplies)({
       ...createDeliveryBaseOptions(turn),
       replyToMode: effectiveReplyToMode,
-      transcriptMirror:
-        options?.durable && options?.mirrorTranscript !== false ? transcriptMirror : undefined,
+      transcriptMirror: options?.durable ? transcriptMirror : undefined,
       replies: [effectivePayload],
       onMediaAccepted: options?.onMediaAccepted,
       onVoiceRecording: turn.context.sendRecordVoice,
@@ -333,33 +332,6 @@ export async function sendPayload(
   }
 }
 
-async function emitPreviewFinalizedHook(turn: Turn, result: LaneDeliveryResult): Promise<void> {
-  if (
-    turn.isSuperseded() ||
-    (result.kind !== "preview-finalized" && result.kind !== "preview-finalized-partial")
-  ) {
-    return;
-  }
-  // A finalized preview is the durable Telegram message. Emit the composite
-  // terminal here so plugin and internal observers see that one provider result.
-  (turn.telegramDeps.emitTelegramMessageSentHooks ?? emitTelegramMessageSentHooks)({
-    sessionKeyForInternalHooks: turn.context.ctxPayload.SessionKey,
-    chatId: String(turn.context.chatId),
-    accountId: turn.context.route.accountId,
-    content: result.delivery.content,
-    success: result.kind === "preview-finalized",
-    messageId: result.delivery.messageId,
-    isGroup: turn.context.isGroup,
-    groupId: turn.context.isGroup ? String(turn.context.chatId) : undefined,
-  });
-  const transcriptMirror = createTelegramTranscriptMirror(turn);
-  if (transcriptMirror && result.delivery.content) {
-    void transcriptMirror({ text: result.delivery.content }).catch((err: unknown) => {
-      logVerbose(`telegram preview-finalized transcriptMirror failed: ${formatErrorMessage(err)}`);
-    });
-  }
-}
-
 export async function handlePreviewFinalizedResult(
   turn: Turn,
   result: LaneDeliveryResult,
@@ -367,7 +339,28 @@ export async function handlePreviewFinalizedResult(
   if (result.kind !== "preview-finalized" && result.kind !== "preview-finalized-partial") {
     return;
   }
-  await emitPreviewFinalizedHook(turn, result);
+  if (!turn.isSuperseded()) {
+    // A finalized preview is the durable Telegram message. Emit the composite
+    // terminal here so plugin and internal observers see that one provider result.
+    (turn.telegramDeps.emitTelegramMessageSentHooks ?? emitTelegramMessageSentHooks)({
+      sessionKeyForInternalHooks: turn.context.ctxPayload.SessionKey,
+      chatId: String(turn.context.chatId),
+      accountId: turn.context.route.accountId,
+      content: result.delivery.content,
+      success: result.kind === "preview-finalized",
+      messageId: result.delivery.messageId,
+      isGroup: turn.context.isGroup,
+      groupId: turn.context.isGroup ? String(turn.context.chatId) : undefined,
+    });
+    const transcriptMirror = createTelegramTranscriptMirror(turn);
+    if (transcriptMirror && result.delivery.content) {
+      void transcriptMirror({ text: result.delivery.content }).catch((err: unknown) => {
+        logVerbose(
+          `telegram preview-finalized transcriptMirror failed: ${formatErrorMessage(err)}`,
+        );
+      });
+    }
+  }
   if (result.kind === "preview-finalized-partial") {
     // The preview is already visible, so this failure is terminal: preserve its
     // receipt and prevent outer fallback delivery from duplicating the message.

@@ -2,6 +2,7 @@ import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
   createSqliteQueryCache,
+  executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQueryIterator,
   prepareSqliteQuerySync,
@@ -18,7 +19,7 @@ import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
 
 type ActiveTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -106,17 +107,39 @@ export function getActiveTranscriptKysely(database: Pick<TranscriptReadDatabase,
   return getNodeSqliteKysely<ActiveTranscriptDatabase>(database.db);
 }
 
-export function parseActiveTranscriptMessageRow(row: {
-  event_seq: number;
-  event_json: string;
-  message_position: number | null;
-}): SessionTranscriptMessageEvent {
+/** Materialize only physical events already selected in the caller's admitted snapshot. */
+export function readSnapshotEventRows(
+  projection: CurrentTranscriptProjection,
+  eventSeqs: readonly number[],
+) {
+  const sessionId = projection.resolved.sessionId;
+  const query = getActiveTranscriptKysely(projection.database)
+    .selectFrom("transcript_events as event")
+    .select(["event.seq", "event.event_json", "event.event_zstd", "event.event_utf8_bytes"])
+    .where("event.session_id", "=", sessionId);
+  return executeSqliteQuerySync(
+    projection.database.db,
+    query.where(
+      "event.seq",
+      "in",
+      /* kysely-allow-raw: bind physical sequences already selected in this snapshot. */
+      sql<number>`(SELECT value FROM json_each(${JSON.stringify(eventSeqs)}))`,
+    ),
+  ).rows;
+}
+
+export function parseActiveTranscriptMessageRow(
+  row: Pick<TranscriptPayloadRecord, "event_json" | "event_zstd" | "event_utf8_bytes"> & {
+    event_seq: number;
+    message_position: number | null;
+  },
+): SessionTranscriptMessageEvent {
   if (row.message_position === null) {
     throw new Error("Active transcript message row is missing its message position");
   }
   return {
     // SAFETY: The active projection indexes serialized TranscriptEvent rows.
-    event: JSON.parse(row.event_json) as TranscriptEvent,
+    event: JSON.parse(readTranscriptPayload(row)) as TranscriptEvent,
     eventSeq: row.event_seq,
     // Gateway cursors use the visible-message ordinal, matching the JSONL index.
     // Raw event seq includes headers/control rows and would make pages overlap.
@@ -166,20 +189,20 @@ export function selectMessageRows(
         .where("active.message_position", "<", selection.endExclusive);
 }
 
-export function selectMessagePayload(
-  database: Pick<TranscriptReadDatabase, "db">,
-  query: ReturnType<typeof selectMessageRows>,
-) {
+export function selectMessagePayload(query: ReturnType<typeof selectMessageRows>) {
   return query.select([
     "active.event_seq",
     "active.message_position",
-    transcriptEventJsonSql(database.db, "event").as("event_json"),
+    "event.event_json",
+    "event.event_zstd",
+    "event.event_utf8_bytes",
   ]);
 }
 
 export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows>) {
   return query
     .select([
+      "active.event_seq",
       "active.message_position",
       /* kysely-allow-raw: byte caps include each event's JSONL newline. */
       sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
@@ -187,11 +210,12 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
     .$narrowType<{ message_position: number }>();
 }
 
-function createMessageRangeReaders(database: Pick<TranscriptReadDatabase, "db">) {
+const messageRangeReaders = createSqliteQueryCache((db) => {
+  const database = { db };
   const metadata = (direction: "asc" | "desc") =>
     prepareSqliteQueryIterator<
       MessageRangeParameters,
-      { message_position: number; serialized_bytes: number }
+      { event_seq: number; message_position: number; serialized_bytes: number }
     >(database.db, (parameter) =>
       selectMessageMetadata(
         selectMessageRows(
@@ -212,7 +236,6 @@ function createMessageRangeReaders(database: Pick<TranscriptReadDatabase, "db">)
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
     >(database.db, (parameter) =>
       selectMessagePayload(
-        database,
         selectMessageRows(
           database,
           parameter((params) => params.sessionId),
@@ -231,7 +254,6 @@ function createMessageRangeReaders(database: Pick<TranscriptReadDatabase, "db">)
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
     >(database.db, (parameter) =>
       selectMessagePayload(
-        database,
         selectMessageRows(
           database,
           parameter((params) => params.sessionId),
@@ -245,9 +267,7 @@ function createMessageRangeReaders(database: Pick<TranscriptReadDatabase, "db">)
     metadata: metadata("asc"),
     metadataDescending: metadata("desc"),
   };
-}
-
-const messageRangeReaders = createSqliteQueryCache((db) => createMessageRangeReaders({ db }));
+});
 
 export function getMessageRangeReaders(database: CurrentTranscriptProjection["database"]) {
   return messageRangeReaders(database.db);

@@ -15,6 +15,7 @@ import {
   installationTargetEnv,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../infra/installation-target-context.js";
+import { omitGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { OPENCLAW_CLI_ENV_VAR, buildExecRoutingEnv } from "../infra/openclaw-exec-env.js";
 import {
   getShellPathFromLoginShell,
@@ -42,7 +43,7 @@ export type ExecToolArgs = Record<string, unknown> & {
   env?: Record<string, string>;
   yieldMs?: number;
   background?: boolean;
-  required?: boolean;
+  awaitResults?: boolean;
   timeoutSeconds?: number;
   pty?: boolean;
   elevated?: boolean;
@@ -73,11 +74,11 @@ export function assertSupportedExecParams(args: unknown): void {
   if (!isRecord(args)) {
     return;
   }
-  if (args.required !== undefined && typeof args.required !== "boolean") {
-    throw new ToolInputError("exec required must be a boolean");
+  if (args.awaitResults !== undefined && typeof args.awaitResults !== "boolean") {
+    throw new ToolInputError("exec awaitResults must be a boolean");
   }
-  if (args.required === true && args.background === true) {
-    throw new ToolInputError("required exec cannot be detached with background=true");
+  if (args.awaitResults === true && args.background === true) {
+    throw new ToolInputError("exec with awaitResults=true cannot be detached with background=true");
   }
   if (Object.hasOwn(args, "timeout")) {
     throw new ToolInputError(
@@ -149,6 +150,7 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
       const read = await readSessionEntriesFromStoreInWorker({
         agentId: notifyAgentSession.agentId,
         sessionKeys: [notifySessionKey],
+        snapshotFields: [],
         storePath: resolveSessionStorePathCore(defaults.config.session?.store, {
           agentId: notifyAgentSession.agentId,
         }),
@@ -173,6 +175,9 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
+    // Periodic heartbeat and automation turns keep heartbeat delivery for their commands.
+    notifyFromConversationTurn:
+      defaults?.trigger === "user" || defaults?.continuesConversation === true,
   };
 }
 
@@ -510,10 +515,13 @@ export function resolvePreparedExecEnvironment(params: {
 
   // `tools.exec.pathPrepend` is only meaningful when exec runs locally (gateway) or in the sandbox.
   // Node hosts intentionally ignore request-scoped PATH overrides, so don't pretend this applies.
-  if (params.host === "node" && params.defaultPathPrepend.length > 0) {
-    params.warnings.push(
-      "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
-    );
+  // The Gateway CLI shim is merged in automatically and only exists on the Gateway host.
+  if (params.host === "node") {
+    if (omitGatewayAgentCliPath(params.defaultPathPrepend).length > 0) {
+      params.warnings.push(
+        "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+      );
+    }
   } else {
     applyPathPrepend(env, params.defaultPathPrepend);
   }

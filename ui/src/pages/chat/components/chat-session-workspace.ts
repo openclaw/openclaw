@@ -25,7 +25,6 @@ import {
   getSessionWorkspace,
   isCurrentSessionWorkspace,
   loadSessionWorkspace,
-  openSessionCheckoutSidebar,
   refreshSessionWorkspaceState,
   trackSessionCheckoutSidebar,
 } from "./chat-session-workspace-state.ts";
@@ -199,6 +198,7 @@ function openFile(
         return null;
       }
       const name = file.name || pathDisplayName(path);
+      const filePath = file.workspacePath || file.path || path;
       if (file.previewKind === "image") {
         if (
           file.contentEncoding !== "base64" ||
@@ -213,7 +213,7 @@ function openFile(
           title: name,
           src: `data:${file.mimeType};base64,${file.content}`,
           mimeType: file.mimeType,
-          rawText: file.workspacePath || file.path || path,
+          rawText: filePath,
         };
       }
       if (file.previewKind === "unsupported") {
@@ -249,7 +249,6 @@ function openFile(
                   },
                 );
                 const hash = saved?.file.hash;
-                const updatedAtMs = saved?.file.updatedAtMs;
                 if (
                   typeof hash === "string" &&
                   viewingSession &&
@@ -261,7 +260,6 @@ function openFile(
                   ? {
                       ok: true as const,
                       hash,
-                      ...(typeof updatedAtMs === "number" ? { updatedAtMs } : {}),
                     }
                   : { ok: false as const, code: "error" as const, message: "Save failed." };
               } catch (error) {
@@ -269,15 +267,12 @@ function openFile(
                   error instanceof GatewayRequestError &&
                   error.details &&
                   typeof error.details === "object"
-                    ? (error.details as { type?: unknown; currentHash?: unknown })
+                    ? (error.details as { type?: unknown })
                     : null;
                 if (details?.type === "session_file_conflict") {
                   return {
                     ok: false as const,
                     code: "conflict" as const,
-                    ...(typeof details.currentHash === "string"
-                      ? { currentHash: details.currentHash }
-                      : {}),
                   };
                 }
                 return {
@@ -311,20 +306,20 @@ function openFile(
         : undefined;
       return {
         kind: "file",
-        path: file.workspacePath || file.path || path,
+        path: filePath,
         name,
         content: file.content,
         sessionFileSource: {
           sessionKey: result.sessionKey,
           agentId,
-          path: file.workspacePath || file.path || path,
+          path: filePath,
         },
         draftKey: [
           gatewayUrl,
           draftScope ?? "",
           result.sessionKey,
           result.root ?? "",
-          file.workspacePath || file.path || path,
+          filePath,
         ].join("\u0000"),
         draftContext: {
           sessionKey: result.sessionKey,
@@ -503,7 +498,6 @@ export function createSessionWorkspaceProps(
       workspace.filter = filter;
       state.requestUpdate?.();
     },
-    onRefresh: () => loadSessionWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
       clearWorkspaceTimer(workspace);
       workspace.browserPath = path;
@@ -529,7 +523,7 @@ export function createSessionWorkspaceProps(
       }, 160);
     },
     onOpenArtifact: (artifactId) => openArtifact(state, workspace, artifactId),
-    onOpenDiff: diffContent ? () => openSessionCheckoutSidebar(state, diffContent) : undefined,
+    onOpenDiff: diffContent ? () => state.handleOpenSidebar(diffContent) : undefined,
   };
 }
 
@@ -537,16 +531,14 @@ export function resolveSessionDiffSidebarContent(
   state: SessionWorkspaceHost,
 ): SidebarContent | null {
   const workspace = getSessionWorkspace(state);
-  const canOpenDiff =
-    isGatewayMethodAdvertised(state, "sessions.diff") === true && Boolean(state.client);
-  if (!canOpenDiff) {
+  const client = state.client;
+  if (isGatewayMethodAdvertised(state, "sessions.diff") !== true || !client) {
     return null;
   }
   if (workspace.diffContent) {
     return workspace.diffContent;
   }
   const sessionKey = state.sessionKey;
-  const client = state.client;
   const agentId = workspace.agentId;
   const canLoadFileText =
     isGatewayMethodAdvertised(state, "sessions.files.get") === true && Boolean(state.client);
@@ -555,9 +547,6 @@ export function resolveSessionDiffSidebarContent(
     // Checkout retirement replaces this identity; ordinary refreshes retain it.
     owner: workspace,
     load: async (scope) => {
-      if (!client) {
-        throw new Error(t("chat.sessionDiff.disconnected"));
-      }
       return await client.request<SessionsDiffResult>("sessions.diff", {
         sessionKey,
         ...(agentId ? { agentId } : {}),

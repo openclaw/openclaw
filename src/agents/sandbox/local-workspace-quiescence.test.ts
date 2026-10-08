@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 const mocks = vi.hoisted(() => ({
   command: vi.fn(),
   current: vi.fn(),
@@ -174,6 +175,95 @@ it("records each released generation before a later resume failure and re-fences
   expect(retained).toEqual([]);
   expect(pausedIds.size).toBe(0);
 });
+
+it.each(["inspect", "pause", "resume-inspect", "unpause"])(
+  "bounds a hung %s, joins command cleanup, and preserves uncertain custody for recovery",
+  async (phase) => {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+      return controller.signal;
+    });
+    const entered = createDeferred();
+    const cleanup = createDeferred();
+    const abortedCommand = Object.assign(new Error("Aborted"), { name: "AbortError" });
+    let paused = false;
+    let retained: Array<{ name: string; id: string }> = [];
+    let fail = true;
+    let aborted = false;
+    let settled = false;
+    mocks.command.mockImplementation(
+      async (_engine, args: string[], options?: { signal?: AbortSignal }) => {
+        const signal = options?.signal;
+        signal?.throwIfAborted();
+        const action = args.includes("{{.State.Paused}}") ? "resume-inspect" : args[0];
+        if (action === "pause" || action === "unpause") {
+          // The engine may accept a mutation before its client stops responding.
+          paused = action === "pause";
+        }
+        if (fail && action === phase) {
+          fail = false;
+          entered.resolve();
+          await new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                void cleanup.promise.then(() => reject(abortedCommand));
+              },
+              { once: true },
+            );
+          });
+        }
+        return {
+          code: 0,
+          stdout: action === "resume-inspect" ? String(paused) : `${id} true ${paused}`,
+          stderr: "",
+        };
+      },
+    );
+    const input = {
+      workspaceDir: entry.workspaceDir,
+      assertCurrent: () => {},
+      persist: (rows: typeof retained) => {
+        retained = [...rows];
+      },
+    };
+    const operation = (async () => {
+      const control = await quiesceLocalWorkspace({ ...input, retained });
+      await control.resume();
+    })().then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(aborted).toBe(true);
+      expect(settled).toBe(false);
+      cleanup.resolve();
+      expect(await operation).toBe(abortedCommand);
+      expect(retained).toEqual(phase === "inspect" ? [] : [{ name: "owned", id }]);
+      const recovery = await quiesceLocalWorkspace({ ...input, retained });
+      await recovery.resume();
+      expect(retained).toEqual([]);
+      expect(paused).toBe(false);
+    } finally {
+      cleanup.resolve();
+      timeout.mockRestore();
+      vi.useRealTimers();
+    }
+  },
+);
 
 it.each([
   { owner: "workspace", removed: false, error: "revoked" },

@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -16,11 +15,9 @@ import {
 import { addSessionMember, removeSessionMember } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
-import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
-import { listSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
+import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import type { SessionMember as StoredSessionMember } from "../../config/sessions/session-sharing-store.kernel.js";
-import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
@@ -31,6 +28,7 @@ import {
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { projectSessionActor } from "../session-identity-projection.js";
+import { prepareSessionPublicShareGrant } from "../session-publication-grant.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import {
@@ -116,11 +114,10 @@ function projectPublicSessionShare(params: {
   agentId: string;
   sessionKey: string;
   grant: NonNullable<ReturnType<typeof resolveSessionPublicShare>>;
-  codec?: PublicSessionShareTokenCodec;
+  codec: PublicSessionShareTokenCodec;
 }): SessionPublicShare {
-  const codec = params.codec ?? loadPublicSessionShareTokenCodec();
   return {
-    token: codec.mint({
+    token: params.codec.mint({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionId: params.grant.sessionId,
@@ -183,110 +180,117 @@ function createSessionMembersListHandler(
     }
     const managed = access.target;
     const projection = requireSessionRowProjection(context);
-    const profiles = await measureSessionCollaborationPhase(`${method}.profiles`, () =>
-      listProfiles(),
-    );
-    const evidenceMembers = (
-      await measureSessionCollaborationPhase(`${method}.evidence`, () =>
-        listSessionMembersInWorker({
-          agentId: managed.agentId,
-          sessionKey: managed.storeKey,
-          storePath: managed.storePath,
-        }),
-      )
-    ).map(projectSessionMemberEvidence);
-    do {
-      await measureSessionCollaborationPhase(`${method}.projection`, () =>
-        projection.ensureMaterialized(),
+    await projection.withSelectionPreparation(async () => {
+      const profiles = await measureSessionCollaborationPhase(`${method}.profiles`, () =>
+        listProfiles(),
       );
-    } while (projection.needsMaterialization);
-    const entry = await withSessionEntryReadOnlyInWorker(
-      {
-        agentId: managed.agentId,
-        sessionKey: managed.storeKey,
-        storePath: managed.storePath,
-        projection: "list",
-      },
-      access.assertCurrent,
-      async (read) => {
-        if (!read.ok) {
-          throw read.error;
+      do {
+        await measureSessionCollaborationPhase(`${method}.projection`, () =>
+          Promise.resolve(projection.prepareSelection()),
+        );
+      } while (projection.needsSelectionPreparation());
+      let tokenCodec = resolveSessionPublicShare(managed.entry)
+        ? await loadPublicSessionShareTokenCodec()
+        : undefined;
+      const readEvidence = async () => {
+        const evidence = await measureSessionCollaborationPhase(`${method}.evidence`, () =>
+          readSessionMembersInWorker({
+            agentId: managed.agentId,
+            sessionKey: managed.storeKey,
+            storePath: managed.storePath,
+          }),
+        );
+        access.assertCurrent();
+        if (!evidence.entry) {
+          throw new Error("session changed before sharing read");
         }
-        return read.value;
-      },
-    );
-    if (!entry) {
-      throw new Error("session changed before sharing read");
-    }
-    const currentCfg = context.getRuntimeConfig();
-    const { target, role } = access.current(entry);
-    const publicShareGrant = resolveSessionPublicShare(entry);
-    const actor = actorIdentity(client);
-    const members = evidenceAware
-      ? evidenceMembers
-      : evidenceMembers.map(projectLegacySessionMember);
-    if (!evidenceAware && members.some((member) => member === null)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "session membership includes actor evidence this client cannot represent",
-          {
-            details: {
-              code: "SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED",
-              recommendedMethod: "session.members.listEvidence",
-            },
-          },
-        ),
-      );
-      return;
-    }
-    const projectedMembers = members.filter((member) => member !== null);
-    const identities = knownSessionIdentities({
-      creators: projection.listCreatedActors(),
-      actor,
-      profiles,
-    });
-    for (const member of projectedMembers) {
-      if (!identities.some((identity) => identity.id === member.identityId)) {
-        identities.push({ type: "human", id: member.identityId });
+        return { entry: evidence.entry, members: evidence.members };
+      };
+      let evidence = await readEvidence();
+      if (resolveSessionPublicShare(evidence.entry) && !tokenCodec) {
+        const prepared = loadPublicSessionShareTokenCodec();
+        if (prepared instanceof Promise) {
+          tokenCodec = await prepared;
+          // Foreign publication can reveal a cold codec after discovery. Its wait
+          // ends the read phase; authorize only the fresh row from the same target.
+          evidence = await readEvidence();
+        } else {
+          tokenCodec = prepared;
+        }
       }
-    }
-    identities.sort(
-      (left, right) =>
-        (left.label ?? left.id).localeCompare(right.label ?? right.id) ||
-        left.id.localeCompare(right.id),
-    );
-    // Persisted provenance deliberately has no current profile label or avatar.
-    // Project it at the same display boundary as session rows; never change the access identity.
-    const storedOwner = entry.createdActor;
-    const owner = sessionCreatorProfileId(storedOwner)
-      ? projectSessionActor(storedOwner, new Map(), currentCfg)
-      : storedOwner
-        ? { type: storedOwner.type, id: storedOwner.id, label: storedOwner.label }
-        : undefined;
-    const publicShare =
-      publicShareGrant?.sessionId === target.entry.sessionId
-        ? projectPublicSessionShare({
-            agentId: target.agentId,
-            sessionKey: target.canonicalKey,
-            grant: publicShareGrant,
-          })
-        : undefined;
-    respond(
-      true,
-      {
-        sessionKey: target.canonicalKey,
-        ...(publicShare ? { publicShare } : {}),
-        ...(owner?.id ? { owner } : {}),
-        members: projectedMembers,
-        identities,
-        role,
-        allowedVisibilities: allowedSessionVisibilities(currentCfg),
-      },
-      undefined,
-    );
+      const { entry, members: storedMembers } = evidence;
+      const publicShareGrant = resolveSessionPublicShare(entry);
+      const currentCfg = context.getRuntimeConfig();
+      const { target, role } = access.current(entry);
+      const evidenceMembers = storedMembers.map(projectSessionMemberEvidence);
+      const actor = actorIdentity(client);
+      const members = evidenceAware
+        ? evidenceMembers
+        : evidenceMembers.map(projectLegacySessionMember);
+      if (!evidenceAware && members.some((member) => member === null)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "session membership includes actor evidence this client cannot represent",
+            {
+              details: {
+                code: "SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED",
+                recommendedMethod: "session.members.listEvidence",
+              },
+            },
+          ),
+        );
+        return;
+      }
+      const projectedMembers = members.filter((member) => member !== null);
+      const identities = knownSessionIdentities({
+        creators: projection.listCreatedActors(),
+        actor,
+        profiles,
+      });
+      for (const member of projectedMembers) {
+        if (!identities.some((identity) => identity.id === member.identityId)) {
+          identities.push({ type: "human", id: member.identityId });
+        }
+      }
+      identities.sort(
+        (left, right) =>
+          (left.label ?? left.id).localeCompare(right.label ?? right.id) ||
+          left.id.localeCompare(right.id),
+      );
+      // Persisted provenance deliberately has no current profile label or avatar.
+      // Project it at the same display boundary as session rows; never change the access identity.
+      const storedOwner = entry.createdActor;
+      const owner = sessionCreatorProfileId(storedOwner)
+        ? projectSessionActor(storedOwner, new Map(), currentCfg)
+        : storedOwner
+          ? { type: storedOwner.type, id: storedOwner.id, label: storedOwner.label }
+          : undefined;
+      const publicShare =
+        publicShareGrant?.sessionId === target.entry.sessionId && tokenCodec
+          ? projectPublicSessionShare({
+              agentId: target.agentId,
+              sessionKey: target.canonicalKey,
+              grant: publicShareGrant,
+              codec: tokenCodec,
+            })
+          : undefined;
+      respond(
+        true,
+        {
+          sessionKey: target.canonicalKey,
+          ...(publicShare ? { publicShare } : {}),
+          ...(owner?.id ? { owner } : {}),
+          members: projectedMembers,
+          identities,
+          role,
+          allowedVisibilities: allowedSessionVisibilities(currentCfg),
+        },
+        undefined,
+      );
+    });
   };
 }
 
@@ -328,8 +332,8 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       }
       let publicShare: SessionPublicShare | undefined;
       await runExclusiveSharingMutation(managed, access.lifecycleStorePath, async () => {
+        const tokenCodec = params.enabled ? await loadPublicSessionShareTokenCodec() : undefined;
         const { target: current } = access.current();
-        const tokenCodec = params.enabled ? loadPublicSessionShareTokenCodec() : undefined;
         let changed = false;
         let inspected = false;
         await patchSessionEntryCore(
@@ -349,17 +353,8 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
             access.assertEntryManageable(entry);
             const previous = resolveSessionPublicShare(entry);
             const publicShareGrant = params.enabled
-              ? (previous ?? {
-                  id: randomBytes(24).toString("hex"),
-                  sessionId: entry.sessionId,
-                  createdAt: Date.now(),
-                })
+              ? prepareSessionPublicShareGrant(entry, current.canonicalKey)
               : undefined;
-            if (publicShareGrant) {
-              // Capability URLs may surface in free-form diagnostics where no
-              // structured field or query-name policy is available.
-              registerSecretValueForRedaction(publicShareGrant.id);
-            }
             publicShare =
               publicShareGrant && tokenCodec
                 ? projectPublicSessionShare({

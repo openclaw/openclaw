@@ -4,7 +4,6 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -29,17 +28,6 @@ type AgentAvatarPublicSourceInput = {
 
 const PUBLIC_AVATAR_SOURCE_MAX_CHARS = 256;
 const PUBLIC_DATA_AVATAR_HEADER_MAX_CHARS = 64;
-
-function resolveAvatarSource(cfg: OpenClawConfig, agentId: string): string | null {
-  const normalizedAgentId = normalizeAgentId(agentId);
-  const fromConfig =
-    normalizeOptionalString(resolveAgentIdentity(cfg, normalizedAgentId)?.avatar) ?? null;
-  if (fromConfig) {
-    return fromConfig;
-  }
-  const workspace = resolveAgentWorkspaceDir(cfg, normalizedAgentId);
-  return normalizeOptionalString(loadAgentIdentityFromWorkspace(workspace)?.avatar) ?? null;
-}
 
 function isSafeRelativeAvatarSource(source: string): boolean {
   if (
@@ -81,7 +69,11 @@ export function resolvePublicAgentAvatarSource(
 
 /** Resolve the effective avatar for an agent, including config and IDENTITY.md. */
 export function resolveAgentAvatar(cfg: OpenClawConfig, agentId: string): AgentAvatarResolution {
-  const source = resolveAvatarSource(cfg, agentId);
+  const source =
+    normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.avatar) ??
+    normalizeOptionalString(
+      loadAgentIdentityFromWorkspace(resolveAgentWorkspaceDir(cfg, agentId))?.avatar,
+    );
   if (!source) {
     return { kind: "none", reason: "missing" };
   }

@@ -10,6 +10,7 @@ import {
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
@@ -75,6 +76,17 @@ const MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS = [100, 400, 1_500, 3_000] as con
 const MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS = 64;
 type ChatPanePresentation = () => boolean;
 
+function refreshChatEventHistory(
+  state: ChatPageHost,
+  presented: boolean,
+  supersedeInFlight?: true,
+): void {
+  void loadChatHistory(state, {
+    deferBranches: !presented,
+    ...(supersedeInFlight ? { supersedeInFlight } : {}),
+  }).finally(() => state.requestUpdate?.());
+}
+
 function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
   return agentId ? normalizeAgentId(agentId) : resolveUiDefaultAgentId(state);
 }
@@ -104,11 +116,21 @@ function finishSessionMessageRunReconcile(
   const cleared = row
     ? reconcileChatRunFromSessionRow(state, row, { publishRunStatus: true })
     : reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true });
-  if (!cleared) {
+  const session = row ?? selectedChatSessionRow(state);
+  const needsRunObservation = Boolean(
+    state.chatRunId && session?.hasActiveRun === false && !isSessionRunActive(session),
+  );
+  if (!cleared && !needsRunObservation) {
     return false;
   }
-  clearPendingQueueItemsForRun(state, runId ?? undefined);
-  void loadChatHistory(state, { deferBranches: !presentation() })
+  if (cleared) {
+    clearPendingQueueItemsForRun(state, runId ?? undefined);
+  }
+  // A different completed run cannot settle local ownership without a fresh read.
+  void loadChatHistory(state, {
+    deferBranches: !presentation(),
+    supersedeInFlight: needsRunObservation,
+  })
     .finally(() => {
       if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
         return;
@@ -138,10 +160,7 @@ function handleSessionMessageEvent(
     // A pre-commit snapshot can erase even an admitted live reply when its leaf advances.
     // Fence it before run settlement, while retaining the loader's single queued refresh.
     if (getChatHistoryLoadState(state).phase === "in-flight") {
-      void loadChatHistory(state, {
-        deferBranches: !presentation(),
-        supersedeInFlight: true,
-      }).finally(() => state.requestUpdate?.());
+      refreshChatEventHistory(state, presentation(), true);
     }
     // A previous run can persist its final after the next local run starts.
     // Admit that sequenced row now so the later unsequenced chat.final replay
@@ -165,10 +184,7 @@ function handleSessionMessageEvent(
     if (event.hasActiveRun === true) {
       if (isUserMessage) {
         // Promotion changes pending custody even while the next turn is active.
-        void loadChatHistory(state, {
-          deferBranches: !presentation(),
-          supersedeInFlight: true,
-        }).finally(() => state.requestUpdate?.());
+        refreshChatEventHistory(state, presentation(), true);
       }
       return true;
     }
@@ -196,9 +212,7 @@ function handleSessionMessageEvent(
   }
   if (matchesChat) {
     state.pendingSessionMessageReloadSessionKey = null;
-    void loadChatHistory(state, {
-      deferBranches: !presentation(),
-    }).finally(() => state.requestUpdate?.());
+    refreshChatEventHistory(state, presentation());
   }
   return matchesChat;
 }
@@ -207,7 +221,6 @@ function replayPendingSessionMessageReload(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
   presentation: ChatPanePresentation,
-  supersedeInFlight = false,
 ): boolean {
   const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
   const payloadSessionKey = payload?.sessionKey?.trim();
@@ -221,10 +234,7 @@ function replayPendingSessionMessageReload(
     return false;
   }
   state.pendingSessionMessageReloadSessionKey = null;
-  void loadChatHistory(state, {
-    deferBranches: !presentation(),
-    supersedeInFlight,
-  }).finally(() => state.requestUpdate?.());
+  refreshChatEventHistory(state, presentation());
   return true;
 }
 
@@ -411,9 +421,7 @@ function handleSessionsChangedEvent(
     observeChatRunModel(state, modelRunId, result.admittedRow);
   }
   if (resetsSelectedSession || (matchesChat && source?.reason === "compact")) {
-    void loadChatHistory(state, { deferBranches: !presented }).finally(() =>
-      state.requestUpdate?.(),
-    );
+    refreshChatEventHistory(state, presented);
     return true;
   }
   if (
@@ -426,10 +434,7 @@ function handleSessionsChangedEvent(
     invalidateChatBranches(state);
     // Legacy multi-message writes cannot prove individual message cursors.
     // A snapshot begun before this invalidation cannot recover the committed rows.
-    void loadChatHistory(state, {
-      deferBranches: !presented,
-      supersedeInFlight: true,
-    }).finally(() => state.requestUpdate?.());
+    refreshChatEventHistory(state, presented, true);
     return true;
   }
   if (
@@ -439,10 +444,7 @@ function handleSessionsChangedEvent(
   ) {
     // Custody can change without a transcript append. A read begun before this
     // event must not hide accepted input until the active run ends.
-    void loadChatHistory(state, {
-      deferBranches: !presented,
-      supersedeInFlight: true,
-    }).finally(() => state.requestUpdate?.());
+    refreshChatEventHistory(state, presented, true);
   }
   // The session capability owns roster invalidation, including unapplied events.
   // A pane refresh here bypasses its debounce and multiplies reads across split panes.
@@ -557,7 +559,10 @@ export function handlePageGatewayEvent(
         refreshPullRequestsForStreamedLinks(state, payload.runId, payload.deltaText);
       }
       const shouldRefreshPullRequests = finalAssistantReplyHasPullRequestLink(state, payload);
-      handleChatGatewayEvent(state, payload);
+      if (handleChatGatewayEvent(state, payload) === "injected") {
+        requestChatPageUpdate(state);
+        return;
+      }
       if (terminalPayload && sessionMatches) {
         clearPendingQueueItemsForRun(state, terminalPayload.runId);
       }

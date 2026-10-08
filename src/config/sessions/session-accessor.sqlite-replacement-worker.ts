@@ -78,21 +78,41 @@ export async function withSessionEntryWorker<T>(
     request: SqliteWorkerAdmissionRequest,
     grant: () => boolean,
   ) => boolean,
+  releaseSource?: () => void | Promise<void>,
 ): Promise<T> {
-  const execution =
-    retainedExecution ??
-    captureOpenClawAgentDatabaseExecution(
-      options,
-      databaseIdentity
-        ? {
-            expectedIdentity: {
-              kind: "file",
-              physicalIdentity: databaseIdentity,
-              nativeLocation: options.path,
-            },
-          }
-        : {},
-    );
+  let execution: OpenClawAgentDatabaseExecution;
+  let env: SessionEntryCommitContext["env"];
+  try {
+    env = Object.freeze({ ...(options.env ?? process.env) });
+    execution =
+      retainedExecution ??
+      captureOpenClawAgentDatabaseExecution(
+        options,
+        databaseIdentity
+          ? {
+              expectedIdentity: {
+                kind: "file",
+                physicalIdentity: databaseIdentity,
+                nativeLocation: options.path,
+              },
+            }
+          : {},
+      );
+  } catch (error) {
+    try {
+      await releaseSource?.();
+    } catch (cleanupError) {
+      throw retainSqliteWorkerErrorCode(
+        createSqliteLifecycleAggregateError(
+          [error, cleanupError],
+          "Session writer acquisition and source cleanup failed",
+          error,
+        ),
+        error,
+      );
+    }
+    throw error;
+  }
   const assertRetainedIdentity = () => {
     if (!retainedExecution) {
       return;
@@ -118,7 +138,7 @@ export async function withSessionEntryWorker<T>(
   };
   let assertNativeCurrent: (() => void) | undefined;
   const context: SessionEntryCommitContext = {
-    env: Object.freeze({ ...(options.env ?? process.env) }),
+    env,
     assertCurrent() {
       execution.assertCurrent();
       assertRetainedIdentity();
@@ -189,6 +209,7 @@ export async function withSessionEntryWorker<T>(
   }
   const cleanupErrors: unknown[] = [];
   for (const cleanup of [
+    () => releaseSource?.(),
     () => preparation?.release(),
     () => (retainedExecution ? undefined : execution.release()),
   ]) {
@@ -457,6 +478,10 @@ export async function runSessionEntryWorkerMutation<T>(
         !Array.isArray(facts.publication.sharingUnchangedKeys) ||
         !facts.publication.sharingUnchangedKeys.every(
           (key): key is string => typeof key === "string",
+        ) ||
+        !Array.isArray(facts.publication.generationUnchangedKeys) ||
+        !facts.publication.generationUnchangedKeys.every(
+          (key): key is string => typeof key === "string",
         )
       ) {
         throw new Error("Session entry mutation commit omitted its publication keys");
@@ -466,6 +491,7 @@ export async function runSessionEntryWorkerMutation<T>(
         facts.publication.changedKeys,
         facts.publication.membershipInvalidatedKeys,
         facts.publication.sharingUnchangedKeys,
+        facts.publication.generationUnchangedKeys,
       );
     },
     executionOptions.retainedExecution,

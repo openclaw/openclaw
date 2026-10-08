@@ -212,8 +212,28 @@ suite.define(() => {
     const gateway = await installMockGateway(page);
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator(".new-session-page__message").fill("verify the default mock");
-      await page.getByRole("button", { name: "Start session" }).click();
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill("verify the default mock");
+      const confirmationConsumed = await composer.evaluate((textarea) => {
+        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        const end = new CompositionEvent("compositionend", { bubbles: true });
+        textarea.dispatchEvent(end);
+        const confirm = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
+        textarea.dispatchEvent(confirm);
+        return confirm.defaultPrevented;
+      });
+      expect(confirmationConsumed).toBe(false);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await composer.inputValue()).toBe("verify the default mock");
+      await captureProof(page, "ime-confirmation-retains-draft.png");
+      await composer.dispatchEvent("keyup", { key: "Enter" });
+      await composer.press("Enter");
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { agentId: "main", message: "verify the default mock" },
@@ -230,6 +250,7 @@ suite.define(() => {
       }
       const firstKey = firstParams.key;
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
+      await captureProof(page, "ime-deliberate-enter-created.png");
 
       await page.getByRole("link", { name: "New conversation" }).first().click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
@@ -690,7 +711,7 @@ suite.define(() => {
           const startup = page.locator(".new-session-page__starting");
           const submittedPrompt = startup.locator(".chat-group.user");
           const announcement = page.locator(
-            '.new-session-page > [role="status"][aria-live="polite"], openclaw-pending-session-create > .chat > [role="status"][aria-live="polite"]',
+            '.new-session-page > [role="status"][aria-live="polite"], openclaw-pending-session-create .chat-main__conversation > [role="status"][aria-live="polite"]',
           );
           const draftImage = page.locator(".chat-attachment-thumb").getByRole("img", {
             name: imageFileName,
@@ -707,8 +728,6 @@ suite.define(() => {
           await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
           await placeSummary.click();
           expect(await placeSelect.getAttribute("open")).not.toBeNull();
-          const scroll = page.locator(".new-session-page__scroll");
-          const initialScrollPadding = await scroll.evaluate((el) => getComputedStyle(el).padding);
           await page.getByRole("button", { name: "Start session" }).dblclick();
 
           const create = await gateway.waitForRequest("sessions.create");
@@ -777,10 +796,12 @@ suite.define(() => {
           expect(new URL(page.url()).pathname).toBe("/new");
           expect(await message.isVisible()).toBe(false);
           expect(await placeSelect.isVisible()).toBe(false);
-          // Pending chat classes must preserve New Session's native titlebar drag inset.
-          expect(await scroll.evaluate((el) => getComputedStyle(el).padding)).toBe(
-            initialScrollPadding,
-          );
+          // The visible chat header now owns the titlebar, not a second draft-scroll inset.
+          const pendingChat = page.locator("openclaw-pending-session-create");
+          expect(await pendingChat.locator(".chat-pane__header").isVisible()).toBe(true);
+          expect(
+            await pendingChat.locator(".agent-chat__composer-combobox textarea").isDisabled(),
+          ).toBe(true);
           await captureUiProof(suite, page, `${proofName}-submitted.png`);
           const presentation = await expectPendingNewSessionPresentation(page);
           if (captureProofEnabled) {

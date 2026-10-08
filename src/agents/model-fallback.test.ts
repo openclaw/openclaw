@@ -84,7 +84,7 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
 }));
 
 const authSourceCheckMock = vi.hoisted(() => ({
-  hasAnyAuthProfileStoreSource: vi.fn(() => false),
+  hasAnyAuthProfileStoreSourceAsync: vi.fn(() => false),
 }));
 
 vi.mock("./auth-profiles/source-check.js", () => authSourceCheckMock);
@@ -191,7 +191,7 @@ function resetModelFallbackTestState(): void {
   authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
   authRuntimeMock.runtime.resolveAuthProfileOrder.mockClear();
   authRuntimeMock.runtime.maybeReprobeWhamBlockedProfiles.mockReset();
-  authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReset().mockReturnValue(false);
+  authSourceCheckMock.hasAnyAuthProfileStoreSourceAsync.mockReset().mockReturnValue(false);
   resetDiagnosticEventsForTest();
 }
 
@@ -272,7 +272,7 @@ async function runWithStoredAuth(params: {
 }
 
 function setAuthRuntimeStore(agentDir: string | undefined, store: AuthProfileStore): void {
-  authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+  authSourceCheckMock.hasAnyAuthProfileStoreSourceAsync.mockReturnValue(true);
   authRuntimeMock.setStore(agentDir, store);
 }
 

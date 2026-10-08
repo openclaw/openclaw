@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -12,7 +13,10 @@ import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
 } from "../state/agent-deletion-journal.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -123,6 +127,21 @@ describe("runSessionRegistryMaintenance", () => {
           scopes.push({ agentId, sessionKey, storePath });
         }
 
+        if (kind === "per-agent") {
+          // Preview isolates discovery from the lifecycle writer's live commit guards.
+          const observation = observeHostDataSql();
+          try {
+            const preview = await runSessionRegistryMaintenance({ apply: false });
+            expect(preview.pruned).toBe(2);
+            expect(
+              observation.queries.filter((sql) =>
+                /ambient-group-watch|database_paths_json|cleanup_paths_json/u.test(sql),
+              ),
+            ).toEqual([]);
+          } finally {
+            observation.restore();
+          }
+        }
         const summary = await runSessionRegistryMaintenance({ apply: true });
 
         expect(summary.skippedReason).toBeUndefined();
@@ -178,7 +197,7 @@ describe("runSessionRegistryMaintenance", () => {
         const mainKey = await writeStaleCronSession(mainStorePath, "main");
         const retainedKey = await writeStaleCronSession(retainedStorePath, "retained");
         const databasePath = resolveSqliteTargetFromSessionStorePath(retainedStorePath).path;
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(state.stateDir);
         runOpenClawStateWriteTransaction((database) => {
           database.db.exec("DROP TABLE agent_deletion_journal");
           if (history === "reconstructed") {

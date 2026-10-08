@@ -295,10 +295,10 @@ export function collectSqliteNamedIndexContract(
     return undefined;
   }
   const index = (
-    database.prepare(`PRAGMA main.index_list(${quoteSqliteIdentifier(row.tbl_name)})`).all() as
-      | SqliteIndexListRow[]
-      | undefined
-  )?.find((candidate) => candidate.name === indexName);
+    database
+      .prepare(`PRAGMA main.index_list(${quoteSqliteIdentifier(row.tbl_name)})`)
+      .all() as SqliteIndexListRow[]
+  ).find((candidate) => candidate.name === indexName);
   return index ? collectSqliteIndexContract(database, index) : undefined;
 }
 
@@ -423,10 +423,11 @@ function buildSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
 }
 
 function collectSqliteSchemaContract(database: DatabaseSync): SqliteSchemaContract {
+  // Authorize catalog ownership even when there are no tables to inspect.
   const rows = database
     .prepare(
       `
-        SELECT name, sql
+        SELECT name, sql, tbl_name
         FROM main.sqlite_schema
         WHERE type = 'table'
           AND name NOT LIKE 'sqlite_%'
@@ -595,7 +596,7 @@ function isCompatibleAdditiveColumnDefinition(definition: string): boolean {
   );
 }
 
-export function collectSqliteIndexContract(
+function collectSqliteIndexContract(
   database: DatabaseSync,
   index: SqliteIndexListRow,
 ): SqliteIndexContract {

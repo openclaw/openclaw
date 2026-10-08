@@ -27,7 +27,7 @@ import { readUserProfileAliasRevision } from "./user-profile-events.js";
 import {
   getUserProfileDisplay,
   readUserProfileIdentity,
-  retainUserProfileCatalog,
+  prepareUserProfileCatalog,
 } from "./user-profile-list.js";
 import {
   linkCanonicalUserProfileEmail,
@@ -103,9 +103,17 @@ it.each(["email binding", "stale role reply"] as const)(
         await linkCanonicalUserProfileEmail("source@example.test", target.id, options);
         await linkCanonicalUserProfileEmail("source@example.test", source.id, options);
       }
-      const prepared = await prepareUserProfileRoleAuthority(source.id, options);
+      const prepared = await prepareUserProfileRoleAuthority(source.id, {
+        ...options,
+        includeProfile: true,
+      });
       if (change === "stale role reply") {
         expect(prepared?.role).toBe("admin");
+        expect(prepared?.listItem).toMatchObject({
+          id: source.id,
+          role: "admin",
+          emails: ["source@example.test"],
+        });
       }
       expect(prepared?.isCurrent()).toBe(true);
       expect(resolveUserProfileId(source.id, options)).toBe(source.id);
@@ -145,7 +153,7 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
   const prepared = await prepareUserChannelIdentityAuthority(identity, options);
   expect(prepared?.linked.profileId).toBe(ada.id);
   const { db } = openOpenClawStateDatabase(options);
-  const releaseCatalog = retainUserProfileCatalog(options);
+  const releaseCatalog = (await prepareUserProfileCatalog(options)).release;
   const queries = vi.spyOn(db, "prepare");
   try {
     expect(prepared?.isCurrent()).toBe(true);

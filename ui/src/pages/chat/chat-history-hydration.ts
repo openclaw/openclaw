@@ -123,7 +123,7 @@ export async function hydrateChatHistory(
         previousRunId,
         ...extra,
       },
-      { console: false, maxBufferedEventsForType: 30 },
+      { maxBufferedEventsForType: 30 },
     );
   recordTiming("start", { method });
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
@@ -376,6 +376,8 @@ export async function hydrateChatHistory(
         }
         if (!state.chatRunId) {
           state.chatStream = null;
+          state.chatStreamItemId = undefined;
+          state.chatStreamItemStartOffset = undefined;
           state.chatStreamStartedAt = null;
         }
         recordTiming("stream-reset", {
@@ -389,6 +391,8 @@ export async function hydrateChatHistory(
         );
         maybeResetToolStream(state);
         state.chatStream = null;
+        state.chatStreamItemId = undefined;
+        state.chatStreamItemStartOffset = undefined;
         state.chatStreamStartedAt = null;
       } else if (historyReplacedSomeToolStream) {
         publishChatSessionProjectionMessages(

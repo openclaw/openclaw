@@ -4,7 +4,10 @@ import {
   formatErrorMessage,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { appendSessionYieldContext } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  appendSessionYieldContext,
+  composeSessionTranscriptWriteAssertion,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -335,7 +338,7 @@ export async function finalizeCodexAttempt(
       const mirrorTerminal = projectTerminalOutcome();
       state.pendingSettlementStage = "transcript/mirror";
       return codexTranscriptMirrorRuntime.mirrorBestEffort({
-        assertWriteCurrent: () => {
+        assertWriteCurrent: composeSessionTranscriptWriteAssertion([], () => {
           // Expiry replaces this exact pending write; it cannot borrow the degraded final's owner.
           if (!isSettlementActive() || state.settlementWarning !== warning) {
             throw new Error("Codex transcript settlement is no longer active");
@@ -348,7 +351,7 @@ export async function finalizeCodexAttempt(
           ) {
             throw new Error("Codex transcript terminal outcome changed before write");
           }
-        },
+        }),
         params,
         settlementWarning: warning,
         agentId: sessionAgentId,
@@ -360,58 +363,55 @@ export async function finalizeCodexAttempt(
         turnId: activeTurnId,
       });
     };
-    try {
-      // Canceling retired media can drain the queue; that cannot reopen ordinary settlement.
-      if (projectionDrained && isSettlementActive() && !state.settlementWarning) {
-        mirrorOutcome = await Promise.race([
-          mirrorFinal(),
-          drainGraceElapsed.promise.then(() => unavailableMirror),
-          degradedSettlement.then(() => unavailableMirror),
-        ]);
-      }
-      if (state.settlementWarning && !runAbortController.signal.aborted) {
-        // Preserve transcript ordering and hooks. Only the retired projection is abandoned;
-        // the completed answer, with its warning, uses the existing final transcript owner.
-        mirrorOutcome = await Promise.race([
-          mirrorFinal(),
-          drainGraceElapsed.promise.then(() => unavailableMirror),
-        ]);
-        if (mirrorOutcome === unavailableMirror) {
-          trajectoryRecorder?.recordEvent("turn.settlement_persistence_unavailable", {
-            pendingStage: "transcript/mirror",
-            threadId: resourceState.thread.threadId,
-            turnId: activeTurnId,
-          });
-        }
-      }
-      if (toolState.yieldMessage && projectTerminalOutcome().turnSucceeded) {
-        state.pendingSettlementStage = "transcript/yield-context";
-        await Promise.race([
-          appendSessionYieldContext({
-            ...activeTranscriptTarget.sessionTarget,
-            agentId: activeTranscriptTarget.agentId,
-            sessionId: activeTranscriptTarget.sessionId,
-            sessionKey: activeTranscriptTarget.sessionKey,
-            config: params.config,
-            message: toolState.yieldMessage,
-            assertCurrent: () => {
-              // The SDK invokes this guard inside its synchronous persistence commit.
-              connection.assertLegacyCurrent();
-              if (!isSettlementActive() || !projectTerminalOutcome().turnSucceeded) {
-                throw new Error("Codex yield settlement is no longer active");
-              }
-            },
-          }),
-          drainGraceElapsed.promise,
-          degradedSettlement,
-        ]);
-      }
-      await settleReplyMedia(activeTurn, result, turnRuntime, runAbortController.signal);
-    } finally {
-      // Retire this exact write before releasing the run. A queued mirror cannot
-      // borrow a later session writer after its settlement deadline has elapsed.
-      closeSettlement();
+    // Canceling retired media can drain the queue; that cannot reopen ordinary settlement.
+    if (projectionDrained && isSettlementActive() && !state.settlementWarning) {
+      mirrorOutcome = await Promise.race([
+        mirrorFinal(),
+        drainGraceElapsed.promise.then(() => unavailableMirror),
+        degradedSettlement.then(() => unavailableMirror),
+      ]);
     }
+    if (state.settlementWarning && !runAbortController.signal.aborted) {
+      // Preserve transcript ordering and hooks. Only the retired projection is abandoned;
+      // the completed answer, with its warning, uses the existing final transcript owner.
+      mirrorOutcome = await Promise.race([
+        mirrorFinal(),
+        drainGraceElapsed.promise.then(() => unavailableMirror),
+      ]);
+      if (mirrorOutcome === unavailableMirror) {
+        trajectoryRecorder?.recordEvent("turn.settlement_persistence_unavailable", {
+          pendingStage: "transcript/mirror",
+          threadId: resourceState.thread.threadId,
+          turnId: activeTurnId,
+        });
+      }
+    }
+    if (toolState.yieldMessage && projectTerminalOutcome().turnSucceeded) {
+      state.pendingSettlementStage = "transcript/yield-context";
+      await Promise.race([
+        appendSessionYieldContext({
+          ...activeTranscriptTarget.sessionTarget,
+          agentId: activeTranscriptTarget.agentId,
+          sessionId: activeTranscriptTarget.sessionId,
+          sessionKey: activeTranscriptTarget.sessionKey,
+          config: params.config,
+          message: toolState.yieldMessage,
+          assertCurrent: () => {
+            // The SDK invokes this guard inside its synchronous persistence commit.
+            connection.assertLegacyCurrent();
+            if (!isSettlementActive() || !projectTerminalOutcome().turnSucceeded) {
+              throw new Error("Codex yield settlement is no longer active");
+            }
+          },
+        }),
+        drainGraceElapsed.promise,
+        degradedSettlement,
+      ]);
+    }
+    await settleReplyMedia(activeTurn, result, turnRuntime, runAbortController.signal);
+    // Retire this exact write before releasing the run. A queued mirror cannot
+    // borrow a later session writer after its settlement deadline has elapsed.
+    closeSettlement();
     const {
       effectiveTimedOut,
       finalPromptError,

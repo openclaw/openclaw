@@ -2,17 +2,27 @@ import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadSessionEntry,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
+  resolveSqliteSessionKey,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
+import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  SqliteWorkerError,
+} from "../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
@@ -26,7 +36,7 @@ import type {
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
 } from "../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-contract.js";
 import {
@@ -38,12 +48,16 @@ import {
   runOpenClawAgentWriteAdmission,
 } from "../state/openclaw-agent-write-admission.js";
 import {
+  scheduleSqliteTrajectoryRuntimeRetention,
+  settleIncognitoTrajectoryRuntimeRetention,
+} from "./runtime-retention.js";
+import {
   appendSqliteTrajectoryRuntimeEvents,
   type SqliteTrajectoryRuntimeAppend,
 } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
 
-export function createSqliteTrajectoryRuntimeSink(params: {
+type TrajectoryRuntimeSinkParams = {
   env: NodeJS.ProcessEnv;
   maxRuntimeFileBytes: number;
   sessionFile?: string;
@@ -51,12 +65,17 @@ export function createSqliteTrajectoryRuntimeSink(params: {
   sessionKey?: string;
   sessionTarget?: SessionTranscriptRuntimeTarget;
   assertCommitAllowed?: () => void;
-}): {
-  describeFlushState: () => string | undefined;
-  flush: () => Promise<void>;
-  write: (event: TrajectoryEvent, line: string) => void;
-} | null {
-  const target = params.sessionTarget
+};
+
+type IncognitoTrajectoryTarget = NonNullable<
+  ReturnType<typeof captureIncognitoSessionOperation>
+> & {
+  sessionKey: string;
+  lifecycleRevision?: string;
+};
+
+function captureTrajectoryTarget(params: TrajectoryRuntimeSinkParams) {
+  return params.sessionTarget
     ? {
         agentId: normalizeOptionalString(params.sessionTarget.agentId),
         sessionId: normalizeOptionalString(params.sessionTarget.sessionId),
@@ -64,6 +83,89 @@ export function createSqliteTrajectoryRuntimeSink(params: {
         storePath: normalizeOptionalString(params.sessionTarget.storePath),
       }
     : undefined;
+}
+
+export async function createSqliteTrajectoryRuntimeSink(input: TrajectoryRuntimeSinkParams) {
+  const params = {
+    ...input,
+    env: { ...input.env, OPENCLAW_STATE_DIR: resolveStateDir(input.env) },
+    sessionTarget: input.sessionTarget && { ...input.sessionTarget },
+  };
+  const target = captureTrajectoryTarget(params);
+  const marker = parseSqliteSessionFileMarker(params.sessionFile);
+  if (target?.storePath && params.sessionTarget) {
+    target.storePath = path.resolve(target.storePath);
+    params.sessionTarget = { ...params.sessionTarget, storePath: target.storePath };
+  }
+  params.sessionFile = marker ? formatSqliteSessionFileMarker(marker) : params.sessionFile;
+  const scope =
+    target?.agentId && target.sessionId && target.sessionKey && target.storePath
+      ? { agentId: target.agentId, sessionKey: target.sessionKey, storePath: target.storePath }
+      : target?.sessionKey && marker
+        ? { ...marker, sessionKey: target.sessionKey }
+        : undefined;
+  params.assertCommitAllowed?.();
+  const selected = scope ?? marker;
+  const incognito = selected && captureIncognitoSessionOperation({ ...selected, env: params.env });
+  if (incognito) {
+    const sessionKey =
+      scope?.sessionKey ??
+      params.sessionKey ??
+      incognito.actor.sessions.deadlines().find((entry) => entry.sessionId === params.sessionId)
+        ?.sessionKey;
+    if (!sessionKey) {
+      throw new Error("Incognito trajectory requires its current session");
+    }
+    const read = await incognito.actor.sessions.read(incognito.authority, { sessionKey });
+    params.assertCommitAllowed?.();
+    read.snapshot.assertCurrent();
+    if (read.entry?.sessionId !== params.sessionId) {
+      return null;
+    }
+    return buildSqliteTrajectoryRuntimeSink(
+      params,
+      () => read.entry,
+      {
+        agentId: incognito.actor.agentId,
+        path: incognito.actor.path,
+        env: params.env,
+      },
+      { ...incognito, sessionKey, lifecycleRevision: read.entry.lifecycleRevision },
+    );
+  }
+  if (!scope || isNativeSessionEntryRead({ ...scope, env: params.env }, scope.agentId)) {
+    return buildSqliteTrajectoryRuntimeSink(params, loadSessionEntry);
+  }
+  return withSessionEntriesFromStoresInWorker(
+    [
+      {
+        ...scope,
+        env: params.env,
+        sessionKeys: [resolveSqliteSessionKey(scope.sessionKey, scope.agentId)],
+        projection: "exact",
+        snapshotFields: [],
+      },
+    ],
+    ([read]) => {
+      params.assertCommitAllowed?.();
+      read!.assertCurrent();
+      return buildSqliteTrajectoryRuntimeSink(params, () => read!.result.entries[0]?.entry, {
+        agentId: read!.database.agentId,
+        path: read!.database.path,
+        env: read!.database.env,
+      });
+    },
+    { ordered: true },
+  );
+}
+
+function buildSqliteTrajectoryRuntimeSink(
+  params: TrajectoryRuntimeSinkParams,
+  readEntry: typeof loadSessionEntry,
+  preparedDatabase?: OpenClawAgentDatabaseOptions,
+  incognito?: IncognitoTrajectoryTarget,
+) {
+  const target = captureTrajectoryTarget(params);
   const legacyMarker = parseSqliteSessionFileMarker(params.sessionFile);
   const completeTarget = Boolean(
     target?.agentId && target.sessionId && target.sessionKey && target.storePath,
@@ -72,7 +174,7 @@ export function createSqliteTrajectoryRuntimeSink(params: {
   const requestedSessionKey = normalizeOptionalString(params.sessionKey);
   const completeTargetKeyEntry =
     completeTarget && target?.agentId && target.sessionKey && target.storePath
-      ? loadSessionEntry({
+      ? readEntry({
           agentId: target.agentId,
           sessionKey: target.sessionKey,
           storePath: target.storePath,
@@ -90,7 +192,7 @@ export function createSqliteTrajectoryRuntimeSink(params: {
   }
   const targetKeyEntry =
     target?.sessionKey && legacyMarker && !completeTarget
-      ? loadSessionEntry({
+      ? readEntry({
           agentId: legacyMarker.agentId,
           sessionKey: target.sessionKey,
           storePath: legacyMarker.storePath,
@@ -122,7 +224,8 @@ export function createSqliteTrajectoryRuntimeSink(params: {
   }
   const env = { ...params.env };
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  const databaseOptions = toDatabaseOptions(resolveSqliteReadScope({ ...marker, env }));
+  const databaseOptions =
+    preparedDatabase ?? toDatabaseOptions(resolveSqliteReadScope({ ...marker, env }));
   let pendingEvents = new Map<TrajectoryEvent, number>();
   let queuedBytes = 0;
   let discardPrevious = false;
@@ -155,7 +258,9 @@ export function createSqliteTrajectoryRuntimeSink(params: {
         if (pendingEvents.size === 0) {
           return;
         }
-        await withOpenClawAgentDatabaseAsync(databaseOptions, async (database) => {
+        const append = async (
+          owner: { database: OpenClawAgentDatabase } | { incognito: IncognitoTrajectoryTarget },
+        ) => {
           // Admission transfers the batch; later arrivals cannot evict accepted rows.
           const batch = { events: pendingEvents, bytes: queuedBytes, discardPrevious };
           inFlight = batch;
@@ -164,10 +269,64 @@ export function createSqliteTrajectoryRuntimeSink(params: {
           discardPrevious = false;
           const events = [...batch.events.keys()];
           try {
-            if (isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions)) {
+            if ("incognito" in owner) {
+              const committed = () => {
+                inFlight = undefined;
+              };
+              const authority: IncognitoTrajectoryTarget["authority"] = {
+                assertCurrent: () => {
+                  owner.incognito.authority.assertCurrent();
+                  params.assertCommitAllowed?.();
+                },
+                authorize(_stage, facts) {
+                  if (
+                    facts.sessionKey !== owner.incognito.sessionKey ||
+                    facts.sharing?.entry?.sessionId !== marker.sessionId ||
+                    facts.sharing?.entry?.lifecycleRevision !== owner.incognito.lifecycleRevision
+                  ) {
+                    throw new Error("Incognito trajectory source changed before persistence");
+                  }
+                },
+              };
+              try {
+                await owner.incognito.actor.sessions.sideData(
+                  authority,
+                  {
+                    type: "session.trajectory.append",
+                    input: {
+                      sessionKey: owner.incognito.sessionKey,
+                      lifecycleRevision: owner.incognito.lifecycleRevision,
+                      sessionId: marker.sessionId,
+                      events,
+                      discardPrevious: batch.discardPrevious,
+                      maxRuntimeBytes: params.maxRuntimeFileBytes,
+                    },
+                  },
+                  undefined,
+                  committed,
+                  committed,
+                );
+              } catch (error) {
+                if (inFlight === batch && hasSqliteWorkerOutcomeUnknown(error)) {
+                  unsettledAppend = new SqliteWorkerError(
+                    "Trajectory append outcome is unknown; pending events cannot be replayed",
+                    "outcome-unknown",
+                  );
+                }
+                throw error;
+              } finally {
+                if (inFlight !== batch && !unsettledAppend) {
+                  await settleIncognitoTrajectoryRuntimeRetention({
+                    actor: owner.incognito.actor,
+                    authority,
+                    input: { sessionKey: owner.incognito.sessionKey, sessionId: marker.sessionId },
+                  });
+                }
+              }
+            } else if (isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions)) {
               await appendSqliteTrajectoryRuntimeEventsInWorker(
                 databaseOptions,
-                database,
+                owner.database,
                 {
                   events,
                   discardPrevious: batch.discardPrevious,
@@ -194,7 +353,7 @@ export function createSqliteTrajectoryRuntimeSink(params: {
                   env: databaseOptions.env,
                   maxRuntimeBytes: params.maxRuntimeFileBytes,
                   sessionId: marker.sessionId,
-                  storePath: database.path,
+                  storePath: owner.database.path,
                   assertCommitAllowed: params.assertCommitAllowed,
                 },
                 events,
@@ -217,7 +376,14 @@ export function createSqliteTrajectoryRuntimeSink(params: {
               }
             }
           }
-        });
+        };
+        if (incognito) {
+          await append({ incognito });
+        } else {
+          await withOpenClawAgentDatabaseRuntime(databaseOptions, (database) =>
+            append({ database }),
+          );
+        }
       },
       true,
     );
@@ -252,13 +418,27 @@ export function createSqliteTrajectoryRuntimeSink(params: {
       backgroundFailed = false;
       await flushPending();
     },
-    write: (event, line) => {
+    write: (event: TrajectoryEvent, line: string) => {
       const bytes = Buffer.byteLength(line, "utf8") + 1;
       pendingEvents.set(event, bytes);
       queuedBytes += bytes;
       trimPending();
       scheduleFlush();
     },
+  };
+}
+
+function createTrajectoryDatabaseGuard(
+  options: OpenClawAgentDatabaseOptions,
+  database: OpenClawAgentDatabase,
+  assertCommitAllowed: (() => void) | undefined,
+): () => void {
+  return () => {
+    // Retention keeps source authority without capturing a completed append batch.
+    if (!database.db.isOpen || getOpenClawAgentDatabaseIfOpen(options)?.db !== database.db) {
+      throw new Error("Trajectory append lost its borrowed database owner");
+    }
+    assertCommitAllowed?.();
   };
 }
 
@@ -280,13 +460,14 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
       nativeLocation: identity.filename,
     },
   });
+  const assertDatabaseCurrent = createTrajectoryDatabaseGuard(
+    options,
+    database,
+    assertCommitAllowed,
+  );
   const assertCurrent = () => {
     execution.assertCurrent();
-    // The source guard can read session metadata; retain its admitted host handle.
-    if (!database.db.isOpen || getOpenClawAgentDatabaseIfOpen(options)?.db !== database.db) {
-      throw new Error("Trajectory append lost its borrowed database owner");
-    }
-    assertCommitAllowed?.();
+    assertDatabaseCurrent();
   };
   let transaction:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
@@ -333,6 +514,12 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
       if (!written) {
         throw new Error("Trajectory database disappeared before append");
       }
+    });
+    void scheduleSqliteTrajectoryRuntimeRetention({
+      database,
+      options,
+      input,
+      assertCurrent: assertDatabaseCurrent,
     });
   } finally {
     await execution.release();

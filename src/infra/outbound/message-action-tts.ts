@@ -14,32 +14,6 @@ const loadMessageActionTtsRuntime = createLazyRuntimeModule(
   () => import("../../tts/tts.runtime.js"),
 );
 
-/** Reads the session-level TTS auto mode for a message-action send. */
-function resolveMessageActionSessionTtsAuto(params: {
-  cfg: OpenClawConfig;
-  sessionKey?: string;
-  agentId?: string;
-}): TtsAutoMode | undefined {
-  const sessionKey = params.sessionKey?.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  try {
-    const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
-      agentId: params.agentId,
-    });
-    return loadSessionEntryReadOnly({
-      agentId: params.agentId,
-      sessionKey,
-      storePath,
-    })?.ttsAuto;
-  } catch {
-    // Missing or unreadable session stores should not block message delivery.
-    return undefined;
-  }
-}
-
-/** Applies automatic TTS to a message-action send payload when config/session policy allows it. */
 export async function maybeApplyTtsToMessageActionSendPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
@@ -53,11 +27,22 @@ export async function maybeApplyTtsToMessageActionSendPayload(params: {
   if (params.dryRun) {
     return params.payload;
   }
-  const ttsAuto = resolveMessageActionSessionTtsAuto({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
+  const sessionKey = params.sessionKey?.trim();
+  let ttsAuto: TtsAutoMode | undefined;
+  if (sessionKey) {
+    try {
+      const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+        agentId: params.agentId,
+      });
+      ttsAuto = loadSessionEntryReadOnly({
+        agentId: params.agentId,
+        sessionKey,
+        storePath,
+      })?.ttsAuto;
+    } catch {
+      // Missing or unreadable session stores should not block message delivery.
+    }
+  }
   const explicitTts = getReplyPayloadMetadata(params.payload)?.ttsExplicit === true;
   const preparedTtsPreferences = await prepareTtsPreferences();
   if (

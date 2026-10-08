@@ -148,8 +148,7 @@ function classifyConfiguredTargetRefs(params: {
   forcedActivePaths?: ReadonlySet<string>;
   optionalActivePaths?: ReadonlySet<string>;
 }): {
-  hasActiveConfiguredRef: boolean;
-  hasUnknownConfiguredRef: boolean;
+  needsResolution: boolean;
   diagnostics: string[];
 } {
   const context = createResolverContext({
@@ -172,29 +171,24 @@ function classifyConfiguredTargetRefs(params: {
   }
 
   const diagnostics = new Set<string>();
-  let hasActiveConfiguredRef = false;
-  let hasUnknownConfiguredRef = false;
+  let needsResolution = false;
 
   for (const path of params.configuredTargetRefPaths) {
-    if (
-      activePaths.has(path) ||
-      params.forcedActivePaths?.has(path) ||
-      params.optionalActivePaths?.has(path)
-    ) {
-      hasActiveConfiguredRef = true;
-      continue;
-    }
-    const inactiveWarning = inactiveWarningsByPath.get(path);
+    const inactiveWarning =
+      !activePaths.has(path) &&
+      !params.forcedActivePaths?.has(path) &&
+      !params.optionalActivePaths?.has(path)
+        ? inactiveWarningsByPath.get(path)
+        : undefined;
     if (inactiveWarning) {
       diagnostics.add(inactiveWarning);
-      continue;
+    } else {
+      needsResolution = true;
     }
-    hasUnknownConfiguredRef = true;
   }
 
   return {
-    hasActiveConfiguredRef,
-    hasUnknownConfiguredRef,
+    needsResolution,
     diagnostics: [...diagnostics],
   };
 }
@@ -285,7 +279,7 @@ async function callGatewaySecretsResolve(params: {
   allowedPaths?: ReadonlySet<string>;
   forcedActivePaths?: ReadonlySet<string>;
   optionalActivePaths?: ReadonlySet<string>;
-  timeoutMs?: number;
+  gatewaySecretResolveTimeoutMs?: number;
 }): Promise<SecretsResolveResult> {
   const callGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
   const request = {
@@ -301,7 +295,7 @@ async function callGatewaySecretsResolve(params: {
         ? { optionalActivePaths: [...params.optionalActivePaths] }
         : {}),
     },
-    timeoutMs: params.timeoutMs ?? 30_000,
+    timeoutMs: params.gatewaySecretResolveTimeoutMs ?? 30_000,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
   };
@@ -590,11 +584,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     allowExecSecretRefs: params.allowLocalExecSecretRefs !== false,
     scrubUnresolvedSecretRefs: params.scrubUnresolvedSecretRefs !== false,
   };
-  const configuredTargetRefPaths = collectConfiguredTargetRefPaths({
-    config: params.config,
-    targetIds: params.targetIds,
-    allowedPaths: params.allowedPaths,
-  });
+  const configuredTargetRefPaths = collectConfiguredTargetRefPaths(params);
   if (configuredTargetRefPaths.size === 0) {
     return {
       resolvedConfig: params.config,
@@ -604,13 +594,10 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     };
   }
   const preflight = classifyConfiguredTargetRefs({
-    config: params.config,
+    ...params,
     configuredTargetRefPaths,
-    agentId: params.agentId,
-    forcedActivePaths: params.forcedActivePaths,
-    optionalActivePaths: params.optionalActivePaths,
   });
-  if (!preflight.hasActiveConfiguredRef && !preflight.hasUnknownConfiguredRef) {
+  if (!preflight.needsResolution) {
     return {
       resolvedConfig: params.config,
       diagnostics: preflight.diagnostics,
@@ -623,15 +610,10 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     preflightDiagnostics = preflight.diagnostics,
   ) =>
     resolveCommandSecretRefsLocally({
-      config: params.config,
-      commandName: params.commandName,
-      targetIds: params.targetIds,
-      agentId: params.agentId,
+      ...params,
       preflightDiagnostics,
       mode,
       allowedPaths,
-      forcedActivePaths: params.forcedActivePaths,
-      optionalActivePaths: params.optionalActivePaths,
       resolutionPolicy,
     });
   const gatewayExecSecretRefCredentialPaths = resolutionPolicy.allowExecSecretRefs
@@ -650,17 +632,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
 
   let payload: SecretsResolveResult;
   try {
-    payload = await callGatewaySecretsResolve({
-      config: params.config,
-      commandName: params.commandName,
-      targetIds: params.targetIds,
-      allowedPaths: params.allowedPaths,
-      forcedActivePaths: params.forcedActivePaths,
-      optionalActivePaths: params.optionalActivePaths,
-      ...(params.gatewaySecretResolveTimeoutMs !== undefined
-        ? { timeoutMs: params.gatewaySecretResolveTimeoutMs }
-        : {}),
-    });
+    payload = await callGatewaySecretsResolve(params);
   } catch (err) {
     const forcedActiveCompatFailure =
       Boolean(params.forcedActivePaths?.size) && isAllowedPathsSecretsResolveCompatError(err);
@@ -705,9 +677,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
 
   const parsed = parseGatewaySecretsResolveResult(payload);
   const gatewayDiagnostics = filterAllowedGatewayDiagnostics({
-    allowedPaths: params.allowedPaths,
-    forcedActivePaths: params.forcedActivePaths,
-    optionalActivePaths: params.optionalActivePaths,
+    ...params,
     diagnostics: parsed.diagnostics,
   });
   const gatewayInactiveRefPaths = params.allowedPaths

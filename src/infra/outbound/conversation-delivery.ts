@@ -1,6 +1,9 @@
 /** Durable external-conversation delivery independent from local model sessions. */
 import crypto from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
+import type { ConversationAuthority } from "../../config/sessions/conversation-authority.types.js";
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
@@ -13,6 +16,7 @@ import type {
   PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OutboundHandoff } from "./deliver-contracts.js";
 import { captureConversationDeliveryTarget } from "./delivery-completion.js";
 import type { MessageActionResult } from "./message-action-contracts.js";
 import { runMessageAction } from "./message-action-runner.js";
@@ -48,10 +52,9 @@ function buildConversationDeliveryIntentId(agentId: string, operationId: string)
   return `convq_${digest}`;
 }
 
-function readMessageIdFromActionResult(result: MessageActionResult): string | undefined {
-  if (result.kind !== "send") {
-    return undefined;
-  }
+function readMessageIdFromActionResult(
+  result: Extract<MessageActionResult, { kind: "send" }>,
+): string | undefined {
   const sendResult = result.sendResult?.result;
   if (sendResult && "receipt" in sendResult && sendResult.receipt) {
     const receiptId = resolveMessageReceiptPrimaryId(sendResult.receipt);
@@ -62,45 +65,33 @@ function readMessageIdFromActionResult(result: MessageActionResult): string | un
   if (sendResult && "messageId" in sendResult && typeof sendResult.messageId === "string") {
     return sendResult.messageId.trim() || undefined;
   }
-  const payload = result.payload;
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const messageId = (payload as { messageId?: unknown }).messageId;
-    return typeof messageId === "string" && messageId.trim() ? messageId.trim() : undefined;
-  }
-  return undefined;
+  return normalizeOptionalString(asOptionalRecord(result.payload)?.messageId);
 }
 
 export function resultFromExistingOperation(
   operation: ConversationDeliveryRecord,
 ): ConversationMessageDeliveryResult | undefined {
-  switch (operation.status) {
-    case "sent":
-    case "replied":
-      return {
-        deliveryStatus: "sent",
-        operation,
-        ...(operation.platformMessageId || operation.preparedMessageId
-          ? { messageId: operation.platformMessageId ?? operation.preparedMessageId }
-          : {}),
-      };
-    case "queued":
-      return {
-        deliveryStatus: "queued",
-        operation,
-        ...(operation.preparedMessageId ? { messageId: operation.preparedMessageId } : {}),
-      };
-    case "suppressed":
-      return { deliveryStatus: "suppressed", operation };
-    case "rejected":
-      throw new ConversationDeliveryRejectedError(
-        operation.rejectionError ?? "Conversation delivery was permanently rejected",
-      );
-    case "unknown":
-      return { deliveryStatus: "unknown", operation };
-    case "created":
-      return undefined;
+  if (operation.status === "created") {
+    return undefined;
   }
-  return operation.status satisfies never;
+  if (operation.status === "rejected") {
+    throw new ConversationDeliveryRejectedError(
+      operation.rejectionError ?? "Conversation delivery was permanently rejected",
+    );
+  }
+  const deliveryStatus = operation.status === "replied" ? "sent" : operation.status;
+  const platformMessageId = deliveryStatus === "sent" ? operation.platformMessageId : undefined;
+  const preparedMessageId =
+    deliveryStatus === "sent" || deliveryStatus === "queued"
+      ? operation.preparedMessageId
+      : undefined;
+  return {
+    deliveryStatus,
+    operation,
+    ...(platformMessageId || preparedMessageId
+      ? { messageId: platformMessageId ?? preparedMessageId }
+      : {}),
+  };
 }
 
 /**
@@ -117,7 +108,9 @@ export async function sendGatewayConversationMessage(params: {
   operation?: ConversationDeliveryRecord;
   preparedMessageId?: string;
   routeFingerprint: string;
+  authority: ConversationAuthority;
   assertCurrent: () => void;
+  withDirectAdapterHandoff: OutboundHandoff;
   signal?: AbortSignal;
 }): Promise<ConversationMessageDeliveryResult> {
   const scope = params.scope;
@@ -134,6 +127,7 @@ export async function sendGatewayConversationMessage(params: {
             ? { sourceSessionKey: params.context.sourceSessionKey }
             : {}),
           message: params.message,
+          authority: params.authority,
           ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
         },
         params.assertCurrent,
@@ -179,7 +173,7 @@ export async function sendGatewayConversationMessage(params: {
         routeFingerprint: params.routeFingerprint,
       },
       conversationDeliveryTarget,
-      onDeliveryAttempt: async () => params.assertCurrent(),
+      withDirectAdapterHandoff: params.withDirectAdapterHandoff,
       ...(begun.record.preparedMessageId
         ? { preparedMessageId: begun.record.preparedMessageId }
         : {}),

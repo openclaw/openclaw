@@ -9,9 +9,7 @@ import {
   cleanupSystemAgentSession,
   createSystemAgentSession,
   type SystemAgentSession,
-  type SystemAgentTurnRunner,
 } from "./agent-turn.js";
-import type { SystemAgentApprovalClassifier } from "./approval-intent.js";
 import type { SystemAgentAssistantTurn } from "./assistant.js";
 import {
   ChatTurnRouter,
@@ -23,16 +21,12 @@ import {
   type ChatWizardHostDependencies,
   type SystemAgentChatReply,
 } from "./chat-wizard-host.js";
-import type {
-  SystemAgentGreetingFacts,
-  SystemAgentGreetingPlan,
-  SystemAgentGreetingPlanner,
-} from "./greeting.js";
+import type { SystemAgentGreetingPlanner } from "./greeting.js";
 import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
-import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
+import type { SystemAgentOperation } from "./operations.js";
 import { loadSystemAgentOverview, type SystemAgentOverview } from "./overview.js";
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
 import {
@@ -42,17 +36,9 @@ import {
 
 export { SystemAgentWizardAnswerError } from "./chat-wizard-host.js";
 
-export type SystemAgentChatEngineOptions = {
-  yes?: boolean;
-  deps?: SystemAgentCommandDeps;
+export type SystemAgentChatEngineOptions = ConstructorParameters<typeof ChatTurnRouter>[0] & {
   planGreeting?: SystemAgentGreetingPlanner;
-  runAgentTurn?: SystemAgentTurnRunner;
-  classifyApproval?: SystemAgentApprovalClassifier;
-  surface?: "cli" | "gateway";
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-  operatorApprovalOnly?: boolean;
-  /** Host-recorded origin for delegated create-agent proposals. */
-  requesterAgentId?: string;
 };
 
 type SystemAgentChatEngineInternals = {
@@ -227,11 +213,9 @@ export class SystemAgentChatEngine {
       : { ...overview, defaultModel: route.modelLabel };
   }
 
-  async planGreeting(params: {
-    overview: SystemAgentOverview;
-    facts: SystemAgentGreetingFacts;
-    timeoutMs: number;
-  }): Promise<SystemAgentGreetingPlan | null> {
+  async planGreeting(
+    params: Parameters<SystemAgentGreetingPlanner>[0],
+  ): ReturnType<SystemAgentGreetingPlanner> {
     const runPlanner = async () => {
       const planner = this.options.planGreeting;
       return planner
@@ -311,7 +295,7 @@ export class SystemAgentChatEngine {
       this.wizard.dispose();
     }
     this.history.splice(0);
-    throw new SystemAgentInferenceUnavailableError("conversation", failures);
+    throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
   }
 
   private async verifyConfigAfterWrite(): Promise<string | null> {

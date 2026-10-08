@@ -127,7 +127,6 @@ describe("recovery notice final transport fence", () => {
         {
           sessionId: scope.sessionId,
           updatedAt: Date.now(),
-          status: "running",
           restartRecoveryDeliveryRunId: scope.recoveryRunId,
           restartRecoveryDeliveryContext: scope.deliveryContext,
         },
@@ -218,8 +217,9 @@ describe("recovery notice final transport fence", () => {
             {
               sessionId: scope.sessionId,
               updatedAt: Date.now(),
-              status: mode === "owner retired" ? "done" : "running",
-              restartRecoveryDeliveryRunId: scope.recoveryRunId,
+              ...(mode === "owner retired"
+                ? { status: "done" as const }
+                : { restartRecoveryDeliveryRunId: scope.recoveryRunId }),
               restartRecoveryDeliveryContext: scope.deliveryContext,
               ...(mode === "automatic delivery revoked"
                 ? { restartRecoverySourceReplyDeliveryMode: "message_tool_only" as const }
@@ -326,7 +326,6 @@ describe("recovery typing final transport fence", () => {
         {
           sessionId: scope.sessionId,
           updatedAt: Date.now(),
-          status: "running",
           restartRecoveryDeliveryRunId: scope.recoveryRunId,
           restartRecoveryDeliveryContext: scope.deliveryContext,
         },
@@ -403,7 +402,7 @@ describe("recovery typing final transport fence", () => {
         if (mode === "session replaced") {
           await replaceSessionEntry(
             { storePath: scope.storePath, sessionKey: scope.sessionKey },
-            { sessionId: "replacement-session", updatedAt: Date.now(), status: "running" },
+            { sessionId: "replacement-session", updatedAt: Date.now() },
           );
         }
         if (mode === "runtime policy revoked") {

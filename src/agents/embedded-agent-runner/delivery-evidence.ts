@@ -69,24 +69,19 @@ type ExplicitFinalSourceReplyEvidence = {
   messagingToolSourceReplyPayloads?: unknown;
 };
 
-function collectSourceReplyFinalMarkers(value: unknown): boolean[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((entry) => {
-    const marker = asOptionalRecord(entry)?.sourceReplyFinal;
-    return typeof marker === "boolean" ? [marker] : [];
-  });
-}
-
 /** Resolve explicit progress/final evidence, or undefined for legacy runtimes. */
 export function resolveExplicitFinalSourceReplyDeliveryEvidence(
   result: ExplicitFinalSourceReplyEvidence,
 ): boolean | undefined {
-  const markers = [
-    ...collectSourceReplyFinalMarkers(result.messagingToolSentTargets),
-    ...collectSourceReplyFinalMarkers(result.messagingToolSourceReplyPayloads),
-  ];
+  const markers: boolean[] = [];
+  for (const value of [result.messagingToolSentTargets, result.messagingToolSourceReplyPayloads]) {
+    for (const entry of Array.isArray(value) ? value : []) {
+      const marker = asOptionalRecord(entry)?.sourceReplyFinal;
+      if (typeof marker === "boolean") {
+        markers.push(marker);
+      }
+    }
+  }
   return markers.length > 0 ? markers.some(Boolean) : undefined;
 }
 
@@ -113,7 +108,6 @@ export function resolveSourceReplyDelivery(
     : observedDelivery;
 }
 
-/** Returns whether messaging-tool evidence completes the current source reply. */
 export function hasCompletedMessagingToolDeliveryEvidence(
   result: AgentDeliveryEvidence & SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
 ): boolean {
@@ -165,7 +159,6 @@ function collectPayloadMediaUrls(
   return Array.from(urls);
 }
 
-/** Collects media URLs from agent payloads and committed messaging-tool delivery metadata. */
 export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string[] {
   return Array.from(
     new Set([
@@ -175,7 +168,6 @@ export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string
   );
 }
 
-/** Collects media URLs recorded by messaging-tool sends and their target attachments. */
 export function collectMessagingToolDeliveredMediaUrls(
   result: Pick<AgentDeliveryEvidence, "messagingToolSentMediaUrls" | "messagingToolSentTargets">,
 ): string[] {
@@ -228,25 +220,13 @@ function hasDeliverableAgentPayload(payload: unknown): boolean {
 /** Collect automatic-delivery media proven sent by aggregate or per-payload evidence. */
 export function collectAutomaticDeliveredMediaUrls(
   result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
-  options: {
-    includeAmbiguousSinglePayloadFailure?: boolean;
-    includeSuppressedOutcomes?: boolean;
-  } = {},
 ): string[] {
-  const outcomes = getPayloadDeliveryOutcomes(result);
-  if (outcomes) {
-    const payloads = Array.isArray(result.payloads) ? result.payloads : [];
+  if (getPayloadDeliveryOutcomes(result)) {
     return collectPayloadOutcomeMediaUrls(
       result,
       (outcome) =>
         normalizeEvidenceStatus(outcome.status) === "sent" ||
-        (options.includeSuppressedOutcomes !== false &&
-          normalizeEvidenceStatus(outcome.status) === "suppressed") ||
-        (options.includeAmbiguousSinglePayloadFailure === true &&
-          normalizeEvidenceStatus(outcome.status) === "failed" &&
-          outcome.sentBeforeError === true &&
-          outcomes.length === 1 &&
-          payloads.length === 1),
+        normalizeEvidenceStatus(outcome.status) === "suppressed",
     );
   }
   const status = normalizeEvidenceStatus(result.deliveryStatus?.status);
@@ -281,28 +261,22 @@ export function hasCompleteAutomaticMediaDeliveryOutcomeEvidence(
   if (payloads.length === 0 || outcomes.length === 0) {
     return false;
   }
-  const classifiedIndexes = new Set<number>();
-  for (const outcome of outcomes) {
-    const record = asOptionalRecord(outcome);
-    if (!record) {
-      continue;
-    }
-    const index =
-      typeof record.index === "number" &&
-      Number.isInteger(record.index) &&
-      record.index >= 0 &&
-      record.index < payloads.length
-        ? record.index
-        : undefined;
-    const status = normalizeEvidenceStatus(record.status);
-    const classified =
-      status === "sent" ||
-      status === "suppressed" ||
-      (status === "failed" && typeof record.sentBeforeError === "boolean");
-    if (index !== undefined && classified) {
-      classifiedIndexes.add(index);
-    }
-  }
+  const classifiedIndexes = new Set(
+    outcomes.flatMap((outcome) => {
+      const record = asOptionalRecord(outcome);
+      const index = record?.index;
+      const status = normalizeEvidenceStatus(record?.status);
+      return typeof index === "number" &&
+        Number.isInteger(index) &&
+        index >= 0 &&
+        index < payloads.length &&
+        (status === "sent" ||
+          status === "suppressed" ||
+          (status === "failed" && typeof record?.sentBeforeError === "boolean"))
+        ? [index]
+        : [];
+    }),
+  );
   const expected = new Set(expectedMediaUrls.map(normalizeMediaReferenceForComparison));
   return payloads.every((payload, index) => {
     const containsExpectedMedia = collectPayloadMediaUrls([payload]).some((url) =>
@@ -342,7 +316,6 @@ export function getAutomaticDeliveryEvidence(
   return { mayHaveSent, suppressionReason };
 }
 
-/** Extracts a gateway result payload when the response carries delivery evidence fields. */
 export function getGatewayAgentResult(response: unknown): AgentDeliveryEvidence | null {
   const record = asOptionalObjectRecord(response);
   const candidate =
@@ -375,7 +348,6 @@ export function hasMessagingToolDeliveryEvidence(result: AgentDeliveryEvidence):
   );
 }
 
-/** Returns whether messaging-tool metadata proves committed text, media, or target delivery. */
 export function hasCommittedMessagingToolDeliveryEvidence(
   result: Pick<
     AgentDeliveryEvidence,
@@ -442,7 +414,6 @@ export function hasUnaccountedMessagingToolAggregateEvidence(
   );
 }
 
-/** Returns whether messaging-tool metadata proves a user-visible committed delivery. */
 export function hasVisibleCommittedMessagingToolDeliveryEvidence(
   result: Pick<
     AgentDeliveryEvidence,
@@ -457,7 +428,6 @@ export function hasVisibleCommittedMessagingToolDeliveryEvidence(
   );
 }
 
-/** Returns whether a source reply was visibly delivered through the message tool. */
 export function hasCommittedSourceReplyDeliveryEvidence(
   result: SourceReplyDeliveryEvidence,
 ): boolean {
@@ -499,7 +469,6 @@ export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): bool
   );
 }
 
-/** Formats an agent-command delivery failure message from delivery status metadata. */
 export function getAgentCommandDeliveryFailure(result: AgentDeliveryEvidence): string | undefined {
   const status = normalizeEvidenceStatus(result.deliveryStatus?.status);
   if (status !== "failed" && status !== "partial_failed") {

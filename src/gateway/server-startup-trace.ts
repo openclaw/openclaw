@@ -21,8 +21,33 @@ const STARTUP_PROGRESS_PHASES = new Set([
   "process.bootstrap",
   "state.schema-preflight",
   "config.auth",
-  "startup.maintenance",
+  "post-ready.startup-maintenance",
+  "startup.maintenance.channels",
+  "startup.maintenance.plugin-registry",
+  "state.desktop-approval-admission",
+  "sessions.admission",
+  "startup.maintenance.sessions",
+  "startup.maintenance.session-orphans",
+  "startup.maintenance.session-transcripts",
+  "startup.maintenance.pairing",
   "http.bound",
+  "runtime.early",
+  "runtime.early.discovery",
+  "runtime.early.lazy-runtime-imports",
+  "runtime.early.skills-listener",
+  "post-attach.system-ca",
+  "plugins.runtime-post-bind",
+  "plugins.runtime-attach",
+  "sidecars.worker-environments",
+  "sidecars.internal-hooks",
+  "sidecars.main-session-recovery",
+  "sidecars.model-runtime",
+  "sidecars.reply-runtime",
+  "sidecars.chat-metadata",
+  "sidecars.channels",
+  "sidecars.plugin-services",
+  "sidecars.subagent-recovery",
+  "runtime.worker-pool-metrics",
   "ready",
 ]);
 
@@ -32,7 +57,6 @@ export type GatewayStartupTrace = {
   measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
 };
 
-/** Measure a startup step when tracing is active, otherwise run it directly. */
 export async function measureStartup<T>(
   startupTrace: GatewayStartupTrace | undefined,
   name: string,

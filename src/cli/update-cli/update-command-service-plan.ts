@@ -10,6 +10,7 @@ import { isBunRuntime } from "../../daemon/runtime-binary.js";
 import { resolvePinnedDaemonRuntimePath } from "../../daemon/runtime-paths.js";
 import {
   formatServiceInspectionReason,
+  ServiceStartRefusalError,
   type ServiceInspectionReason,
 } from "../../daemon/service-inspection-error.js";
 import {
@@ -58,20 +59,30 @@ export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
 
   constructor(
-    message: string,
+    message: string | { message: string; failureFacts: UpdateFailureFact[] },
     cause: unknown,
     inspectionReason?: ServiceInspectionReason,
     code?: keyof typeof UPDATE_PREFLIGHT_DETAILS,
   ) {
-    super(inspectionReason ? formatServiceInspectionReason(inspectionReason) : message, { cause });
+    super(
+      typeof message === "string"
+        ? inspectionReason
+          ? formatServiceInspectionReason(inspectionReason)
+          : message
+        : message.message,
+      { cause },
+    );
     this.name = "GatewayServiceUpdateOwnershipError";
-    this.failureFacts = [
-      createUpdateFailureFact({
-        check: "managed-service",
-        code: inspectionReason ?? code ?? "service-ownership-unverified",
-        message: this.message,
-      }),
-    ];
+    this.failureFacts =
+      typeof message !== "string"
+        ? message.failureFacts
+        : [
+            createUpdateFailureFact({
+              check: "managed-service",
+              code: inspectionReason ?? code ?? "service-ownership-unverified",
+              message: this.message,
+            }),
+          ];
   }
 }
 
@@ -181,6 +192,15 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
   allowInstallRootChange?: boolean;
 }): Promise<ManagedGatewayUpdateVerdict> {
   const { state } = params;
+  const refusal = state.runtime?.systemd?.startRefusal;
+  if (refusal) {
+    throw new GatewayServiceUpdateOwnershipError(
+      refusal.message,
+      new ServiceStartRefusalError(refusal),
+      undefined,
+      "service-mutation-refused",
+    );
+  }
   const { command } = state;
   const unavailable = (): ManagedGatewayUpdateVerdict => ({
     kind: "unavailable",
@@ -288,6 +308,16 @@ export function readGatewayServiceStateForUpdate(
       loadForInspection,
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs,
+    }).catch((error: unknown) => {
+      if (error instanceof ServiceStartRefusalError) {
+        throw new GatewayServiceUpdateOwnershipError(
+          error.message,
+          error,
+          undefined,
+          "service-mutation-refused",
+        );
+      }
+      throw error;
     });
   if (process.platform !== "linux" || inspection?.managerUid === undefined) {
     return read();
@@ -329,7 +359,11 @@ export async function readManagedGatewayServiceForUpdate(
         ? { ...state, command: state.command, verdict: inspection }
         : null;
     } catch (error) {
-      if (hasCommandProcessCleanupError(error)) {
+      if (
+        hasCommandProcessCleanupError(error) ||
+        (error instanceof GatewayServiceUpdateOwnershipError &&
+          error.cause instanceof ServiceStartRefusalError)
+      ) {
         throw error;
       }
       if (error instanceof GatewayServiceUpdateOwnershipError && service) {

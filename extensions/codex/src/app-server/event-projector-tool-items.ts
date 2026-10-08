@@ -163,17 +163,13 @@ export function itemToolResult(item: CodexThreadItem): Record<string, unknown> |
     });
   }
   if (item.type === "webSearch") {
-    return webSearchToolResult(item);
+    return sanitizeCodexAgentEventRecord({
+      status: itemStatus(item),
+      ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
+      ...webSearchToolArgs(item),
+    });
   }
   return undefined;
-}
-
-function webSearchToolResult(item: CodexThreadItem): Record<string, unknown> {
-  return sanitizeCodexAgentEventRecord({
-    status: itemStatus(item),
-    ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
-    ...webSearchToolArgs(item),
-  });
 }
 
 type CodexFileChangeSummary = {
@@ -202,13 +198,6 @@ function itemFileChanges(item: CodexThreadItem): CodexFileChangeSummary[] {
   });
 }
 
-function fileChangeKindType(kind: unknown): string | undefined {
-  if (typeof kind === "string") {
-    return kind;
-  }
-  return isJsonObject(kind) ? normalizeOptionalString(kind.type) : undefined;
-}
-
 function countFileContentLines(content: string): number {
   if (!content) {
     return 0;
@@ -221,7 +210,12 @@ function countFileContentLines(content: string): number {
 }
 
 function fileChangeDiffStat(diff: string, kind: unknown): { added: number; removed: number } {
-  const kindType = fileChangeKindType(kind);
+  const kindType =
+    typeof kind === "string"
+      ? kind
+      : isJsonObject(kind)
+        ? normalizeOptionalString(kind.type)
+        : undefined;
   if (kindType === "add") {
     return { added: countFileContentLines(diff), removed: 0 };
   }

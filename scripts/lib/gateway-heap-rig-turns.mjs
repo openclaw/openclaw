@@ -10,7 +10,7 @@ function toolEvents(callId, code) {
     id: `fc_${callId}`,
     call_id: callId,
     name: "exec",
-    arguments: JSON.stringify({ title: "Exercise synthetic agent work", code, required: true }),
+    arguments: JSON.stringify({ title: "Exercise synthetic agent work", code, awaitResults: true }),
   };
   return [
     { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },

@@ -79,7 +79,7 @@ function resolveAllowedExternalCliAuthProfiles(params: {
   store: AuthProfileStore;
   env?: NodeJS.ProcessEnv;
   externalCli?: ExternalCliOverlayOptions;
-}): ProviderExternalAuthProfile[] {
+}): ReturnType<typeof externalCliSync.resolveExternalCliAuthProfiles> {
   const env = params.env ?? process.env;
   const explicitProfileIds = resolveExplicitProfileIds(params.externalCli?.externalCliProfileIds);
   const cliProfiles = externalCliSync.resolveExternalCliAuthProfiles(params.store, {
@@ -88,23 +88,17 @@ function resolveAllowedExternalCliAuthProfiles(params: {
     providerIds: params.externalCli?.externalCliProviderIds,
     profileIds: explicitProfileIds,
   });
-  return cliProfiles.flatMap((profile) =>
-    isExternalAuthProfileAllowed(
-      profile,
-      params.store,
-      params.externalCli?.config,
-      explicitProfileIds,
-      env,
+  return cliProfiles
+    .filter((profile) =>
+      isExternalAuthProfileAllowed(
+        profile,
+        params.store,
+        params.externalCli?.config,
+        explicitProfileIds,
+        env,
+      ),
     )
-      ? [
-          {
-            profileId: profile.profileId,
-            credential: profile.credential,
-            persistence: profile.persistence ?? "runtime-only",
-          },
-        ]
-      : [],
-  );
+    .map(({ profileId, credential, persistence }) => ({ profileId, credential, persistence }));
 }
 
 function hasScopedExternalCliOverlay(params?: ExternalCliOverlayOptions): boolean {
@@ -114,7 +108,7 @@ function hasScopedExternalCliOverlay(params?: ExternalCliOverlayOptions): boolea
 /** Persist safe external CLI OAuth profiles that own their local profile slot. */
 export function syncPersistedExternalCliAuthProfiles(
   store: AuthProfileStore,
-  params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
+  params?: ExternalCliOverlayOptions,
 ): AuthProfileStore {
   // MiniMax keeps its persisted external profile fresh without an explicit scope.
   if (
@@ -125,9 +119,8 @@ export function syncPersistedExternalCliAuthProfiles(
   }
   const persistedProfiles = resolveAllowedExternalCliAuthProfiles({
     store,
-    env: params?.env,
     externalCli: params,
-  }).filter((profile) => profile.persistence === "persisted");
+  });
   if (persistedProfiles.length === 0) {
     return store;
   }
@@ -161,7 +154,6 @@ export function createExternalAuthRuntime(
   }): {
     profiles: ExternalAuthProfileMap;
     pluginProfileIds: ReadonlySet<string>;
-    runtimeExternalCliProfileIds: ReadonlySet<string>;
   } {
     const env = params.env ?? process.env;
     const resolveProfiles =
@@ -177,13 +169,8 @@ export function createExternalAuthRuntime(
         store: params.store,
       },
     });
-    const resolved = new Map(
+    const resolved: ExternalAuthProfileMap = new Map(
       resolveAllowedExternalCliAuthProfiles(params).map((profile) => [profile.profileId, profile]),
-    );
-    const runtimeExternalCliProfileIds = new Set(
-      [...resolved.values()]
-        .filter((profile) => profile.persistence !== "persisted")
-        .map((profile) => profile.profileId),
     );
     const pluginProfileIds = new Set<string>();
     const explicitProfileIds = resolveExplicitProfileIds(params.externalCli?.externalCliProfileIds);
@@ -208,9 +195,8 @@ export function createExternalAuthRuntime(
       }
       resolved.set(profile.profileId, profile);
       pluginProfileIds.add(profile.profileId);
-      runtimeExternalCliProfileIds.delete(profile.profileId);
     }
-    return { profiles: resolved, pluginProfileIds, runtimeExternalCliProfileIds };
+    return { profiles: resolved, pluginProfileIds };
   }
 
   /** List runtime-only and persisted external auth profiles for this store. */
@@ -263,10 +249,7 @@ export function createExternalAuthRuntime(
     const retainedCliProfileIds = getRuntimeExternalCliProfileIds(base).filter(
       (profileId) => !resolved.pluginProfileIds.has(profileId),
     );
-    setRuntimeExternalCliProfileIds(next, [
-      ...retainedCliProfileIds,
-      ...resolved.runtimeExternalCliProfileIds,
-    ]);
+    setRuntimeExternalCliProfileIds(next, retainedCliProfileIds);
     return next;
   }
 

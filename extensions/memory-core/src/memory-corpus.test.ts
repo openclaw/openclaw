@@ -20,9 +20,7 @@ it.each(["timer", "event-loop"] as const)(
       run: async (currentSignal) => {
         signal = currentSignal;
         return await attemptMemoryCorpus({
-          corpus: "memory",
           signal: currentSignal,
-          unavailableValue: [],
           getPartialValue: () => partial,
           run: () => pending.promise,
         });
@@ -55,9 +53,7 @@ it.each(["provider", "caller"] as const)(
       parentSignal: parent.signal,
       run: async (signal) =>
         await attemptMemoryCorpus({
-          corpus: "memory",
           signal,
-          unavailableValue: [],
           getPartialValue: () => ["keyword match"],
           run: async () => {
             if (source === "caller") {
@@ -70,7 +66,7 @@ it.each(["provider", "caller"] as const)(
     if (source === "caller") {
       await expect(result).rejects.toBe(failure);
     } else {
-      expect(await result).toMatchObject({ outcome: "unavailable", value: [], deadline: false });
+      expect(await result).toMatchObject({ outcome: "unavailable", value: null, deadline: false });
     }
   },
 );

@@ -311,6 +311,16 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     !sourceReplyPolicy.suppressAutomaticSourceDelivery ||
     explicitCommandTurnCtx ||
     (ctx.InboundEventKind !== "room_event" && !unauthorizedTextSlashSourceReplyCtx);
+  const skipDuplicate = () => {
+    recordProcessed("skipped", { reason: "duplicate" });
+    return {
+      status: "complete" as const,
+      result: attachSourceReplyDeliveryMode({
+        queuedFinal: false,
+        counts: dispatcher.getQueuedCounts(),
+      }),
+    };
+  };
 
   const durableSourceTurnId =
     readChannelSourceTurnId(ctx) ??
@@ -331,48 +341,42 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   if (isDuplicateRestartRecoverySource(sessionStoreEntry.entry, durableSourceTurnId)) {
     // Process-local inbound dedupe cannot see provider redelivery after restart.
     // Drop durable duplicates before any plugin dispatch hook can repeat effects.
-    recordProcessed("skipped", { reason: "duplicate" });
-    return {
-      status: "complete" as const,
-      result: attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      }),
-    };
+    return skipDuplicate();
   }
 
   const sourceRunId = normalizeOptionalString(ctx.MessageSid);
   const recorder = params.replyOptions?.userTurnTranscriptRecorder;
-  const reclaimPendingInput =
+  let reclaimPendingInput: (() => boolean) | undefined;
+  if (
     recorder?.getPendingInputMessage?.() &&
     !recorder.hasPersisted() &&
     sourceRunId &&
     sessionStoreEntry.sessionKey &&
     sessionStoreEntry.entry?.sessionId
-      ? await prepareSessionPendingInputDedupeRecovery(
-          {
-            agentId: sessionStoreEntry.agentId ?? sessionAgentId,
-            storePath: sessionStoreEntry.storePath,
-            sessionKey: sessionStoreEntry.sessionKey,
-            sessionId: sessionStoreEntry.entry.sessionId,
-          },
-          sourceRunId,
-        )
-      : undefined;
-  const inboundDedupeClaim = claimInboundDedupe(ctx, {
-    reclaimPendingInput: reclaimPendingInput
-      ? () => !recorder!.hasPersisted() && reclaimPendingInput()
-      : undefined,
-  });
-  if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
-    recordProcessed("skipped", { reason: "duplicate" });
-    return {
-      status: "complete" as const,
-      result: attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      }),
+  ) {
+    const recoveryScope = {
+      agentId: sessionStoreEntry.agentId ?? sessionAgentId,
+      storePath: sessionStoreEntry.storePath,
+      sessionKey: sessionStoreEntry.sessionKey,
+      sessionId: sessionStoreEntry.entry.sessionId,
     };
+    reclaimPendingInput = await prepareSessionPendingInputDedupeRecovery(
+      recoveryScope,
+      sourceRunId,
+    );
+  }
+  const claimInput = () => {
+    const reclaim = reclaimPendingInput;
+    return claimInboundDedupe(ctx, {
+      reclaimPendingInput: reclaim ? () => !recorder!.hasPersisted() && reclaim() : undefined,
+    });
+  };
+  const inboundDedupeClaim =
+    reclaimPendingInput && recorder?.withPendingInputCurrent
+      ? await recorder.withPendingInputCurrent(claimInput)
+      : claimInput();
+  if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
+    return skipDuplicate();
   }
   const commitInboundDedupeIfClaimed = () => inboundDedupeClaim.commit?.();
   const releaseInboundDedupeIfClaimed = () => inboundDedupeClaim.release?.();

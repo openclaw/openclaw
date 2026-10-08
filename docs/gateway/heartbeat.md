@@ -123,7 +123,11 @@ Proactive heartbeat behavior is opt-in:
   night-time pings in your configured local timezone (see
   [Timezone](/concepts/timezone)).
 
-Heartbeat can react to completion events from background execution.
+Heartbeat can react to completion events from background execution. A completion carrying a captured delivery route returns to that account, conversation, and thread; the monitor's configured `target`, `to`, or `accountId` cannot redirect it. Intentional `target: "none"`, direct-message restrictions, notification opt-outs, and disabled heartbeat controls still apply. Plugin normalization that would change the captured route fails closed. Ordinary scheduled heartbeats retain their configured destinations.
+
+Captured exec completions with different delivery routes run in separate turns, including different accounts or topics. Identical completion text does not suppress a different completion occurrence.
+
+If a completion cannot enter delivery, its original-route event remains available for the existing bounded wake retry. Once the durable delivery queue owns an attempt, that queue owns transport retries; an unrelated wake must not regenerate its result. An unresolved attempt without confirmed delivery custody is withheld from model replay. Use `process poll` to collect an exec result, and verify whether a message arrived before manually resending an ambiguous delivery. This does not change node protocol negotiation or legacy notification behavior.
 
 If you want a heartbeat to do something very specific (e.g. "check Gmail PubSub stats" or "verify gateway health"), set `agents.defaults.heartbeat.prompt` (or `agents.entries.*.heartbeat.prompt`) to a custom body (sent verbatim).
 
@@ -277,10 +281,10 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   Optional model override for heartbeat runs (`provider/model`).
 </ParamField>
 <ParamField path="lightContext" type="boolean" default="false">
-  When true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way.
+  When true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way. A conversation's own background command completion keeps the conversation's full context.
 </ParamField>
 <ParamField path="isolatedSession" type="boolean" default="false">
-  When true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as automation jobs with `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing and conversation context still follow the selected conversation, including its channel, account, and topic. A background command's completion keeps its original event route if that conversation later moves. It does not borrow the new room's description or activation policy.
+  When true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as automation jobs with `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing and conversation context still follow the selected conversation, including its channel, account, and topic. A background command's completion keeps its original event route if that conversation later moves. It does not borrow the new room's description or activation policy. A conversation's own background command completion is not isolated; see [Session and target routing](#delivery-behavior).
 </ParamField>
 <ParamField path="session" type="string">
   Optional session key for heartbeat runs.
@@ -342,7 +346,8 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
 <AccordionGroup>
   <Accordion title="Session and target routing">
     - Heartbeats run in the agent's main session by default (`agent:<id>:main`), or `global` when `session.scope = "global"`. Set `session` to override to a specific channel session (Discord/WhatsApp/etc.).
-    - `session` only affects the run context. Delivery is controlled by `target` and `to`, except for session-owned events in an internal session (see below).
+    - `session` only affects the run context. Delivery is controlled by `target` and `to`, except for session-owned events (see below).
+    - A background command completion whose captured route is still its session's own conversation (for example the Telegram topic where the agent started the command) continues that conversation. It runs in that session with its full context, ignoring `isolatedSession` and `lightContext`, and the reply goes to that conversation, regardless of `target`, `to`, `directPolicy`, and channel `heartbeatVisibility`. A command started during that completion turn belongs to the same conversation. These completions do not wait for the next heartbeat interval, but event turns still start at least 30 seconds apart and at most 5 per minute. The model still stays silent when the result is not worth reporting. OpenClaw's own notices from that turn, such as a run-failure notice, a tool-failure warning, a status line, or a truncation label, still follow the heartbeat's `target`, `isolatedSession`, and `showAlerts` settings, so `target: "none"` or `showAlerts: false` keeps them out of the chat while the model's answer is still delivered. These settings keep governing periodic polls and heartbeat-owned work. A completion without such a route, for example from an automation with `delivery: "none"`, still follows `target`/`to`. To turn off completion turns, set `tools.exec.notifyOnExit: false`.
     - A wake whose pending events are all session-owned (background exec completions, or the continuation of a turn interrupted by a Gateway restart) in an internal session (Control UI/WebChat, or another operator-owned session without an external route) publishes the reply into that session's transcript instead of the `target`/`to` channel. `target: "none"` still suppresses it. If the session write fails, the event stays queued for a later wake and does not fall back to the channel. Batches that also contain other events use `target`/`to` as usual.
     - The default `owner` target chooses an explicitly configured owner identity. It reuses the exact account/thread only when the session's last route is a direct chat to that owner.
     - A wake that carries a channel and recipient uses that named origin before owner discovery. This event destination can be a group because it is explicit, not inferred.

@@ -10,6 +10,7 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
+import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
   beginPanelRefresh,
@@ -71,7 +72,6 @@ import {
   saveIdentityDraft,
   selectIdentityAvatar,
   setIdentityDraftField,
-  togglePinnedAgent,
 } from "./identity-actions.ts";
 import { createAgentModelActions } from "./model-config.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
@@ -82,12 +82,10 @@ import {
 } from "./route-navigation.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { AgentSelectionDrafts } from "./selection-drafts.ts";
-import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
+import { clearAgentSkillFilter, loadAgentSkills, nextAgentSkillAllowlist } from "./skills.ts";
 import { renderAgents, renderAgentsPageHeader } from "./view.ts";
 
-type AgentsRequestSources = Partial<
-  Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
->;
+type AgentsRequestSources = Partial<Pick<ApplicationContext, "agents" | "agentIdentity">>;
 
 class AgentsPage
   extends OpenClawLightDomElement
@@ -144,12 +142,7 @@ class AgentsPage
   private routeDataInitialized = false;
   private applyingRouteSelection = false;
   private routeSelectionSuperseded = false;
-  private hasBoundAgents = false;
-  private agentsSource: ApplicationContext["agents"] | null = null;
-  private hasBoundAgentIdentity = false;
-  private agentIdentitySource: ApplicationContext["agentIdentity"] | null = null;
-  private hasBoundSessions = false;
-  private sessionsSource: ApplicationContext["sessions"] | null = null;
+  private readonly boundSources = new Set<"agents" | "agentIdentity" | "sessions">();
   private chatModelCatalogSubscription: {
     isCurrent: () => boolean;
     unsubscribe: () => void;
@@ -224,88 +217,74 @@ class AgentsPage
     )
     .effect(
       () => this.context?.agents,
-      (agents) => {
-        const resetForSourceBind = this.hasBoundAgents;
-        this.hasBoundAgents = true;
-        this.agentsSource = agents;
-        if (resetForSourceBind) {
-          this.resetForSourceChange();
-        }
-        this.syncAgentState(agents);
-        this.ensureInitialData();
-        const stop = agents.subscribe(() => {
-          if (this.agentsSource !== agents || this.context.agents !== agents) {
-            return;
+      this.observeSource(
+        "agents",
+        (agents, replacement) => {
+          if (replacement) {
+            this.resetForSourceChange();
           }
+          this.syncAgentState(agents);
+          this.ensureInitialData();
+        },
+        (agents) => {
           this.syncAgentState(agents);
           this.ensureAgentIdentities();
           this.loadActivePanelData();
-          this.requestUpdate();
-        });
-        return () => {
-          stop();
-          if (this.agentsSource === agents) {
-            this.agentsSource = null;
-          }
-        };
-      },
+        },
+      ),
     )
     .effect(
       () => this.context?.agentIdentity,
-      (agentIdentity) => {
-        const resetForSourceBind = this.hasBoundAgentIdentity;
-        this.hasBoundAgentIdentity = true;
-        this.agentIdentitySource = agentIdentity;
-        if (resetForSourceBind) {
+      this.observeSource("agentIdentity", (_agentIdentity, replacement) => {
+        if (replacement) {
           this.invalidateTransientRequests();
         }
         this.ensureAgentIdentities();
         this.ensureInitialData();
-        const stop = agentIdentity.subscribe(() => {
-          if (
-            this.agentIdentitySource === agentIdentity &&
-            this.context.agentIdentity === agentIdentity
-          ) {
-            this.requestUpdate();
-          }
-        });
-        return () => {
-          stop();
-          if (this.agentIdentitySource === agentIdentity) {
-            this.agentIdentitySource = null;
-          }
-        };
-      },
+      }),
     )
     .watchStore(() => this.context?.channels)
     .watchStore(() => this.context?.navigation)
     .watchStore(() => this.context?.runtimeConfig)
     .effect(
       () => this.context?.sessions,
-      (sessions) => {
-        const resetForSourceBind = this.hasBoundSessions;
-        this.hasBoundSessions = true;
-        this.sessionsSource = sessions;
-        if (resetForSourceBind) {
-          this.invalidateTransientRequests();
-          resetToolsEffectiveState(this);
-          this.loadActivePanelData();
-        }
-        const stop = sessions.subscribe(() => {
-          if (this.sessionsSource !== sessions || this.context.sessions !== sessions) {
-            return;
+      this.observeSource(
+        "sessions",
+        (_sessions, replacement) => {
+          if (replacement) {
+            this.invalidateTransientRequests();
+            resetToolsEffectiveState(this);
+            this.loadActivePanelData();
           }
+        },
+        () => {
           void refreshVisibleToolsEffectiveForCurrentSession(this);
-          this.requestUpdate();
-        });
-        return () => {
-          stop();
-          if (this.sessionsSource === sessions) {
-            this.sessionsSource = null;
-          }
-        };
-      },
+        },
+      ),
     );
+
+  private observeSource<Key extends "agents" | "agentIdentity" | "sessions">(
+    key: Key,
+    onBind: (source: ApplicationContext[Key], replacement: boolean) => void,
+    onChange?: (source: ApplicationContext[Key]) => void,
+  ) {
+    return (source: ApplicationContext[Key]) => {
+      const replacement = this.boundSources.has(key);
+      this.boundSources.add(key);
+      onBind(source, replacement);
+      let active = true;
+      const stop = source.subscribe(() => {
+        if (active && this.context[key] === source) {
+          onChange?.(source);
+          this.requestUpdate();
+        }
+      });
+      return () => {
+        stop();
+        active = false;
+      };
+    };
+  }
 
   get sessions() {
     return this.context.sessions;
@@ -514,8 +493,8 @@ class AgentsPage
   private isCurrentRequest(
     client: GatewayBrowserClient,
     generation: number,
-    agentId?: string,
-    sources: AgentsRequestSources = {},
+    agentId: string | undefined,
+    sources: AgentsRequestSources,
   ): boolean {
     return (
       this.client === client &&
@@ -523,7 +502,6 @@ class AgentsPage
       this.requestGeneration === generation &&
       (!sources.agents || this.context.agents === sources.agents) &&
       (!sources.agentIdentity || this.context.agentIdentity === sources.agentIdentity) &&
-      (!sources.sessions || this.context.sessions === sources.sessions) &&
       (!agentId || this.agentsSelectedId === agentId)
     );
   }
@@ -1117,21 +1095,18 @@ class AgentsPage
               if (!target || !skillName.trim()) {
                 return;
               }
-              const base =
-                resolveAgentSkillsFilter(
-                  currentConfigObject(this.context.runtimeConfig.state),
-                  agentId,
-                ) ??
-                this.agentSkillsReport?.agentSkillFilter ??
-                this.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
-                [];
-              const next = new Set(base);
-              if (enabled) {
-                next.add(skillName.trim());
-              } else {
-                next.delete(skillName.trim());
-              }
-              this.context.runtimeConfig.patchForm([...target.path, "skills"], [...next]);
+              this.context.runtimeConfig.patchForm(
+                [...target.path, "skills"],
+                nextAgentSkillAllowlist({
+                  configured: resolveAgentSkillsFilter(
+                    currentConfigObject(this.context.runtimeConfig.state),
+                    agentId,
+                  ),
+                  report: this.agentSkillsReport,
+                  skillName: skillName.trim(),
+                  enabled,
+                }),
+              );
             },
             onAgentSkillsClear: (agentId) => this.clearAgentSkills(agentId),
             onAgentSkillsDisableAll: (agentId) => {

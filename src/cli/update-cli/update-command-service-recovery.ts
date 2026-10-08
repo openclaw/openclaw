@@ -69,7 +69,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   timeoutMs?: number;
   expectedVersion?: string;
   expectedBuildId?: string;
-  requirePluginHealth?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<{
   health: GatewayRestartSnapshot;
@@ -134,7 +133,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     timeoutMs: params.timeoutMs,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
-    requirePluginHealth: params.requirePluginHealth,
+    requirePluginHealth: false,
     env: params.env,
     supervisorKeepsAlive: true,
     settle: { probes: 12 },
@@ -191,12 +190,13 @@ export function refuseUnsettledDoctorRecovery(
   return false;
 }
 
-export async function admitMigratedGatewayRecovery(
+export async function admitInstalledGatewayRecovery(
   params: Pick<
     FinishUpdateParams,
     | "root"
     | "opts"
     | "shouldRestart"
+    | "coreAlreadyCurrent"
     | "preManagedServiceStop"
     | "packageTransaction"
     | "originalManagedServiceRuntime"
@@ -215,8 +215,15 @@ export async function admitMigratedGatewayRecovery(
   }
   const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
   const databaseRollback = result.steps.findLast((step) => step.name === "database rollback");
+  // Current-core maintenance has no package rollback, but still owns its Doctor park.
+  const currentCore =
+    params.coreAlreadyCurrent === true &&
+    !params.packageTransaction &&
+    result.status === "error" &&
+    settlement !== undefined;
   if (
-    result.reason !== "state-migrated-no-rollback" ||
+    (!currentCore && result.reason !== "state-migrated-no-rollback") ||
+    (params.coreAlreadyCurrent && result.recovery?.serviceRestartSafe === false) ||
     params.originalManagedServiceRuntime ||
     !params.shouldRestart ||
     !params.preManagedServiceStop?.stopped ||
@@ -409,10 +416,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     }
     await checkOriginal();
     const service = resolveGatewayService();
-    let expectedService: Pick<
-      PreManagedServiceStop,
-      "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
-    > = original?.service ?? before;
+    let expectedService: OriginalManagedServiceRuntime["service"] = original?.service ?? before;
     const readCurrentService = async () => {
       assertCurrent();
       const state = await readGatewayServiceStateForUpdate(service, serviceEnv, params.timeoutMs, {

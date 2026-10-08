@@ -1,15 +1,13 @@
 import {
   type WorkerAdmissionFailureReason,
-  type WorkerAdmissionHandshake,
   type WorkerConnectParams,
   type WorkerProtocolCloseReason,
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import {
   sameWorkerProtocolFeatures,
+  supportsCurrentWorkerLaunch,
   type ExpectedWorkerBuild,
 } from "../../worker/worker-build-identity.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -33,16 +31,6 @@ export class StaleWorkerBuildError extends Error {
   constructor() {
     super(STALE_WORKER_BUILD_REASON);
   }
-}
-
-/** Fence persisted builds that cannot parse the exact current launch descriptor. */
-export function supportsCurrentWorkerLaunch(
-  handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,
-): boolean {
-  return (
-    handshake?.protocolFeatures.includes(WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE) === true &&
-    handshake.protocolFeatures.includes(WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE)
-  );
 }
 
 export function requireCurrentWorkerTurnEnvironment(params: {

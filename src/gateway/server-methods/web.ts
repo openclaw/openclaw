@@ -10,7 +10,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listChannelPlugins, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listLoadedChannelPluginsForRegistry } from "../../channels/plugins/registry-loaded.js";
-import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveRuntimeAccountSnapshot } from "./channels-account.js";
@@ -128,18 +127,6 @@ function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
   return { accountId, provider, run: run.bind(gateway) as NonNullable<WebLoginGateway[TMethod]> };
 }
 
-function wasChannelRunning(params: {
-  context: GatewayRequestContext;
-  channelId: ChannelId;
-  accountId?: string;
-}): boolean {
-  const runtime = params.context.getRuntimeSnapshot();
-  const account = params.accountId
-    ? resolveRuntimeAccountSnapshot({ ...params, runtime, accountId: params.accountId })
-    : runtime.channels[params.channelId];
-  return account?.running === true;
-}
-
 export const webHandlers: GatewayRequestHandlers = {
   "web.login.start": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWebLoginStartParams, "web.login.start", respond)) {
@@ -156,11 +143,11 @@ export const webHandlers: GatewayRequestHandlers = {
         return;
       }
       const { accountId, provider, run } = request;
-      const wasRunning = wasChannelRunning({
-        context,
-        channelId: provider.id,
-        accountId,
-      });
+      const runtime = context.getRuntimeSnapshot();
+      const account = accountId
+        ? resolveRuntimeAccountSnapshot({ runtime, channelId: provider.id, accountId })
+        : runtime.channels[provider.id];
+      const wasRunning = account?.running === true;
       const forceLogin = Boolean(params.force);
       const stoppedBeforeLogin = forceLogin || !wasRunning;
       if (stoppedBeforeLogin) {

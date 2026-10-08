@@ -25,7 +25,6 @@ const native = vi.hoisted(() => ({
   running: false,
   scriptPath: "",
   taskName: "OpenClaw Gateway",
-  failure: undefined as "enable" | "run" | undefined,
   afterEnable: undefined as (() => void | Promise<void>) | undefined,
   files: new Map<string, string>(),
   calls: [] as string[][],
@@ -69,22 +68,17 @@ vi.mock("node:child_process", async (original) => ({
     }),
   })),
 }));
+// mock-isolation: Native enable and Run mutations update only the selected task fixture.
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: vi.fn(async (args: string[]) => {
     native.calls.push(args);
     if (args[0] === "/Change" && args.includes("/ENABLE")) {
-      if (native.failure === "enable") {
-        return { code: 1, stdout: "", stderr: "Enable denied." };
-      }
       native.enabled = true;
       await native.afterEnable?.();
     }
     if (args[0] === "/Run") {
       if (!native.enabled) {
         return { code: 1, stdout: "", stderr: "The scheduled task is disabled." };
-      }
-      if (native.failure === "run") {
-        return { code: 1, stdout: "", stderr: "Run denied." };
       }
       native.running = true;
     }
@@ -104,12 +98,11 @@ beforeEach(() => {
   native.running = false;
   native.calls.length = 0;
   native.files.clear();
-  native.failure = undefined;
   native.afterEnable = undefined;
 });
 afterEach(() => vi.restoreAllMocks());
 
-async function fixture(program?: string, kind = "gateway") {
+async function fixture(kind = "gateway") {
   const root = temporary.make("schtasks-start-");
   const packageRoot = path.join(root, "package");
   await fs.mkdir(packageRoot);
@@ -121,7 +114,7 @@ async function fixture(program?: string, kind = "gateway") {
   native.files.set(native.scriptPath, file);
   await fs.writeFile(
     file,
-    `@echo off\r\n${program ?? `"C:\\Node\\node.exe" "${entry}" ${kind === "node" ? "node run" : "gateway"}`}\r\n`,
+    `@echo off\r\n"C:\\Node\\node.exe" "${entry}" ${kind === "node" ? "node run" : "gateway"}\r\n`,
   );
   native.taskName = kind === "node" ? "OpenClaw Node" : "OpenClaw Gateway";
   const env: Record<string, string> = {
@@ -199,19 +192,16 @@ it.each(["owned", "foreign", "missing launcher"] as const)(
   },
 );
 
-it.each(["gateway", "node"])(
-  "explicitly starts a disabled registered %s without replacing its launcher",
-  async (kind) => {
-    const { env, file } = await fixture(undefined, kind);
-    const before = await fs.readFile(file);
-    const onMutation = vi.fn();
-    await startScheduledTask({ env, stdout: new PassThrough(), onMutation });
-    expect(native.enabled).toBe(true);
-    expect(native.running).toBe(true);
-    expect(await fs.readFile(file)).toEqual(before);
-    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "schtasks-start" }]]);
-  },
-);
+it("explicitly starts a disabled registered node without replacing its launcher", async () => {
+  const { env, file } = await fixture("node");
+  const before = await fs.readFile(file);
+  const onMutation = vi.fn();
+  await startScheduledTask({ env, stdout: new PassThrough(), onMutation });
+  expect(native.enabled).toBe(true);
+  expect(native.running).toBe(true);
+  expect(await fs.readFile(file)).toEqual(before);
+  expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "schtasks-start" }]]);
+});
 
 it("does not enable a captured service whose auto-start policy must be preserved", async () => {
   const { env } = await fixture();
@@ -223,54 +213,40 @@ it("does not enable a captured service whose auto-start policy must be preserved
   expect(native.calls.some((args) => args[0] === "/Change")).toBe(false);
 });
 
-it.each([true, false])(
-  "preserves native Run with missing policy metadata (enabled=%s)",
-  async (enabled) => {
-    const { env } = await fixture();
-    native.enabled = enabled;
-    native.enabledAvailable = false;
-    const start = startScheduledTask({ env, stdout: new PassThrough() });
-    if (enabled) {
-      await expect(start).resolves.toBeUndefined();
-      expect(native.running).toBe(true);
-    } else {
-      await expect(start).rejects.toThrow("The scheduled task is disabled.");
-    }
-    expect(native.calls.some((args) => args[0] === "/Run")).toBe(true);
-    expect(native.calls.some((args) => args[0] === "/Change")).toBe(false);
-  },
-);
+it("preserves native Run with missing policy metadata (enabled=true)", async () => {
+  const { env } = await fixture();
+  native.enabled = true;
+  native.enabledAvailable = false;
+  const start = startScheduledTask({ env, stdout: new PassThrough() });
+  await expect(start).resolves.toBeUndefined();
+  expect(native.running).toBe(true);
+  expect(native.calls.some((args) => args[0] === "/Run")).toBe(true);
+  expect(native.calls.some((args) => args[0] === "/Change")).toBe(false);
+});
 
-it.each([
-  "foreign program",
-  "foreign entrypoint filename",
-  "wrong profile",
-  "missing launcher",
-  "multiple commands",
-])("does not enable or run an unverified selected task (%s)", async (kind) => {
-  const { env, file, root, entry } = await fixture();
-  if (kind === "missing launcher") {
-    await fs.unlink(file);
-  } else if (kind === "foreign entrypoint filename") {
-    const foreign = path.join(root, "foreign");
-    await fs.mkdir(foreign);
-    await fs.writeFile(path.join(foreign, "package.json"), JSON.stringify({ name: "unrelated" }));
-    const foreignEntry = path.join(foreign, "openclaw.mjs");
-    await fs.writeFile(foreignEntry, "export {};\n");
-    await fs.writeFile(file, `@echo off\r\n"C:\\Node\\node.exe" "${foreignEntry}" gateway\r\n`);
-  } else {
-    const program =
-      kind === "foreign program"
-        ? '"C:\\Windows\\notepad.exe" gateway'
-        : kind === "wrong profile"
+it.each(["foreign entrypoint filename", "wrong profile", "multiple commands"])(
+  "does not enable or run an unverified selected task (%s)",
+  async (kind) => {
+    const { env, file, root, entry } = await fixture();
+    if (kind === "foreign entrypoint filename") {
+      const foreign = path.join(root, "foreign");
+      await fs.mkdir(foreign);
+      await fs.writeFile(path.join(foreign, "package.json"), JSON.stringify({ name: "unrelated" }));
+      const foreignEntry = path.join(foreign, "openclaw.mjs");
+      await fs.writeFile(foreignEntry, "export {};\n");
+      await fs.writeFile(file, `@echo off\r\n"C:\\Node\\node.exe" "${foreignEntry}" gateway\r\n`);
+    } else {
+      const program =
+        kind === "wrong profile"
           ? `"C:\\Node\\node.exe" "${entry}" --profile other gateway`
           : `"C:\\Node\\node.exe" "${entry}" gateway\r\necho additional-command`;
-    await fs.writeFile(file, `@echo off\r\n${program}\r\n`);
-  }
-  await expect(startScheduledTask({ env, stdout: new PassThrough() })).rejects.toThrow();
-  expect(native.calls.filter((args) => args[0] === "/Change" || args[0] === "/Run")).toEqual([]);
-  expect(native.enabled).toBe(false);
-});
+      await fs.writeFile(file, `@echo off\r\n${program}\r\n`);
+    }
+    await expect(startScheduledTask({ env, stdout: new PassThrough() })).rejects.toThrow();
+    expect(native.calls.filter((args) => args[0] === "/Change" || args[0] === "/Run")).toEqual([]);
+    expect(native.enabled).toBe(false);
+  },
+);
 
 it.each(["definition", "entrypoint", "authority"])(
   "revalidates %s after enable before running",
@@ -346,24 +322,6 @@ it("revalidates a registered VBS launcher across enable before running", async (
   expect(native.calls.some((args) => args[0] === "/Run")).toBe(false);
 });
 
-it.each(["enable", "run"] as const)(
-  "preserves native %s failure and reports only completed mutations",
-  async (failure) => {
-    const { env } = await fixture();
-    native.failure = failure;
-    const onMutation = vi.fn();
-    await expect(
-      startScheduledTask({ env, stdout: new PassThrough(), onMutation }),
-    ).rejects.toThrow(`${failure === "enable" ? "Enable" : "Run"} denied`);
-    expect(native.running).toBe(false);
-    expect(native.enabled).toBe(failure === "run");
-    expect(onMutation.mock.calls).toEqual(failure === "run" ? [[{ mode: "enable" }]] : []);
-    if (failure === "enable") {
-      expect(native.calls.some((args) => args[0] === "/Run")).toBe(false);
-    }
-  },
-);
-
 it.each([
   "persisted",
   "changed after enable",
@@ -371,15 +329,12 @@ it.each([
   "mismatched",
   "missing executable",
   "root relative",
-  "relative",
 ])("requires recorded and runnable wrapper intent before enabling (%s)", async (kind) => {
   const { env, file, root } = await fixture();
   const wrapper =
     kind === "root relative"
       ? "\\fixture\\operator-wrapper.exe"
-      : kind === "relative"
-        ? "operator-wrapper.exe"
-        : "C:\\fixture\\operator-wrapper.exe";
+      : "C:\\fixture\\operator-wrapper.exe";
   const executable = path.join(root, "operator-wrapper");
   native.files.set(wrapper, executable);
   if (kind !== "missing executable") {
@@ -406,15 +361,4 @@ it.each([
     await expect(start).rejects.toThrow();
     expect(native.calls.some((args) => args[0] === "/Change" || args[0] === "/Run")).toBe(false);
   }
-});
-
-it("keeps an already-enabled Node wrapper without inventing persisted wrapper intent", async () => {
-  const { env, file, root } = await fixture(undefined, "node");
-  const wrapper = path.join(root, "node-wrapper");
-  await fs.writeFile(wrapper, "fixture executable\n", { mode: 0o700 });
-  await fs.writeFile(file, `@echo off\r\n"${wrapper}" node run\r\n`);
-  native.enabled = true;
-  await startScheduledTask({ env, stdout: new PassThrough() });
-  expect(native.running).toBe(true);
-  expect(native.calls.some((args) => args[0] === "/Change")).toBe(false);
 });

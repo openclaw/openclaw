@@ -51,6 +51,7 @@ import {
 } from "../test-utils/port-claims.js";
 import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { registerWorktreeListingOwnerTests } from "./local-state-owner-listing.test-support.js";
 
 const execFileAsync = promisify(execFile);
 const roots = useAutoCleanupTempDirTracker(afterAll);
@@ -90,6 +91,7 @@ describe("same-root local mutation routing", () => {
   let claim: TestPortClaim;
   let owner: GatewayLockHandle | null;
   let service: ManagedWorktreeService;
+  let repoFingerprint: string;
   const maintenanceClock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(maintenanceClock.clock);
   let maintenance: ReturnType<typeof startWorktreeMaintenance>;
@@ -144,6 +146,7 @@ describe("same-root local mutation routing", () => {
     vi.stubEnv("USERPROFILE", root);
     const cfg = { worktreeRoot: path.join(root, "gateway-worktrees"), worktreeAcceleration: false };
     service = new ManagedWorktreeService({ env, getConfig: () => cfg });
+    repoFingerprint = (await service.resolveRepositoryIdentity(repo)).fingerprint;
     owner = await acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
     expect(owner).not.toBeNull();
     const handlers = createWorktreesHandlers(service);
@@ -266,6 +269,24 @@ describe("same-root local mutation routing", () => {
       // A configured remote URL must not redirect this same-root operation.
       env: { ...env, OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:1" },
     });
+
+  registerWorktreeListingOwnerTests(
+    () => ({
+      root,
+      repo,
+      env,
+      service,
+      methods,
+      port: claim.port,
+      get owner() {
+        return owner;
+      },
+      set owner(value: GatewayLockHandle | null) {
+        owner = value;
+      },
+    }),
+    entrypoint,
+  );
 
   it("runs the CLI create in the live owner and exposes committed profile results", async () => {
     const result = await create(
@@ -413,12 +434,14 @@ describe("same-root local mutation routing", () => {
 
   async function prepareOperation(kind: Operation["kind"]) {
     const name = `mutation-${++sequence}`;
-    const record = await service.create({
+    const record = await materializeManagedWorktreeFixture({
+      env,
+      stateDir: env.OPENCLAW_STATE_DIR!,
       repoRoot: repo,
+      repoFingerprint,
       name,
-      baseRef: "HEAD",
+      now: Date.now(),
       ownerKind: kind === "gc" || kind === "gc-partial" ? "workboard" : "manual",
-      runSetupScript: false,
     });
     let args = ["remove", record.id];
     let cleanup = async () => {};
@@ -614,12 +637,12 @@ describe("same-root local mutation routing", () => {
       const snapshotRef = `refs/openclaw/snapshots/${record.id}`;
       await git(repo, "update-ref", snapshotRef, snapshot);
       await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
-      updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });
+      await updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });
       await fs.unlink(path.join(record.path, ".git"));
       args = ["recover-removal", record.id, "--snapshot", snapshot];
     }
     if (kind === "gc" || kind === "gc-partial") {
-      updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+      await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
       let brokenId: string | undefined;
       if (kind === "gc-partial") {
         const brokenRepo = await initializeRepository(path.join(root, name));
@@ -635,7 +658,7 @@ describe("same-root local mutation routing", () => {
         await fs.rename(brokenRepo, `${brokenRepo}-away`);
         cleanup = async () => {
           await fs.rename(`${brokenRepo}-away`, brokenRepo);
-          updateRegistryWorktree(env, broken.id, { lastActiveAt: Date.now() });
+          await updateRegistryWorktree(env, broken.id, { lastActiveAt: Date.now() });
         };
       }
       args = ["gc"];
@@ -711,8 +734,11 @@ describe("same-root local mutation routing", () => {
           scenario === "live" || scenario === "lost-reply" ? [method] : [],
         );
         if (scenario === "offline") {
-          expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
-          expect(observation.worktreeSql).toBeGreaterThan(0);
+          // Worker-only operations need no caller-thread SQL; any native access still needs custody.
+          expect(observation.missingCustody).toBe(0);
+          for (const pid of observation.ownerPids) {
+            expect(pid).toBe(observation.pid);
+          }
         } else {
           expect(observation.worktreeSql).toBe(0);
         }
@@ -775,25 +801,62 @@ describe("same-root local mutation routing", () => {
     },
   );
 
-  it("visibly refuses live sandbox recreate before any worktree SQL or owner dispatch", async () => {
-    const before = methods.length;
-    const result = await runCliProcessChild({
-      nodeArgs: [...entrypoint, "sandbox", "recreate", "--all", "--force"],
-      env,
-    });
-    expect(result.code, result.stderr).toBe(1);
-    expect(result.stderr).toContain("exclusive offline state ownership");
-    expect(methods).toHaveLength(before);
-    expect(
-      JSON.parse(await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"))
-        .worktreeSql,
-    ).toBe(0);
-  });
+  it.each([
+    ["sandbox recreate", ["sandbox", "recreate", "--all", "--force"]],
+    ["exec-policy preset", ["exec-policy", "preset", "deny-all"]],
+    ["exec-policy set", ["exec-policy", "set", "--ask", "always"]],
+  ])(
+    "refuses live %s before changing local state or dispatching to the owner",
+    async (_name, args) => {
+      const before = methods.length;
+      const configBefore = await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8");
+      const result = await runCliProcessChild({
+        nodeArgs: [...entrypoint, ...args],
+        env,
+      });
+      expect(result.code, result.stderr).toBe(1);
+      expect(result.stderr).toContain("exclusive offline state ownership");
+      expect(methods).toHaveLength(before);
+      expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(configBefore);
+      expect(
+        JSON.parse(await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"))
+          .worktreeSql,
+      ).toBe(0);
+    },
+  );
 });
 
 describe("offline local mutation custody", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   afterEach(() => vi.unstubAllEnvs());
+
+  it("keeps offline exec-policy preset writes and their config update working", async () => {
+    const root = roots.make("openclaw-exec-policy-offline-");
+    const env = environment(root);
+    await fs.mkdir(env.OPENCLAW_STATE_DIR!, { recursive: true });
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}\n");
+    const result = await runCliProcessChild({
+      nodeArgs: [...entrypoint, "exec-policy", "preset", "cautious", "--json"],
+      env,
+    });
+
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      preset: "cautious",
+      approvalsExists: true,
+      effectivePolicy: {
+        scopes: [
+          expect.objectContaining({
+            security: expect.objectContaining({ effective: "allowlist" }),
+            ask: expect.objectContaining({ effective: "on-miss" }),
+          }),
+        ],
+      },
+    });
+    expect(JSON.parse(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8"))).toMatchObject({
+      tools: { exec: { host: "gateway", mode: "ask" } },
+    });
+  });
 
   it.skipIf(process.platform === "win32")(
     "retains offline CLI custody through its POSIX setup hook while Gateway startup races",

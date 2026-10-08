@@ -4,7 +4,6 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import {
   buildFeishuConversationId,
   resolveConfiguredFeishuGroupSessionScope,
-  type FeishuGroupSessionScope as GroupSessionScope,
 } from "./conversation-id.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -13,7 +12,7 @@ import { saveMessageResourceFeishu } from "./media.js";
 import { isFeishuBroadcastMention } from "./mention.js";
 import { formatFeishuMediaContent } from "./message-content.js";
 import { parsePostContent } from "./post.js";
-import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
+import type { FeishuChatType, FeishuConfig, FeishuMediaInfo } from "./types.js";
 
 type FeishuMention = NonNullable<FeishuMessageEvent["message"]["mentions"]>[number];
 
@@ -21,13 +20,10 @@ type FeishuMessageLike = {
   message: Pick<FeishuMessageEvent["message"], "content" | "message_type" | "mentions">;
 };
 
-type ResolvedFeishuGroupSession = {
-  peerId: string;
-  parentPeer: { kind: "group"; id: string } | null;
-  groupSessionScope: GroupSessionScope;
-  replyInThread: boolean;
-  threadReply: boolean;
-};
+type FeishuGroupSessionConfig = Pick<
+  FeishuConfig,
+  "groupSessionScope" | "topicSessionMode" | "replyInThread"
+>;
 
 export function resolveFeishuGroupSession(params: {
   chatId: string;
@@ -36,17 +32,9 @@ export function resolveFeishuGroupSession(params: {
   rootId?: string;
   threadId?: string;
   chatType?: FeishuChatType;
-  groupConfig?: {
-    groupSessionScope?: GroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-    replyInThread?: "enabled" | "disabled";
-  };
-  feishuCfg?: {
-    groupSessionScope?: GroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-    replyInThread?: "enabled" | "disabled";
-  };
-}): ResolvedFeishuGroupSession {
+  groupConfig?: FeishuGroupSessionConfig;
+  feishuCfg?: FeishuGroupSessionConfig;
+}) {
   const { chatId, senderOpenId, messageId, rootId, threadId, chatType, groupConfig, feishuCfg } =
     params;
   const normalizedThreadId = threadId?.trim();
@@ -66,34 +54,19 @@ export function resolveFeishuGroupSession(params: {
         (replyInThread ? messageId : null))
       : null;
 
-  let peerId;
-  switch (groupSessionScope) {
-    case "group_sender":
-      peerId = buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
-      break;
-    case "group_topic":
-      peerId = topicScope
-        ? buildFeishuConversationId({ chatId, scope: "group_topic", topicId: topicScope })
-        : chatId;
-      break;
-    case "group_topic_sender":
-      peerId = topicScope
-        ? buildFeishuConversationId({
-            chatId,
-            scope: "group_topic_sender",
-            topicId: topicScope,
-            senderOpenId,
-          })
-        : buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
-      break;
-    default:
-      peerId = chatId;
-      break;
-  }
+  const peerId =
+    groupSessionScope === "group_sender" || groupSessionScope === "group_topic_sender" || topicScope
+      ? buildFeishuConversationId({
+          chatId,
+          scope: groupSessionScope,
+          senderOpenId,
+          topicId: topicScope ?? undefined,
+        })
+      : chatId;
 
   return {
     peerId,
-    parentPeer: topicScope ? { kind: "group", id: chatId } : null,
+    parentPeer: topicScope ? { kind: "group" as const, id: chatId } : null,
     groupSessionScope,
     replyInThread,
     threadReply,

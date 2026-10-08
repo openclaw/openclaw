@@ -14,17 +14,23 @@ import {
 } from "../../lib/chat/chat-types.ts";
 import { extractText, extractTextCached } from "../../lib/chat/message-extract.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
+import type { ToolStreamHost } from "./tool-stream-contract.ts";
+import { closeToolStreamBoundary } from "./tool-stream-state.ts";
 
 export type StreamCausalBoundaryState = {
   chatMessages?: unknown[];
   chatRunId?: string | null;
+  chatStreamItemId?: string;
+  chatStreamItemStartOffset?: number;
   chatStreamSegments?: ChatStreamSegment[];
 };
 
-type StreamRolloverState = {
+type StreamRolloverState = Partial<Pick<ToolStreamHost, "toolStreamById" | "chatToolMessages">> & {
   chatMessages?: unknown[];
   chatRunId: string | null;
   chatStream: string | null;
+  chatStreamItemId?: string;
+  chatStreamItemStartOffset?: number;
   chatStreamStartedAt: number | null;
   chatStreamSegments?: ChatStreamSegment[];
 };
@@ -171,41 +177,6 @@ export function streamCausalInsertIndex(
     }
   }
   return endIndex;
-}
-
-export function streamCausalTimestamp(
-  messages: unknown[],
-  index: number,
-  desiredTimestamp: number,
-  readTimestamp: (message: unknown) => number | null,
-): number {
-  let previousTimestamp: number | null = null;
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    previousTimestamp = readTimestamp(messages[cursor]);
-    if (previousTimestamp != null) {
-      break;
-    }
-  }
-  let nextTimestamp: number | null = null;
-  for (let cursor = index; cursor < messages.length; cursor += 1) {
-    nextTimestamp = readTimestamp(messages[cursor]);
-    if (nextTimestamp != null) {
-      break;
-    }
-  }
-  if (previousTimestamp != null && desiredTimestamp <= previousTimestamp) {
-    const afterPrevious = previousTimestamp + 1;
-    return nextTimestamp != null && afterPrevious >= nextTimestamp
-      ? previousTimestamp + (nextTimestamp - previousTimestamp) / 2
-      : afterPrevious;
-  }
-  if (nextTimestamp != null && desiredTimestamp >= nextTimestamp) {
-    const beforeNext = nextTimestamp - 1;
-    return previousTimestamp != null && beforeNext <= previousTimestamp
-      ? previousTimestamp + (nextTimestamp - previousTimestamp) / 2
-      : beforeNext;
-  }
-  return desiredTimestamp;
 }
 
 export function resolveCumulativeAssistantTail(
@@ -511,21 +482,25 @@ function interveningUserBoundaryRunId(params: {
   return undefined;
 }
 
-/** Closes cumulative assistant output at a tool or persisted user boundary. */
+/** Closes cumulative assistant output at a history or user boundary. */
 export function rolloverChatStream(
   host: StreamRolloverState,
   options: {
     runId: string;
     boundaryRunId?: string;
-    toolCallId?: string;
     persisted?: true;
-    timestamp?: number;
   },
 ): void {
   if (host.chatRunId !== options.runId) {
     return;
   }
   let segments = host.chatStreamSegments ?? [];
+  if (
+    options.boundaryRunId &&
+    segments.some((segment) => segment.boundaryRunId === options.boundaryRunId)
+  ) {
+    return;
+  }
   const previousBoundaryRunId = latestStreamBoundaryRunId(host);
   const hasStream = typeof host.chatStream === "string";
   const hasStreamText = hasStream && Boolean(host.chatStream?.trim());
@@ -537,7 +512,13 @@ export function rolloverChatStream(
         afterBoundaryRunId: previousBoundaryRunId,
       }) ?? options.boundaryRunId)
     : undefined;
+  let streamTimestamp = host.chatStreamStartedAt ?? Date.now();
   if (streamBoundaryRunId) {
+    const toolTimestamp = closeToolStreamBoundary(host, options.runId, streamBoundaryRunId);
+    if (toolTimestamp !== undefined) {
+      // The live tail was below these tools, even if its first byte predates them.
+      streamTimestamp = Math.max(streamTimestamp, toolTimestamp + 1);
+    }
     const previousBoundaryIndex = segments.findLastIndex((segment) => segment.boundaryRunId);
     segments = segments.map((segment, index) =>
       index <= previousBoundaryIndex || segment.boundaryRunId
@@ -550,11 +531,10 @@ export function rolloverChatStream(
       ...segments,
       {
         text: host.chatStream ?? "",
-        ts: host.chatStreamStartedAt ?? options.timestamp ?? Date.now(),
+        ts: streamTimestamp,
         runId: options.runId,
         ...(previousBoundaryRunId ? { afterBoundaryRunId: previousBoundaryRunId } : {}),
         ...(streamBoundaryRunId ? { boundaryRunId: streamBoundaryRunId } : {}),
-        ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
         ...(options.persisted ? { persisted: true } : {}),
       },
     ];
@@ -569,7 +549,7 @@ export function rolloverChatStream(
       ...segments,
       {
         text: "",
-        ts: host.chatStreamStartedAt ?? options.timestamp ?? Date.now(),
+        ts: host.chatStreamStartedAt ?? Date.now(),
         runId: options.runId,
         boundaryRunId: options.boundaryRunId,
         boundaryMarker: true,
@@ -582,6 +562,8 @@ export function rolloverChatStream(
     return;
   }
   host.chatStream = null;
+  host.chatStreamItemId = undefined;
+  host.chatStreamItemStartOffset = undefined;
   // The closed segment owns elapsed time; a later cumulative tail must not restart the run clock.
   host.chatStreamStartedAt = null;
 }

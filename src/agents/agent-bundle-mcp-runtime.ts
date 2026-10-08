@@ -1,4 +1,3 @@
-/** Session-scoped MCP runtime catalog loader and transport lifecycle. */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
@@ -12,7 +11,10 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { projectBundleMcpCatalogTools } from "./agent-bundle-mcp-catalog-projection.js";
+import {
+  projectBundleMcpCatalogTools,
+  projectUnavailableBundleMcpCatalog,
+} from "./agent-bundle-mcp-catalog-projection.js";
 import {
   createCombinedSessionMcpRuntime,
   mergeMcpToolCatalogs,
@@ -404,32 +406,13 @@ function createServerMcpRuntime(
     catalogRetryAfterMs = undefined;
   };
   const scheduleCatalogServerRetry = (message: string) => {
-    const currentCatalog = catalog;
-    const server = currentCatalog?.servers[serverName];
-    const existing = currentCatalog?.diagnostics?.[0];
-    if (!currentCatalog) {
-      invalidateCatalog();
-      return;
-    }
-    let diagnostic: McpToolCatalogDiagnostic;
-    if (existing) {
-      diagnostic = { ...existing, message };
-    } else if (server) {
-      diagnostic = {
-        serverName,
-        safeServerName: server.safeServerName ?? serverName,
-        launchSummary: server.launchSummary,
-        message,
-      };
-    } else {
+    const unavailableCatalog = projectUnavailableBundleMcpCatalog(catalog, serverName, message);
+    if (!unavailableCatalog) {
       invalidateCatalog();
       return;
     }
     catalogInvalidationGeneration += 1;
-    catalog = {
-      ...currentCatalog,
-      diagnostics: [diagnostic],
-    };
+    catalog = unavailableCatalog;
     catalogRetryAfterMs = Date.now();
   };
   const catalogRetryIsDue = (): boolean =>
