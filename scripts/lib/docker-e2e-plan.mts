@@ -31,6 +31,8 @@ import {
 } from "./update-first-hop-lanes.mjs";
 import {
   assertSupportedUpgradeSurvivorBaselineSpec,
+  isPackageRecoveryScenario,
+  packageRecoveryBaselines,
   isTrustedHarnessOwnedUpgradeSurvivorScenario,
   parseUpgradeSurvivorBaselineSpecs,
   parseUpgradeSurvivorScenarios,
@@ -520,7 +522,8 @@ function expandUpgradeSurvivorBaselineLanes(
       ? requestedScenarios.filter((scenario) => !supportedScenarioSet.has(scenario))
       : [];
   const scenarios = configuredScenarios.length > 0 ? supportedScenarios : [];
-  const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];
+  const matrixBaselines: Array<string | undefined> =
+    baselineSpecs.length > 0 ? baselineSpecs : [undefined];
   const omittedLaneNames = survivorLanes.flatMap((poolLane) =>
     matrixBaselines.flatMap((baselineSpec) =>
       unsupportedScenarios
@@ -546,32 +549,38 @@ function expandUpgradeSurvivorBaselineLanes(
         return [poolLane];
       }
       const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
-      return matrixBaselines.flatMap((baselineSpec) =>
+      const cells = matrixBaselines.flatMap((baselineSpec) =>
         matrixScenarios
           .filter((scenario) => supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec))
-          .map((scenario) => {
-            const name = expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario);
-            const suffix = name.slice(poolLane.name.length + 1);
-            const commandPrefix = [
-              `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
-              baselineSpec
-                ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}`
-                : "",
-              scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
-            ]
-              .filter(Boolean)
-              .join(" ");
-            return Object.assign({}, poolLane, {
-              cacheKey: poolLane.cacheKey
-                ? suffix
-                  ? `${poolLane.cacheKey}-${suffix}`
-                  : poolLane.cacheKey
-                : name,
-              command: `${commandPrefix} ${poolLane.command}`,
-              name,
-            });
-          }),
+          .map((scenario) => ({ baselineSpec, scenario })),
       );
+      for (const scenario of matrixScenarios.filter(isPackageRecoveryScenario)) {
+        for (const baselineSpec of packageRecoveryBaselines(scenario)) {
+          if (!matrixBaselines.includes(baselineSpec)) {
+            cells.push({ baselineSpec, scenario });
+          }
+        }
+      }
+      return cells.map(({ baselineSpec, scenario }) => {
+        const name = expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario);
+        const suffix = name.slice(poolLane.name.length + 1);
+        const commandPrefix = [
+          `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
+          baselineSpec ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}` : "",
+          scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return Object.assign({}, poolLane, {
+          cacheKey: poolLane.cacheKey
+            ? suffix
+              ? `${poolLane.cacheKey}-${suffix}`
+              : poolLane.cacheKey
+            : name,
+          command: `${commandPrefix} ${poolLane.command}`,
+          name,
+        });
+      });
     }),
     omittedLaneNames,
   };
@@ -759,6 +768,7 @@ export function requiredPrepublishPluginPackagesForLanes(
     const scenario = upgradeSurvivorScenarioForLane(poolLane);
     if (
       !scenario ||
+      isPackageRecoveryScenario(scenario) ||
       scenario === "abandoned-update" ||
       scenario === "backup-schedule" ||
       scenario === "custom-plugin-siblings" ||
