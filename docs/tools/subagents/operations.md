@@ -45,6 +45,16 @@ unchanged backlog counts do not repeat the warning every sweep. A count change
 at or above 25, or a return to that threshold after recovery, produces a new
 warning. The backlog size does not discard results or change their retention.
 
+A suspended delivery expires after seven days. The warning records its run and
+session identifiers, original delivery error, and suspension time. Expiry ends
+automatic delivery; it does not turn a successful child execution into a failure.
+For a retained run, `/subagents info <runId>` shows the captured result, discarded
+delivery status, and original error, even after the run leaves the recent list.
+Inspect that result or available child session history and ask the requester to
+continue. Cleanup and retention still apply: `cleanup: "delete"` can remove the
+run, and hidden session cleanup can remove its transcript. Expiry does not promise
+that deleted results remain recoverable.
+
 ## Liveness and recovery
 
 OpenClaw does not treat `endedAt` absence as permanent proof that a

@@ -63,6 +63,7 @@ describe("subagent suspended delivery pressure", () => {
       status: "suspended",
       suspendedAt: Date.now() - 7 * 24 * 60 * 60_000,
       suspendedReason: "expiry",
+      lastError: "requester unavailable",
     };
     discardTerminalDelivery.mockImplementation((discarded) => {
       discarded.delivery = { status: "discarded" };
@@ -80,7 +81,15 @@ describe("subagent suspended delivery pressure", () => {
     expect(completeCleanupBookkeeping).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       "subagent suspended delivery discarded",
-      expect.objectContaining({ runId: entry.runId, reason: "expired" }),
+      expect.objectContaining({
+        runId: entry.runId,
+        reason: "expired",
+        suspendedAt: entry.delivery?.suspendedAt,
+        suspendedReason: "expiry",
+        lastError: "requester unavailable",
+        recovery:
+          "Inspect retained results with /subagents info <runId>; session history depends on cleanup and retention.",
+      }),
     );
     expect(runs.size).toBe(25);
   });
