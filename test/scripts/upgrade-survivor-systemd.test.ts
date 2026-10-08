@@ -13,6 +13,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { serializeSystemdEnvironmentFile } from "../../src/daemon/systemd-environment-files.js";
 import { readLoadedSystemdServiceRuntime } from "../../src/daemon/systemd-loaded-runtime.js";
 import { readSystemdServiceRuntime } from "../../src/daemon/systemd-runtime.js";
+import { findInstalledSystemdGatewayScope } from "../../src/daemon/systemd-scope.js";
 import { readSystemdServiceExecStart } from "../../src/daemon/systemd-service-files.js";
 import { buildSystemdUnit } from "../../src/daemon/systemd-unit.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
@@ -25,10 +26,19 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+// Bind filesystem discovery inputs, not discovery/authority results. The native
+// selector must still distinguish saved, absent and unsupported fixture units.
+const systemUnitDirectories = vi.hoisted(() => [] as string[]);
+vi.mock("../../src/daemon/systemd-unit-load-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/daemon/systemd-unit-load-paths.js")>()),
+  DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS: systemUnitDirectories,
+}));
+
 const fixtureLifetime = createFixtureLifetime();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await fixtureLifetime.cleanup();
+    systemUnitDirectories.length = 0;
     cleanup();
   }),
 );
@@ -37,6 +47,9 @@ let receipts: FixtureReceiptChannel;
 
 function fixture(customPaths = true, registry?: string) {
   const home = realpathSync(tempDirs.make("survivor-manager-"));
+  const systemUnits = join(home, "system-units");
+  mkdirSync(systemUnits);
+  systemUnitDirectories.push(systemUnits);
   const artifacts = join(home, customPaths ? "artifacts ' \" $ `" : "bin");
   mkdirSync(artifacts, { recursive: true });
   const paths = {
@@ -92,7 +105,7 @@ function fixture(customPaths = true, registry?: string) {
     expect(command.status, command.stderr).toBe(0);
     return spawnSync("bash", ["-c", command.stdout], { env, encoding: "utf8", timeout: 5_000 });
   };
-  return { home, env, shell, systemctl, unit, paths, manager, execute };
+  return { home, env, shell, systemctl, unit, paths, manager, execute, systemUnits };
 }
 
 describe.skipIf(process.platform === "win32")("survivor manager fixture", () => {
@@ -199,7 +212,21 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
   });
 
   it("distinguishes confirmed absence from unsupported inspection and reads the generated service", async () => {
-    const { home, env, systemctl, unit, paths } = fixture();
+    const { home, env, systemctl, unit, paths, systemUnits } = fixture();
+    // Exercise real presence/absence discovery in the owned system namespace.
+    expect(await findInstalledSystemdGatewayScope(env)).toBeNull();
+    const systemUnit = join(systemUnits, "openclaw-gateway.service");
+    writeFileSync(
+      systemUnit,
+      buildSystemdUnit({ programArguments: [process.execPath, "gateway"] }),
+    );
+    expect(await findInstalledSystemdGatewayScope(env)).toEqual({
+      scope: "system",
+      unitName: "openclaw-gateway.service",
+      unitPath: systemUnit,
+    });
+    rmSync(systemUnit);
+    expect(await findInstalledSystemdGatewayScope(env)).toBeNull();
     const managerVersion = spawnSync(
       join(home, "bin/busctl"),
       [

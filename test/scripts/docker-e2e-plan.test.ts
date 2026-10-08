@@ -789,6 +789,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
   it.each([
     ["workshop-doctor-recovery", "2026.9.4", "2026.9.3 2026.9.4 2026.9.5"],
     ["update-report-recovery", "2026.9.6", "2026.9.5 2026.9.6 2026.9.7"],
+    ["repair-progress", "2026.9.7", "2026.9.6 2026.9.7 latest"],
   ])("pins opt-in %s to published %s without credentials", (scenario, baseline, baselines) => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],

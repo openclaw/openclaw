@@ -256,7 +256,7 @@ export class UpdateFinalizationLifecycle {
     const output = new UpdateFinalizationOutput();
     // Doctor holds the state-lifecycle coordinator while repairing shared state.
     // Keep its parent out of that database; recorded driver liveness still
-    // prevents abandonment while phase-start and phase-end records report progress.
+    // prevents abandonment. Child output carries operation progress without ledger reads.
     const heartbeat =
       phase === "doctor" || phase === "targetConfigConvergence"
         ? undefined

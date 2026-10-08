@@ -639,7 +639,25 @@ recorded outcome. Reports from older updaters can still contain a `repairing` ph
 Failed steps include the final diagnostics from both output streams; timeouts
 are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
-print progress steps or run the progress observer. Progress observes committed
+print progress steps or run the ledger progress observer. During repair and update
+finalization, the fresh Doctor's SQLite integrity heartbeat is forwarded while
+the operation is still running, including through the finalizer child process.
+These bounded `[update progress]` records go to **stderr**, not the single terminal
+JSON result on stdout. They report the Doctor phase, observed integrity phase,
+elapsed milliseconds, size when known, and whether the receiving command has a
+cancellation signal. Size is the inspected store size, not completed work or a
+percentage. No service-offline claim is inferred from maintenance ownership.
+Quiet logging suppresses these informational records. Partial or oversized lines
+are not forwarded; database paths, credentials, and arbitrary child text are not
+progress fields. Other Doctor diagnostics remain in the local completion-only
+detail channel, redacted before a 16 KiB display limit per stream; truncation is
+marked. This preserves useful panels that are not structured result warnings.
+Quiet progress does not hide these completion-only advisories. Structured
+warnings and failure facts retain their existing result channel.
+This streaming fix belongs to the installed updater:
+an older updater may still buffer its candidate's diagnostics until completion.
+
+The normal update progress observer reads committed
 ledger rows through a reusable read-only worker connection instead of repeatedly
 copying shared state. This applies to updates launched by the fixed updater; a
 published older updater keeps its own progress reader until it is replaced.

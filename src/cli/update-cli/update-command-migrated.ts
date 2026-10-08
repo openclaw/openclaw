@@ -40,6 +40,7 @@ import {
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import { recordUpdatePackageCompletion } from "./update-command-terminal.js";
+import { streamUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
 /** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(
@@ -277,6 +278,7 @@ export async function continueMigratedUpdateInFreshProcess(
       ...(windowsRecovery ? { windowsTaskAutoStartSuspended: true } : {}),
       resultPath,
     };
+    const output = streamUpdateFinalizationDoctorOutput();
     const runChild = (
       grant?: UpdateCommandChildGrant,
       bindChild?: (pid: number, argv?: readonly string[]) => void,
@@ -289,13 +291,15 @@ export async function continueMigratedUpdateInFreshProcess(
         // cancellation settlement keep their separate finite allowances.
         timeoutMs: run.activationTimeoutMs,
         maxOutputBytes: 1024 * 1024,
+        onOutputChunk: output.onOutputChunk,
       });
     await releaseLegacySourceLock(root, run.sourceArtifactLock);
-    const child = executorFence
-      ? await withUpdateCommandExecutorChild(executorFence, root, runChild)
-      : await runChild();
-    if (child.stderr) {
-      process.stderr.write(child.stderr);
+    const child = await (
+      executorFence ? withUpdateCommandExecutorChild(executorFence, root, runChild) : runChild()
+    ).finally(() => output.finish());
+    const diagnostics = output.remainingOutput(child.stderr);
+    if (diagnostics.trim()) {
+      process.stderr.write(diagnostics);
     }
     const response = JSON.parse(
       await fs.readFile(resultPath, "utf8"),

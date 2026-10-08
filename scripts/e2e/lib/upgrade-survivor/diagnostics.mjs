@@ -69,7 +69,51 @@ const pluginPolicyLogs = [
   "webhooks-only-policy/baseline-runtime.out",
   "webhooks-only-policy/candidate-runtime.out",
 ];
+const repairProgressLogs = [
+  "phase.txt",
+  "progress-cell.json",
+  "inputs.json",
+  "progress-package.json",
+  "progress-relabel.json",
+  "progress-summary.json",
+  ...[
+    "install-driver",
+    "restore-driver",
+    "candidate-build",
+    "fixture",
+    "seed-state",
+    "install-service",
+    "before-ready",
+    "update",
+    "recorded-run",
+    "after-ready",
+    "running-version",
+    "progress-baseline-identity",
+    "progress-candidate-extract",
+    "progress-legacy-install",
+    "progress-legacy-identity",
+    "progress-legacy-doctor",
+    "progress-stop",
+    "progress-relabel",
+    "progress-target-extract",
+    "progress-repair",
+    "progress-quiet",
+    "progress-migrated",
+    "service-probe-install",
+    "service-probe-reload",
+    "service-probe-verify",
+    "service-probe-restore",
+    "service-probe-restore-reload",
+    "service-probe-restore-verify",
+    "stop-service",
+    ...["progress-repair", "progress-quiet", "progress-migrated"].map((phase) => `${phase}-fifo`),
+  ].flatMap((phase) => [`${phase}.stdout`, `${phase}.stderr`, `${phase}-exit.json`]),
+  ...["progress-repair", "progress-quiet", "progress-migrated"].flatMap((phase) =>
+    ["held", "released", "observed", "heartbeat", "result"].map((name) => `${phase}/${name}.json`),
+  ),
+];
 const logNames = [
+  ...repairProgressLogs,
   "baseline-install.log",
   "baseline-companion.json",
   "install.log",
@@ -1824,6 +1868,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
           : []),
         ...(snapshot.scenario === "dreaming-cron-doctor" ? ["dreaming-cron-proof.json"] : []),
         ...(snapshot.scenario === "cron-owner-doctor" ? ["cron-owner-proof.json"] : []),
+        ...(snapshot.scenario === "repair-progress" ? repairProgressLogs : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)
@@ -1850,7 +1895,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
 }
 
 function failedUpdateContext(text, label) {
-  if (label !== "update.json" && label !== "recovery-update.json") {
+  if (label !== "update.json" && label !== "update.stdout" && label !== "recovery-update.json") {
     return "";
   }
   try {

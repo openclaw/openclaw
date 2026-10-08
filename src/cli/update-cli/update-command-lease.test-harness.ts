@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   plugins: vi.fn<typeof import("./update-command-plugins.js").updatePluginsAfterCoreUpdate>(),
   restart: vi.fn(async () => "ok"),
   print: vi.fn(),
+  stderr: vi.fn(() => true),
   publication: vi.fn(
     async (
       params: { assertCurrent: () => void },
@@ -144,6 +145,7 @@ export function installUpdateLeaseHarness(): void {
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+    vi.spyOn(process.stderr, "write").mockImplementation(mocks.stderr);
   });
 
   afterEach(async () => {
@@ -232,12 +234,9 @@ export async function events(): Promise<string[]> {
 
 export function expectDoctorDiagnostics(): void {
   expect(defaultRuntime.log).not.toHaveBeenCalledWith(expect.stringContaining("doctor fixture"));
-  expect(defaultRuntime.error).toHaveBeenCalledWith(
-    expect.stringContaining("doctor fixture output"),
-  );
-  expect(defaultRuntime.error).toHaveBeenCalledWith(
-    expect.stringContaining("doctor fixture diagnostic"),
-  );
+  for (const diagnostic of ["doctor fixture output", "doctor fixture diagnostic"]) {
+    expect(mocks.stderr).toHaveBeenCalledWith(expect.stringContaining(diagnostic));
+  }
 }
 
 export function expectSuccess(lane: Lane, doctorExpected = true): void {

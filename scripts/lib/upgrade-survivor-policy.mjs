@@ -38,6 +38,7 @@ const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "update-report-recovery",
   "dreaming-cron-doctor",
   "cron-owner-doctor",
+  "repair-progress",
 ]);
 
 export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
@@ -65,7 +66,8 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
     scenario !== "watchos-direct-node" &&
     scenario !== "prerelease-plugin-registry" &&
     scenario !== "auth-profile-v2026-7-2-beta-5" &&
-    scenario !== "recovery-cleanup",
+    scenario !== "recovery-cleanup" &&
+    scenario !== "repair-progress",
 );
 const scenarioAliases = new Map([
   ["reported-issues", aggregateScenarios.filter((scenario) => scenario !== "sqlite-volume")],
@@ -217,7 +219,7 @@ function comparePublishedReleaseVersion(a, b) {
 }
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
-  if (scenario === "backup-schedule") {
+  if (scenario === "backup-schedule" || scenario === "repair-progress") {
     return baselineSpec === "openclaw@2026.9.7";
   }
   if (scenario === "missing-load-path") {
