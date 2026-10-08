@@ -112,7 +112,7 @@ export function prepareEmbeddedRunTerminal(input: {
   // reports a different route. A cold reader must not adopt it for that route.
   const preparedContextMatchesReportedModel =
     reportedModelRef.provider.trim().toLowerCase() === input.provider.trim().toLowerCase() &&
-    reportedModelRef.model.trim().toLowerCase() === input.model.trim().toLowerCase();
+    reportedModelRef.model.trim() === input.model.trim();
   const agentMeta: EmbeddedAgentMeta = {
     sessionId: input.sessionIdUsed,
     sessionFile: input.sessionFileUsed,

@@ -121,9 +121,7 @@ export async function prepareAgentRequestRouting(params: {
     try {
       explicitRecipientSession = await resolveAgentExplicitRecipientSession({
         cfg: params.cfg,
-        agentId: explicitRecipient.agentId,
-        channel: explicitRecipient.channel,
-        to: explicitRecipient.to,
+        ...explicitRecipient,
         accountId: normalizeOptionalString(params.request.accountId),
         threadId: params.request.threadId,
       });

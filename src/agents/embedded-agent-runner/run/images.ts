@@ -316,10 +316,7 @@ export async function detectAndLoadPromptImages(
     factIndex: number | undefined,
     allowUnowned: boolean,
   ): PromptImageEntry | undefined => {
-    const exact =
-      factIndex === undefined
-        ? -1
-        : unusedExisting.findIndex((entry) => entry.factIndex === factIndex);
+    const exact = unusedExisting.findIndex((entry) => entry.factIndex === factIndex);
     const index =
       exact >= 0
         ? exact

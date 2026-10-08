@@ -144,6 +144,49 @@ describe("existing-session recovery through the admitted owner", () => {
       .toBeUndefined();
   });
 
+  it.each(["ambiguous", "selected-route", "transport-free"] as const)(
+    "keeps native capacity scoped for %s inventory",
+    (scenario) => {
+      const large: ModelCatalogEntry = {
+        provider: "openai",
+        id: "native-fixture",
+        name: "Native fixture",
+        nativeRuntime: "codex",
+        api: "openai-responses",
+        baseUrl: "https://native.example/large",
+        contextWindow: 1_000_000,
+        contextTokens: 777_000,
+      };
+      const small: ModelCatalogEntry = {
+        ...large,
+        baseUrl: "https://native.example/small",
+        contextWindow: 64_000,
+        contextTokens: 64_000,
+      };
+      const transportFree: ModelCatalogEntry = {
+        provider: large.provider,
+        id: large.id,
+        name: large.name,
+        nativeRuntime: large.nativeRuntime,
+        contextWindow: large.contextWindow,
+        contextTokens: large.contextTokens,
+      };
+      const resolve = createSessionContextCapacityResolver(
+        owner(scenario === "transport-free" ? [transportFree] : [large, small]).snapshot,
+      );
+      expect(
+        resolve(large.provider, large.id, {
+          nativeRuntime: "codex",
+          ...(scenario === "selected-route" ? { route: large } : {}),
+        }),
+      ).toEqual(
+        scenario === "ambiguous"
+          ? { state: "unavailable" }
+          : { state: "ready", contextTokens: 777_000, synthetic: false },
+      );
+    },
+  );
+
   it("keeps genuine (non-synthetic) persisted 128k conservative", () => {
     const ownerCapacity = createSessionContextCapacityResolver(owner([accepted]).snapshot)(
       "github-copilot",

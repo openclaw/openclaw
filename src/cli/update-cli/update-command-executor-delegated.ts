@@ -69,7 +69,7 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         retainedChild,
         slot,
         slotChild,
-      } = resolveUpdateCommandChildBinding(grant, runId, root, identityWarnings.warn);
+      } = await resolveUpdateCommandChildBinding(grant, runId, root, identityWarnings.warn);
       using readConnections = new DisposableStack();
       readConnections.use(store.retainReadConnection());
       let active = true;

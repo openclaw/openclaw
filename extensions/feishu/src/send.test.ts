@@ -2,6 +2,7 @@
 import type { HttpInstance, HttpRequestOptions } from "@larksuiteoapi/node-sdk";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { buildFeishuAgentBody } from "./bot-agent-body.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import {
   editMessageFeishu,
@@ -413,6 +414,7 @@ describe("getMessageFeishu", () => {
             message_id: "om_post",
             chat_id: "oc_post",
             msg_type: "post",
+            mentions: [{ key: "@_user_1", id: "ou_ada", id_type: "open_id", name: "Ada" }],
             body: {
               content: JSON.stringify({
                 zh_cn: {
@@ -422,6 +424,8 @@ describe("getMessageFeishu", () => {
                       { tag: "text", text: "post body", style: ["bold"] },
                       { tag: "text", text: " " },
                       { tag: "a", text: "Docs", href: "https://example.com", style: ["italic"] },
+                      { tag: "text", text: " " },
+                      { tag: "at", user_id: "ou_ada", user_name: "Ada" },
                     ],
                   ],
                 },
@@ -440,7 +444,7 @@ describe("getMessageFeishu", () => {
     expectParsedMessage(result, {
       messageId: "om_post",
       chatId: "oc_post",
-      content: "Summary\n\n**post body** *[Docs](https://example.com)*",
+      content: "Summary\n\n**post body** *[Docs](https://example.com)* @Ada",
       contentType: "post",
     });
   });
@@ -601,6 +605,87 @@ function body(content: unknown) {
 function textMessage(message_id: string, text: string) {
   return { message_id, body: body({ text }) };
 }
+
+describe("fetched text mentions", () => {
+  it.each(["get", "thread", "forward"] as const)(
+    "resolves %s placeholders once using each message's flat metadata",
+    async (surface) => {
+      const text = "Meet @_user_1 then @_user_10 and @_user_1";
+      const normalized =
+        'Meet <at user_id="ou_alice">Alice @_user_10</at> then <at user_id="ou_bob">Bob &lt;Ops&gt;</at> and <at user_id="ou_alice">Alice @_user_10</at>';
+      const message = {
+        ...textMessage("om_mentions", text),
+        msg_type: "text",
+        mentions: [
+          { key: "@_user_1", id: "ou_alice", id_type: "open_id", name: "Alice @_user_10" },
+          { key: "@_user_10", id: "ou_bob", id_type: "open_id", name: "Bob <Ops>" },
+        ],
+      };
+      const items =
+        surface === "forward"
+          ? [
+              { message_id: "om_forward", msg_type: "merge_forward" },
+              { ...message, upper_message_id: "om_forward", create_time: "1000" },
+              {
+                ...textMessage("om_other", "@_user_1"),
+                msg_type: "text",
+                upper_message_id: "om_forward",
+                create_time: "2000",
+                mentions: [{ key: "@_user_1", id: "ou_other", id_type: "open_id", name: "Other" }],
+              },
+            ]
+          : [message];
+      const response = page(items);
+      const before = structuredClone(response);
+      let content: string | undefined;
+      if (surface === "thread") {
+        mockClientList.mockResolvedValueOnce(response);
+        content = (await listFeishuThreadMessages(thread))[0]?.content;
+      } else {
+        mockClientGet.mockResolvedValueOnce(response);
+        content = (
+          await getMessageFeishu({
+            cfg: {},
+            messageId: surface === "forward" ? "om_forward" : "om_mentions",
+          })
+        )?.content;
+      }
+      expect(content).toBe(
+        surface === "forward"
+          ? `[Merged and Forwarded Messages]\n- ${normalized}\n- <at user_id="ou_other">Other</at>`
+          : normalized,
+      );
+      expect(response).toEqual(before);
+      if (surface === "get") {
+        expect(
+          buildFeishuAgentBody({
+            ctx: { content: "reply", senderOpenId: "ou_sender", messageId: "om_reply" },
+            quotedContent: content,
+          }),
+        ).toBe(`[message_id: om_reply]\nou_sender: [Replying to: "${normalized}"]\n\nreply`);
+      }
+    },
+  );
+
+  it.each([
+    ["open_id", "ou_person"],
+    ["user_id", "user_person"],
+    ["union_id", "on_person"],
+  ])("preserves the API-selected %s mention identifier", async (id_type, id) => {
+    mockClientGet.mockResolvedValueOnce(
+      page([
+        {
+          ...textMessage("om_person", "Hello @_user_1"),
+          msg_type: "text",
+          mentions: [{ key: "@_user_1", id, id_type, name: "Person" }],
+        },
+      ]),
+    );
+    expect((await getMessageFeishu({ cfg: {}, messageId: "om_person" }))?.content).toBe(
+      `Hello <at user_id="${id}">Person</at>`,
+    );
+  });
+});
 
 describe("listFeishuThreadMessages", () => {
   it("reuses the same content parsing for thread history messages", async () => {

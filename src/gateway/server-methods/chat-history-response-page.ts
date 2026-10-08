@@ -241,9 +241,10 @@ export function prepareChatHistoryResponsePage(
     messages: groups,
     maxSingleMessageBytes: Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxCost - 1),
   });
+  const capParams = { messages: replaced.messages, maxCost, messageCost, messageSequences };
   const capped = messageId
     ? capChatHistoryAroundMessage({
-        messages: replaced.messages,
+        ...capParams,
         messageId: historyPage.anchor?.direction
           ? (readChatHistoryMessageId(
               historyPage.anchor.direction === "newer"
@@ -251,17 +252,8 @@ export function prepareChatHistoryResponsePage(
                 : replaced.messages.at(-1),
             ) ?? messageId)
           : messageId,
-        // A nonempty JSON array costs one framing byte plus each message and its separator.
-        maxCost,
-        messageCost,
-        messageSequences,
       })
-    : capChatHistoryTail({
-        messages: replaced.messages,
-        maxCost,
-        messageCost,
-        messageSequences,
-      });
+    : capChatHistoryTail(capParams);
   const pagination = historyPage.pagination;
   const candidateNextOffset =
     pagination === undefined

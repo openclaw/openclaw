@@ -415,6 +415,14 @@ export function truncateToolResultText(
     maxChars - estimateToolResultTextChars(defaultSuffix, budgetOptions),
   );
 
+  const appendSuffix = (keptText: string) =>
+    appendBoundedTruncationSuffix({
+      keptText,
+      originalTextLength: text.length,
+      maxChars,
+      suffixFactory,
+      minimumRawWeight: options.minimumRawWeight,
+    });
   if (hasImportantTail(text) && budget > minKeepChars * 2) {
     const tailBudget = Math.min(Math.floor(budget * 0.3), 4_000);
     const headBudget =
@@ -434,13 +442,7 @@ export function truncateToolResultText(
       }
 
       if (headText.length + tailText.length < text.length) {
-        return appendBoundedTruncationSuffix({
-          keptText: headText + MIDDLE_OMISSION_MARKER + tailText,
-          originalTextLength: text.length,
-          maxChars,
-          suffixFactory,
-          minimumRawWeight: options.minimumRawWeight,
-        });
+        return appendSuffix(headText + MIDDLE_OMISSION_MARKER + tailText);
       }
     }
   }
@@ -450,13 +452,7 @@ export function truncateToolResultText(
   if (lastNewline > keptText.length * 0.8) {
     keptText = sliceUtf16Safe(keptText, 0, lastNewline);
   }
-  return appendBoundedTruncationSuffix({
-    keptText,
-    originalTextLength: text.length,
-    maxChars,
-    suffixFactory,
-    minimumRawWeight: options.minimumRawWeight,
-  });
+  return appendSuffix(keptText);
 }
 
 export function resolveLiveToolResultAggregateMaxChars(params: {

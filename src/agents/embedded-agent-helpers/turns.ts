@@ -185,6 +185,7 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       ? []
       : [{ type: "text", text: "[tool calls omitted]" }];
 
+    let nextContent = originalContent;
     if (hasThinking) {
       const allToolCallsResolvable = originalContent.every((block) => {
         if (!block || !isToolCallBlock(block)) {
@@ -201,37 +202,30 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
         }
         return matchingToolNames.size === 0 || matchingToolNames.has(blockName);
       });
-      if (allToolCallsResolvable) {
-        result.push(msg);
-      } else {
-        result.push({
-          ...assistantMsg,
-          content: omittedContent,
-        } as AgentMessage);
+      if (!allToolCallsResolvable) {
+        nextContent = omittedContent;
       }
-      continue;
+    } else {
+      const filteredContent = originalContent.filter((block) => {
+        if (!block) {
+          return false;
+        }
+        if (!isToolCallBlock(block)) {
+          return true;
+        }
+        const blockId = normalizeOptionalString(block.id);
+        return blockId ? validToolUseIds.has(blockId) : false;
+      });
+
+      if (filteredContent.length !== originalContent.length) {
+        nextContent = filteredContent.length === 0 ? omittedContent : filteredContent;
+      }
     }
-
-    const filteredContent = originalContent.filter((block) => {
-      if (!block) {
-        return false;
-      }
-      if (!isToolCallBlock(block)) {
-        return true;
-      }
-      const blockId = normalizeOptionalString(block.id);
-      return blockId ? validToolUseIds.has(blockId) : false;
-    });
-
-    if (filteredContent.length === originalContent.length) {
-      result.push(msg);
-      continue;
-    }
-
-    result.push({
-      ...assistantMsg,
-      content: filteredContent.length === 0 ? omittedContent : filteredContent,
-    } as AgentMessage);
+    result.push(
+      nextContent === originalContent
+        ? msg
+        : ({ ...assistantMsg, content: nextContent } as AgentMessage),
+    );
   }
 
   return result;

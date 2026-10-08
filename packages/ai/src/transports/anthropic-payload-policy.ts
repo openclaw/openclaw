@@ -341,30 +341,13 @@ function applyAnthropicCacheControlToMessages(
     }
 
     const content = record.content;
-    if (typeof content === "string") {
-      if (fallbackToolResult && markerLimit === 1) {
-        fallbackToolResult.cache_control = cacheControl;
-        return;
-      }
-      record.content = [
-        {
-          type: "text",
-          text: content,
-          cache_control: cacheControl,
-        },
-      ];
-      if (fallbackToolResult && markerLimit > 1) {
-        fallbackToolResult.cache_control = cacheControl;
-      }
-      return;
-    }
-
-    if (!Array.isArray(content)) {
+    const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
+    if (!Array.isArray(blocks)) {
       continue;
     }
 
-    for (let j = content.length - 1; j >= 0; j--) {
-      const block = content[j];
+    for (let j = blocks.length - 1; j >= 0; j--) {
+      const block = blocks[j];
       if (!block || typeof block !== "object") {
         continue;
       }
@@ -376,6 +359,9 @@ function applyAnthropicCacheControlToMessages(
           return;
         }
         blockRecord.cache_control = cacheControl;
+        if (typeof content === "string") {
+          record.content = blocks;
+        }
         if (fallbackToolResult && markerLimit > 1) {
           fallbackToolResult.cache_control = cacheControl;
         }

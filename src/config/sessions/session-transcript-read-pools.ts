@@ -4,7 +4,7 @@ import {
 } from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { getWorkerComputeCapacity } from "../../infra/worker-task-capacity.js";
+import { resolveWorkerPoolSize } from "../../infra/worker-pool-sizing.js";
 import { createOwnedWorkerTaskPool, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type {
   SessionHistoryWorkerInput,
@@ -13,12 +13,6 @@ import type {
 } from "./session-transcript-worker.types.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-
-// Foreground history and context share the host's CPU headroom.
-export const SESSION_TRANSCRIPT_FOREGROUND_WORKERS = Math.min(
-  8,
-  Math.ceil(getWorkerComputeCapacity().getSnapshot().limit / 2),
-);
 
 export function createSessionTranscriptReadPool<Input extends SessionTranscriptWorkerInput>(
   maxWorkers: number,
@@ -37,7 +31,9 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
   });
 }
 
-export function createSessionTranscriptHistoryPool(maxWorkers = 1) {
+export function createSessionTranscriptHistoryPool(
+  maxWorkers = resolveWorkerPoolSize("singleton"),
+) {
   const generations = new Set<{ canCloseNativeResources: boolean }>();
   const pool = createOwnedWorkerTaskPool<
     SessionHistoryWorkerInput,

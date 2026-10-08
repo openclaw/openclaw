@@ -235,21 +235,6 @@ export function readRestartCheckpointProgress(input: ResponsesInputItem[]) {
   };
 }
 
-function isCodeModeControlToolOutput(body: Record<string, unknown>, input: ResponsesInputItem[]) {
-  if (!hasCodeModeExecSurface(body)) {
-    return false;
-  }
-  const toolOutputCallId = extractToolOutputCallId(input);
-  if (!toolOutputCallId) {
-    return false;
-  }
-  const toolCall = findToolCallByCallId(input, toolOutputCallId);
-  return (
-    isGeneratedCodeModeExecCall(toolCall) ||
-    Boolean(toolCall && findGeneratedCodeModeWaitTarget(input, toolCall))
-  );
-}
-
 export function canCallScenarioTool(
   body: Record<string, unknown>,
   name: string,
@@ -330,7 +315,13 @@ export function readScenarioToolCompletion(
 ) {
   const rawToolOutput = extractToolOutput(input);
   const codeModeSurface = resolveCodeModeExecSurface(toolDeclarationBody);
-  const hasCodeModeControlOutput = isCodeModeControlToolOutput(toolDeclarationBody, input);
+  const toolOutputCallId = extractToolOutputCallId(input);
+  const completedToolCall = findToolCallByCallId(input, toolOutputCallId);
+  const hasCodeModeControlOutput =
+    codeModeSurface !== null &&
+    Boolean(toolOutputCallId) &&
+    (isGeneratedCodeModeExecCall(completedToolCall) ||
+      Boolean(completedToolCall && findGeneratedCodeModeWaitTarget(input, completedToolCall)));
   const codeModeControlJson = hasCodeModeControlOutput
     ? codeModeSurface === "native"
       ? parseNativeCodeModeOutput(extractToolOutputValue(input))
@@ -342,7 +333,6 @@ export function readScenarioToolCompletion(
       : codeModeSurface === "native" && hasCodeModeControlOutput
         ? ""
         : unwrapScenarioCatalogOutput(input, rawToolOutput);
-  const completedToolCall = findToolCallByCallId(input, extractToolOutputCallId(input));
   const completedToolName = readScenarioCompletedToolName(completedToolCall, input);
   const scenarioToolOutput =
     toolOutput ||
@@ -371,7 +361,7 @@ export function readScenarioToolCompletion(
   };
 }
 
-function readProgressCommandOutput(input: ResponsesInputItem[], command: string, isPoll = false) {
+function readProgressCommandOutput(input: ResponsesInputItem[], command: string, isPoll: boolean) {
   const text = unwrapScenarioCatalogOutput(input, extractToolOutput(input), "content");
   // Provider wires carry content, not process details; JSON stdout remains data.
   const sessionId = !isPoll

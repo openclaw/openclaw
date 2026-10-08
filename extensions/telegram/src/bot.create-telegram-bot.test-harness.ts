@@ -413,7 +413,9 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
 vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);
 
 export const getOnHandler = (event: string) => {
-  const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
+  const handler = onSpy.mock.calls.find(([filter]) =>
+    Array.isArray(filter) ? filter.includes(event) : filter === event,
+  )?.[1];
   if (!handler) {
     throw new Error(`Missing handler for event: ${event}`);
   }

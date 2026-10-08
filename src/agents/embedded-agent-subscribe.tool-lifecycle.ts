@@ -1,7 +1,5 @@
-import {
-  handleToolExecutionEnd,
-  handleToolExecutionStart,
-} from "./embedded-agent-subscribe.handlers.tools.js";
+import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
+import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
 import { buildToolLifecycleErrorResult, prepareToolResult } from "./embedded-agent-tool-results.js";

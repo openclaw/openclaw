@@ -430,8 +430,7 @@ suite.define(() => {
       await page.locator("openclaw-agents-page").evaluate((element) => {
         const agentsPage = element as HTMLElement & {
           agentFileActive: string | null;
-          agentFileContents: Record<string, string>;
-          agentFileDrafts: Record<string, string>;
+          agentFileEditors: Record<string, { content?: string; draft?: string }>;
           agentFilesList: {
             agentId: string;
             files: Array<{ name: string; path: string; missing: boolean }>;
@@ -451,8 +450,13 @@ suite.define(() => {
           workspace: "/tmp/openclaw-e2e/workspace",
         };
         agentsPage.agentFileActive = "AGENTS.md";
-        agentsPage.agentFileContents = { "AGENTS.md": "# Main agent\n" };
-        agentsPage.agentFileDrafts = { "AGENTS.md": "# Mutated\n" };
+        agentsPage.agentFileEditors = {
+          "AGENTS.md": {
+            ...agentsPage.agentFileEditors["AGENTS.md"],
+            content: "# Main agent\n",
+            draft: "# Mutated\n",
+          },
+        };
         agentsPage.requestUpdate();
       });
       const fileEditor = page.locator(".agent-file-textarea");

@@ -153,6 +153,15 @@ function resolveScopedAbortKey(params: {
   });
 }
 
+function sessionAbortResult(abortedRunId: string | null, aborted: boolean, warning?: string) {
+  return {
+    ok: true,
+    abortedRunId,
+    status: aborted ? "aborted" : "no-active-run",
+    ...(warning ? { warning } : {}),
+  };
+}
+
 export const sessionAbortHandlers: GatewayRequestHandlers = {
   "sessions.abort": async (options) => {
     const { params, respond, context, client, sessionMutationAuthorization } = options;
@@ -241,7 +250,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       workerRunTarget?.sessionKey ??
       embeddedRunSessionKey;
     if (!keyCandidate && requestedRunId) {
-      respond(true, { ok: true, abortedRunId: null, status: "no-active-run" });
+      respond(true, sessionAbortResult(null, false));
       return;
     }
     const key = requireSessionKey(keyCandidate, respond);
@@ -423,11 +432,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       if (error) {
         respond(false, undefined, error);
       } else {
-        respond(true, {
-          ok: true,
-          abortedRunId: aborted ? embeddedRun.runId : null,
-          status: aborted ? "aborted" : "no-active-run",
-        });
+        respond(true, sessionAbortResult(aborted ? embeddedRun.runId : null, aborted));
       }
       if (aborted) {
         emitSessionsChanged(context, {
@@ -595,12 +600,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       } else {
         respond(
           true,
-          {
-            ok: true,
-            abortedRunId: result.value.runIds[0] ?? null,
-            status: result.value.aborted ? "aborted" : "no-active-run",
-            ...(abortWarning ? { warning: abortWarning } : {}),
-          },
+          sessionAbortResult(result.value.runIds[0] ?? null, result.value.aborted, abortWarning),
           undefined,
           undefined,
         );
@@ -681,12 +681,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     }
     respond(
       true,
-      {
-        ok: true,
-        abortedRunId: abortedRunIds[0] ?? null,
-        status: aborted ? "aborted" : "no-active-run",
-        ...(abortWarning ? { warning: abortWarning } : {}),
-      },
+      sessionAbortResult(abortedRunIds[0] ?? null, aborted, abortWarning),
       undefined,
       responseMeta,
     );

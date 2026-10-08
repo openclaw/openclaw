@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
@@ -18,7 +19,7 @@ export type SessionHistoryWorkerRequestRunner = <TResult>(
   inputBytes: number,
   receive: (value: SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]]) => TResult,
   signal?: AbortSignal,
-  onRequest?: (value: unknown) => void,
+  onRequest?: (value: unknown) => void | Promise<WorkerTaskResponse>,
 ) => Promise<TResult>;
 
 type SessionHistoryWorkerValue = SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]];
@@ -209,17 +210,23 @@ export function createSessionHistoryWorkerReaders(
       "cold storage inventory",
       (value) => value,
     ),
-    searchTranscripts: reader(
-      "transcript-search",
-      "search",
-      (value) => value.result,
-      (params) => ({ kind: "transcript-search", params }),
-    ),
-    isTranscriptSearchCurrent: reader(
-      "transcript-search-current",
-      "search snapshot currency",
-      (value) => value.current,
-    ),
+    searchTranscripts: (params, readIndexStatus) =>
+      runRequest(
+        () => ({ kind: "transcript-search", params }),
+        JSON.stringify(params).length * 2,
+        (value) => {
+          assertResultKind(value, "transcript-search", "search");
+          return value.result;
+        },
+        undefined,
+        async (request) => {
+          if (request !== "transcript-index-status") {
+            throw new Error("Unexpected transcript search status request");
+          }
+          // Status waiting is host work; the resumed freshness read keeps its own budget.
+          return { input: await readIndexStatus(), timeoutMs: 60_000 };
+        },
+      ),
     readPreview: reader("session-preview", "a preview", (value) => value.items),
     readTitleFields: reader("session-title-fields", "title fields", (value) => value.fields),
     readWatermark: reader(

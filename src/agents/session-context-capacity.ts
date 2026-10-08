@@ -84,6 +84,7 @@ export function createSessionContextCapacityResolver(
     let reported: number | undefined;
     let estimate: number | undefined;
     let selectable = false;
+    let nativeRoute: ModelCatalogEntry | undefined;
     for (const entry of [
       ...(catalog?.routeVariants ?? []),
       ...(catalog?.entries ?? []),
@@ -97,6 +98,16 @@ export function createSessionContextCapacityResolver(
         entry.id !== modelId
       ) {
         continue;
+      }
+      if (selection?.nativeRuntime && !selection.route) {
+        if (
+          nativeRoute &&
+          (!modelTransportRoutesMatch(nativeRoute, entry) ||
+            !modelTransportRoutesMatch(entry, nativeRoute))
+        ) {
+          return { state: "unavailable" };
+        }
+        nativeRoute ??= entry;
       }
       selectable ||= Boolean(entry.contextWindows?.length);
       const tokens = positive(entry.contextTokens);

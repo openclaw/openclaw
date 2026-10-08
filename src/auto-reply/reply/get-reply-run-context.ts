@@ -34,6 +34,7 @@ import { resolveReplyPolicyConversationType } from "./get-reply-conversation-typ
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
   buildExecOverridePromptHint,
+  finishReplyPreparation,
   hasInboundHistoryBody,
   hasReplyTargetContext,
 } from "./get-reply-run-helpers.js";
@@ -92,8 +93,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     sessionStore,
   } = params;
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey });
-  const { resolvedElevatedLevel, execOverrides, abortedLastRun } = params;
-  const { sessionEntry } = params;
+  const { resolvedElevatedLevel, execOverrides, abortedLastRun, sessionEntry } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
   const explicitThinkingLevelOverride = normalizeThinkLevel(opts?.thinkingLevelOverride);
   const effectiveQueueMode = opts?.queueModeOverride ?? perMessageQueueMode;
@@ -199,20 +199,16 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
   const buildSourceConversationContext = (mode: typeof sourceReplyDeliveryMode) => {
-    if (isDirectChat) {
-      return buildDirectChatContext({
-        sourceReplyDeliveryMode: mode,
-        sessionCtx: promptSessionCtx,
-      });
-    }
-    return isGroupChat
-      ? buildGroupChatContext({
-          sessionCtx: promptSessionCtx,
-          sourceReplyDeliveryMode: mode,
-          silentReplyPolicy: silentReplySettings.policy,
-          silentToken: SILENT_REPLY_TOKEN,
-        })
-      : "";
+    const conversationContext = { sourceReplyDeliveryMode: mode, sessionCtx: promptSessionCtx };
+    return isDirectChat
+      ? buildDirectChatContext(conversationContext)
+      : isGroupChat
+        ? buildGroupChatContext({
+            ...conversationContext,
+            silentReplyPolicy: silentReplySettings.policy,
+            silentToken: SILENT_REPLY_TOKEN,
+          })
+        : "";
   };
   const sourceConversationContextByMode = {
     automatic: buildSourceConversationContext("automatic"),
@@ -307,8 +303,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       );
     }
     opts?.onDeliberateSilentTerminalReply?.();
-    typing.cleanup();
-    return { kind: "reply", reply: undefined } as const;
+    return finishReplyPreparation(typing);
   }
   const isBareNewOrReset = /^\/(new|reset)$/i.test(normalizedCommandBody);
   const isBareSessionReset =
@@ -367,11 +362,9 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       await typing.onReplyStart();
     }
     logVerbose("Inbound body empty after normalization; skipping agent run");
-    typing.cleanup();
-    return {
-      kind: "reply",
-      reply: { text: "I didn't receive any text in your message. Please resend or add a caption." },
-    } as const;
+    return finishReplyPreparation(typing, () => ({
+      text: "I didn't receive any text in your message. Please resend or add a caption.",
+    }));
   }
 
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
@@ -388,16 +381,19 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     : ((sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
       sessionEntryHandle?.getCurrent() ??
       sessionEntry);
-  let activeGoalContext = formatActiveGoalContext(inboundContextSessionEntry);
   // Heartbeats are synthetic system turns: delivery facts still drive routing and
   // formatting, but must not be presented to the model as user-role inbound context.
-  let inboundUserContext = isHeartbeat
-    ? ""
-    : buildInboundUserContextPrefix(
-        inboundUserContextSessionCtx,
-        envelopeOptions,
-        inboundContextSessionEntry,
-      );
+  const buildInboundContextState = () => ({
+    activeGoalContext: formatActiveGoalContext(inboundContextSessionEntry),
+    inboundUserContext: isHeartbeat
+      ? ""
+      : buildInboundUserContextPrefix(
+          inboundUserContextSessionCtx,
+          envelopeOptions,
+          inboundContextSessionEntry,
+        ),
+  });
+  let { activeGoalContext, inboundUserContext } = buildInboundContextState();
   const refreshInboundContextAfterAdmissionWait = async () => {
     if (isHeartbeat) {
       return;
@@ -408,12 +404,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
         : (sessionEntryHandle?.getCurrent() ??
           (sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
           sessionEntry);
-    activeGoalContext = formatActiveGoalContext(inboundContextSessionEntry);
-    inboundUserContext = buildInboundUserContextPrefix(
-      inboundUserContextSessionCtx,
-      envelopeOptions,
-      inboundContextSessionEntry,
-    );
+    ({ activeGoalContext, inboundUserContext } = buildInboundContextState());
   };
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const getPromptEnvelopeParams = (): Parameters<typeof buildReplyPromptEnvelopeBase>[0] => ({

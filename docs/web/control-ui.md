@@ -87,6 +87,14 @@ the total tool-call count. When no run duration is available, the heading reads
 non-success outcomes remain visible even when collapsed, such as
 **Worked for 2 minutes, 3 seconds · 2 failed**.
 
+Still-streaming assistant text stays at the bottom of its run, below saved output, and
+takes its transcript position once saved.
+
+Steering keeps the current response intact. A steer appears below all server
+output from the run it targets, including live text, restored text, commentary,
+and saved assistant messages. These display rules do not rewrite the stored
+transcript or split an assistant message around a steer.
+
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
 keep their place and separate logs; live response text and the working indicator

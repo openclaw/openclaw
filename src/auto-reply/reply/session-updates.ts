@@ -20,29 +20,7 @@ import { loadExecApprovalsReadOnlyAsync } from "../../infra/exec-approvals-store
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
-import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
-
-function publishSessionEntry(
-  params: {
-    sessionEntryHandle?: ReplySessionEntryHandle;
-    sessionStore?: Record<string, SessionEntry>;
-    sessionKey?: string;
-  },
-  entry: SessionEntry | undefined,
-): void {
-  if (entry) {
-    if (params.sessionEntryHandle) {
-      params.sessionEntryHandle.replaceCurrent(entry);
-    } else if (params.sessionStore && params.sessionKey) {
-      params.sessionStore[params.sessionKey] = entry;
-    }
-  } else {
-    params.sessionEntryHandle?.clearCurrent();
-    if (params.sessionStore && params.sessionKey) {
-      delete params.sessionStore[params.sessionKey];
-    }
-  }
-}
+import { publishReplySessionEntry, type ReplySessionEntryHandle } from "./session-entry-handle.js";
 
 async function persistSkillSnapshot(params: {
   expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
@@ -76,7 +54,7 @@ async function persistSkillSnapshot(params: {
     // Preparation can yield to session management. Apply only the owned fields
     // to its current row, including field removals such as unpinning.
     const nextEntry = { ...(current ?? params.currentEntry), ...updates };
-    publishSessionEntry(params, nextEntry);
+    publishReplySessionEntry(params, nextEntry);
     return { entry: nextEntry, updated: true };
   }
   let updated = false;
@@ -95,7 +73,7 @@ async function persistSkillSnapshot(params: {
     { workerGuard: { source: params.assertCurrent } },
   );
   params.assertCurrent?.();
-  publishSessionEntry(params, persistedEntry ?? undefined);
+  publishReplySessionEntry(params, persistedEntry ?? undefined);
   return { entry: persistedEntry ?? undefined, updated: Boolean(persistedEntry) && updated };
 }
 
@@ -197,32 +175,41 @@ export async function ensureSkillSnapshot(params: {
       assertCurrent();
       return result;
     });
+  const persistSnapshot = (
+    key: string,
+    currentEntry: SessionEntry,
+    skillsSnapshot: SessionEntry["skillsSnapshot"],
+  ) =>
+    persistSkillSnapshot({
+      ...params,
+      expectedSession,
+      sessionKey: key,
+      currentEntry,
+      skillsSnapshot,
+    });
+  const createEntry = (): SessionEntry => ({
+    sessionId: sessionId ?? crypto.randomUUID(),
+    updatedAt: Date.now(),
+  });
   const initialSnapshotState = await resolveSnapshot(existingSnapshot);
   const shouldRefreshSnapshot = initialSnapshotState.shouldRefresh;
 
   if (isFirstTurnInSession && (sessionEntryHandle || sessionStore) && sessionKey) {
-    const current = nextEntry ??
+    const current =
+      nextEntry ??
       sessionEntryHandle?.get(sessionKey) ??
-      sessionStore?.[sessionKey] ?? {
-        sessionId: sessionId ?? crypto.randomUUID(),
-        updatedAt: Date.now(),
-      };
+      sessionStore?.[sessionKey] ??
+      createEntry();
     const skillSnapshot =
       !current.skillsSnapshot || shouldRefreshSnapshot
         ? initialSnapshotState.snapshot
         : (await resolveSnapshot(current.skillsSnapshot)).snapshot;
-    const { entry: persistedEntry, updated } = await persistSkillSnapshot({
-      ...params,
-      expectedSession,
-      sessionKey,
-      currentEntry: current,
-      skillsSnapshot: skillSnapshot,
-    });
+    const { entry, updated } = await persistSnapshot(sessionKey, current, skillSnapshot);
     if (!updated) {
-      return readSkillSnapshotState(persistedEntry);
+      return readSkillSnapshotState(entry);
     }
-    nextEntry = persistedEntry;
-    systemSent = persistedEntry?.systemSent ?? systemSent;
+    nextEntry = entry;
+    systemSent = entry?.systemSent ?? systemSent;
   }
 
   const skillsSnapshot =
@@ -237,21 +224,15 @@ export async function ensureSkillSnapshot(params: {
     !isFirstTurnInSession &&
     (!nextEntry?.skillsSnapshot || shouldRefreshSnapshot)
   ) {
-    const current = nextEntry ?? {
-      sessionId: sessionId ?? crypto.randomUUID(),
-      updatedAt: Date.now(),
-    };
-    const { entry: persistedEntry, updated } = await persistSkillSnapshot({
-      ...params,
-      expectedSession,
+    const { entry, updated } = await persistSnapshot(
       sessionKey,
-      currentEntry: current,
+      nextEntry ?? createEntry(),
       skillsSnapshot,
-    });
+    );
     if (!updated) {
-      return readSkillSnapshotState(persistedEntry);
+      return readSkillSnapshotState(entry);
     }
-    nextEntry = persistedEntry;
+    nextEntry = entry;
   }
 
   if (sessionKey && (sessionEntryHandle || sessionStore)) {
@@ -264,7 +245,7 @@ export async function ensureSkillSnapshot(params: {
         : sessionStore?.[sessionKey];
     assertCurrent();
     if (storePath) {
-      publishSessionEntry(params, current);
+      publishReplySessionEntry(params, current);
     }
     if (
       current?.sessionId !== expectedSession?.sessionId ||
