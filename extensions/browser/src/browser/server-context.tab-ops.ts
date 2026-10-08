@@ -138,7 +138,7 @@ async function readProfileTabLastUsedAt(profileName: string): Promise<Map<string
  * session activity) evict first in reverse CDP order; tracked tabs follow in
  * ascending last-use order.
  */
-export function orderManagedTabEvictionCandidates(
+function orderManagedTabEvictionCandidates(
   candidates: readonly BrowserTab[],
   lastUsedByTarget: ReadonlyMap<string, number>,
 ): BrowserTab[] {
