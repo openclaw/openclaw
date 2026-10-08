@@ -23,17 +23,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
-import { resolveAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
 import {
   assertAgentDeletionRecoveryHoldPredicate,
   readAgentDeletionRecoveryHolds,
 } from "../state/agent-deletion-journal-recovery.kernel.js";
-import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import { readAgentDeletionJournalForCreation } from "../state/agent-deletion-journal.read.js";
 import type { HeldAgentDatabase } from "../state/agent-deletion-journal.types.js";
+import { resolveAgentDeletionRecoveryHoldsInWorker } from "../state/agent-deletion-recovery.js";
 import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-provenance.js";
 import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
@@ -411,7 +410,8 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       // Held bootstrap can still be a no-op; never claim its journal before that decision.
       const deletion = hasBootstrapHold()
         ? undefined
-        : readAgentDeletionJournal(agentId, {}, "runtime");
+        : await readAgentDeletionJournalForCreation(agentId);
+      beforePersistentApply();
       if (deletion && !deletion.cleanupCompleted) {
         return createError(
           "deletion-pending",
@@ -680,7 +680,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
       }
       if (result.status === "created") {
-        recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
+        await recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
       }
       if (recoveryPaths.length > 0) {
         assertRecoveryCurrent();
@@ -691,10 +691,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           recoveryPathMatcher,
         );
         const selectedPaths = recoveryPaths.filter((pathname) => confirmedPaths.includes(pathname));
-        runOpenClawStateWriteTransaction((database) => {
-          assertRecoveryCurrent();
-          resolveAgentDeletionRecoveryHolds(database, agentId, selectedPaths);
-        });
+        await resolveAgentDeletionRecoveryHoldsInWorker(
+          recoveryHoldPredicate(),
+          selectedPaths,
+          assertRecoveryPathCurrent,
+        );
       }
       return result;
     });

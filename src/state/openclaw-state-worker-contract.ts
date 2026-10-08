@@ -162,6 +162,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       output: AgentProvenance[];
     };
     "agentProvenance.list": { input: undefined; output: AgentProvenance[] };
+    "agentProvenance.record": { input: AgentProvenance; output: void };
     "secrets.write": {
       input: Omit<secretWrites.SecretStoreBatchWriteParams, "database"> & {
         capturePrevious: boolean;

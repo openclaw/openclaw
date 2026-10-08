@@ -128,9 +128,14 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         input.command.type === "restartSentinel.snapshot" ||
         input.command.type === "restartSentinel.installReceipt" ||
         input.command.type === "plugins.deferredMigrations.read" ||
+        input.command.type === "legacySessionMigration.readLedger" ||
         input.command.type === "config.health.read") &&
         "input" in input.command &&
         input.command.input === undefined) ||
+      (input.command.type === "agentRecovery.creationJournal" &&
+        "input" in input.command &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.agentId === "string") ||
       (input.command.type === "claws.packageOwnership" &&
         typeof input.command.includeInstalls === "boolean" &&
         (input.command.agentId === undefined || typeof input.command.agentId === "string")) ||
@@ -267,6 +272,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           (pin) =>
             isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
         )) ||
+      (input.command.type === "agentLifecycle.read" && typeof input.command.input === "string") ||
       input.command.type === "agentDatabaseRegistry.read" ||
       (input.command.type === "agentDatabaseDeletion.snapshot" &&
         (input.command.purpose === "runtime" || input.command.purpose === "maintenance")) ||

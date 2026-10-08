@@ -33,12 +33,6 @@ type ExecApprovalsDatabase = Pick<
   "agent_deletion_journal" | "exec_approvals_config"
 >;
 
-export type ExecApprovalsMutationAuthority = {
-  action: "remove" | "restore";
-  agentId: string;
-  operationId: string;
-};
-
 export class ExecApprovalsMutationFencedError extends Error {
   constructor() {
     super("Exec approvals cannot be changed while agent deletion is in progress; retry.");
@@ -46,27 +40,10 @@ export class ExecApprovalsMutationFencedError extends Error {
   }
 }
 
-export function assertExecApprovalsMutationAuthority(
-  db: DatabaseSync,
-  authority: ExecApprovalsMutationAuthority,
-): void {
-  const journal = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<ExecApprovalsDatabase>(db)
-      .selectFrom("agent_deletion_journal")
-      .select("operation_id")
-      .where("agent_id", "=", normalizeAgentId(authority.agentId)),
-  );
-  if (journal?.operation_id !== authority.operationId) {
-    throw new ExecApprovalsMutationFencedError();
-  }
-}
-
 export function assertExecApprovalsMutationAllowed(params: {
   db: DatabaseSync;
   current: ExecApprovalsFile;
   next: ExecApprovalsFile;
-  authority?: ExecApprovalsMutationAuthority;
 }): void {
   const current = normalizeExecApprovalsInternal(params.current);
   const next = normalizeExecApprovalsInternal(params.next);
@@ -90,17 +67,6 @@ export function assertExecApprovalsMutationAllowed(params: {
         .where("agent_id", "=", normalizedAgentId),
     );
     if (!journal) {
-      continue;
-    }
-    const authority = params.authority;
-    const authorizedRemoval = currentPolicy !== undefined && nextPolicy === undefined;
-    const authorizedRestore = currentPolicy === undefined && nextPolicy !== undefined;
-    if (
-      authority?.agentId === normalizedAgentId &&
-      authority.operationId === journal.operation_id &&
-      ((authority.action === "remove" && authorizedRemoval) ||
-        (authority.action === "restore" && authorizedRestore))
-    ) {
       continue;
     }
     throw new ExecApprovalsMutationFencedError();

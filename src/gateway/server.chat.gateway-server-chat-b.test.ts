@@ -1223,7 +1223,7 @@ describe("gateway server chat", () => {
           },
         },
       });
-      recordAgentProvenance(
+      await recordAgentProvenance(
         "research",
         { createdVia: "agent", creatorAgentId: "main" },
         { nowMs: 42 },

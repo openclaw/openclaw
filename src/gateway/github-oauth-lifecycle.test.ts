@@ -21,12 +21,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { writeHiddenGitHubSecretRecord } from "../secrets/store/secret-store.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   beginAgentDeletionJournal,
   removeAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
-import { recordAgentProvenance } from "../state/agent-provenance.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+} from "../test-utils/agent-deletion-journal.js";
+import { seedAgentProvenance } from "../test-utils/agent-provenance.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -264,6 +264,25 @@ describe("GitHub OAuth authorization lifecycle", () => {
     await lifecycle.stop();
     expect(mocks.clearVerificationCache).toHaveBeenCalledOnce();
   });
+
+  it.each(["identity replacement", "shutdown"] as const)(
+    "does not request a device code after %s during agent preparation",
+    async (change) => {
+      currentConfig = configForScope("agent");
+      const lifecycle = createLifecycle();
+      const pending = startAuthorization(lifecycle, "agent");
+      const rejected = expect(pending).rejects.toThrow();
+      if (change === "identity replacement") {
+        setSelectedIdentity("agent", "main", identity(OTHER_PROFILE));
+      } else {
+        await lifecycle.stop();
+      }
+
+      await rejected;
+      expect(mocks.requestDeviceCode).not.toHaveBeenCalled();
+      expect(listGitHubDeviceAuthorizationRecords()).toEqual([]);
+    },
+  );
 
   it.each(["system", "agent"] as const)(
     "records an exact %s-scope CAS snapshot and delays the initial poll",
@@ -694,7 +713,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
     currentConfig = configForScope("agent");
     const lifecycle = createLifecycle();
     const started = await startAuthorization(lifecycle, "agent");
-    recordAgentProvenance("main", { createdVia: "operator" }, { nowMs: NOW + 1 });
+    seedAgentProvenance("main", { createdVia: "operator" }, { nowMs: NOW + 1 });
     await advanceToPoll(started.requestId);
 
     await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({

@@ -3,13 +3,18 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { AgentDeletionWorkerGuard } from "../state/agent-deletion-worker-contract.js";
+import { assertAgentDeletionWorkerPredicate } from "../state/agent-deletion.worker.js";
 import {
   CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE,
   clawPackageLifecycleLeaseKey,
 } from "../state/claw-package-lifecycle-lease-key.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
+import {
+  assertOpenClawStateLeaseWorkerOwnedInTransaction,
+  assertOpenClawStateLeasesWorkerOwnedInTransaction,
+} from "../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import { rowToRef, selectMcpRefs } from "./mcp-records.js";
@@ -30,11 +35,13 @@ export const clawProvenanceOperations = {
       status: ClawPackageRefStatus;
       nowMs?: number;
       lease: OpenClawStateLeaseIdentity;
+      deletion?: AgentDeletionWorkerGuard;
     },
     { open, stateOptions },
   ) =>
     runOpenClawStateWriteTransaction(
-      ({ db }) => {
+      (database) => {
+        const { db } = database;
         const ref = input.ref;
         const artifact =
           ref.kind === "plugin"
@@ -55,7 +62,26 @@ export const clawProvenanceOperations = {
         ) {
           throw new Error("Claw package claim does not match the held artifact lease");
         }
-        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.lease);
+        const assertLeases = (stage: "transaction" | "commit") => {
+          if (input.deletion) {
+            if (
+              input.deletion.predicate.agentId !== ref.agentId ||
+              input.deletion.lease.scope !== "core:agent-deletion" ||
+              input.deletion.lease.key !== ref.agentId
+            ) {
+              throw new Error("Claw package write does not belong to its deletion");
+            }
+            assertOpenClawStateLeasesWorkerOwnedInTransaction(
+              db,
+              [input.deletion.lease, input.lease],
+              stage,
+            );
+            assertAgentDeletionWorkerPredicate(database, input.deletion.predicate);
+          } else {
+            assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.lease, "write", stage);
+          }
+        };
+        assertLeases("transaction");
         const row = executeSqliteQueryTakeFirstSync(
           db,
           getNodeSqliteKysely<DB>(db)
@@ -84,7 +110,7 @@ export const clawProvenanceOperations = {
           input.status,
           input.nowMs ?? Date.now(),
         );
-        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.lease, "write", "commit");
+        assertLeases("commit");
         return result;
       },
       { database: open(), ...stateOptions() },

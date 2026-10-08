@@ -11,16 +11,14 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import * as agentDeletionDiscovery from "../state/agent-deletion-discovery.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import * as agentWriteAdmission from "../state/openclaw-agent-write-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { runPluginHostCleanup } from "./host-hook-cleanup.js";

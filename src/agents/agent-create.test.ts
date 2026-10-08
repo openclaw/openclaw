@@ -47,8 +47,8 @@ vi.mock("./agent-lifecycle-registry.js", () => ({
   claimCompletedAgentDeletion: mocks.claimCompletedAgentDeletion,
 }));
 
-vi.mock("../state/agent-deletion-journal.js", () => ({
-  readAgentDeletionJournal: mocks.readAgentDeletionJournal,
+vi.mock("../state/agent-deletion-journal.read.js", () => ({
+  readAgentDeletionJournalForCreation: mocks.readAgentDeletionJournal,
 }));
 
 vi.mock("../state/agent-provenance.js", () => ({

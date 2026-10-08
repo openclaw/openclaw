@@ -39,10 +39,11 @@ export function assertAgentDatabaseExecutionSharedState(
 export function supportsAgentDatabaseExecutionScope(
   options: OpenClawAgentDatabaseOptions,
 ): boolean {
+  const cleanup = getAgentDeletionDatabaseCleanup(options);
   return (
     getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance !== true &&
     !hasAgentDatabaseMaintenanceAuthority() &&
-    !getAgentDeletionDatabaseCleanup(options)
+    (!cleanup || cleanup.worker !== undefined)
   );
 }
 

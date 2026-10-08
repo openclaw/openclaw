@@ -4,7 +4,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
+import type {
+  WorkerOperationHandlers,
+  WorkerWriteOperationContext,
+} from "../state/worker-operation-registry.js";
 import { applyExecAuthorizationCommit } from "./exec-approvals-authorization.kernel.js";
 import { resolveExecApprovalsDisplayPath } from "./exec-approvals-config.js";
 import type {
@@ -14,6 +17,7 @@ import type {
 import type { ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
 import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
+import { execApprovalRetirementOperations } from "./exec-approvals-retirement.worker.js";
 import {
   snapshotFromExecApprovalsDatabase,
   assertExecApprovalsMutationAllowed,
@@ -89,8 +93,9 @@ export function commitExecAuthorizationsInWorker(
 }
 
 export const execAuthorizationOperations = {
+  ...execApprovalRetirementOperations,
   "execApprovals.commitAuthorizations": (
     input: { items: ExecAuthorizationCommitInput[] },
     { open, stateOptions },
   ) => commitExecAuthorizationsInWorker(input, { ...stateOptions(), database: open() }),
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

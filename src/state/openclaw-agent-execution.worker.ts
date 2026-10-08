@@ -22,7 +22,9 @@ import {
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { withAgentCreationClaimWitness } from "./agent-creation-claim.js";
+import { withAgentDeletionWorkerCleanup } from "./agent-deletion-cleanup.worker.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
+import type { AgentDeletionWorkerGuard } from "./agent-deletion-worker-contract.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseRegistrationCommit,
@@ -181,7 +183,8 @@ function openAgentDatabaseBackend(
   let identity: AgentDatabaseFileExecutionIdentity | undefined;
   let openingFailure: { error: unknown } | undefined;
   let startupJournalRequested = false;
-  let publicationStartupJournal: boolean | undefined;
+  type RequestPreparation = { startupJournal: boolean; deletion?: AgentDeletionWorkerGuard };
+  let publicationPreparation: RequestPreparation | undefined;
   const readRequestPreparation = () => {
     const attachment = takeSqliteWorkerOperationAdmissionAttachment();
     if (
@@ -191,7 +194,44 @@ function openAgentDatabaseBackend(
     ) {
       throw new Error("Agent execution requires its request-local preparation facts");
     }
-    return attachment.startupJournal;
+    return {
+      startupJournal: attachment.startupJournal,
+      // SAFETY: captureAgentDeletionCleanupAdmission sends this private typed guard. Before SQL,
+      // the original live owner must grant the same guard by exact comparison.
+      deletion: attachment.deletion as AgentDeletionWorkerGuard | undefined,
+    };
+  };
+  const openShared = () => {
+    if (!shared) {
+      shared = openOpenClawStateDatabase({
+        path: input.stateDatabasePath,
+        env: input.environment,
+        initializationAgentPaths: [input.databasePath],
+      });
+      sharedBorrow = retainOpenClawStateDatabase(shared);
+    }
+    return shared;
+  };
+  const withPreparation = <T>(preparation: RequestPreparation, run: () => T): T => {
+    startupJournalRequested = preparation.startupJournal;
+    try {
+      return preparation.deletion
+        ? withAgentDeletionWorkerCleanup(
+            preparation.deletion,
+            {
+              agentId: input.agentId,
+              path: input.databasePath,
+              statePath: input.stateDatabasePath,
+              env: input.environment,
+              shared: openShared,
+              assertFileCurrent: assertFileIdentity,
+            },
+            run,
+          )
+        : run();
+    } finally {
+      startupJournalRequested = false;
+    }
   };
   const readDeletionJournal = () =>
     readAgentDeletionJournalStatusInDatabase(
@@ -204,15 +244,8 @@ function openAgentDatabaseBackend(
       // Promotion needs the current command's source authority before any durable open work.
       admitOpen();
       assertFileIdentity();
-      if (!shared) {
-        shared = openOpenClawStateDatabase({
-          path: input.stateDatabasePath,
-          env: input.environment,
-          initializationAgentPaths: [input.databasePath],
-        });
-        sharedBorrow = retainOpenClawStateDatabase(shared);
-      }
-      const lease = prepareOpenClawAgentDatabaseWorkerLease(options, shared, input.leaseId);
+      const sharedDatabase = openShared();
+      const lease = prepareOpenClawAgentDatabaseWorkerLease(options, sharedDatabase, input.leaseId);
       const { port1, port2 } = new MessageChannel();
       try {
         requestSqliteWorkerOperationAdmission(
@@ -220,7 +253,7 @@ function openAgentDatabaseBackend(
             stage: "prepare",
             facts: {
               kind: "shared-owner",
-              identity: requireOpenClawStateDatabaseIdentity(shared),
+              identity: requireOpenClawStateDatabaseIdentity(sharedDatabase),
               lease: lease.receipt,
               validationPort: port2,
             },
@@ -389,6 +422,8 @@ function openAgentDatabaseBackend(
     "session.turn.commit": loadAgentCompoundOperations,
     "session.lifecycle.reset": loadAgentCompoundOperations,
     "session.lifecycle.project": loadAgentCompoundOperations,
+    "session.agentPurge.prepare": loadAgentCompoundOperations,
+    "session.agentPurge.commit": loadAgentCompoundOperations,
     "session.nativeBindings.delete": loadAgentNativeBindingOperations,
     "session.messageCut.commit": loadAgentMessageCutOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
@@ -527,7 +562,9 @@ function openAgentDatabaseBackend(
           ? command.input
           : command.type === "session.messageCut.commit"
             ? command.input.nativeBindings
-            : undefined;
+            : command.type === "session.agentPurge.commit"
+              ? command.input.nativeBindings
+              : undefined;
       if (nativeBindings) {
         return Promise.all([
           preparing,
@@ -549,25 +586,22 @@ function openAgentDatabaseBackend(
       if (command.type !== "database.domain.publish") {
         return undefined;
       }
-      publicationStartupJournal = readRequestPreparation();
-      startupJournalRequested = publicationStartupJournal;
-      try {
-        return domain.preparePublication(command.input);
-      } finally {
-        startupJournalRequested = false;
-      }
+      publicationPreparation = readRequestPreparation();
+      return withPreparation(publicationPreparation, () =>
+        domain.preparePublication(command.input),
+      );
     },
     [SQLITE_WORKER_OPERATION_CLEANUP](command) {
       if (command.type === "session.maintenance.metadata") {
         maintenance.cleanup(command.input);
       }
       if (command.type === "database.domain.publish") {
-        startupJournalRequested = publicationStartupJournal ?? false;
         try {
-          domain.cleanupPublication(command.input.id);
+          withPreparation(publicationPreparation ?? { startupJournal: false }, () =>
+            domain.cleanupPublication(command.input.id),
+          );
         } finally {
-          startupJournalRequested = false;
-          publicationStartupJournal = undefined;
+          publicationPreparation = undefined;
         }
       }
     },
@@ -593,18 +627,12 @@ function openAgentDatabaseBackend(
     execute(command) {
       assertOpen();
       if (command.type === "database.domain.publish") {
-        if (publicationStartupJournal === undefined) {
+        if (publicationPreparation === undefined) {
           throw new Error("Agent publication lost its request-local preparation facts");
         }
-        startupJournalRequested = publicationStartupJournal;
-      } else {
-        startupJournalRequested = readRequestPreparation();
+        return withPreparation(publicationPreparation, () => executeCommand(command));
       }
-      try {
-        return executeCommand(command);
-      } finally {
-        startupJournalRequested = false;
-      }
+      return withPreparation(readRequestPreparation(), () => executeCommand(command));
     },
   };
 }

@@ -24,10 +24,7 @@ import {
 } from "../cron/store/run-receipt-store.js";
 import { claimCronRunReceiptInDatabaseForTest } from "../cron/store/run-receipt-store.test-support.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import {
-  beginAgentDeletionJournal,
-  readAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
+import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import * as stateReader from "../state/openclaw-state-db-readonly.js";
 import {
@@ -36,6 +33,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { authorizeOperatorScopesForMethod, isGatewayMethodClassified } from "./method-scopes.js";
 import {
   useClawMonitorFixture,

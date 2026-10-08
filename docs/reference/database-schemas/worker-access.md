@@ -1314,6 +1314,26 @@ and incognito retains its native owner.
 The existing cross-database crash window, schemas, retention, and update behavior
 are unchanged; no migration is required.
 
+Agent retirement uses the existing shared-state writer for its journal, provenance,
+recovery resolution, and workspace retirement. The original live deletion lease
+admits each operation; a serialized journal identifier never grants cleanup.
+The canonical agent executor carries request-local cleanup authority and holds
+the shared journal transaction through the actual agent COMMIT, preserving
+agent-to-shared lock order and native binding rollback custody. Scope closure
+joins accepted work before releasing cleanup-owned readers and writers.
+The dedicated purge selects entry-referenced generations and preserves generations
+referenced by surviving entries. It does not expand selection to all historical
+windows. Released opaque SDK callbacks and initialization rollback retain their
+native transaction guard. These changes require no schema, retention, durability,
+permission, or update migration.
+
+Legacy-main detection reads comparison facts through the existing session reader
+and the migration ledger through the shared-state reader. It retains physical
+store and logical alias identities across awaits, including initially absent
+stores. Detection compares entries and transcript content without loading the
+artifact and pending-input fingerprints needed only for Doctor deletion custody.
+Doctor continues to acquire those complete custody facts before repair.
+
 Durable rewind and branch switching run their complete scan, graph clone, index,
 collaboration cleanup, and entry rotation in that same agent executor. Preparation
 retains the original physical source, selected lifecycle, cold restoration, and
@@ -2000,8 +2020,11 @@ never reuse an inherited discovery snapshot.
 Expiry rereads current setup and attestation rows, preserving the 24-hour and
 future-timestamp protections. Native commit receipts retire the stored workspace's
 file cache even if ordinary result delivery fails; uncertain writes are never
-replayed. Explicit agent deletion and Doctor relocation retain their existing
-transaction owners. Schemas, retention, durability, and update behavior are unchanged.
+replayed. Explicit workspace retirement uses the same writer with the deletion
+owner's current journal and lease predicates. It preserves captured alias identity
+after filesystem removal, never recreates an absent state database, and retires
+file caches only after acknowledged commit. Doctor relocation retains its native
+transaction. Schemas, retention, durability, and update behavior are unchanged.
 
 Session branch summaries retain compact counts, headlines, and their append
 certificate in the host, keyed by physical database identity and the transcript
@@ -3413,3 +3436,32 @@ at both shared-state write grants, with native admission completed beforehand.
 No question policy is projected when image cancellation finds no pending question;
 ordinary steering retains its own admission. Schemas, retention, durability,
 configuration, and update behavior are unchanged.
+
+Agent lifecycle preparation for GitHub authorization and repository work reads the
+incarnation and deletion fence in one indexed statement through the existing
+shared-state read-only worker. Preparation rechecks the current roster and local
+admission refusals after awaiting. Optional provenance-table absence keeps the
+legacy identity; reads do not create it.
+
+Final OAuth publication, credential subprocess, repository transfer, and provider
+consumption guards retain a synchronous current read because native, SDK, and
+foreign-process writers can revoke the agent outside host publication. That guard
+uses the same indexed journal/provenance projection without a transaction envelope
+or journal payload scan; it never treats prepared facts as current authority.
+Retire this native guard at the next Plugin SDK major after synchronous writers
+are removed and the lifecycle owner publishes complete revocation facts. The
+accepted GitHub config draft mutation retains its synchronous incarnation check; the preparation cutover adds no new final config-publication contract.
+Schemas, stored bytes, permissions, retention, and update behavior are unchanged.
+
+Agent retirement also retains an owner-minted synchronous final-effect guard for
+filesystem and config mutation callbacks. The original host lease lifetime is
+checked before and after one indexed current SELECT covering the deletion
+journal, lease ownership and expiry, and the expected Claw installation when
+present. The read-only connection's existing freshness admission still observes
+foreign commits; the guard opens no write transaction and sends no worker request.
+Worker transaction grants continue to use SQL-free host checks and authoritative
+worker predicates. Removing this final guard requires the next Plugin SDK major's
+removal of synchronous writers and complete lifecycle revocation publication;
+prepared worker replies cannot replace it. The GitHub identity draft mutation
+likewise keeps its single current incarnation query at its original accepted
+mutation checkpoint.

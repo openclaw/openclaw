@@ -9,14 +9,14 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  beginAgentDeletionJournal,
-  removeAgentDeletionJournal,
-} from "../../state/agent-deletion-journal.js";
-import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import {
+  beginAgentDeletionJournal,
+  removeAgentDeletionJournal,
+} from "../../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { clearCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";

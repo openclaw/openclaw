@@ -36,7 +36,10 @@ import {
   type SessionIdentityMutation,
 } from "../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { beginAgentDeletionJournal, removeAgentDeletionJournal } from "./agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournal,
+  removeAgentDeletionJournal,
+} from "../test-utils/agent-deletion-journal.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";

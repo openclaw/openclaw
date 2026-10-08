@@ -3,7 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  withAgentDeletion,
+  type AgentDeletionOperation,
+} from "../agents/agent-lifecycle-registry.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
 import {
@@ -11,6 +17,8 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { sha256Hex } from "./crypto-digest.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
@@ -30,6 +38,7 @@ import {
   loadExecApprovalsReadOnly,
   loadExecApprovalsReadOnlyAsync,
   readExecApprovalsSnapshot,
+  prepareCronExecHostPolicyUse,
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
   withAgentExecApprovalsRemoved,
@@ -82,16 +91,26 @@ function makeStateDatabaseUnavailable(): void {
   fs.writeFileSync(path.join(stateDir, "state"), "not a directory");
 }
 
-const TEST_DELETION_OPERATION_ID = "test-deletion-operation";
+async function withDeletion<T>(
+  agentId: string,
+  run: (deletion: AgentDeletionOperation) => Promise<T>,
+): Promise<T> {
+  return withAgentDeletion(agentId, async (begin) =>
+    run(
+      await begin({
+        agentId: normalizeAgentId(agentId),
+        agentDir: "/agent",
+        workspaceDir: "/workspace",
+        sessionsDir: "/sessions",
+      }),
+    ),
+  );
+}
 
-function seedAgentDeletionJournal(agentId: string, operationId = TEST_DELETION_OPERATION_ID): void {
-  openOpenClawStateDatabase()
-    .db.prepare(
-      `INSERT INTO agent_deletion_journal (
-         agent_id, operation_id, agent_dir, workspace_dir, sessions_dir, created_at
-       ) VALUES (?, ?, '/agent', '/workspace', '/sessions', 1)`,
-    )
-    .run(agentId, operationId);
+async function removeAgentPolicies<T>(agentId: string, commit: () => Promise<T>): Promise<T> {
+  return withDeletion(agentId, (deletion) =>
+    withAgentExecApprovalsRemoved(agentId, commit, deletion),
+  );
 }
 
 beforeEach(() => {
@@ -100,8 +119,8 @@ beforeEach(() => {
   execApprovalsStoreTesting.reset();
 });
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  await closeStateDatabaseForTest();
   execApprovalsStoreTesting.reset();
   envSnapshot.restore();
   for (const directory of tempDirs.splice(0)) {
@@ -339,14 +358,13 @@ describe("exec approvals SQLite store", () => {
     expect(loggerWarn.mock.calls[0]?.[0]).toContain("unavailable");
   });
 
-  it("aborts agent deletion before commit when the approvals store is unavailable", async () => {
-    makeStateDatabaseUnavailable();
+  it("aborts agent deletion before commit when policy storage disappears", async () => {
     const commit = vi.fn(async () => "committed");
-
-    await expect(withAgentExecApprovalsRemoved("removed", commit)).rejects.toThrow(
-      "Exec approvals SQLite state is unavailable",
-    );
-    expect(commit).not.toHaveBeenCalled();
+    await withDeletion("removed", async (deletion) => {
+      openOpenClawStateDatabase().db.exec("DROP TABLE exec_approvals_config");
+      await expect(withAgentExecApprovalsRemoved("removed", commit, deletion)).rejects.toThrow();
+      expect(commit).not.toHaveBeenCalled();
+    });
   });
 
   it("removes one agent and preserves wildcard and unrelated policy", async () => {
@@ -358,9 +376,8 @@ describe("exec approvals SQLite store", () => {
         kept: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/keep" }] },
       },
     });
-    seedAgentDeletionJournal("main");
 
-    await expect(withAgentExecApprovalsRemoved("main", async () => "ok")).resolves.toBe("ok");
+    await expect(removeAgentPolicies("main", async () => "ok")).resolves.toBe("ok");
     expect(loadExecApprovals().agents).toEqual({
       "*": { security: "deny" },
       kept: expect.objectContaining({
@@ -377,16 +394,19 @@ describe("exec approvals SQLite store", () => {
         kept: { security: "deny" },
       },
     });
-    seedAgentDeletionJournal("removed");
     const { promise: commitStarted, resolve: notifyCommitStarted } = createDeferred();
     const { promise: commitGate, resolve: finishCommit } = createDeferred();
-    const deletion = withAgentExecApprovalsRemoved("removed", async () => {
+    const deletion = removeAgentPolicies("removed", async () => {
       notifyCommitStarted();
       await commitGate;
       return "committed";
     });
 
-    await commitStarted;
+    await awaitGateBeforeSettlement(
+      commitStarted,
+      deletion,
+      "Deletion settled before roster commit",
+    );
     try {
       expect(loadExecApprovals().agents).toEqual({ kept: { security: "deny" } });
       await expect(
@@ -406,15 +426,18 @@ describe("exec approvals SQLite store", () => {
 
   it("allows unrelated writers while deleting an agent with no approval policy", async () => {
     saveExecApprovals({ version: 1, agents: { kept: { security: "deny" } } });
-    seedAgentDeletionJournal("missing");
     const { promise: commitStarted, resolve: notifyCommitStarted } = createDeferred();
     const { promise: commitGate, resolve: finishCommit } = createDeferred();
-    const deletion = withAgentExecApprovalsRemoved("missing", async () => {
+    const deletion = removeAgentPolicies("missing", async () => {
       notifyCommitStarted();
       await commitGate;
     });
 
-    await commitStarted;
+    await awaitGateBeforeSettlement(
+      commitStarted,
+      deletion,
+      "Deletion settled before roster commit",
+    );
     try {
       saveExecApprovals({
         version: 1,
@@ -436,11 +459,10 @@ describe("exec approvals SQLite store", () => {
         kept: { security: "deny" },
       },
     });
-    seedAgentDeletionJournal("agent-a");
     let policiesDuringCommit: ReturnType<typeof loadExecApprovals>["agents"] = undefined;
 
     await expect(
-      withAgentExecApprovalsRemoved("Agent A", async () => {
+      removeAgentPolicies("Agent A", async () => {
         policiesDuringCommit = loadExecApprovals().agents;
         throw new Error("roster commit failed");
       }),
@@ -454,13 +476,98 @@ describe("exec approvals SQLite store", () => {
     });
   });
 
-  it("requires a deletion journal before commit", async () => {
+  it("refuses a foreign deletion takeover before removing policy or committing the roster", async () => {
+    saveExecApprovals({ version: 1, agents: { removed: { security: "full" } } });
     const commit = vi.fn(async () => "committed");
-
-    await expect(withAgentExecApprovalsRemoved("missing", commit)).rejects.toMatchObject({
-      name: "ExecApprovalsMutationFencedError",
+    await withDeletion("removed", async (deletion) => {
+      const foreign = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      try {
+        foreign
+          .prepare(
+            "UPDATE agent_deletion_journal SET operation_id = 'replacement' WHERE agent_id = 'removed'",
+          )
+          .run();
+      } finally {
+        foreign.close();
+      }
+      await expect(withAgentExecApprovalsRemoved("removed", commit, deletion)).rejects.toThrow(
+        "deletion no longer owns",
+      );
+      expect(commit).not.toHaveBeenCalled();
+      expect(loadExecApprovals().agents?.removed?.security).toBe("full");
     });
-    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it("uses the foreign-committed policy and removes aliases without host SQL", async () => {
+    saveExecApprovals({ version: 1, agents: { removed: { security: "full" } } });
+    await withDeletion("removed", async (deletion) => {
+      const foreign = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      try {
+        writeExecApprovalsConfigRow({
+          db: foreign,
+          file: {
+            version: 1,
+            agents: {
+              removed: { security: "allowlist" },
+              kept: { security: "deny" },
+            },
+          },
+        });
+      } finally {
+        foreign.close();
+      }
+      const sql = observeHostDataSql();
+      try {
+        await withAgentExecApprovalsRemoved("removed", async () => "committed", deletion);
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      expect(loadExecApprovals().agents).toEqual({ kept: { security: "deny" } });
+    });
+  });
+
+  it("retires prepared cron uses before COMMIT and keeps the row when the host refuses that grant", async () => {
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "deny" },
+      agents: { removed: { security: "full" } },
+    });
+    await withDeletion("removed", async (deletion) => {
+      const use = await prepareCronExecHostPolicyUse(captureOpenClawStateWorkerContext(), {
+        agentId: "removed",
+        security: "full",
+        ask: "off",
+      });
+      const commit = vi.fn(async () => "committed");
+      let reachedCommit = false;
+      try {
+        await expect(
+          withAgentExecApprovalsRemoved("removed", commit, {
+            ...deletion,
+            runWithWorker(operation, options) {
+              return deletion.runWithWorker(operation, {
+                ...options,
+                onAdmission(request, key) {
+                  options?.onAdmission?.(request, key);
+                  if (request.stage === "commit") {
+                    reachedCommit = true;
+                    expect(use.assertCurrent).toThrow("policy changed");
+                    throw new Error("synthetic lost host grant");
+                  }
+                },
+              });
+            },
+          }),
+        ).rejects.toThrow("synthetic lost host grant");
+        expect(reachedCommit).toBe(true);
+        expect(commit).not.toHaveBeenCalled();
+        expect(loadExecApprovals().agents?.removed?.security).toBe("full");
+        expect(use.assertCurrent).toThrow("policy changed");
+      } finally {
+        use.release();
+      }
+    });
   });
 
   it("restores snapshots and honors rollback CAS", async () => {

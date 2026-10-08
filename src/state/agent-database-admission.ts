@@ -101,10 +101,13 @@ function sameKnownState(left: string, right: string): boolean {
 /** Capture existing pending decisions; a later commit must never revoke their successors. */
 export function captureAgentDatabasePreparationDeletion(
   agentId: string,
-  database: Pick<OpenClawStateDatabase, "db" | "path">,
+  database: Pick<OpenClawStateDatabase, "db" | "path"> | { path: string; identityKey: string },
 ): () => void {
   const id = normalizeAgentId(agentId);
-  const identityKey = requireOpenClawStateDatabaseIdentity(database).key;
+  const identityKey =
+    "identityKey" in database
+      ? database.identityKey
+      : requireOpenClawStateDatabaseIdentity(database).key;
   const databasePath = database.path;
   const captured = [...refusalsByState].flatMap(([key, owner]) => {
     const known = openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(key);

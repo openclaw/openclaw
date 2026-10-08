@@ -48,6 +48,8 @@ import type {
   SkillCuratorOperations,
 } from "../skills/workshop/store.worker-contract.js";
 import type { TranscriptWriteOperations } from "../transcripts/store-write.worker-contract.js";
+import type { agentRecoveryOperations } from "./agent-deletion-recovery.worker.js";
+import type { agentDeletionOperations } from "./agent-deletion.worker.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.kernel.js";
 import type { AgentDatabaseRegistryWorkerOperations } from "./openclaw-agent-db-contract.js";
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
@@ -56,6 +58,8 @@ import type { WorkerOperations, WorkerWriteOperationContext } from "./worker-ope
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBootOperations> &
+  WorkerOperations<typeof agentDeletionOperations> &
+  WorkerOperations<typeof agentRecoveryOperations> &
   WorkerOperations<typeof localWorkspaceOperations> &
   ClawProvenanceWriteOperations &
   GeneratedHtmlProvenanceOperations &
@@ -112,6 +116,9 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
   RegisteredStateWorkerOperations,
   WorkerWriteOperationContext
 >({
+  agentDeletion: () => import("./agent-deletion.worker.js").then((m) => m.agentDeletionOperations),
+  agentRecovery: () =>
+    import("./agent-deletion-recovery.worker.js").then((m) => m.agentRecoveryOperations),
   gatewayBoot: () =>
     import("../infra/gateway-boot-lifecycle.worker.js").then((m) => m.gatewayBootOperations),
   localWorkspace: () =>

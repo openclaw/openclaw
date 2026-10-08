@@ -35,11 +35,9 @@ import {
 } from "../plugins/provider-auth-persistence.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import {
-  beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
-import { readAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -57,6 +55,8 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import { readAgentProvenance } from "../test-utils/agent-provenance.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   installWorkspacePreparationPause,

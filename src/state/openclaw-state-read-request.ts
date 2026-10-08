@@ -295,6 +295,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "agentDatabaseDeletion.snapshot") {
     return bytes + Buffer.byteLength(command.purpose, "utf8");
   }
+  if (command.type === "agentLifecycle.read") {
+    return bytes + Buffer.byteLength(command.input, "utf8");
+  }
   if (
     command.type === "agentDeletionJournal.status" ||
     command.type === "agentDeletionJournal.authority"

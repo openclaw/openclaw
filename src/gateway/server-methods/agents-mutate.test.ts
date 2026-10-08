@@ -50,6 +50,8 @@ const mocks = vi.hoisted(() => ({
     async (_agentId: string, commit: () => Promise<unknown>) => await commit(),
   ),
   assertAgentDeletionCurrent: vi.fn(),
+  assertAgentDeletionCurrentAsync: vi.fn<() => Promise<void>>(),
+  assertAgentDeletionCurrentFinal: vi.fn<() => void>(),
   beginAgentDeletionRollback: vi.fn(),
   beginAgentDeletionFinish: vi.fn(),
   closeDeletedAgentDatabases: vi.fn(async () => {}),
@@ -66,7 +68,6 @@ const mocks = vi.hoisted(() => ({
   ),
   closeOpenClawAgentDatabaseByPath: vi.fn((_pathname?: string, _expectedAgentId?: string) => true),
   listOpenClawRegisteredAgentDatabases: vi.fn(() => [] as Array<Record<string, unknown>>),
-  unregisterOpenClawAgentDatabase: vi.fn(),
   assertNoOpenClawAgentDatabaseLeases: vi.fn(),
   registerResolvedAgentDir: vi.fn(),
   resolveRegisteredAgentIdForDir: vi.fn((_pathname?: string) => undefined as string | undefined),
@@ -254,10 +255,9 @@ vi.mock("../../agents/agent-lifecycle-registry.js", () => ({
         databasePaths: entry.databasePaths ?? [],
         cleanupPaths: entry.cleanupPaths ?? [],
       }),
-      assertCurrent: mocks.assertAgentDeletionCurrent,
-      assertCurrentAsync: async () => {
-        await mocks.assertAgentDeletionCurrent();
-      },
+      assertCurrentHost: mocks.assertAgentDeletionCurrent,
+      assertCurrentAsync: mocks.assertAgentDeletionCurrentAsync,
+      assertCurrentFinal: mocks.assertAgentDeletionCurrentFinal,
       fenceDatabasePaths: (paths: string[]) => {
         entry.databasePaths = [...new Set(paths)];
       },
@@ -267,6 +267,10 @@ vi.mock("../../agents/agent-lifecycle-registry.js", () => ({
       finish: mocks.beginAgentDeletionFinish,
       rollback: mocks.beginAgentDeletionRollback,
       runDatabaseCleanup: mocks.runAgentDatabaseCleanup,
+      runWithWorker: async (operation: (scope: { execute: () => void }) => unknown) =>
+        operation({
+          execute: () => mocks.assertNoOpenClawAgentDatabaseLeases(_agentId, {}),
+        }),
     })),
   claimCompletedAgentDeletion: mocks.claimCompletedAgentDeletion,
   isAgentDeletionBlocked: () => false,
@@ -298,10 +302,25 @@ vi.mock("../../state/openclaw-agent-db.js", () => ({
 
 vi.mock("../../state/agent-deletion-journal.js", () => ({
   readAgentDeletionJournal: mocks.readAgentDeletionJournal,
+  readAgentDeletionJournalAsync: async () => mocks.readAgentDeletionJournal(),
 }));
 
-vi.mock("../../state/openclaw-agent-db-registry.js", () => ({
-  unregisterOpenClawAgentDatabase: mocks.unregisterOpenClawAgentDatabase,
+vi.mock("../../state/agent-deletion-journal.read.js", () => ({
+  readAgentDeletionJournalForCreation: async () => mocks.readAgentDeletionJournal(),
+}));
+
+vi.mock("../../state/agent-provenance.js", () => ({
+  recordAgentProvenance: vi.fn(async () => {}),
+}));
+
+vi.mock("../../state/openclaw-agent-db-registry-listing.js", () => ({
+  invalidateRegisteredAgentDatabasesMemo: () => {},
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead: () => ({
+    read: async () => ({
+      assertCurrent: () => {},
+      result: { status: "available", entries: mocks.listOpenClawRegisteredAgentDatabases() },
+    }),
+  }),
 }));
 
 vi.mock("../../state/openclaw-agent-db.paths.js", async (importOriginal) => ({
@@ -434,6 +453,12 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async (_agentId: string, commit: () => Promise<unknown>) => await commit());
   mocks.assertAgentDeletionCurrent.mockReset();
+  mocks.assertAgentDeletionCurrentAsync.mockReset().mockImplementation(async () => {
+    mocks.assertAgentDeletionCurrent();
+  });
+  mocks.assertAgentDeletionCurrentFinal.mockReset().mockImplementation(() => {
+    mocks.assertAgentDeletionCurrent();
+  });
   mocks.beginAgentDeletionRollback.mockReset();
   mocks.beginAgentDeletionFinish.mockReset();
   mocks.readAgentDeletionJournal.mockReset().mockReturnValue(undefined);
@@ -444,7 +469,6 @@ beforeEach(() => {
     );
   mocks.closeOpenClawAgentDatabaseByPath.mockReset().mockReturnValue(true);
   mocks.listOpenClawRegisteredAgentDatabases.mockReset().mockReturnValue([]);
-  mocks.unregisterOpenClawAgentDatabase.mockReset();
   mocks.registerResolvedAgentDir.mockReset();
   mocks.resolveRegisteredAgentIdForDir
     .mockReset()
@@ -893,12 +917,15 @@ describe("agents.delete", () => {
     );
     expect(mocks.writeConfigFile).toHaveBeenCalledWith(expect.anything(), {
       allowConfigSizeDrop: true,
-      assertConfigPathForWrite: mocks.assertAgentDeletionCurrent,
+      assertConfigPathForWrite: mocks.assertAgentDeletionCurrentFinal,
+      beforeCommit: mocks.assertAgentDeletionCurrentAsync,
       allowedAgentRosterRemovals: ["test-agent"],
     });
     expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith(
       { workspaceDir: "/workspace/test-agent" },
-      { assertCurrent: mocks.assertAgentDeletionCurrent },
+      {
+        deletion: expect.objectContaining({ assertCurrentHost: mocks.assertAgentDeletionCurrent }),
+      },
     );
     expect(cronJobs).toEqual([{ id: "other-job", agentId: "other-agent" }]);
     expect(approvals).toEqual(new Set(["other-agent"]));
@@ -909,15 +936,13 @@ describe("agents.delete", () => {
     expect(mocks.withAgentExecApprovalsRemoved).toHaveBeenCalledWith(
       "test-agent",
       expect.any(Function),
+      expect.objectContaining({ assertCurrentHost: mocks.assertAgentDeletionCurrent }),
     );
     expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
       "/agents/test-agent/openclaw-agent.sqlite",
       "test-agent",
     );
-    expect(mocks.unregisterOpenClawAgentDatabase).toHaveBeenCalledWith({
-      agentId: "test-agent",
-      path: "/agents/test-agent/openclaw-agent.sqlite",
-    });
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledWith({ unregisterDatabases: true });
     expect(mocks.unregisterResolvedAgentDir).toHaveBeenCalledWith({
       agentId: "test-agent",
       agentDir: "/agents/test-agent",
@@ -1015,7 +1040,7 @@ describe("agents.delete", () => {
     await expect(promise).rejects.toThrow("config mutation did not return its target");
     expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledTimes(2);
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
-    expect(mocks.unregisterOpenClawAgentDatabase).not.toHaveBeenCalled();
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalledWith({ unregisterDatabases: true });
     expect(mocks.beginAgentDeletionRollback).toHaveBeenCalledOnce();
   });
 
@@ -1032,7 +1057,7 @@ describe("agents.delete", () => {
     await expect(promise).rejects.toThrow("config mutation did not return its target");
     expect(mocks.beginAgentDeletionRollback).not.toHaveBeenCalled();
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
-    expect(mocks.unregisterOpenClawAgentDatabase).not.toHaveBeenCalled();
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalledWith({ unregisterDatabases: true });
   });
 
   it("converges after partial cleanup and makes the agent id recreatable", async () => {
@@ -1074,7 +1099,7 @@ describe("agents.delete", () => {
       mocks.movePathToTrash.mock.invocationCallOrder[0]!,
     );
     expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
-    expect(mocks.unregisterOpenClawAgentDatabase).not.toHaveBeenCalled();
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalledWith({ unregisterDatabases: true });
     expect(mocks.unregisterResolvedAgentDir).toHaveBeenCalledWith({
       agentId: "test-agent",
       agentDir: journal.agentDir,
@@ -1580,16 +1605,6 @@ describe("agents.delete", () => {
       },
     );
     mocks.listOpenClawRegisteredAgentDatabases.mockImplementation(() => databaseRows);
-    mocks.unregisterOpenClawAgentDatabase.mockImplementation(
-      ({ agentId, path: databasePath }: { agentId: string; path: string }) => {
-        const index = databaseRows.findIndex(
-          (entry) => entry.agentId === agentId && entry.path === databasePath,
-        );
-        if (index >= 0) {
-          databaseRows.splice(index, 1);
-        }
-      },
-    );
 
     const respond = await call("agents.delete", { agentId: "test-agent" });
 
@@ -1604,13 +1619,7 @@ describe("agents.delete", () => {
     expectNotTrashed("/journal/agent");
     expectNotTrashed("/journal");
     expectTrashedWithinParent("/deleted/sessions");
-    expect(mocks.unregisterOpenClawAgentDatabase).toHaveBeenCalledWith({
-      agentId: "test-agent",
-      path: "/journal/agent/openclaw-agent.sqlite",
-    });
-    expect(databaseRows).toEqual([
-      { agentId: "other-agent", path: "/journal/agent/openclaw-agent.sqlite" },
-    ]);
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledWith({ unregisterDatabases: true });
     expect(mocks.unregisterResolvedAgentDir).toHaveBeenCalledWith({
       agentId: "test-agent",
       agentDir: "/journal/agent",
@@ -1673,16 +1682,6 @@ describe("agents.delete", () => {
         : path.resolve(pathname),
     );
     mocks.listOpenClawRegisteredAgentDatabases.mockImplementation(() => databaseRows);
-    mocks.unregisterOpenClawAgentDatabase.mockImplementation(
-      ({ agentId, path: databasePath }: { agentId: string; path: string }) => {
-        const index = databaseRows.findIndex(
-          (entry) => entry.agentId === agentId && entry.path === databasePath,
-        );
-        if (index >= 0) {
-          databaseRows.splice(index, 1);
-        }
-      },
-    );
 
     const respond = await call("agents.delete", { agentId: "test-agent" });
 
@@ -1701,9 +1700,7 @@ describe("agents.delete", () => {
     expect(mocks.closeDeletedAgentDatabases).toHaveBeenCalledWith("test-agent", [
       "/agents/test-agent/openclaw-agent.sqlite",
     ]);
-    expect(databaseRows).toEqual([
-      { agentId: "other-agent", path: "/real/shared/agent.sqlite-wal" },
-    ]);
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledWith({ unregisterDatabases: true });
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
@@ -1719,7 +1716,7 @@ describe("agents.delete", () => {
 
     expectRespondOk(respond, { ok: true, removed: [], failed: [] });
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
-    expect(mocks.unregisterOpenClawAgentDatabase).not.toHaveBeenCalled();
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalledWith({ unregisterDatabases: true });
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
@@ -1744,7 +1741,7 @@ describe("agents.delete", () => {
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
     expect(mocks.fsLstat).not.toHaveBeenCalled();
     expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
-    expect(mocks.unregisterOpenClawAgentDatabase).not.toHaveBeenCalled();
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalledWith({ unregisterDatabases: true });
   });
 
   it("reports failed session cleanup and retains its journal and files for retry", async () => {
@@ -1827,7 +1824,9 @@ describe("agents.delete", () => {
         expect(mocks.closeDeletedAgentDatabases).not.toHaveBeenCalled();
         expect(mocks.movePathToTrash).not.toHaveBeenCalled();
       }
-      expect(mocks.unregisterOpenClawAgentDatabase).not.toHaveBeenCalled();
+      expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalledWith({
+        unregisterDatabases: true,
+      });
       expect(mocks.unregisterResolvedAgentDir).not.toHaveBeenCalled();
       expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
     },

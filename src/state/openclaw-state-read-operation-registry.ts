@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { configHealthReadOperations } from "../config/io.health-state.kernel.js";
+import type { legacySessionMigrationReadOperations } from "../config/sessions/legacy-main-session-ledger.read.worker.js";
 import type { MentionReadOperations } from "../gateway/mention-inbox.worker-contract.js";
 import type { localWorkspaceReadOperations } from "../gateway/worker-environments/local-workspace-store.kernel.js";
 import type { DeferredPluginMigrationReadOperations } from "../infra/deferred-plugin-migrations.contract.js";
@@ -12,12 +13,17 @@ import type { PairingReadOperations } from "../pairing/pairing-store.types.js";
 import type { SecretStoreReadOperations } from "../secrets/store/secret-store.types.js";
 import type { SessionStateReadOperations } from "../sessions/session-state-events.read.worker-contract.js";
 import type { SkillLibraryReadOperations } from "../skills/library/read.contract.js";
+import type { AgentRecoveryReadOperations } from "./agent-deletion-recovery.read-contract.js";
+import type { agentLifecycleReadOperations } from "./agent-lifecycle-read.kernel.js";
 import {
   createWorkerOperationRegistry,
   type WorkerOperations,
 } from "./worker-operation-registry.js";
 
 type Operations = WorkerOperations<typeof localWorkspaceReadOperations> &
+  WorkerOperations<typeof legacySessionMigrationReadOperations> &
+  AgentRecoveryReadOperations &
+  WorkerOperations<typeof agentLifecycleReadOperations> &
   WorkerOperations<typeof gatewayBootReadOperations> &
   DiagnosticReadOperations &
   GeneratedHtmlProvenanceReadOperations &
@@ -33,6 +39,14 @@ export type RegisteredStateReadCommand = SqliteWorkerCommand<Operations>;
 export type RegisteredStateReadResult = Operations[keyof Operations]["output"];
 
 export const stateReadRegistry = createWorkerOperationRegistry<Operations, DatabaseSync>({
+  agentLifecycle: () =>
+    import("./agent-lifecycle-read.kernel.js").then((m) => m.agentLifecycleReadOperations),
+  agentRecovery: () =>
+    import("./agent-deletion-recovery.worker.js").then((m) => m.agentRecoveryReadOperations),
+  legacySessionMigration: () =>
+    import("../config/sessions/legacy-main-session-ledger.read.worker.js").then(
+      (m) => m.legacySessionMigrationReadOperations,
+    ),
   gatewayBoot: () =>
     import("../infra/gateway-boot-lifecycle.kernel.js").then((m) => m.gatewayBootReadOperations),
   localWorkspace: () =>

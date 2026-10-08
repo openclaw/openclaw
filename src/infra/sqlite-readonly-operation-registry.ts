@@ -1,3 +1,4 @@
+import type { AgentDeleteDatabaseReadOperations } from "../agents/agent-delete-databases.worker-contract.js";
 import type { createPluginModelCatalogReadOperations } from "../agents/plugin-model-catalog.read-operation.js";
 import {
   createWorkerOperationRegistry,
@@ -13,12 +14,17 @@ export type SqliteReadOnlyOperations = WorkerOperations<
     typeof immutableInstallReadOperations &
     typeof pageCacheReadOperations
 > &
+  AgentDeleteDatabaseReadOperations &
   TrajectoryRuntimeRetentionReadOperations;
 
 export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
   SqliteReadOnlyOperations,
   SqliteReadOnlyOperationContext
 >({
+  agentRetirement: () =>
+    import("../agents/agent-delete-databases.worker.js").then(
+      (module) => module.agentDeleteDatabaseReadOperations,
+    ),
   pageCache: () =>
     import("./sqlite-page-cache.worker.js").then((module) => module.pageCacheReadOperations),
   trajectoryRetention: () =>

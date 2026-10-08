@@ -39,7 +39,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
-import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   normalizeResolvedMaintenanceConfigInput,

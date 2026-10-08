@@ -27,6 +27,7 @@ import {
 } from "../infra/sqlite-worker-store.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import { captureAgentDatabasePreparationJournal } from "./agent-database-admission.js";
+import { captureAgentDeletionCleanupAdmission } from "./agent-deletion-cleanup-admission.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import {
   captureOpenClawAgentDatabaseRegistration,
@@ -140,6 +141,11 @@ export function createAgentDatabaseNativeGeneration(
           );
         }
       };
+      const cleanup = captureAgentDeletionCleanupAdmission(
+        { agentId, path: pathname, env: context.environment },
+        operation,
+        assertSourceCurrent,
+      );
       const observeNative = (request: SqliteWorkerAdmissionRequest): void => {
         const facts = request.facts;
         if (
@@ -172,6 +178,9 @@ export function createAgentDatabaseNativeGeneration(
         request: SqliteWorkerAdmissionRequest,
       ): AgentDatabaseFileExecutionIdentity | undefined => {
         const facts = request.facts;
+        if (cleanup?.authorize(request)) {
+          return undefined;
+        }
         if (
           request.stage === "prepare" &&
           isRecord(facts) &&
@@ -180,6 +189,7 @@ export function createAgentDatabaseNativeGeneration(
           return undefined;
         }
         assertCurrent();
+        cleanup?.assertCurrent();
         if (!nativeIdentity || creatingIdentity) {
           assertCallerCurrent?.();
         }
@@ -324,6 +334,7 @@ export function createAgentDatabaseNativeGeneration(
         attachment: {
           kind: "agent-execution",
           startupJournal: assertPreparationJournal !== undefined,
+          ...(cleanup ? { deletion: cleanup.guard } : {}),
         },
         nativeLocations,
         assertCurrent,

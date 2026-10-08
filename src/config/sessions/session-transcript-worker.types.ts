@@ -92,6 +92,10 @@ import type {
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
 import type * as PendingInputSourceWorker from "./session-pending-input-source.types.js";
+import type {
+  SessionRetirementReadResult,
+  SessionRetirementReadWorkerInput,
+} from "./session-retirement-read.types.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import type {
   SessionMembersWorkerInput,
@@ -336,6 +340,7 @@ type BoardWidgetDocumentWorkerInput = BoardReadWorkerInput<
 >;
 
 export type SessionHistoryWorkerInput =
+  | SessionRetirementReadWorkerInput
   | BoardSnapshotWorkerInput
   | BoardWidgetDocumentWorkerInput
   | SessionStoreProjectionWorkerInput
@@ -408,6 +413,10 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
+  "session-retirement-read": {
+    kind: "session-retirement-read";
+    result: SessionRetirementReadResult;
+  };
   "board-snapshot": {
     kind: "board-snapshot";
     value: BoardReadOperations["boards.readSnapshot"]["output"];
@@ -573,6 +582,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
   >;
   readConversations: SessionHistoryReader<ConversationRowsWorkerInput, ConversationRecord[]>;
   prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
+  readRetirement: CancellableSessionHistoryReader<
+    SessionRetirementReadWorkerInput,
+    SessionRetirementReadResult
+  >;
   readPendingArchives: CancellableSessionHistoryReader<SessionPendingArchivesWorkerInput, boolean>;
   readLifecycleArtifactPlan: CancellableSessionHistoryReader<LifecycleArtifactCleanupRequest>;
   findTranscriptEvent: (

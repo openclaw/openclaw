@@ -1,13 +1,19 @@
 // Loads, updates, restores, and initializes exec approval policy state.
+import crypto from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   AgentDeletionAuthorityRollbackError,
   AgentDeletionCommitUncertainError,
 } from "../agents/agent-lifecycle-registry.js";
-import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
@@ -49,14 +55,12 @@ import {
 } from "./exec-approvals-migration-gate.js";
 import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
+import type { RemovedExecApprovalPolicies } from "./exec-approvals-retirement.worker.js";
 import {
   snapshotFromExecApprovalsDatabase,
   warnFailClosed,
   assertExecApprovalsMutationAllowed,
-  assertExecApprovalsMutationAuthority,
   deleteExecApprovalsConfigRow,
-  ExecApprovalsMutationFencedError,
-  type ExecApprovalsMutationAuthority,
   readExecApprovalsConfigRow,
   serializeExecApprovals,
   snapshotFromExecApprovalsRow,
@@ -184,6 +188,47 @@ const cronPolicyUses = resolveGlobalSingleton(
   () => new Map<string, Set<CronExecHostPolicyUse>>(),
 );
 
+const pendingWorkerPolicyPublications = resolveGlobalSingleton(
+  Symbol.for("openclaw.execApprovalsWorkerPolicyPublications"),
+  () => new Map<string, Set<ExecApprovalsFile>>(),
+);
+
+/** New preparations also observe an admitted policy change until its worker settles. */
+function stageWorkerCronExecHostPolicyPublication(
+  key: string,
+  file: ExecApprovalsFile,
+): () => void {
+  const affected = [...(cronPolicyUses.get(key) ?? [])].filter((use) => !use.accepts(file));
+  if (affected.some((use) => use.initiating)) {
+    throw new Error(
+      "Exec policy change refused while cron native launch acknowledgement is pending; retry after command startup settles.",
+    );
+  }
+  const pending = pendingWorkerPolicyPublications.get(key) ?? new Set<ExecApprovalsFile>();
+  pendingWorkerPolicyPublications.set(key, pending);
+  pending.add(file);
+  for (const use of affected) {
+    // Like native rollback publication, even a later refusal cannot revive an old use.
+    use.retired = true;
+  }
+  let unregister = () => {};
+  const release = () => {
+    pending.delete(file);
+    if (pending.size === 0 && pendingWorkerPolicyPublications.get(key) === pending) {
+      pendingWorkerPolicyPublications.delete(key);
+    }
+    unregister();
+  };
+  unregister = registerOpenClawStateDatabaseAsyncResource({
+    async close(identity) {
+      if (!identity || identity.key === key) {
+        release();
+      }
+    },
+  });
+  return release;
+}
+
 /** Live uses retain eligibility, not policy snapshots; native writers publish before returning. */
 export async function prepareCronExecHostPolicyUse(
   context: OpenClawStateWorkerContext,
@@ -223,6 +268,9 @@ export async function prepareCronExecHostPolicyUse(
       return security !== "deny" && ask !== "always";
     },
   };
+  use.retired = [...(pendingWorkerPolicyPublications.get(key) ?? [])].some(
+    (file) => !use.accepts(file),
+  );
   uses.add(use);
   let unregister = () => {};
   const release = () => {
@@ -366,12 +414,8 @@ export function replaceExecApprovalsSnapshot(
   }
 }
 
-type InternalExecApprovalsUpdate = ExecApprovalsUpdate & {
-  authority?: ExecApprovalsMutationAuthority;
-};
-
 function updateExecApprovalsInTransaction(
-  params: InternalExecApprovalsUpdate,
+  params: ExecApprovalsUpdate,
   options: OpenClawStateDatabaseOptions = {},
 ): ExecApprovalsSnapshot | null {
   assertNoPendingLegacyExecApprovals();
@@ -395,7 +439,6 @@ function updateExecApprovalsInTransaction(
         db,
         current: current.file,
         next,
-        authority: params.authority,
       });
       const raw = serializeExecApprovals(next);
       if (current.exists && current.raw === raw) {
@@ -519,46 +562,92 @@ function enqueueExecAuthorization(
 export async function withAgentExecApprovalsRemoved<T>(
   agentId: string,
   commit: () => Promise<T>,
-  options: OpenClawStateDatabaseOptions = {},
+  authority: AgentDeletionWorkerAuthority,
 ): Promise<T> {
   const key = normalizeAgentId(agentId);
-  const snapshot = readExecApprovalsSnapshotWithOptions(options);
-  const operationId = readAgentDeletionJournal(key, options)?.operationId;
-  if (!operationId) {
-    throw new ExecApprovalsMutationFencedError();
-  }
-  const removedPolicyEntries = Object.entries(snapshot.file.agents ?? {}).filter(([policyKey]) => {
-    const normalizedPolicyKey = normalizeAgentIdStrict(policyKey);
-    return normalizedPolicyKey.ok && normalizedPolicyKey.value === key;
-  });
-  if (removedPolicyEntries.length > 0) {
-    const updated = updateExecApprovalsInTransaction(
-      {
-        baseHash: snapshot.hash,
-        authority: { action: "remove", agentId: key, operationId },
-        update: (file) => {
-          const agents = { ...file.agents };
-          for (const [policyKey] of removedPolicyEntries) {
-            delete agents[policyKey];
+  const mutate = async (
+    input: { action: "remove" } | { action: "restore"; entries: RemovedExecApprovalPolicies },
+  ) => {
+    const nonce = crypto.randomUUID();
+    let operationId: string | undefined;
+    let committed = false;
+    let uncertain = false;
+    let releasePublication: (() => void) | undefined;
+    try {
+      return await authority.runWithWorker(
+        (scope, guard) => {
+          if (guard.predicate.agentId !== key) {
+            throw new Error("Exec approval retirement differs from its deletion owner");
           }
-          return { ...file, agents };
+          operationId = guard.predicate.operationId;
+          return scope.execute({
+            type: "execApprovals.retireAgent",
+            input: { ...input, guard, nonce },
+          });
         },
-      },
-      options,
-    );
-    if (!updated) {
-      throw new Error("Exec approvals changed while deleting agent; retry deletion.");
+        {
+          onAdmission(request, identityKey) {
+            if (request.stage !== "commit") {
+              return;
+            }
+            const facts = isRecord(request.facts) ? request.facts.domainFacts : undefined;
+            if (
+              !isRecord(facts) ||
+              facts.kind !== "exec-approvals-retirement" ||
+              facts.nonce !== nonce ||
+              facts.agentId !== key ||
+              facts.operationId !== operationId ||
+              facts.action !== input.action ||
+              (facts.raw !== null && typeof facts.raw !== "string") ||
+              releasePublication
+            ) {
+              throw new Error("Exec approval retirement publication differs from its command");
+            }
+            if (facts.raw !== null) {
+              releasePublication = stageWorkerCronExecHostPolicyPublication(
+                identityKey,
+                snapshotFromExecApprovalsRow({
+                  path: "",
+                  row: { raw_json: facts.raw },
+                }).file,
+              );
+            }
+          },
+          onCommitted(facts) {
+            if (
+              !isRecord(facts) ||
+              facts.kind !== "exec-approvals-retirement" ||
+              facts.nonce !== nonce ||
+              facts.action !== input.action
+            ) {
+              throw new Error("Exec approval retirement receipt differs from its command");
+            }
+            committed = true;
+          },
+        },
+      );
+    } catch (error) {
+      uncertain = collectNestedErrorCandidates(error).some(
+        (candidate) => extractErrorCode(candidate) === "outcome-unknown",
+      );
+      if (committed || uncertain) {
+        // Without a settled reply the removed aliases cannot safely be restored or forgotten.
+        throw new AgentDeletionAuthorityRollbackError(
+          [error],
+          `Exec approvals retirement outcome is uncertain for agent ${key}.`,
+          { cause: error },
+        );
+      }
+      throw error;
+    } finally {
+      if (!uncertain) {
+        releasePublication?.();
+      }
     }
-  } else {
-    runOpenClawStateWriteTransaction(({ db }) => {
-      assertExecApprovalsMutationAuthority(db, {
-        action: "remove",
-        agentId: key,
-        operationId,
-      });
-    }, options);
-  }
+  };
+  const removedPolicyEntries = await mutate({ action: "remove" });
   try {
+    authority.assertCurrentHost();
     return await commit();
   } catch (error) {
     if (error instanceof AgentDeletionCommitUncertainError) {
@@ -566,16 +655,7 @@ export async function withAgentExecApprovalsRemoved<T>(
     }
     if (removedPolicyEntries.length > 0) {
       try {
-        updateExecApprovalsInTransaction(
-          {
-            authority: { action: "restore", agentId: key, operationId },
-            update: (file) => ({
-              ...file,
-              agents: { ...file.agents, ...Object.fromEntries(removedPolicyEntries) },
-            }),
-          },
-          options,
-        );
+        await mutate({ action: "restore", entries: removedPolicyEntries });
       } catch (rollbackError) {
         throw new AgentDeletionAuthorityRollbackError(
           [error, rollbackError],

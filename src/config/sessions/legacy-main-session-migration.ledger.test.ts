@@ -84,6 +84,7 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
 
   const restoredPath = path.join(root, "restored-main.sqlite");
   seedClaim("main", restoredPath, "agent:main:restored", env);
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   fs.renameSync(mainPath, `${mainPath}.before-restore`);
   fs.renameSync(restoredPath, mainPath);

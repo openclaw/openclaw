@@ -39,14 +39,29 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { prepareOpenClawStateReadSource } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
+export async function readAgentDeletionJournalForCreation(
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "agentRecovery.creationJournal", input: { agentId: normalizeAgentId(agentId) } },
+    { current: true },
+  );
+  if (reply && (!reply.ok || reply.type !== "agentRecovery.creationJournal")) {
+    throw new Error("Unexpected agent creation journal result");
+  }
+  return reply?.journal;
+}
+
 export async function readAgentDeletionJournalAuthorityInWorker(
   agentId: string,
   context: OpenClawStateWorkerContext,
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ): Promise<AgentDeletionJournalAuthority | undefined> {
   context.maintenanceScope?.assertAdmission();
   context.admission.assertCurrent();
-  signal.throwIfAborted();
+  signal?.throwIfAborted();
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "agentDeletionJournal.authority", agentId: normalizeAgentId(agentId) },
@@ -54,7 +69,7 @@ export async function readAgentDeletionJournalAuthorityInWorker(
   );
   context.maintenanceScope?.assertAdmission();
   context.admission.assertCurrent();
-  signal.throwIfAborted();
+  signal?.throwIfAborted();
   if (reply && (!reply.ok || reply.type !== "agentDeletionJournal.authority")) {
     throw new Error("Unexpected agent deletion journal authority result");
   }
