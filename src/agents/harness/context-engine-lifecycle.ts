@@ -3,10 +3,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
+import { boundContextEngineAssembly } from "../../context-engine/bounded-context.js";
 import {
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
   type ContextEngineHostSupport,
 } from "../../context-engine/host-compat.js";
+import { resolveContextEngineTranscriptByteLimit } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type {
   AssembleResult,
@@ -189,6 +191,19 @@ export async function assembleHarnessContextEngine(params: HarnessContextEngineA
   );
 }
 
+function resolveAssemblyHistoryTokenBudget(params: HarnessContextEngineAssemblyParams) {
+  if (!params.promptBudget) {
+    return params.tokenBudget;
+  }
+  const { contextTokens, reserveTokens, systemPrompt, prompt } = params.promptBudget;
+  const budget = Math.max(1, Math.floor(contextTokens ?? DEFAULT_CONTEXT_TOKENS));
+  return Math.max(
+    1,
+    Math.max(1, budget - Math.max(0, Math.floor(reserveTokens))) -
+      estimateRenderedLlmBoundaryTokenPressure({ systemPrompt, prompt }),
+  );
+}
+
 async function assembleHarnessContextEngineWithinSourceScope(
   params: HarnessContextEngineAssemblyParams,
 ) {
@@ -196,18 +211,10 @@ async function assembleHarnessContextEngineWithinSourceScope(
     return undefined;
   }
   const contextEngine = params.contextEngine;
-  let { maxOutputTokens, tokenBudget } = params;
-  if (params.promptBudget) {
-    const { contextTokens, reserveTokens, systemPrompt, prompt } = params.promptBudget;
-    const reserve = Math.max(0, Math.floor(reserveTokens));
-    const budget = Math.max(1, Math.floor(contextTokens ?? DEFAULT_CONTEXT_TOKENS));
-    maxOutputTokens = reserve;
-    tokenBudget = Math.max(
-      1,
-      Math.max(1, budget - reserve) -
-        estimateRenderedLlmBoundaryTokenPressure({ systemPrompt, prompt }),
-    );
-  }
+  const tokenBudget = resolveAssemblyHistoryTokenBudget(params);
+  const maxOutputTokens = params.promptBudget
+    ? Math.max(0, Math.floor(params.promptBudget.reserveTokens))
+    : params.maxOutputTokens;
   // Append-only replay policies keep persisted carriers in the assembled window;
   // dropping one here would change the prefix bound to later thinking signatures.
   const messages = (
@@ -247,7 +254,11 @@ async function assembleHarnessContextEngineWithinSourceScope(
           },
           assemble,
         );
-  return ensureAssembleResultShape(result, contextEngine.info.id);
+  return boundContextEngineAssembly(
+    ensureAssembleResultShape(result, contextEngine.info.id),
+    resolveContextEngineTranscriptByteLimit(contextEngine),
+    tokenBudget,
+  );
 }
 
 type PreparedHarnessContextEnginePrompt = {
@@ -301,7 +312,14 @@ export async function prepareHarnessContextEnginePrompt(
       };
     } catch (error) {
       params.warn(`context engine assemble failed, using pipeline messages: ${String(error)}`);
-      return initial;
+      return {
+        ...initial,
+        messages: boundContextEngineAssembly(
+          { messages: initial.messages, estimatedTokens: 0 },
+          resolveContextEngineTranscriptByteLimit(params.contextEngine),
+          resolveAssemblyHistoryTokenBudget(params),
+        ).messages,
+      };
     }
   });
 }

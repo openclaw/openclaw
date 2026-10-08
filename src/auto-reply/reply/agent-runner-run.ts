@@ -479,24 +479,25 @@ export async function runReplyAgent(
     buildReplyMediaContextParams(followupRun, sessionKey, cfg),
   );
   const compactionNoticeMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-  const sendDirectCompactionNotice = shouldNotifyUserAboutCompaction(cfg)
-    ? async (phase: CompactionNoticePhase, text?: string) => {
-        if (!opts?.onBlockReply) {
-          return;
-        }
-        const noticePayload = createCompactionNoticePayload({
-          phase,
-          text,
-          currentMessageId: compactionNoticeMessageId,
-          applyReplyToMode,
-        });
-        try {
-          await opts.onBlockReply(noticePayload);
-        } catch (err) {
-          logVerbose(`context maintenance notice delivery failed: ${String(err)}`);
-        }
-      }
-    : undefined;
+  const sendDirectCompactionNotice = async (phase: CompactionNoticePhase, text?: string) => {
+    if (
+      !opts?.onBlockReply ||
+      (phase !== "context_bounded" && !shouldNotifyUserAboutCompaction(cfg))
+    ) {
+      return;
+    }
+    const noticePayload = createCompactionNoticePayload({
+      phase,
+      text,
+      currentMessageId: compactionNoticeMessageId,
+      applyReplyToMode,
+    });
+    try {
+      await opts.onBlockReply(noticePayload);
+    } catch (err) {
+      logVerbose(`context maintenance notice delivery failed: ${String(err)}`);
+    }
+  };
   const blockReplyPipeline =
     blockStreamingEnabled && (opts?.onPreparedBlockReply || opts?.onBlockReply)
       ? createBlockReplyPipeline({
