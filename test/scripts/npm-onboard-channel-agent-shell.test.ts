@@ -23,6 +23,7 @@ type Scenario = {
   helpFailure?: "exit" | "timeout";
   failProbe?: number;
   dirtyState?: boolean;
+  doctorFailure?: boolean;
 };
 
 function sha256(file: string): string {
@@ -92,6 +93,8 @@ function runScenario(scenario: Scenario = {}) {
   if (bundled) {
     mkdirSync(join(packageRoot, "dist/extensions", channel), { recursive: true });
   }
+  const redactorPath = join(root, "redactor.mjs");
+  writeFileSync(redactorPath, "export const redactSensitiveText = (text) => text;\n");
   const cli = join(bin, "openclaw");
   writeFileSync(
     cli,
@@ -129,6 +132,9 @@ if (help) {
 } else if (args[0] === "channels" && args[1] === "add" && env.BUNDLED === "0") {
   if (current && !fs.existsSync(dependencyPath())) fail("external channel needs consent first");
   if (!current) installChannelDependency();
+} else if (args[0] === "doctor" && env.DOCTOR_FAILURE === "1") {
+  console.error("doctor-fixture-first-failure");
+  process.exit(37);
 } else if (args[0] === "identity") {
   console.log("execution-fixture");
 }
@@ -180,7 +186,11 @@ openclaw_e2e_start_mock_openai() { :; }
 openclaw_e2e_wait_mock_openai() { :; }
 openclaw_e2e_start_gateway() { "$FIXTURE_CLI" gateway-start; printf '%s' fixture-gateway; }
 openclaw_e2e_wait_gateway_ready() { :; }
-openclaw_e2e_stop_process() { if [ -n "$1" ]; then "$FIXTURE_CLI" gateway-stop; fi; }
+eval "$(declare -f openclaw_e2e_stop_process | sed '1s/openclaw_e2e_stop_process/stop_real_fixture_process/')"
+openclaw_e2e_stop_process() {
+  if [ "$1" = fixture-gateway ]; then "$FIXTURE_CLI" gateway-stop;
+  else stop_real_fixture_process "$@"; fi
+}
 `;
   const registryEnv = scenario.registry ? registryFixture(root, scenario) : {};
   if (scenario.corruptRegistry) {
@@ -204,6 +214,8 @@ openclaw_e2e_stop_process() { if [ -n "$1" ]; then "$FIXTURE_CLI" gateway-stop; 
       EVENTS: eventsPath,
       CONSENT: scenario.consent === false ? "0" : "1",
       BUNDLED: bundled ? "1" : "0",
+      DOCTOR_FAILURE: scenario.doctorFailure ? "1" : "0",
+      OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
       HELP_FAILURE: scenario.helpFailure ?? "",
       FAIL_PROBE: scenario.helpFailure ? String(scenario.failProbe ?? 1) : "0",
       OPENCLAW_E2E_COMMAND_TIMEOUT: scenario.helpFailure === "timeout" ? "1s" : "5s",
@@ -250,6 +262,13 @@ describe("npm onboarding fixture consent", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe(`--- ${logPath} ---\n`);
+  });
+
+  it("reports a redirected Doctor failure outside its own log", () => {
+    const { result, events } = runScenario({ doctorFailure: true });
+    expect(result.status).toBe(37);
+    expect(result.stderr).toContain("doctor-fixture-first-failure");
+    expect(events.some((args) => args[0] === "gateway-start")).toBe(false);
   });
 
   it.each([false, true])(
@@ -322,7 +341,6 @@ describe("npm onboarding fixture consent", () => {
         ["gateway-start"],
         ["audit", "--execution", "execution-fixture"],
         ["gateway-stop"],
-        ...(registry ? [["gateway-stop"]] : []),
       ]);
     },
   );
