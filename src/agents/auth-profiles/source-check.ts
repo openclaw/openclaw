@@ -63,12 +63,9 @@ function canonicalStoreOwnsProviderRoute(
   }
   const store =
     inspection.status === "readable" ? coercePersistedAuthProfileStore(inspection.raw) : null;
-  if (!store) {
-    // A present but unreadable canonical row must route through the loader so
-    // AUTH_PROFILE_STORE_UNREADABLE fails closed before env/config fallback.
-    return true;
-  }
-  return storeHasProviderProfile(store, provider, profileIds);
+  // A present but unreadable canonical row must route through the loader so
+  // AUTH_PROFILE_STORE_UNREADABLE fails closed before env/config fallback.
+  return !store || storeHasProviderProfile(store, provider, profileIds);
 }
 
 /** Synchronous Doctor/CLI and released coding-tool construction compatibility. */
@@ -81,16 +78,13 @@ export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
     ? resolveAuthProfileDatabasePath(agentDir)
     : resolveSharedAuthStorePath();
   const mainAuthPath = resolveSharedAuthStorePath();
-  if (
+  return Boolean(
     agentDir &&
     authPath !== mainAuthPath &&
     (hasLegacyAuthProfileCredentialSource(undefined) ||
       inspectPersistedAuthProfileStoreRaw(undefined).status !== "missing" ||
-      readPersistedAuthProfileStateRaw(undefined))
-  ) {
-    return true;
-  }
-  return false;
+      readPersistedAuthProfileStateRaw(undefined)),
+  );
 }
 
 /** Runtime source detection retains the existing readers through classification and cleanup. */
