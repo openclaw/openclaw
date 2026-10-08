@@ -128,7 +128,12 @@ describe("context token resolution", () => {
     };
     expect(resolveModelContextTokenProjection(params)).toEqual({
       contextTokens: 128_000,
-      authoredContextTokens: 128_000,
+      configuredContextTokenLimits: {
+        effectiveConfiguredTokens: 128_000,
+        authoredContextTokenCap: 128_000,
+        configuredContextWindow: 128_000,
+        fixedContextWindow: undefined,
+      },
     });
     expect(resolve(params)).toBe(128_000);
   });

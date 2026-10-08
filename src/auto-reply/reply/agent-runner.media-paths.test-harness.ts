@@ -100,8 +100,12 @@ vi.mock("../../agents/model-runtime-aliases.js", async () => {
   };
 });
 
-vi.mock("../../agents/context.js", () => ({
-  resolveContextTokensForModel: () => 200_000,
+vi.mock("../../agents/context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/context.js")>()),
+  resolveModelContextTokenProjection: () => ({
+    contextTokens: 200_000,
+    configuredContextTokenLimits: undefined,
+  }),
 }));
 
 vi.mock("../../infra/agent-events.js", async () => {

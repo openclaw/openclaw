@@ -8,7 +8,7 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
-import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
+import { resolveConfiguredContextTokenLimits } from "../agents/context-resolution.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import {
   prepareCliProviderClassifier,
@@ -337,7 +337,7 @@ export async function sessionsCommand(
     const modelContext = usesCliContextFallback
       ? {
           contextTokens: lookupContextTokens(modelRef.model, { allowAsyncLoad: false }),
-          authoredContextTokens: resolveAuthoredModelContextTokens({
+          configuredContextTokenLimits: resolveConfiguredContextTokenLimits({
             cfg,
             provider: modelRef.provider,
             model: modelRef.model,
@@ -355,7 +355,7 @@ export async function sessionsCommand(
       model: modelRef.model,
       agentHarnessId: agentRuntime.id,
       resolvedContextTokens: modelContext.contextTokens,
-      authoredContextTokens: modelContext.authoredContextTokens,
+      configuredContextTokenLimits: modelContext.configuredContextTokenLimits,
     });
     return Object.assign(row, {
       agentId,

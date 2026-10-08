@@ -284,16 +284,17 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const projected = resolveProjectedSessionContextTokens({
     ...contextSelection,
     resolvedContextTokens: resolution?.contextTokens,
-    authoredContextTokens: resolution?.authoredContextTokens,
+    configuredContextTokenLimits: resolution?.configuredContextTokenLimits,
   });
   const retainedRuntimeContextTokens = resolveTrustedSessionContextTokens(contextSelection);
   const projectedUsesPersistedContext =
     projected !== undefined &&
     ((retainedRuntimeContextTokens !== undefined &&
       (activeSessionEntry?.modelSelectionLocked === true ||
-        (resolution?.authoredContextTokens === undefined &&
+        (resolution?.configuredContextTokenLimits?.effectiveConfiguredTokens === undefined &&
           projected === retainedRuntimeContextTokens))) ||
-      (resolution?.contextTokens === undefined && resolution?.authoredContextTokens === undefined));
+      (resolution?.contextTokens === undefined &&
+        resolution?.configuredContextTokenLimits?.effectiveConfiguredTokens === undefined));
   const contextTokensUsed = runtimeContextTokens ?? projected ?? DEFAULT_CONTEXT_TOKENS;
   const contextTokensSource = qualifySessionContextTokenSource({
     entry: activeSessionEntry,
@@ -304,7 +305,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
         ? "runtime"
         : projectedUsesPersistedContext
           ? activeSessionEntry?.contextTokensSource
-          : resolution?.authoredContextTokens !== undefined
+          : resolution?.configuredContextTokenLimits?.authoredContextTokenCap !== undefined
             ? "resolved"
             : resolution?.contextTokens !== undefined
               ? "resolved-v1"

@@ -8,7 +8,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
+import { resolveConfiguredContextTokenLimits } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -622,7 +622,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
     model: contextLookupModel,
     agentHarnessId: args.resolvedHarness,
     resolvedContextTokens: activeContextTokens,
-    authoredContextTokens: resolveAuthoredModelContextTokens({
+    configuredContextTokenLimits: resolveConfiguredContextTokenLimits({
       cfg: contextConfig,
       provider: contextLookupProvider,
       modelProvider: activeModelProvider,

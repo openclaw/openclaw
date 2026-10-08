@@ -208,7 +208,10 @@ describe("existing-session recovery through the admitted owner", () => {
         entry: persisted("synthetic"),
         ...selection,
         resolvedContextTokens: 872_000,
-        authoredContextTokens: 64_000,
+        configuredContextTokenLimits: {
+          effectiveConfiguredTokens: 64_000,
+          authoredContextTokenCap: 64_000,
+        },
         ownerCapacity: { state: "ready", contextTokens: 872_000, synthetic: false },
       }),
     ).toBe(64_000);

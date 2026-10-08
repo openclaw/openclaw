@@ -515,6 +515,10 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     expect(capped.contextTokenBudget).toBe(32_000);
     expect(capped.authoredContextTokenCap).toBe(32_000);
 
+    const nativeWindow = resolve([createConfiguredModel({ contextWindow: 64_000 })]);
+    expect(nativeWindow.contextTokenBudget).toBe(64_000);
+    expect(nativeWindow.authoredContextTokenCap).toBe(64_000);
+
     const discovered = resolve([]);
     expect(discovered.contextTokenBudget).toBe(272_000);
     expect(discovered).not.toHaveProperty("authoredContextTokenCap");

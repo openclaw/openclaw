@@ -128,7 +128,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
   const {
     classifySessionKey,
     resolveConfiguredStatusModelRef,
-    resolveAuthoredModelContextTokens,
+    resolveConfiguredContextTokenLimits,
     resolveContextTokensForModel,
     resolveSessionRuntime,
     resolveSessionModelRef,
@@ -283,7 +283,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
             model: lookupModelId,
             agentHarnessId: runtime.id,
             resolvedContextTokens,
-            authoredContextTokens: resolveAuthoredModelContextTokens({
+            configuredContextTokenLimits: resolveConfiguredContextTokenLimits({
               cfg,
               provider: lookupModel.provider,
               modelProvider: contextModelProvider,

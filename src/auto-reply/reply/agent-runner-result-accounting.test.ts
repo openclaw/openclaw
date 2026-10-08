@@ -16,7 +16,7 @@ vi.mock("../../agents/context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/context.js")>()),
   resolveModelContextTokenProjection: () => ({
     contextTokens: mocks.resolveContextTokensForModel(),
-    authoredContextTokens: undefined,
+    configuredContextTokenLimits: undefined,
   }),
 }));
 

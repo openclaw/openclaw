@@ -102,7 +102,7 @@ export async function finalizeCronRun(params: {
   const runtimeContextTokens = resolvePositiveContextTokens(
     finalRunResult.meta?.agentMeta?.contextTokens,
   );
-  const { contextTokens: modelContextTokens, authoredContextTokens } = (
+  const { contextTokens: modelContextTokens, configuredContextTokenLimits } = (
     await cronContextRuntimeLoader.load()
   ).resolveModelContextTokenProjection({
     cfg: prepared.cfgWithAgentDefaults,
@@ -125,7 +125,7 @@ export async function finalizeCronRun(params: {
     model: modelUsed,
     agentHarnessId,
     resolvedContextTokens: modelContextTokens,
-    authoredContextTokens,
+    configuredContextTokenLimits,
   });
   const contextTokens = runtimeContextTokens ?? projectedContextTokens ?? DEFAULT_CONTEXT_TOKENS;
   // Preserve persisted provenance only when the projector selected that owner;
@@ -133,7 +133,7 @@ export async function finalizeCronRun(params: {
   const projectedUsesPersistedContext =
     retainedRuntimeContextTokens !== undefined &&
     (prepared.cronSession.sessionEntry.modelSelectionLocked === true ||
-      (authoredContextTokens === undefined &&
+      (configuredContextTokenLimits?.effectiveConfiguredTokens === undefined &&
         projectedContextTokens === retainedRuntimeContextTokens));
   const contextTokensSource = qualifySessionContextTokenSource({
     entry: prepared.cronSession.sessionEntry,

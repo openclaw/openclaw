@@ -5,7 +5,7 @@ import {
   createAgentDir,
   createModelRegistry,
   writeProfiles,
-} from "./index.test-support.js";
+} from "./index.test-utils.js";
 
 const mocks = getIndexMocks();
 

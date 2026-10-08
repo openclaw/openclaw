@@ -262,7 +262,7 @@ export function readSessionRowInputs(params: {
               contextWindowProfile.contextTokens,
             )
           : resolvedModelContextTokens,
-        authoredContextTokens: asPositiveFiniteNumber(modelContext.authoredContextTokens),
+        configuredContextTokenLimits: modelContext.configuredContextTokenLimits,
       }),
       pluginExtensions,
       includeSwarmSummary: params.rowContext !== undefined,
