@@ -35,6 +35,15 @@ export function createGatewayRestartRuntimePreparation(
         return undefined;
       }
     },
+    async settle(operation: Promise<void>, prepared: typeof current): Promise<void> {
+      try {
+        await operation;
+      } finally {
+        if (prepared) {
+          await this.release(prepared);
+        }
+      }
+    },
     release(prepared = current) {
       if (prepared) {
         if (current === prepared) {

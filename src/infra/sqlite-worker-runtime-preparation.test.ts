@@ -22,7 +22,7 @@ it.each([false, true])(
     const markerPath = path.join(directory, "factory-entered");
     const loaded = createDeferredCore<number>();
     const channel = new BroadcastChannel(directory);
-    channel.onmessage = (event) => loaded.resolve(Number(event.data));
+    channel.addEventListener("message", (event) => loaded.resolve(Number(event.data)));
     const backendUrl = new URL("./sqlite-worker-store.test-support.ts", import.meta.url);
     await writeFile(
       moduleUrl,

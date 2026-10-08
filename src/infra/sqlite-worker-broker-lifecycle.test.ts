@@ -340,10 +340,6 @@ describe("SQLite worker slots", () => {
       lifecycle.createSlot(
         {
           carrierUrl: new URL("file:///openclaw/src/infra/sqlite-store.worker.ts"),
-          moduleUrl: new URL("file:///openclaw/src/infra/device-auth-store.sqlite.ts"),
-          databasePath: "/state/openclaw.sqlite",
-          input: Buffer.alloc(0),
-          existingOnly: false,
         },
         false,
         () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() }),
@@ -391,10 +387,6 @@ describe("SQLite worker slots", () => {
       const slot = lifecycle.createSlot(
         {
           carrierUrl: new URL("file:///openclaw/dist/sqlite-store.worker.js"),
-          moduleUrl: new URL("file:///openclaw/dist/device-auth-store.sqlite.js"),
-          databasePath: "/state/openclaw.sqlite",
-          input: Buffer.alloc(0),
-          existingOnly: false,
         },
         false,
         () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() }),

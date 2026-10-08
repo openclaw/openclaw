@@ -235,7 +235,7 @@ export class SqliteWorkerBroker {
         options,
         moduleUrl,
         { maxWorkers: this.maxWorkers, maxStores: MAX_STORES },
-        (slot) => this.createReplyOwner(slot),
+        (replySlot) => this.createReplyOwner(replySlot),
       );
       try {
         options.assertCurrent?.();

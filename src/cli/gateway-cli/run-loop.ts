@@ -793,7 +793,7 @@ export async function runGatewayLoop(params: {
       };
     }
 
-    const completion = (async () => {
+    const shutdownOperation = (async () => {
       if (process.platform === "linux" || process.platform === "darwin") {
         if (budget.nativeStopBudget && !getManagedUpdateOwner()) {
           armForceExitTimer(budget.timeoutMs);
@@ -978,8 +978,8 @@ export async function runGatewayLoop(params: {
       if (action === "restart") {
         forceActiveRestartExit = null;
       }
-      return preparedRuntime ? restartRuntime.release(preparedRuntime) : undefined;
     });
+    const completion = restartRuntime.settle(shutdownOperation, preparedRuntime);
     if (acceptedRequest.action === "stop") {
       acceptedStartupOperations.stopCompletion = completion;
     }

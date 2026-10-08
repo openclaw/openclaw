@@ -20,7 +20,7 @@ const VOICE_SESSION_CACHE_SCOPE = "talk-client-voice-sessions";
 export const VOICE_SESSION_RECORD_VERSION = 1;
 export const VOICE_SESSION_STALE_AFTER_MS = 6 * 60 * 60_000;
 
-export type ClientVoiceToolEffect = {
+type ClientVoiceToolEffect = {
   runId: string;
   toolCallId?: string;
   toolName: string;

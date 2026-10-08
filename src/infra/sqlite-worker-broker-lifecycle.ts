@@ -273,13 +273,11 @@ export function createSqliteWorkerLifecycle({
     return createSlot(options, borrowedGenerationSlot, createReplyOwner);
   }
 
-  function createSlot<
-    Options extends Pick<
+  function createSlot(
+    options: Pick<
       PreparedSqliteWorkerOpen,
       "carrierUrl" | "runtimeGeneration" | "target" | "assertCurrent"
     >,
-  >(
-    options: Options,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
     runtimeSource?: RuntimeSource,
