@@ -2,8 +2,11 @@ import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-cont
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
+import { readWorkspaceAttachmentFile } from "./attachment-file.js";
 import { redactClaimToken } from "./card-redaction.js";
+import { MAX_ATTACHMENT_BYTES } from "./store-constants.js";
 import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
@@ -359,19 +362,45 @@ export function createWorkboardTools(params: {
     {
       name: "workboard_attachment_add",
       label: "Workboard Attachment Add",
-      description:
-        "Store a small Workboard attachment in plugin SQLite KV and link it to the card.",
+      description: `Attach a file (up to ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MiB) to a Workboard card. Pass path for a file in your workspace, or contentBase64 with fileName.`,
       parameters: strictObject({
         id: cardIdField(),
-        fileName: Type.String({ description: "Attachment file name." }),
-        contentBase64: Type.String({ description: "Base64 attachment content." }),
-        mimeType: Type.Optional(Type.String({ description: "Attachment MIME type." })),
+        path: Type.Optional(
+          Type.String({
+            description:
+              "File in your workspace, absolute or workspace-relative. Use instead of contentBase64.",
+          }),
+        ),
+        fileName: Type.Optional(
+          Type.String({ description: "Attachment file name. Defaults to the path basename." }),
+        ),
+        contentBase64: Type.Optional(
+          Type.String({ description: "Base64 attachment content. Requires fileName." }),
+        ),
+        mimeType: Type.Optional(
+          Type.String({ description: "Attachment MIME type. Detected from path when omitted." }),
+        ),
         note: Type.Optional(Type.String({ description: "Optional attachment note." })),
         token: ScopedClaimTokenField,
       }),
-      execute: scopedCardMutation((id, record, scope) =>
-        store.addAttachment(id, record, scope, params.context?.assertInputCommitAllowed),
-      ),
+      execute: scopedCardMutation(async (id, record, scope) => {
+        const filePath = readStringValue(record.path);
+        if (filePath && record.contentBase64 !== undefined) {
+          throw new Error("pass either path or contentBase64, not both.");
+        }
+        const input = filePath
+          ? {
+              ...(await readWorkspaceAttachmentFile({
+                workspaceDir: params.context?.workspaceDir,
+                filePath,
+                fileName: readStringValue(record.fileName),
+                mimeType: readStringValue(record.mimeType),
+              })),
+              note: record.note,
+            }
+          : record;
+        return store.addAttachment(id, input, scope, params.context?.assertInputCommitAllowed);
+      }),
     },
     {
       name: "workboard_attachment_read",

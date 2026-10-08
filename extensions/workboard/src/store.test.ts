@@ -13,6 +13,7 @@ import type { PersistedWorkboardCard, WorkboardCardStore } from "./persistence-t
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createWorkboardSqliteKernel } from "./sqlite-store-kernel.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { MAX_ATTACHMENT_BYTES } from "./store-constants.js";
 import { WorkboardStore } from "./store.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
 import {
@@ -3655,7 +3656,7 @@ describe("WorkboardStore attachments", () => {
     await expect(
       store.addAttachment(card.id, {
         fileName: "huge.bin",
-        contentBase64: Buffer.alloc(256 * 1024 + 1).toString("base64"),
+        contentBase64: Buffer.alloc(MAX_ATTACHMENT_BYTES + 1).toString("base64"),
       }),
     ).rejects.toThrow(/attachment must be/);
     await expect(

@@ -362,7 +362,7 @@ plugin using the linked run and session lifecycle (see
 | `workboard_heartbeat`                                                                                                                            | Refresh the claim heartbeat during a longer run.                                                                                                                                          |
 | `workboard_release`                                                                                                                              | Release the claim after completion, pause, or handoff; can move the card to a next status.                                                                                                |
 | `workboard_complete` / `workboard_block`                                                                                                         | Structured lifecycle tools for final summaries, proof, artifacts, and created-card manifests (must reference cards linked back to the completed card) or blocker reasons.                 |
-| `workboard_attachment_add` / `workboard_attachment_read` / `workboard_attachment_delete`                                                         | Store small card attachments in plugin SQLite state, index on the card, expose in worker context.                                                                                         |
+| `workboard_attachment_add` / `workboard_attachment_read` / `workboard_attachment_delete`                                                         | Store card attachments (up to 16 MiB each, from a workspace `path` or `contentBase64`) in plugin SQLite state, index on the card, expose in worker context.                               |
 | `workboard_worker_log` / `workboard_protocol_violation`                                                                                          | Record worker log lines and block a card when an automated worker stops without calling `workboard_complete`/`workboard_block`.                                                           |
 | `workboard_board_create` / `workboard_board_archive` / `workboard_board_delete`                                                                  | Manage persisted board metadata (display name, description, archive state, default workspace).                                                                                            |
 | `workboard_sessions_board_read` / `workboard_sessions_board_update` / `workboard_sessions_board_move`                                            | Read Sessions board placements, edit columns, rules, or scope, or pin a session in a column.                                                                                              |
@@ -497,6 +497,7 @@ openclaw workboard list [--board <id>] [--status <status>] [--include-archived] 
 openclaw workboard create "Fix stale card lifecycle" --priority high --labels bug,workboard
 openclaw workboard show <card-id> [--json]
 openclaw workboard move <card-id> --status <status> [--json]
+openclaw workboard attach <card-id> <file> [--note <text>] [--json]
 openclaw workboard dispatch [--board <id>] [--json]
 ```
 

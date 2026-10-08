@@ -23,6 +23,7 @@ openclaw workboard list [--board <id>] [--status <status>] [--include-archived] 
 openclaw workboard create <title...> [--notes <text>] [--status <status>] [--priority <priority>] [--agent <id>] [--board <id>] [--labels <items>] [--json]
 openclaw workboard show <id> [--json]
 openclaw workboard move <id> --status <status> [--json]
+openclaw workboard attach <id> <file> [--name <fileName>] [--mime-type <type>] [--note <text>] [--json]
 openclaw workboard dispatch [--board <id>] [--max-starts <count>] [--admin] [--url <url>] [--token <token>] [--timeout <ms>] [--json]
 ```
 
@@ -95,6 +96,15 @@ openclaw workboard move 7f4a2c10 --status done --json
 ```
 
 `move` changes the card's status using the same manual-operator path as dragging a card in the dashboard. It accepts a full card id or an unambiguous prefix. Active dependency and schedule holds still apply. Operators may move a claimed card without its agent claim token. Claim tokens remain scoped to agent-tool mutations, and JSON output redacts them.
+
+## `attach`
+
+```bash
+openclaw workboard attach 7f4a2c10 ./screenshot.png
+openclaw workboard attach 7f4a2c10 ./trace.log --note "Failing run" --json
+```
+
+`attach` reads a local file and stores it as a card attachment in Workboard SQLite state, up to 16 MiB per file and 20 attachments per card. The file name defaults to the file basename and the MIME type is detected from the file when `--mime-type` is omitted. It accepts a full card id or an unambiguous prefix. Text output prints the new attachment id; `--json` prints the card and the attachment record.
 
 ## `dispatch`
 
