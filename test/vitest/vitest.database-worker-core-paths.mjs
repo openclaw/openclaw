@@ -226,6 +226,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands-subagents.test.ts",
   "test/subagent-announce-origin.integration.test.ts",
   "test/subagent-progress-telegram-retirement.integration.test.ts",
+  "test/media-progress-telegram-retirement.integration.test.ts",
   "src/agents/tools/pdf-tool.auth-routing.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-system-prompt.sandbox-info.test.ts",

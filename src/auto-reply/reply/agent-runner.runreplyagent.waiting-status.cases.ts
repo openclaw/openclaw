@@ -166,7 +166,7 @@ export function registerWaitingStatusCases({
       assert(result && !Array.isArray(result) && handle);
       const draft = { push: vi.fn(), retire: vi.fn() };
       expect(getReplyPayloadMetadata(result)?.progressContinuation?.adopt(draft)).toBe(true);
-      const item = { itemId: handle.runId, kind: "tool", name: "image_generate" };
+      const item = { itemId: handle.runId, kind: "subagent", title: "Image generation" };
       expect(draft.push.mock.calls).toEqual([[{ ...item, phase: "update", status: "running" }]]);
       const lifecycle = createMediaGenerationTaskLifecycle("image");
       if (delivered) {

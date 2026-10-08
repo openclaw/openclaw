@@ -26,7 +26,7 @@ export type MediaGenerationOperation = {
 
 type MediaProgressDraft = {
   draft: ProgressContinuationDraft;
-  /** Owed runs and their progress tool names. */
+  /** Owed runs and their card titles. */
   runs: Map<string, string>;
   undelivered: boolean;
 };
@@ -94,25 +94,32 @@ export function registerGeneratedMediaTaskActivity(
 export function clearGeneratedMediaTaskActivity(runId: string): void {
   state.active.delete(runId);
   const live = state.drafts.get(runId);
-  const name = live?.runs.get(runId);
-  if (!live || !name) {
+  const title = live?.runs.get(runId);
+  if (!live || !title) {
     return;
   }
   state.drafts.delete(runId);
   live.runs.delete(runId);
   const operation = state.operations.get(runId);
-  if (operation?.status !== "succeeded" || operation.terminalOutcome === "blocked") {
-    live.undelivered = true;
-    live.draft.push({ itemId: runId, kind: "tool", name, phase: "end", status: "failed" });
-  }
+  const delivered = operation?.status === "succeeded" && operation.terminalOutcome !== "blocked";
+  live.undelivered ||= !delivered;
   if (live.runs.size === 0 && !live.undelivered) {
     live.draft.retire();
+    return;
   }
+  live.draft.push({
+    itemId: runId,
+    kind: "subagent",
+    title,
+    phase: "end",
+    status: delivered ? "completed" : "failed",
+  });
 }
 
 /**
  * Keep a waiting turn's confirmed progress card while the media runs it delegated
- * to are still owed. The completion wake stays the only result owner.
+ * to are still owed. The completion wake stays the only result owner; each run
+ * shows as delegated work, whose terminal state the quiet card keeps.
  */
 export function adoptMediaGenerationProgressDraft(
   sessionKey: string,
@@ -122,7 +129,13 @@ export function adoptMediaGenerationProgressDraft(
   const runs = new Map(
     listMediaGenerationOperations(sessionKey, requesterAgentId).flatMap((operation) =>
       operation.runId && state.active.has(operation.runId) && !state.drafts.has(operation.runId)
-        ? [[operation.runId, operation.taskKind.replace(/_generation$/, "_generate")] as const]
+        ? [
+            [
+              operation.runId,
+              // `image_generation` → `Image generation`
+              `${operation.taskKind.charAt(0).toUpperCase()}${operation.taskKind.slice(1).replaceAll("_", " ")}`,
+            ] as const,
+          ]
         : [],
     ),
   );
@@ -130,9 +143,9 @@ export function adoptMediaGenerationProgressDraft(
     return false;
   }
   const live = { draft, runs, undelivered: false };
-  for (const [runId, name] of runs) {
+  for (const [runId, title] of runs) {
     state.drafts.set(runId, live);
-    draft.push({ itemId: runId, kind: "tool", name, phase: "update", status: "running" });
+    draft.push({ itemId: runId, kind: "subagent", title, phase: "update", status: "running" });
   }
   return true;
 }
