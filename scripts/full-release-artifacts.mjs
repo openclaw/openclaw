@@ -286,9 +286,10 @@ async function readArtifact(request, runId, name, fileName, { retained = false }
     },
     maxArchiveBytes: MAX_ARCHIVE_BYTES,
     token: process.env.GH_TOKEN,
-  }).catch((error) => {
+  }).catch((/** @type {unknown} */ error) => {
     if (
       retained &&
+      error instanceof Error &&
       /^GitHub Actions artifact (?:metadata|download) returned HTTP (?:404|410)\.$/u.test(
         error.message,
       )

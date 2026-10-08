@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
@@ -396,21 +397,20 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       ["candidate_acquisition", "Dispatch immutable validation candidate producer"],
     ] as const) {
       expect(String(workflow.jobs[job]?.if), job).not.toContain("github.run_attempt");
+      const dispatchCondition = step(job, dispatch).if;
+      const recoveryCondition = step(job, "Recover original artifact producer").if ?? "true";
+      assert(typeof dispatchCondition === "string");
+      assert(typeof recoveryCondition === "string");
       for (const reused of job === "candidate_acquisition" ? [undefined] : ["false", "true"]) {
         for (const attempt of [1, 2]) {
           const context = {
             github: { run_attempt: attempt },
             env: { PUBLICATION_ARTIFACTS_REUSED: reused },
           };
-          expect(runInNewContext(String(step(job, dispatch).if), context)).toBe(
+          expect(runInNewContext(dispatchCondition, context)).toBe(
             attempt === 1 && reused !== "true",
           );
-          expect(
-            runInNewContext(
-              String(step(job, "Recover original artifact producer").if ?? "true"),
-              context,
-            ),
-          ).toBe(reused !== "true");
+          expect(runInNewContext(recoveryCondition, context)).toBe(reused !== "true");
         }
       }
     }
