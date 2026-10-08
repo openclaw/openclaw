@@ -3,7 +3,7 @@ import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/type
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
+import { DEFAULT_ACCOUNT_ID, normalizeOptionalAccountId } from "../routing/account-id.js";
 import { isPlainObject } from "../utils.js";
 import { canHotReloadGatewayAuthCredentials } from "./auth-resolve.js";
 import { haveSameOperatorRoleSourcePolicies } from "./operator-role-source-policy.js";
@@ -471,11 +471,36 @@ export function resolvePluginInstallReloadMetadata(prevConfig: unknown, nextConf
   return { noopPaths, forceChangedPaths };
 }
 
-function extractAccountIdFromPath(channel: ChannelId, path: string): string | null {
-  const prefix = `channels.${channel}.accounts.`;
+function extractAccountIdFromPath(
+  plugin: ChannelPlugin,
+  path: string,
+  options: GatewayReloadPlanOptions,
+): string | null {
+  const prefix = `channels.${plugin.id}.accounts.`;
   const id = path.startsWith(prefix) ? path.slice(prefix.length).split(".", 1)[0] : undefined;
-  // Default config is the inheritance base, so it can change every account.
-  return id && id !== DEFAULT_ACCOUNT_ID ? id : null;
+  const normalized = normalizeOptionalAccountId(id);
+  if (!id || !normalized || normalized === DEFAULT_ACCOUNT_ID) {
+    return null;
+  }
+  const matches = new Set<string>();
+  try {
+    for (const config of [options.previousConfig, options.candidateConfig]) {
+      if (!config) {
+        continue;
+      }
+      for (const listed of plugin.config.listAccountIds(config)) {
+        if (normalizeOptionalAccountId(listed) === normalized) {
+          matches.add(listed);
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  if (matches.size > 1) {
+    return null;
+  }
+  return [...matches][0] ?? (id === normalized ? id : null);
 }
 
 function canReloadChannelAccountIndividually(params: {
@@ -593,7 +618,9 @@ export function buildGatewayReloadPlan(
       }
     }
     for (const plugin of rule?.channels ?? []) {
-      const accountId = rule?.accountScoped ? extractAccountIdFromPath(plugin.id, path) : null;
+      const accountId = rule?.accountScoped
+        ? extractAccountIdFromPath(plugin, path, options)
+        : null;
       if (
         accountId === null ||
         (options.candidateConfig &&

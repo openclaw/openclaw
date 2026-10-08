@@ -94,7 +94,6 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { isRecord } from "../utils.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -116,7 +115,10 @@ import { applyHookMappings, commitHookTransformMappingReload } from "./hooks-map
 import { createChannelManager } from "./server-channels.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import type { GatewayCronState } from "./server-cron.js";
-import { registerManagedChannelRemovalTests } from "./server-reload-channel-removal.test-support.js";
+import {
+  createManagedChannelFixtureAccountConfig,
+  registerManagedChannelRemovalTests,
+} from "./server-reload-channel-removal.test-support.js";
 import {
   GatewayConfigReloadSupersededError,
   type GatewayPluginReloadResult,
@@ -1012,7 +1014,7 @@ async function runManagedOwnershipScenario(params: {
 
 async function withManagedChannelSecretFixture(
   options: {
-    shape?: "named" | "default" | "shared";
+    shape?: "named" | "default" | "shared" | "authored";
     accountScopedRestart?: boolean;
   },
   run: (fixture: {
@@ -1055,15 +1057,13 @@ async function withManagedChannelSecretFixture(
           ? { botToken: ref, accounts: { root: {}, ada: {}, other: { botToken: "independent" } } }
           : shape === "default"
             ? { accounts: { default: { botToken: ref }, ada: { botToken: "independent" } } }
-            : { accounts: { root: { botToken: "independent" }, ada: { botToken: ref } } },
+            : {
+                accounts: {
+                  [shape === "authored" ? "Root" : "root"]: { botToken: "independent" },
+                  [shape === "authored" ? "Ada" : "ada"]: { botToken: ref },
+                },
+              },
     },
-  };
-  const readChannel = (config: OpenClawConfig) => {
-    const channel = config.channels?.mattermost;
-    if (!isRecord(channel) || !isRecord(channel.accounts)) {
-      throw new Error("Expected channel-account fixture");
-    }
-    return { channel, accounts: channel.accounts };
   };
   const starts: Array<{ accountId: string; token: unknown }> = [];
   const stops: string[] = [];
@@ -1076,20 +1076,7 @@ async function withManagedChannelSecretFixture(
       accountScopedRestart: options.accountScopedRestart ?? true,
     },
     config: {
-      listAccountIds: (config) => Object.keys(readChannel(config).accounts),
-      resolveAccount: (config, requestedAccountId) => {
-        const accountId = requestedAccountId ?? "default";
-        const { channel, accounts } = readChannel(config);
-        const account = accounts[accountId];
-        if (!isRecord(account)) {
-          throw new Error(`Account ${accountId} no longer exists`);
-        }
-        return {
-          accountId,
-          botToken: account.botToken ?? channel.botToken,
-          enabled: channel.enabled !== false && account.enabled !== false,
-        };
-      },
+      ...createManagedChannelFixtureAccountConfig(),
       isConfigured: (account) => {
         if (rejectStart && account.accountId === "ada") {
           throw new Error("replacement start failed");
@@ -1375,7 +1362,9 @@ describe("managed channel credential publication", () => {
     },
   );
 
-  registerManagedChannelRemovalTests((run) => withManagedChannelSecretFixture({}, run));
+  registerManagedChannelRemovalTests((run, authoredKeys) =>
+    withManagedChannelSecretFixture({ shape: authoredKeys ? "authored" : "named" }, run),
+  );
 
   it.each([
     { cold: true, manualStop: false },

@@ -185,11 +185,16 @@ resolution reads channel-wide shared fields plus the selected account, never a
 sibling account, and the Gateway can stop and start one `(channel, accountId)`
 runtime without replacing sibling runtimes.
 
-The scoped path applies only to changes under
-`channels.<channel>.accounts.<non-default-id>.*`. Changes to shared channel
-fields, `accounts.default`, removed or unresolvable accounts, and mixed changes
-that can affect inheritance are promoted to a whole-channel restart. Plugins
-that do not opt in always use the whole-channel path.
+The scoped path applies to changes under
+`channels.<channel>.accounts.<non-default-id>`, including removal. The Gateway
+matches authored keys to the account IDs listed by the plugin in the previous
+and candidate configs. A removed account is stopped without starting a
+replacement; sibling accounts stay connected, and removal-only reloads do not
+wait for unrelated Gateway work. Account teardown still settles its own work.
+Changes to shared channel fields, `accounts.default`, ambiguous account
+identities, unresolvable surviving accounts, and mixed changes that can affect
+inheritance are promoted to a whole-channel restart. Plugins that do not opt in
+always use the whole-channel path.
 
 The Gateway retains the admitted account's `cfg`, resolved `account`, and owning
 `stopAccount` hook through teardown, including failed-stop retries. Cleanup must
