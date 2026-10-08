@@ -115,6 +115,13 @@ export function openThreadBindingsStore() {
   });
 }
 
+export function openThreadBindingsStoreAsync() {
+  return getDiscordRuntime().state.openKeyedStore<ThreadBindingRecord>({
+    namespace: THREAD_BINDINGS_NAMESPACE,
+    maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+  });
+}
+
 export function normalizeTargetKind(
   raw: unknown,
   targetSessionKey: string,
@@ -125,7 +132,7 @@ export function normalizeTargetKind(
   return targetSessionKey.includes(":subagent:") ? "subagent" : "acp";
 }
 
-export function toBindingRecordKey(params: { accountId: string; threadId: string }): string {
+export function toBindingRecordKey(params: { accountId?: string; threadId: string }): string {
   return `${normalizeAccountId(params.accountId)}:${params.threadId.trim()}`;
 }
 
@@ -137,10 +144,7 @@ export function resolveBindingRecordKey(params: {
   if (!threadId) {
     return undefined;
   }
-  return toBindingRecordKey({
-    accountId: normalizeAccountId(params.accountId),
-    threadId,
-  });
+  return toBindingRecordKey({ accountId: params.accountId, threadId });
 }
 
 export function normalizePersistedBinding(
@@ -377,12 +381,7 @@ export function ensureBindingsLoaded() {
 async function loadBindingsAsync() {
   let entries: PluginStateEntry<ThreadBindingRecord>[];
   try {
-    entries = await getDiscordRuntime()
-      .state.openKeyedStore<ThreadBindingRecord>({
-        namespace: THREAD_BINDINGS_NAMESPACE,
-        maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
-      })
-      .entries();
+    entries = await openThreadBindingsStoreAsync().entries();
   } catch {
     if (!THREAD_BINDINGS_STATE.loadedBindings) {
       beginBindingsLoad();

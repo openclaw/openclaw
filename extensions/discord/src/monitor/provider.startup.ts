@@ -71,12 +71,7 @@ export async function createDiscordMonitorClient(params: {
   isDisallowedIntentsError: (err: unknown) => boolean;
 }) {
   let autoPresenceController: DiscordAutoPresenceController | null = null;
-  const constructorPlugins: RegisteredPlugin[] = [
-    createDiscordGatewayPlugin({
-      discordConfig: params.discordConfig,
-      runtime: params.runtime,
-    }),
-  ];
+  const constructorPlugins: RegisteredPlugin[] = [createDiscordGatewayPlugin(params)];
   const voicePlugin = params.voiceEnabled ? new VoicePlugin() : undefined;
 
   const eventQueueOpts = {
@@ -121,16 +116,13 @@ export async function createDiscordMonitorClient(params: {
   const gateway = client.getPlugin("gateway");
   await waitForDiscordGatewayPluginRegistration(gateway);
   const gatewaySupervisor = createDiscordGatewaySupervisor({
+    ...params,
     gateway,
-    isDisallowedIntentsError: params.isDisallowedIntentsError,
-    runtime: params.runtime,
   });
 
   if (gateway) {
     autoPresenceController = createDiscordAutoPresenceController({
-      scheduler: params.scheduler,
-      accountId: params.accountId,
-      discordConfig: params.discordConfig,
+      ...params,
       gateway,
       log: (message) => params.runtime.log?.(message),
     });

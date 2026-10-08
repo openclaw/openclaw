@@ -103,11 +103,7 @@ function createDiscordIngressResolver(params: {
     accountId: params.accountId,
     identity: discordIngressIdentity,
     cfg: params.cfg,
-    resolveAccessGroupMembership: createDiscordDynamicAccessGroupResolver({
-      cfg: params.cfg,
-      token: params.token,
-      rest: params.rest,
-    }),
+    resolveAccessGroupMembership: createDiscordDynamicAccessGroupResolver(params),
     ...(params.readStoreAllowFrom ? { readStoreAllowFrom: params.readStoreAllowFrom } : {}),
     ...(params.useDefaultPairingStore !== undefined
       ? { useDefaultPairingStore: params.useDefaultPairingStore }

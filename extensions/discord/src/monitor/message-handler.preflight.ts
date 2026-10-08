@@ -160,15 +160,8 @@ async function resolveDiscordHistoryMediaForPendingRecord(params: {
   const stickerStartIndex = Math.max(0, mediaList.length - stickers.length);
   return (await toInboundMediaFactsWithMetadata(mediaList, { messageId: params.message.id })).map(
     (media, index) => ({
-      path: media.path,
-      url: media.url,
-      contentType: media.contentType,
+      ...media,
       kind: index >= stickerStartIndex ? "sticker" : (media.kind ?? "image"),
-      durationMs: media.durationMs,
-      width: media.width,
-      height: media.height,
-      transcribed: media.transcribed,
-      messageId: media.messageId,
     }),
   );
 }
@@ -288,30 +281,45 @@ export async function preflightDiscordMessage(
           threadId: messageChannelId,
         })
       : undefined;
+  const ignoreBoundThreadMessage = (
+    threadBinding: Parameters<typeof shouldIgnoreBoundThreadWebhookMessage>[0]["threadBinding"],
+    isBoundThreadSession: () => boolean,
+  ) => {
+    let reason: string;
+    if (
+      shouldIgnoreBoundThreadWebhookMessage({
+        threadId: messageChannelId,
+        webhookId,
+        threadBinding,
+      })
+    ) {
+      reason = "webhook echo";
+    } else if (
+      isBoundThreadBotSystemMessage({
+        isBoundThreadSession: isBoundThreadSession(),
+        isBotAuthor: Boolean(author.bot),
+        text: messageText,
+      })
+    ) {
+      reason = "bot system";
+    } else {
+      return false;
+    }
+    logVerbose(`discord: drop bound-thread ${reason} message ${message.id}`);
+    return true;
+  };
   if (
-    shouldIgnoreBoundThreadWebhookMessage({
-      threadId: messageChannelId,
-      webhookId,
-      threadBinding: injectedBoundThreadBinding,
-    })
-  ) {
-    logVerbose(`discord: drop bound-thread webhook echo message ${message.id}`);
-    return null;
-  }
-  if (
-    isBoundThreadBotSystemMessage({
-      isBoundThreadSession:
+    ignoreBoundThreadMessage(
+      injectedBoundThreadBinding,
+      () =>
         Boolean(injectedBoundThreadBinding) &&
         isDiscordThreadChannelMessage({
           isGuildMessage,
           message,
           channelInfo,
         }),
-      isBotAuthor: Boolean(author.bot),
-      text: messageText,
-    })
+    )
   ) {
-    logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
     return null;
   }
   const pluralkitInfo = await resolveDiscordPreflightPluralKitInfo({
@@ -435,25 +443,8 @@ export async function preflightDiscordMessage(
     boundAgentId,
     baseSessionKey,
   } = routeState;
-  if (
-    shouldIgnoreBoundThreadWebhookMessage({
-      threadId: messageChannelId,
-      webhookId,
-      threadBinding,
-    })
-  ) {
-    logVerbose(`discord: drop bound-thread webhook echo message ${message.id}`);
-    return null;
-  }
   const isBoundThreadSession = Boolean(threadBinding && threadChannel);
-  if (
-    isBoundThreadBotSystemMessage({
-      isBoundThreadSession,
-      isBotAuthor: Boolean(author.bot),
-      text: messageText,
-    })
-  ) {
-    logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
+  if (ignoreBoundThreadMessage(threadBinding, () => isBoundThreadSession)) {
     return null;
   }
   const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId, {

@@ -19,6 +19,14 @@ export async function getChannel(rest: RequestClient, channelId: string): Promis
   return (await rest.get(Routes.channel(channelId))) as APIChannel;
 }
 
+export async function createChannelMessage(
+  rest: RequestClient,
+  channelId: string,
+  data: RequestData,
+): Promise<APIMessage> {
+  return (await rest.post(Routes.channelMessages(channelId), data)) as APIMessage;
+}
+
 export async function getThreadMember(
   rest: RequestClient,
   threadId: string,

@@ -10,33 +10,22 @@ import type {
   TranscriptOccupancyWatchRequest,
 } from "openclaw/plugin-sdk/transcripts";
 import { listEnabledDiscordAccounts, resolveDiscordAccount } from "../accounts.js";
-import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
 import { resolveDiscordVoiceAccess } from "./owner-access.js";
-import type { VoiceOperationResult, VoiceSessionEntry } from "./session.js";
+import type { VoiceSessionEntry } from "./session.js";
+import type { DiscordVoiceManager } from "./voice-runtime.js";
 
 type CaptureSource = { accountId: string; guildId: string; channelId: string };
-type CaptureTarget = Pick<CaptureSource, "guildId" | "channelId">;
-type DiscordTranscriptsManager = {
-  readPolicy?: DiscordLivePolicyReader;
-  resolveAccessTarget: (
-    target: CaptureTarget,
-  ) => Promise<
-    | Pick<
-        Parameters<typeof authorizeDiscordVoiceIngress>[0],
-        "guild" | "channelName" | "channelSlug" | "parentId" | "parentName" | "parentSlug" | "scope"
-      >
-    | undefined
-  >;
-  startTranscriptsCapture: (target: CaptureTarget) => Promise<VoiceOperationResult>;
-  stopTranscriptsCapture: (target: CaptureTarget) => Promise<void>;
-  hasRealtimeCapture: (target: CaptureTarget) => boolean;
-  watchChannelOccupancy: (
-    target: CaptureTarget,
-    listener: (state: { occupied: boolean }) => void,
-  ) => () => void;
-};
+type DiscordTranscriptsManager = Pick<
+  DiscordVoiceManager,
+  | "readPolicy"
+  | "resolveAccessTarget"
+  | "startTranscriptsCapture"
+  | "stopTranscriptsCapture"
+  | "hasRealtimeCapture"
+  | "watchChannelOccupancy"
+>;
 type CaptureRegistration = NonNullable<VoiceSessionEntry["transcripts"]> & {
   source: CaptureSource;
   readonly subscriptionToken: symbol;

@@ -76,6 +76,10 @@ function normalizeTouchTimestamp(at: number | undefined): number {
   return typeof at === "number" && Number.isFinite(at) ? Math.max(0, Math.floor(at)) : Date.now();
 }
 
+function touchBindingRecord(record: ThreadBindingRecord, at: number): ThreadBindingRecord {
+  return { ...record, lastActivityAt: Math.max(record.lastActivityAt || 0, at) };
+}
+
 export async function createThreadBindingManager(input: {
   accountId?: string;
   token?: string;
@@ -320,10 +324,7 @@ function createLoadedThreadBindingManager(
       const at = normalizeTouchTimestamp(input.at);
       return updateBindingRecordSync({
         bindingKey: key,
-        transform: (record) => ({
-          ...record,
-          lastActivityAt: Math.max(record.lastActivityAt || 0, at),
-        }),
+        transform: (record) => touchBindingRecord(record, at),
         persist: (input.persist ?? persist) && shouldPersistAnyBindingState(),
         minIntervalMs: THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
       });
@@ -339,10 +340,7 @@ function createLoadedThreadBindingManager(
           return null;
         }
         const { bindingKey, record: existingResult } = binding;
-        const nextRecord: ThreadBindingRecord = {
-          ...existingResult,
-          lastActivityAt: Math.max(existingResult.lastActivityAt || 0, touchParams.at),
-        };
+        const nextRecord = touchBindingRecord(existingResult, touchParams.at);
         await commitBindingRecord({
           bindingKey,
           previous: existingResult,
@@ -595,7 +593,7 @@ function createLoadedThreadBindingManager(
     }, THREAD_BINDINGS_SWEEP_INTERVAL_MS);
     // Keep the production process free to exit, but avoid breaking fake-timer
     // sweeper tests where unref'd intervals may never fire.
-    if (!(process.env.VITEST || process.env.NODE_ENV === "test")) {
+    if (shouldDefaultPersist()) {
       sweepTimer.unref?.();
     }
   }
