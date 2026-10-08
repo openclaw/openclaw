@@ -90,6 +90,50 @@ async function getError(field: string, json: boolean): Promise<string> {
 }
 
 describe("config cli integration", () => {
+  it.each([true, false])(
+    "retains completed validation on a thrown preview refusal (json=%s)",
+    async (json) => {
+      const raw = '{"agents":{"entries":{"main":{}}}}';
+      const refusal =
+        "Config write would drop agent roster entries without an explicit deletion: main.";
+      await withConfig(raw, async ({ configPath, tempDir }) => {
+        const stateDir = path.join(tempDir, "state");
+        fs.mkdirSync(stateDir);
+        const inventory = fs.readdirSync(tempDir).toSorted();
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          await reject(
+            set(
+              "agents.entries",
+              "{}",
+              "--replace",
+              "--strict-json",
+              "--dry-run",
+              ...(json ? ["--json"] : []),
+            ),
+          );
+          if (json) {
+            expect(logs).toHaveLength(1);
+            expect(JSON.parse(logs[0] ?? "")).toEqual({
+              ok: false,
+              operations: 1,
+              configPath,
+              inputModes: ["json"],
+              checks: { schema: true, resolvability: true, resolvabilityComplete: true },
+              refsChecked: 0,
+              skippedExecRefs: 0,
+              errors: [{ kind: "schema", message: refusal }],
+            });
+          } else {
+            expect(logs).toEqual([]);
+            expect(errors).toEqual([refusal]);
+          }
+          expect(read(configPath)).toBe(raw);
+          expect(fs.readdirSync(tempDir).toSorted()).toEqual(inventory);
+        });
+      });
+    },
+  );
+
   it.each([
     { name: "large root shrink", include: false, remaining: 2, rejected: true },
     { name: "moderate root shrink", include: false, remaining: 60, rejected: false },
