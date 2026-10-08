@@ -90,6 +90,31 @@ settlement receipts, output delivery, expiry, and cancellation. Missing or
 disabled executors fail explicitly; the host never substitutes a less isolated
 executor.
 
+The controller's `__openclaw*` hook protocol is experimental and changes with
+the controller source. Bridge settlement is host-only: before evaluating
+`CODE_MODE_CONTROLLER_SOURCE`, register an `__openclawHostTakeBridgeReply`
+callback next to `__openclawHostRequest` (the controller captures and removes
+both). To settle, stage the replies host-side and call `__openclawSettleBridge()`
+with no arguments; the controller pulls each reply from the callback until it
+returns `undefined`. Return each reply as an object with own data properties
+`id`, `ok`, and `json`, never through ordinary property assignment on a guest
+object. Executors that called `__openclawSettleBridge(id, ok, payload)` must
+move to this pull form.
+
+## Native MCP App adapters
+
+An agent harness that owns MCP connections can implement `acquireMcpAppRuntime` alongside `loadMcpToolCatalog`. The acquisition receives the exact session identity, configured server names, session tool overrides, requester identity, and an `assertCurrent` invocation guard. Return a `SessionMcpRuntimeLease` over the existing connection; do not create a second client to launch an App.
+
+For a cold session, call the optional lazy `prepareSession` callback. Core returns a versioned session-preparation envelope (`version: 1`, `purpose: "mcp-app"`), whose `params` carry required admitted host capabilities, prepared credentials, environment and session facts. Execute the existing native session/thread lifecycle inside its `run` callback, then borrow the resulting thread-owned connection. This is a session preparation operation, not a model attempt: it has no prompt or transcript artifact and must not submit a model turn. Warm sessions do not call the preparer. Retained callbacks must honor the source and host closure; return `undefined` only when no supported preparation or existing native binding is available.
+
+The current Codex app-server `mcpServer/resource/read` contract does not accept `_meta`. Native remote MCP resource reads therefore cannot request metadata-selected representations; OpenClaw reports that limitation rather than sending unsupported wire fields. Managed MCP clients still forward resource `_meta`, and host-file representations remain available through the local host-file owner.
+
+The runtime retains the native connection and thread subscription for each App view, exposes `assertOwnerCurrent` to revalidate its exact thread/client binding, and preserves server, tool, and connector boundaries. `callTool` accepts optional `_meta` and `assertCurrent`; run the guard immediately before upstream I/O after any preparation awaits. The host separately enforces session sharing, requester identity, effective tool policy, and approval policy. Metadata does not grant permission.
+
+Harness adapters publish supported entrypoints, structured settings, and mention discovery in `McpToolCatalog` without adding model tools. The bundled Codex adapter reuses the core metadata and approval-hint parsers through its existing private `codex-mcp-projection` façade; these implementation helpers are not additional public SDK exports.
+
+The bundled adapter’s private `createHarnessMcpFormResourceContext` accepts `AgentHarnessMcpFormResourceParamsV1` (`version: 1`) and binds rich previews and uploads to the exact originating runtime, server, requester and pending question. Its tool preparer receives only the tool name, input, cancellation signal, and current-authority assertion; Gateway dispatch options and upload implementations remain private to the host. A runtime may expose `canReadLocalFiles(serverName)` only for a current transport that can read host-local files. The shared form adapter uses that fact to select workspace uploads; remote transports do not receive unusable host `file:` URIs. Native no-turn tool elicitations use the originating request scope, separately from model-turn elicitation routing.
+
 ## MCP subprocess runtime
 
 **Import:** `mcpStdioRuntime` from `openclaw/plugin-sdk/agent-harness-runtime` using dynamic `import()` when opening a connection. Its frozen object lazily loads one factory:
@@ -176,7 +201,7 @@ Code Mode; `readSkillFiles` supplies a bundle for worker delivery. Gateway-owned
 bundled, plugin, Library, Workshop and user-level sources keep their Gateway paths.
 Workspace-owned sources use the remote provider. Gateway preserves source precedence
 and uses existing resource delivery for workers. Discovery assigns file ownership; a provider cannot
-request Gateway-local reads by returning a source label or `fileHost` value.
+request Gateway-local reads by returning source or path metadata.
 Stopping the binding revokes retained host readers.
 
 The Skills worker also runs install and ClawHub operations. Install/remove use

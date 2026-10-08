@@ -2,15 +2,10 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
-import {
-  type CommandOptions,
-  runCommandWithTimeout,
-  type SpawnResult,
-} from "openclaw/plugin-sdk/process-runtime";
+import { type CommandOptions, runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeTempFileName } from "openclaw/plugin-sdk/temp-path";
 
-const TOKEN_PATTERN = /^[a-f0-9]{32}$/u;
 const SSH_OPTIONS = [
   "-o",
   "BatchMode=yes",
@@ -28,21 +23,8 @@ const SSH_OPTIONS = [
 const CLEANUP_TIMEOUT_MS = 10_000;
 const log = createSubsystemLogger("channels/imessage");
 
-type RunCommand = (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
-
-type RemoteFileDeps = {
-  runCommand?: RunCommand;
-  createToken?: () => string;
-  onCleanupError?: (error: Error) => void;
-};
-
-async function runChecked(
-  run: RunCommand,
-  label: string,
-  argv: string[],
-  options: CommandOptions,
-): Promise<void> {
-  const result = await run(argv, {
+async function runChecked(label: string, argv: string[], options: CommandOptions): Promise<void> {
+  const result = await runCommandWithTimeout(argv, {
     killProcessTree: true,
     maxOutputBytes: { stdout: 4 * 1024, stderr: 64 * 1024 },
     outputCapture: { stdout: "head", stderr: "tail" },
@@ -56,29 +38,19 @@ async function runChecked(
   }
 }
 
-function requireToken(createToken: () => string): string {
-  const token = createToken().replaceAll("-", "").toLowerCase();
-  if (!TOKEN_PATTERN.test(token)) {
-    throw new Error("iMessage remote staging generated an invalid temporary token");
-  }
-  return token;
-}
-
 export async function withIMessageRemoteFile<T>(params: {
   remoteHost: string;
   localPath: string;
   timeoutMs?: number;
   signal?: AbortSignal;
   assertDirectAdapterHandoff?: () => void;
-  deps?: RemoteFileDeps;
   use: (remotePath: string) => Promise<T>;
 }): Promise<T> {
   const remoteHost = normalizeScpRemoteHost(params.remoteHost);
   if (!remoteHost) {
     throw new Error("invalid iMessage remoteHost for SSH/SCP staging");
   }
-  const run = params.deps?.runCommand ?? runCommandWithTimeout;
-  const token = requireToken(params.deps?.createToken ?? randomUUID);
+  const token = randomUUID().replaceAll("-", "");
   const remoteDir = `/tmp/openclaw-imessage-${token}`;
   const remotePath = `${remoteDir}/${sanitizeTempFileName(path.basename(params.localPath))}`;
   const createScript = `set -eu
@@ -95,14 +67,12 @@ rm -rf -- ${remoteDir}
   params.assertDirectAdapterHandoff?.();
   try {
     await runChecked(
-      run,
       "iMessage remote temporary directory allocation",
       ["ssh", ...SSH_OPTIONS, "-T", "--", remoteHost, "sh -s"],
       { input: createScript, timeoutMs: params.timeoutMs, signal: params.signal },
     );
     params.assertDirectAdapterHandoff?.();
     await runChecked(
-      run,
       "iMessage remote file upload",
       ["scp", ...SSH_OPTIONS, "--", params.localPath, `${remoteHost}:${remotePath}`],
       { timeoutMs: params.timeoutMs, signal: params.signal },
@@ -114,16 +84,13 @@ rm -rf -- ${remoteDir}
       // An aborted caller may still own a remote file, so cleanup gets its own
       // bounded attempt without reusing the already-aborted signal.
       await runChecked(
-        run,
         "iMessage remote file cleanup",
         ["ssh", ...SSH_OPTIONS, "-T", "--", remoteHost, "sh -s"],
         { input: cleanupScript, timeoutMs: CLEANUP_TIMEOUT_MS },
       );
     } catch (cleanupError) {
-      (
-        params.deps?.onCleanupError ??
-        ((error) => log.warn(`remote attachment cleanup failed: ${error.message}`))
-      )(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)));
+      const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      log.warn(`remote attachment cleanup failed: ${detail}`);
     }
   }
 }

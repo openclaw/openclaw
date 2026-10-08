@@ -9,7 +9,6 @@ import {
   syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./src/lifecycle-sync.js";
-import { SESSIONS_BOARD_VIEWER_IDLE_MS } from "./src/sessions-board-classification.js";
 import { createWorkboardSessionsBoardService } from "./src/sessions-board.js";
 import { resolveWorkboardSqliteWorkerModuleUrl } from "./src/sqlite-store-paths.js";
 import { registerWorkboardStoreLifecycle } from "./src/store-lifecycle.js";
@@ -45,20 +44,11 @@ export default definePluginEntry({
       gateway: api.runtime.gateway,
     });
     resourceServices.push(sessionsBoard);
-    const refreshSessionsBoards = () => {
-      // Sessions boards nobody reads stay quiet: no session-facts or utility-model work.
-      void sessionsBoard
-        .sweep({ viewedWithinMs: SESSIONS_BOARD_VIEWER_IDLE_MS })
-        .catch((error: unknown) => {
-          api.logger.warn(`workboard sessions sweep failed: ${String(error)}`);
-        });
-    };
     const lifecycleSync = createWorkboardLifecycleService({
       store,
       worktrees: api.runtime.worktrees,
       readSessions: async (options) =>
         await readWorkboardLifecycleSessions(api.runtime.gateway, options),
-      onSweep: refreshSessionsBoards,
     });
     resourceServices.push(lifecycleSync);
     api.session.controls.registerControlUiDescriptor({
@@ -104,7 +94,6 @@ export default definePluginEntry({
           event,
           onMatched: automationNudge.nudge,
         });
-        refreshSessionsBoards();
       }),
     );
     api.on("agent_end", (event, context) =>
@@ -115,7 +104,6 @@ export default definePluginEntry({
           context,
           onMatched: automationNudge.nudge,
         });
-        refreshSessionsBoards();
       }),
     );
     api.registerCli(

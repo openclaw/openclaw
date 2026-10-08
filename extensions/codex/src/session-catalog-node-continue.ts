@@ -121,6 +121,12 @@ export async function listPairedNode(params: {
     params.onHost?.(host);
     return host;
   }
+  const failedHost = (error: unknown): CodexSessionCatalogHost => ({
+    ...common,
+    connected: true,
+    sessions: [],
+    error: catalogError("NODE_INVOKE_FAILED", error),
+  });
   const eventualHost = Promise.resolve()
     .then(async () => {
       const raw = await params.runtime.nodes.invoke({
@@ -152,28 +158,14 @@ export async function listPairedNode(params: {
         ),
       };
     })
-    .catch((error: unknown) => ({
-      ...common,
-      connected: true,
-      sessions: [],
-      error: catalogError("NODE_INVOKE_FAILED", error),
-    }));
+    .catch(failedHost);
   // Retain publication through cold discovery without extending the fail-soft response.
   publishSessionCatalogHost(params, eventualHost);
-  try {
-    return await withTimeout(
-      eventualHost,
-      NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS,
-      "paired node Codex session catalog timed out",
-    );
-  } catch (error) {
-    return {
-      ...common,
-      connected: true,
-      sessions: [],
-      error: catalogError("NODE_INVOKE_FAILED", error),
-    };
-  }
+  return await withTimeout(
+    eventualHost,
+    NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+    "paired node Codex session catalog timed out",
+  ).catch(failedHost);
 }
 
 async function requireNodeForCodexContinue(params: {
@@ -255,16 +247,7 @@ async function continueNodeCodexSessionInner(params: {
   nodeId: string;
   threadId: string;
   sourceHomeId?: string;
-}): Promise<{
-  sessionKey: string;
-  disposition: CodexSessionDisposition;
-  conversationBinding: {
-    summary: string;
-    detachHint: string;
-    data: Record<string, unknown>;
-  };
-  afterConversationBound: () => Promise<void>;
-}> {
+}) {
   const { nodeId } = params;
   await requireNodeForCodexContinue({
     runtime: params.api.runtime,
@@ -292,48 +275,30 @@ async function continueNodeCodexSessionInner(params: {
   const sourceHomeId = lookup.sourceHomeId;
   const record = lookup.record;
   requireContinuableNodeRecord(record);
-  const existing = findNodeAdoptedSessionEntry({
+  const source = {
     agentId: params.agentId,
+    api: params.api,
     config: params.config,
     runtime: params.api.runtime,
     hostId: params.hostId,
     threadId: params.threadId,
+    nodeId,
     sourceHomeId,
+    record,
+  };
+  const existing = findNodeAdoptedSessionEntry({
+    ...source,
     includeInitializing: true,
   });
   let adopted: AdoptedSessionEntry;
-  let disposition: CodexSessionDisposition;
   if (existing) {
-    // Unarchive/finalize happens in afterConversationBound so a failed binding
-    // install cannot leave a visible session with no node routing.
     adopted = existing;
-    disposition = "existing";
   } else {
-    const history = await readNodeCodexHistory({
-      agentId: params.agentId,
-      runtime: params.api.runtime,
-      nodeId,
-      sourceHomeId,
-      record,
-    });
-    adopted = await createOrReuseNodeAdoptedSession({
-      agentId: params.agentId,
-      api: params.api,
-      config: params.config,
-      hostId: params.hostId,
-      nodeId,
-      sourceHomeId,
-      record,
-      history,
-    });
-    disposition = "forked";
+    const history = await readNodeCodexHistory(source);
+    adopted = await createOrReuseNodeAdoptedSession({ ...source, history });
   }
-  const marker = nodeSessionMarker({
-    hostId: params.hostId,
-    threadId: params.threadId,
-    sourceHomeId,
-    nodeId,
-  });
+  const disposition: CodexSessionDisposition = existing ? "existing" : "forked";
+  const marker = nodeSessionMarker(source);
   return {
     sessionKey: adopted.key,
     disposition,
@@ -348,6 +313,7 @@ async function continueNodeCodexSessionInner(params: {
         cwd: record.cwd,
       }),
     },
+    // Unarchive/finalize follows binding installation so failure cannot expose an unrouted session.
     afterConversationBound: async () =>
       await finalizeNodeAdoptedSession({ api: params.api, adopted, marker }),
   };

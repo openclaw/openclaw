@@ -14,7 +14,6 @@ export interface ExecOptions {
   signal?: AbortSignal;
   /** Timeout in milliseconds */
   timeout?: number;
-  /** Working directory */
   cwd?: string;
   /** Optional maximum retained stdout/stderr characters per stream. */
   maxOutputChars?: number;
@@ -49,32 +48,24 @@ function clampMaxOutputChars(value: number | undefined): number {
 
 function appendCapturedOutput(
   current: OutputCapture,
-  chunk: Buffer | string,
+  chunk: string,
   maxOutputChars: number,
   truncateTail: boolean,
 ): OutputCapture {
-  const text = String(chunk);
-  const combined = `${current.text}${text}`;
+  const combined = `${current.text}${chunk}`;
   const overflowChars = Math.max(0, combined.length - maxOutputChars);
-  if (overflowChars === 0) {
-    return {
-      text: combined,
-      truncatedChars: current.truncatedChars,
-    };
-  }
-  const nextText = truncateTail
-    ? sliceUtf16Safe(combined, overflowChars)
-    : sliceUtf16Safe(combined, 0, maxOutputChars);
+  const nextText =
+    overflowChars === 0
+      ? combined
+      : truncateTail
+        ? sliceUtf16Safe(combined, overflowChars)
+        : sliceUtf16Safe(combined, 0, maxOutputChars);
   return {
     text: nextText,
     truncatedChars: current.truncatedChars + combined.length - nextText.length,
   };
 }
 
-/**
- * Execute a shell command and return stdout/stderr/code.
- * Supports timeout and abort signal.
- */
 export async function execCommand(
   command: string,
   args: string[],
@@ -131,14 +122,14 @@ export async function execCommand(
         proc.nodeChildProcess.once("exit", () => {
           childExited = true;
         });
-        let commandSettled = false;
+        let settled = false;
         const termination = createCommandTerminationController({
           child: proc.nodeChildProcess,
           cancelController,
           processTree: { mode: "graceful" },
           killGraceMs: FORCE_KILL_GRACE_MS,
           isChildExited: () => childExited,
-          isCommandSettled: () => commandSettled,
+          isCommandSettled: () => settled,
         });
         terminationController = termination;
 
@@ -150,22 +141,28 @@ export async function execCommand(
           stdout: createWindowsOutputDecoder({ preserveUtf8Bom: true }),
           stderr: createWindowsOutputDecoder({ preserveUtf8Bom: true }),
         };
-        let settled = false;
         const maxOutputChars = clampMaxOutputChars(options?.maxOutputChars);
         const truncateOutput = options?.maxOutputChars !== undefined;
         let outputLimitExceeded: "stdout" | "stderr" | undefined;
-        const markOutputLimitExceeded = (stream: "stdout" | "stderr") => {
-          if (!truncateOutput && !outputLimitExceeded) {
+        const captureOutput = (stream: "stdout" | "stderr", chunk: string): boolean => {
+          const before = captures[stream].truncatedChars;
+          captures[stream] = appendCapturedOutput(
+            captures[stream],
+            chunk,
+            maxOutputChars,
+            truncateOutput,
+          );
+          if (!truncateOutput && captures[stream].truncatedChars > before && !outputLimitExceeded) {
             outputLimitExceeded = stream;
-            killProcess();
+            return true;
           }
+          return false;
         };
         const finish = async (code: number) => {
           if (settled) {
             return;
           }
           settled = true;
-          commandSettled = true;
           if (timeoutId) {
             clearTimeout(timeoutId);
           }
@@ -174,20 +171,7 @@ export async function execCommand(
           }
           await termination.settle();
           for (const stream of ["stdout", "stderr"] as const) {
-            const before = captures[stream].truncatedChars;
-            captures[stream] = appendCapturedOutput(
-              captures[stream],
-              decoders[stream].flush(),
-              maxOutputChars,
-              truncateOutput,
-            );
-            if (
-              !truncateOutput &&
-              captures[stream].truncatedChars > before &&
-              !outputLimitExceeded
-            ) {
-              outputLimitExceeded = stream;
-            }
+            captureOutput(stream, decoders[stream].flush());
           }
           if (outputLimitExceeded) {
             captures.stderr = appendCapturedOutput(
@@ -216,15 +200,8 @@ export async function execCommand(
             if (!acceptingOutput) {
               return;
             }
-            const before = captures[stream].truncatedChars;
-            captures[stream] = appendCapturedOutput(
-              captures[stream],
-              decodeCapturedOutput(decoders[stream], data),
-              maxOutputChars,
-              truncateOutput,
-            );
-            if (captures[stream].truncatedChars > before) {
-              markOutputLimitExceeded(stream);
+            if (captureOutput(stream, decodeCapturedOutput(decoders[stream], data))) {
+              killProcess();
             }
           });
         }

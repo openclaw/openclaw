@@ -21,7 +21,7 @@ export async function expectLegacyWorkerCatalogRetention(params: {
   catalogReturnsRows: boolean;
   aliasOnly?: boolean;
 }): Promise<void> {
-  const fixture = createCatalogFixture(
+  const fixture = await createCatalogFixture(
     params.makeTempDir,
     0,
     { [EXTERNAL_AUTH_PATH_ENV]: "" },

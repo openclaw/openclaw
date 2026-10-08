@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 // Builds config recipes for upgrade-survivor E2E scenarios.
-import { spawnSync } from "node:child_process";
+import {
+  spawnSync,
+  type SpawnSyncOptionsWithStringEncoding,
+  type SpawnSyncReturns,
+} from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  classifyReleaseTrain,
   compareReleaseVersions,
   parsePinnedReleaseVersion,
-  parseReleaseVersion,
 } from "../../../lib/release-version.mjs";
 import { usesStructuredToolSearchAtBaseline } from "../../../lib/upgrade-survivor-policy.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
@@ -31,26 +33,11 @@ type UpgradeSurvivorCommandParams = {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 };
-type ConfigCommandResult = {
-  error?: Error & { code?: unknown };
-  signal: NodeJS.Signals | null;
-  status: number | null;
-  stderr: string;
-  stdout: string;
-};
 type SpawnSyncCommand = (
   command: string,
   args: string[],
-  options: {
-    encoding: BufferEncoding;
-    env: NodeJS.ProcessEnv;
-    killSignal: NodeJS.Signals;
-    maxBuffer: number;
-    shell: boolean;
-    timeout: number;
-    windowsVerbatimArguments?: boolean;
-  },
-) => ConfigCommandResult;
+  options: SpawnSyncOptionsWithStringEncoding,
+) => Pick<SpawnSyncReturns<string>, "error" | "signal" | "status" | "stderr" | "stdout">;
 type ConfigCommandParams = {
   maxBufferBytes?: number;
   spawnSyncCommand?: SpawnSyncCommand;
@@ -209,12 +196,12 @@ export function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
 const sharedRecipe: ConfigStep[] = [
   configSetJsonFile("gateway", "gateway", "gateway"),
   ...representativeConfigSteps,
-  {
-    id: "validate",
-    intent: "validate",
-    argv: ["config", "validate"],
-  },
 ];
+const validateStep: ConfigStep = {
+  id: "validate",
+  intent: "validate",
+  argv: ["config", "validate"],
+};
 
 const connectionOnlySharedIntents = new Set(["gateway"]);
 const connectionOnlyScenarios = new Set(["mobile-pairing-reconnect", "watchos-direct-node"]);
@@ -223,7 +210,6 @@ export function resolveUpgradeSurvivorConfigSteps(
   scenario = "base",
   configuredUpdateChannel = process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL,
 ): ConfigStep[] {
-  const validateStep = sharedRecipe.at(-1);
   const updateChannel =
     configuredUpdateChannel || (scenario === "prerelease-plugin-registry" ? "beta" : "stable");
   if (updateChannel !== "stable" && updateChannel !== "beta") {
@@ -235,7 +221,6 @@ export function resolveUpgradeSurvivorConfigSteps(
     throw new Error(`invalid selected Tool Search recipe: ${toolSearchRecipe}`);
   }
   const sharedSteps = sharedRecipe
-    .slice(0, -1)
     .filter((step) => step.intent !== "tool-search" || toolSearchRecipe === "current")
     .filter(
       (step) =>
@@ -268,7 +253,7 @@ export function resolveUpgradeSurvivorConfigSteps(
     },
     ...sharedSteps,
     ...resolveScenarioConfigSteps(scenario),
-    ...(validateStep ? [validateStep] : []),
+    validateStep,
   ];
 }
 
@@ -291,14 +276,7 @@ function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null):
       agents.entries.main.default = true;
       delete agents.ownership;
     }
-    // July's extended-stable line branched before keyed rosters shipped.
-    const baselineRelease = parseReleaseVersion(baselineVersion ?? "");
-    if (
-      (baselineRelease?.year === 2026 &&
-        baselineRelease.month === 7 &&
-        classifyReleaseTrain(baselineRelease) === "extended-stable") ||
-      compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1
-    ) {
+    if (compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1) {
       agents.list = Object.entries<Record<string, unknown>>(agents.entries).map(([id, entry]) =>
         Object.assign(entry, { id }),
       );

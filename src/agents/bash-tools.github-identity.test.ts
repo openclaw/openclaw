@@ -57,7 +57,7 @@ describe("exec GitHub identity", () => {
   it("keeps required sandbox execution isolated from host overrides, elevation, and GitHub credentials", async () => {
     setTestEnvValue("GH_TOKEN", "ambient-token");
     setTestEnvValue("GITHUB_TOKEN", "ambient-fallback");
-    storeMocks.readSecretStoreExecEnvironment.mockReturnValue({ env: {} });
+    storeMocks.readSecretStoreExecEnvironment.mockResolvedValue({ env: {} });
     const buildExecSpec = vi.fn(async ({ env }: { env: Record<string, string> }) => ({
       argv: [process.execPath, "-e", "process.stdout.write('sandbox-ok')"],
       env,
@@ -120,7 +120,7 @@ describe("exec GitHub identity", () => {
   });
 
   it("excludes the preview store ref from native gateway exec projection", async () => {
-    storeMocks.readSecretStoreExecEnvironment.mockReturnValue({ env: {} });
+    storeMocks.readSecretStoreExecEnvironment.mockResolvedValue({ env: {} });
     const preparedRunEnvironment = previewEnvironment("store", "PREVIEW_STORE_TOKEN");
     expect(preparedRunEnvironment.credentialScrubEnv.PREVIEW_STORE_TOKEN).toBe("");
     const tool = createExecTool({

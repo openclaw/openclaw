@@ -32,8 +32,6 @@ export type ExecAsk = ExecApprovalsResolvedDefaults["ask"];
 // Editor choices stay closed even though the wire accepts policy strings for host normalization.
 type ExecApprovalsDefaults = Partial<ExecApprovalsResolvedDefaults>;
 
-export type ExecApprovalsAllowlistEntry = NonNullable<WireExecApprovalsAgent["allowlist"]>[number];
-
 type ExecApprovalsAgent = ExecApprovalsDefaults & Pick<WireExecApprovalsAgent, "allowlist">;
 
 export type ExecApprovalsFile = {
@@ -79,7 +77,6 @@ type NodesState = NodesRequestState & {
   nodesQueuedRefresh: QueuedRefresh;
   nodes: Array<Record<string, unknown>>;
   lastError: string | null;
-  chatError?: string | null;
 };
 
 type DevicesState = NodesRequestState & {
@@ -97,7 +94,6 @@ type ExecApprovalsState = NodesRequestState & {
   execApprovalsForm: ExecApprovalsFile | null;
   execApprovalsSelectedAgent: string | null;
   lastError: string | null;
-  chatError?: string | null;
 };
 
 export type DevicesPageDataState = NodesState & DevicesState & ExecApprovalsState;
@@ -150,7 +146,6 @@ export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
   state.nodesLoading = true;
   if (!opts?.quiet) {
     state.lastError = null;
-    state.chatError = null;
   }
   const generation = state.requestGeneration;
   try {
@@ -244,7 +239,6 @@ export async function rejectDevicePairing(state: DevicesState, requestId: string
   await runDeviceMutation(state, (client) => client.request("device.pair.reject", { requestId }));
 }
 
-/** Entry removal request resolved from the unified inventory row. */
 export type InventoryRemovalRequest = {
   id: string;
   name: string;
@@ -416,7 +410,6 @@ function classifyRotationOutcome(
   );
 }
 
-/** Rotates a device token and returns what the Gateway did with the replacement. */
 export async function rotateDeviceToken(
   state: DevicesState,
   params: { deviceId: string; gatewayUrl: string; role: string; scopes?: string[] },
@@ -494,7 +487,6 @@ export async function loadExecApprovals(
   }
   state.execApprovalsLoading = true;
   state.lastError = null;
-  state.chatError = null;
   const generation = state.requestGeneration;
   try {
     const rpc = resolveExecApprovalsRpc(target);
@@ -545,7 +537,6 @@ export async function saveExecApprovals(
   }
   state.execApprovalsSaving = true;
   state.lastError = null;
-  state.chatError = null;
   const generation = state.requestGeneration;
   try {
     if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {

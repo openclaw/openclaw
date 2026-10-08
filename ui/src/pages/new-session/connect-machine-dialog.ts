@@ -12,14 +12,8 @@ import { formatTimeMs } from "../../lib/format.ts";
 
 registerNewSessionSetupEnglish();
 
-/**
- * The join setup behind the connect-machine dialog.
- *
- * The request token and the open flag travel together on purpose: a setup that
- * arrives after the dialog closed, after the gateway changed, or after a newer
- * request started must be dropped rather than shown, and closing has to retire
- * whatever is still in flight.
- */
+// Closing, replacing the Gateway, or starting a newer request retires prior setup.
+// Both the request token and open state fence late replies.
 export class ConnectMachineSetupState {
   private openValue = false;
   private loadingValue = false;

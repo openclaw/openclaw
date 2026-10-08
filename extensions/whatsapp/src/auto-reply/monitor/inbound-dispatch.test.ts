@@ -84,7 +84,7 @@ async function fixture(overrides: Partial<Params> & { msg?: Message } = {}) {
     context: { Body: "hi", CommandAuthorized: false },
     deliverReply,
     maxMediaBytes: 1,
-    inbound,
+    conversationId: inbound.conversation.id,
     replyLogger: replyLogger as never,
     replyPipeline: {},
     replyResolver: async () => undefined,
@@ -156,7 +156,7 @@ describe("prepared WhatsApp inbound boundary", () => {
       command: {
         kind: "text-slash",
         body: "/status",
-        authorization: { kind: "denied", reason: "sender_not_allowed" },
+        authorized: false,
       },
       route: route({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
       sender: { id: "+15550001111", name: "Alice", e164: "+15550001111" },
@@ -168,7 +168,8 @@ describe("prepared WhatsApp inbound boundary", () => {
       suppressMessageReceivedHooks: true,
     });
     expect(prepared.inbound).toMatchObject({
-      event: { id: "current-1", timestamp: 1_710_000_000 },
+      messageId: "current-1",
+      timestamp: 1_710_000_000,
       message: {
         body: "formatted agent body",
         bodyForAgent: "agent body",
@@ -181,29 +182,36 @@ describe("prepared WhatsApp inbound boundary", () => {
       command: {
         kind: "text-slash",
         body: "/status",
-        authorization: { kind: "denied", reason: "sender_not_allowed" },
+        authorized: false,
       },
       media: [
         { path: "/tmp/photo.jpg", contentType: "image/jpeg", kind: "image", transcribed: true },
       ],
-      context: {
-        transcript: "prepared transcript",
-        groupSubject: "Boundary Room",
-        senderE164: "+15550001111",
-        replyThreading: { implicitCurrentMessage: "allow" },
+      extra: {
+        Transcript: "prepared transcript",
+        GroupSubject: "Boundary Room",
+        SenderE164: "+15550001111",
+        ReplyThreading: { implicitCurrentMessage: "allow" },
       },
     });
     expect(prepared.ctxPayload).toMatchObject({
+      MessageSid: "current-1",
+      BodyForAgent: "agent body",
+      RawBody: "agent body",
+      CommandBody: "/status",
+      ReplyToId: "quoted-1",
+      Transcript: "prepared transcript",
       SenderId: "+15550001111",
       SenderIsSelf: true,
       ConversationLabel: "123@g.us",
       GroupSubject: "Boundary Room",
       GroupMembers: "Alice (+15550001111)",
+      CommandAuthorized: false,
+      SuppressMessageReceivedHooks: true,
     });
     expect(nonPortablePaths(prepared.inbound)).toEqual([]);
     expect(prepared.inbound).not.toHaveProperty("platform");
     expect(prepared.inbound).not.toHaveProperty("admission");
-    expect(prepared.control).toEqual({ messageReceivedHooks: "channel" });
     const transport = buildWhatsAppInboundTransportContext(msg);
     expect(transport).toMatchObject({
       accountId: "default",
@@ -223,10 +231,10 @@ describe("prepared WhatsApp inbound boundary", () => {
     const msg = message({ event: { id: undefined, timestamp: 1_710_000_000 } });
     const params = { msg, sender: { id: "+15550001111" } };
     const [first, second] = await Promise.all([prepare(params), prepare(params)]);
-    expect(first.inbound.event.id).not.toBe(second.inbound.event.id);
+    expect(first.inbound.messageId).not.toBe(second.inbound.messageId);
     const { plan } = await fixture({
       msg,
-      inbound: first.inbound,
+      conversationId: first.inbound.conversation.id,
       context: { CommandAuthorized: false, ReplyToId: "quoted-bot-message" },
     });
     if (typeof plan.delivery.durable !== "function") {
@@ -244,7 +252,7 @@ describe("prepared WhatsApp inbound boundary", () => {
       combinedBody: "spoken transcript",
       rawBody: "",
       transcript: "spoken transcript",
-      command: { kind: "normal", body: "", authorization: { kind: "denied" } },
+      command: { kind: "normal", body: "", authorized: false },
       msg: message({
         payload: {
           body: "",

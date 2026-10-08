@@ -50,6 +50,8 @@ it("keeps Messages default and opens capture with a collapsed schema editor insi
       basePath: "",
       gateway: { ...gateway, connection: { gatewayUrl: "ws://transcripts.test" } },
       runtimeConfig,
+      agentSelection: { state: { selectedId: "main" } },
+      agents: { state: { agentsList: null } },
       navigate: vi.fn(),
       config: { current: { assistantIdentity: { name: "OpenClaw" } } },
       overlays: { snapshot: { updateRunning: false, updateReconciliationPending: false } },

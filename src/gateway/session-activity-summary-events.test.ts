@@ -69,9 +69,9 @@ function summaryFixture() {
   return { target, other, initial, projection, preparation, entered, ready, broadcast, publish };
 }
 
-it("joins a recap admitted before its deferred preparation starts", async () => {
+it("joins deferred recaps, coalesces the latest row, and admits changes made during delivery", async () => {
   const f = summaryFixture();
-  const publication = f.publish();
+  const first = f.publish();
   let drained = false;
   const drain = drainSessionEventPublications(f.projection).then(() => {
     drained = true;
@@ -80,28 +80,19 @@ it("joins a recap admitted before its deferred preparation starts", async () => 
   await Promise.resolve();
   expect(drained).toBe(false);
   expect(f.broadcast).not.toHaveBeenCalled();
-  f.ready.resolve();
-  await vi.runAllTimersAsync();
-  await Promise.all([publication, drain]);
-  expect(drained).toBe(true);
-  expect(f.broadcast).toHaveBeenCalledOnce();
-});
-
-it("coalesces pending recaps to the latest row and admits changes made during delivery", async () => {
-  const f = summaryFixture();
-  const first = f.publish();
-  await f.entered.promise;
   f.projection.setEntry("first", { ...f.initial, label: "latest" });
   const second = f.publish();
   let following: Promise<void> | undefined;
   f.broadcast.mockImplementationOnce(() => {
+    expect(f.broadcast).toHaveBeenCalledOnce();
     f.projection.setEntry("first", { ...f.initial, label: "after delivery" });
     following = f.publish();
   });
   f.ready.resolve();
   await vi.runAllTimersAsync();
-  await Promise.all([first, second]);
+  await Promise.all([first, second, drain]);
   await following;
+  expect(drained).toBe(true);
   expect(f.broadcast.mock.calls.map(([, payload]) => payload)).toMatchObject([
     { reason: "activity-summary", session: { label: "latest" } },
     { reason: "activity-summary", session: { label: "after delivery" } },

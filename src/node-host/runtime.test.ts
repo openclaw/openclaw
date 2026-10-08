@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
-import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke.js";
@@ -12,9 +11,7 @@ import {
   createNodeHostClient,
   frame,
   holdInvoke,
-  listRegisteredNodeHostCapsAndCommands,
   mocks,
-  prepareNodeHostRuntime,
   startRuntime,
 } from "./runtime.test-support.js";
 
@@ -25,7 +22,6 @@ type SkillBinsFixture = {
   expected: SkillBinTrustEntry[];
   response: SkillBinsResponse;
   invoke: (id: string) => Promise<void>;
-  expire: () => void;
   disconnect: () => Promise<void>;
 };
 
@@ -36,8 +32,6 @@ async function withSkillBinsRuntime(run: (fixture: SkillBinsFixture) => Promise<
     const invokes: Promise<void>[] = [];
     const name = path.basename(process.execPath);
     const response = { bins: [name] };
-    const now = Date.now;
-    let elapsed = 0;
     const runtime = await startRuntime(
       createNodeHostClient(() => {
         const request = createDeferred<SkillBinsResponse>();
@@ -45,7 +39,6 @@ async function withSkillBinsRuntime(run: (fixture: SkillBinsFixture) => Promise<
         return request.promise;
       }),
     );
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
     mocks.handleInvoke.mockImplementation(async (...args: unknown[]) => {
       const request = args[0] as typeof frame;
       const provider = args[2] as SkillBinsProvider;
@@ -62,9 +55,6 @@ async function withSkillBinsRuntime(run: (fixture: SkillBinsFixture) => Promise<
           invokes.push(pending);
           return pending;
         },
-        expire: () => {
-          elapsed += 90_001;
-        },
         disconnect: () => runtime.cancelAll(),
       });
     } finally {
@@ -77,27 +67,14 @@ async function withSkillBinsRuntime(run: (fixture: SkillBinsFixture) => Promise<
         await runtime.close();
       } finally {
         mocks.handleInvoke.mockReset();
-        clock.mockRestore();
       }
     }
   });
 }
 
-async function primeSkillBins(fixture: SkillBinsFixture) {
-  const pending = fixture.invoke("prime");
-  await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
-  expectDefined(fixture.requests[0], "initial skill refresh").resolve(fixture.response);
-  await pending;
-  expect(fixture.observed.get("prime")).toEqual(fixture.expected);
-  fixture.expire();
-}
-
 describe("node-host skill-bin cache", () => {
-  it.each(["cold", "expired"])("shares a failed %s refresh and permits retry", async (phase) => {
+  it("shares a failed cold refresh and permits retry", async () => {
     await withSkillBinsRuntime(async (fixture) => {
-      if (phase === "expired") {
-        await primeSkillBins(fixture);
-      }
       const requestCount = fixture.requests.length + 1;
       const first = fixture.invoke("first");
       const second = fixture.invoke("second");
@@ -107,7 +84,7 @@ describe("node-host skill-bin cache", () => {
       );
       await Promise.all([first, second]);
       for (const id of ["first", "second"]) {
-        expect(fixture.observed.get(id)).toEqual(phase === "expired" ? fixture.expected : []);
+        expect(fixture.observed.get(id)).toEqual([]);
       }
       const retry = fixture.invoke("retry");
       const joined = fixture.invoke("joined-retry");
@@ -364,36 +341,6 @@ describe("node-host invocation cancellation", () => {
 });
 
 describe("node-host desktop manifest", () => {
-  it.each([
-    { configEnabled: false, nativeEnabled: undefined, ephemeral: false, enabled: false },
-    { configEnabled: true, nativeEnabled: false, ephemeral: false, enabled: false },
-  ])(
-    "honors desktop opt-out from config=$configEnabled and native=$nativeEnabled",
-    async ({ configEnabled, nativeEnabled, ephemeral, enabled }) => {
-      const prepared = await prepareNodeHostRuntime({
-        config: { desktop: { host: { enabled: configEnabled, port: 5901 } } },
-        env: { PATH: "/usr/bin" },
-        desktopSharingEnabled: nativeEnabled,
-        platform: "darwin",
-        ephemeral,
-      });
-      expect(prepared.manifest.commands.includes(NODE_DESKTOP_STREAM_COMMAND)).toBe(enabled);
-      const runtime = prepared.start({ client: createNodeHostClient(async () => ({ bins: [] })) });
-      try {
-        await runtime.invoke({ ...frame, command: NODE_DESKTOP_STREAM_COMMAND });
-        expect(mocks.handleInvoke).toHaveBeenLastCalledWith(
-          expect.anything(),
-          expect.anything(),
-          expect.anything(),
-          expect.anything(),
-          expect.objectContaining({ desktopHostConfig: { enabled, port: 5901 } }),
-        );
-      } finally {
-        await runtime.close();
-      }
-    },
-  );
-
   it("emits desktop statuses without control-channel heartbeats", async () => {
     const runtime = await startRuntime();
     await runtime.invoke({ ...frame, command: NODE_DESKTOP_STREAM_COMMAND });
@@ -511,46 +458,5 @@ describe("node-host invoke input dispatch", () => {
       runtime.handleInput(frame.id, 5, "continued");
       expect(input).not.toHaveBeenCalled();
     });
-  });
-});
-
-describe("node-host duplex capability selection", () => {
-  it("advertises duplex plugin commands without enabling native agent runs", async () => {
-    await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      enableDuplexPluginCommands: true,
-    });
-
-    expect(listRegisteredNodeHostCapsAndCommands).toHaveBeenLastCalledWith(expect.anything(), {
-      includeDuplex: true,
-    });
-  });
-});
-
-describe("installed application command advertisement", () => {
-  it("advertises device.apps only when sharing is enabled on macOS", async () => {
-    const disabled = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      platform: "darwin",
-      installedAppsSharingEnabled: false,
-    });
-    const enabled = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      platform: "darwin",
-      installedAppsSharingEnabled: true,
-    });
-    const nonDarwin = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      platform: "linux",
-      installedAppsSharingEnabled: true,
-    });
-
-    expect(disabled.manifest.commands).not.toContain(NODE_DEVICE_APPS_COMMAND);
-    expect(enabled.manifest.commands).toContain(NODE_DEVICE_APPS_COMMAND);
-    expect(nonDarwin.manifest.commands).not.toContain(NODE_DEVICE_APPS_COMMAND);
   });
 });

@@ -8,10 +8,8 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 };
 
 const TELEGRAM_POLL_STOP_TIMEOUT_COOLDOWN_POLICY = {
+  ...TELEGRAM_POLL_RESTART_POLICY,
   initialMs: 120_000,
-  maxMs: 600_000,
-  factor: 2,
-  jitter: 0.2,
 };
 const TELEGRAM_POLL_STOP_TIMEOUT_BURST_LIMIT = 2;
 
@@ -30,9 +28,7 @@ export function createTelegramRestartBackoffState(): TelegramRestartBackoffState
 }
 
 export function resetTelegramRestartBackoffState(state: TelegramRestartBackoffState): void {
-  state.restartAttempts = 0;
-  state.stopTimeoutBurst = 0;
-  state.stopTimeoutCooldownAttempts = 0;
+  Object.assign(state, createTelegramRestartBackoffState());
 }
 
 export function resolveTelegramRestartDelayMs(

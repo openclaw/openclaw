@@ -56,7 +56,7 @@ export function registerTelegramMiniAppRoutes(
         await handleAuth(api, launchTickets, req, res);
         return true;
       }
-      sendText(res, 404, "Not found");
+      sendResponse(res, 404, "Not found");
       return true;
     },
   });
@@ -64,19 +64,19 @@ export function registerTelegramMiniAppRoutes(
 
 async function handlePage(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   if (req.method !== "GET") {
-    sendText(res, 405, "Method not allowed");
+    sendResponse(res, 405, "Method not allowed");
     return;
   }
   const accountId = normalizeAccountId(url.searchParams.get("accountId") ?? DEFAULT_ACCOUNT_ID);
   const nonce = crypto.randomBytes(16).toString("base64url");
-  sendHtml(
+  sendResponse(
     res,
     200,
-    renderTelegramMiniAppPage({
-      accountId,
-      scriptNonce: nonce,
-    }),
-    nonce,
+    renderTelegramMiniAppPage({ accountId, scriptNonce: nonce }),
+    "text/html",
+    {
+      "Content-Security-Policy": `default-src 'none'; script-src 'nonce-${nonce}' https://telegram.org; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'`,
+    },
   );
 }
 
@@ -87,12 +87,12 @@ async function handleAuth(
   res: ServerResponse,
 ): Promise<void> {
   if (req.method !== "POST") {
-    sendText(res, 405, "Method not allowed");
+    sendResponse(res, 405, "Method not allowed");
     return;
   }
   const contentType = (req.headers["content-type"] ?? "").toLowerCase();
   if (contentType.split(";")[0]?.trim() !== "application/json") {
-    sendText(res, 415, "Unsupported media type");
+    sendResponse(res, 415, "Unsupported media type");
     return;
   }
   const currentConfig = () => (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
@@ -104,7 +104,7 @@ async function handleAuth(
       requestConfig.gateway?.allowRealIpFallback === true,
     ) ?? "unknown";
   if (rateLimit.isRateLimited(ip)) {
-    sendText(res, 429, "Too many requests");
+    sendResponse(res, 429, "Too many requests");
     return;
   }
 
@@ -120,12 +120,18 @@ async function handleAuth(
   if (!body.ok) {
     return;
   }
-  const authBody = parseAuthBody(body.value);
-  if (!authBody) {
-    sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
+  const authBody = body.value;
+  if (
+    !isRecord(authBody) ||
+    typeof authBody.initData !== "string" ||
+    typeof authBody.launchTicket !== "string"
+  ) {
+    sendResponse(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
     return;
   }
-  const accountId = normalizeAccountId(authBody.accountId ?? DEFAULT_ACCOUNT_ID);
+  const accountId = normalizeAccountId(
+    typeof authBody.accountId === "string" ? authBody.accountId : DEFAULT_ACCOUNT_ID,
+  );
   const cfg = currentConfig();
   const account = resolveTelegramAccount({ cfg, accountId });
   const validated = validateTelegramMiniAppInitData({
@@ -133,11 +139,11 @@ async function handleAuth(
     botToken: account.token,
   });
   if (!validated) {
-    sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
+    sendResponse(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
     return;
   }
   if (!(await isTelegramMiniAppOwner({ cfg, accountId, userId: validated.userId }))) {
-    sendText(res, 403, "Restricted to the bot owner.");
+    sendResponse(res, 403, "Restricted to the bot owner.");
     return;
   }
 
@@ -145,11 +151,11 @@ async function handleAuth(
   try {
     urls = await resolveTelegramMiniAppUrls({ cfg });
   } catch {
-    sendText(res, 503, TELEGRAM_MINIAPP_URL_ERROR);
+    sendResponse(res, 503, TELEGRAM_MINIAPP_URL_ERROR);
     return;
   }
   if (!(await isTelegramMiniAppOwner({ cfg, accountId, userId: validated.userId }))) {
-    sendText(res, 403, "Restricted to the bot owner.");
+    sendResponse(res, 403, "Restricted to the bot owner.");
     return;
   }
   const authorityChanged = new Error("Telegram Mini App owner configuration changed");
@@ -167,11 +173,11 @@ async function handleAuth(
         userId: validated.userId,
       })
     ) {
-      sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
+      sendResponse(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
       return;
     }
     if (!rememberReplay(validated.hash, validated.authDateMs + 300_000)) {
-      sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
+      sendResponse(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
       return;
     }
     const issued = await issueDeviceBootstrapToken({
@@ -183,37 +189,31 @@ async function handleAuth(
       },
     });
     assertCurrent();
-    sendJson(res, 200, {
-      bootstrapToken: issued.token,
-      controlUiUrl: urls.controlUiUrl,
-      gatewayUrl: urls.gatewayUrl,
-    });
+    sendResponse(
+      res,
+      200,
+      JSON.stringify({
+        bootstrapToken: issued.token,
+        controlUiUrl: urls.controlUiUrl,
+        gatewayUrl: urls.gatewayUrl,
+      }),
+      "application/json",
+    );
   } catch (error) {
     if (error !== authorityChanged) {
       throw error;
     }
-    sendText(res, 403, "Restricted to the bot owner.");
+    sendResponse(res, 403, "Restricted to the bot owner.");
   }
-}
-
-function parseAuthBody(
-  value: unknown,
-): { initData: string; launchTicket: string; accountId?: string } | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  if (typeof value.initData !== "string" || typeof value.launchTicket !== "string") {
-    return null;
-  }
-  return {
-    initData: value.initData,
-    launchTicket: value.launchTicket,
-    ...(typeof value.accountId === "string" ? { accountId: value.accountId } : {}),
-  };
 }
 
 function rememberReplay(hash: string, expiresAtMs: number): boolean {
-  pruneReplayCache();
+  const now = Date.now();
+  for (const [cachedHash, expires] of replayCache) {
+    if (expires <= now) {
+      replayCache.delete(cachedHash);
+    }
+  }
   if (replayCache.has(hash)) {
     return false;
   }
@@ -222,41 +222,19 @@ function rememberReplay(hash: string, expiresAtMs: number): boolean {
   return true;
 }
 
-function pruneReplayCache(): void {
-  const now = Date.now();
-  for (const [hash, expiresAtMs] of replayCache) {
-    if (expiresAtMs <= now) {
-      replayCache.delete(hash);
-    }
-  }
-}
-
-function securityHeaders(extra?: Record<string, string>): Record<string, string> {
-  return {
+function sendResponse(
+  res: ServerResponse,
+  status: number,
+  body: string,
+  contentType = "text/plain",
+  headers?: Record<string, string>,
+): void {
+  res.writeHead(status, {
     "Cache-Control": "no-store",
     "Referrer-Policy": "no-referrer",
     "X-Robots-Tag": "noindex",
-    ...extra,
-  };
-}
-
-function sendHtml(res: ServerResponse, status: number, body: string, nonce: string): void {
-  res.writeHead(
-    status,
-    securityHeaders({
-      "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy": `default-src 'none'; script-src 'nonce-${nonce}' https://telegram.org; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'`,
-    }),
-  );
-  res.end(body);
-}
-
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, securityHeaders({ "Content-Type": "application/json; charset=utf-8" }));
-  res.end(JSON.stringify(body));
-}
-
-function sendText(res: ServerResponse, status: number, body: string): void {
-  res.writeHead(status, securityHeaders({ "Content-Type": "text/plain; charset=utf-8" }));
+    "Content-Type": `${contentType}; charset=utf-8`,
+    ...headers,
+  });
   res.end(body);
 }

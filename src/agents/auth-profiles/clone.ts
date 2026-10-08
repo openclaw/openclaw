@@ -3,16 +3,13 @@
  * Keeps store snapshots JSON-serializable before callers mutate or persist
  * profile state.
  */
+import { cloneAuthProfileJsonValue } from "./clone-value.js";
+import { copyCanonicalAuthProfileCredentialObservations } from "./credential-observation.js";
 import type { AuthProfileStore } from "./types.js";
 
 /** Deep-clones an auth profile store and rejects non-JSON values. */
 export function cloneAuthProfileStore<T extends AuthProfileStore>(store: T): T {
-  return JSON.parse(
-    JSON.stringify(store, (_key, value: unknown) => {
-      if (typeof value === "bigint" || typeof value === "function" || typeof value === "symbol") {
-        throw new TypeError(`AuthProfileStore contains non-JSON value: ${typeof value}`);
-      }
-      return value;
-    }),
-  ) as T;
+  const cloned = cloneAuthProfileJsonValue(store);
+  copyCanonicalAuthProfileCredentialObservations(store.profiles, cloned.profiles);
+  return cloned;
 }

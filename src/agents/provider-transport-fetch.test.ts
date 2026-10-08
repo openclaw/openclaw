@@ -2,7 +2,9 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { prepareModelRequestBody } from "../../packages/ai/src/transports/model-request-body.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   buildGuardedModelFetch,
@@ -76,6 +78,8 @@ describe("buildGuardedModelFetch", () => {
   installProviderTransportFetchTestHooks();
 
   it("waits for local reconciliation and releases its lease after consuming the body", async () => {
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", "http://127.0.0.1:7799");
     const entered = createDeferredCore();
     const lease = createDeferredCore<{ release: () => void }>();
     const release = vi.fn();
@@ -83,14 +87,21 @@ describe("buildGuardedModelFetch", () => {
       entered.resolve();
       return lease.promise;
     });
-    const pending = request({ method: "POST" }, localModel);
-    await entered.promise;
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-    lease.resolve({ release });
-    const response = await pending;
-    await expect(response.text()).resolves.toBe("ok");
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
+    try {
+      const pending = request({ method: "POST" }, localModel);
+      await entered.promise;
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      lease.resolve({ release });
+      const response = await pending;
+      await expect(response.text()).resolves.toBe("ok");
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+      expect(resolveProviderRequestPolicyConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({ request: { proxy: undefined } }),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("releases the local lease when guarded fetch fails", async () => {
@@ -148,19 +159,6 @@ describe("buildGuardedModelFetch", () => {
     } finally {
       timeoutSpy.mockRestore();
       anySpy.mockRestore();
-    }
-  });
-
-  it("does not force the debug proxy onto plain HTTP local transports", async () => {
-    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
-    vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", "http://127.0.0.1:7799");
-    try {
-      await (await request({}, localModel)).text();
-      expect(resolveProviderRequestPolicyConfigMock).toHaveBeenCalledWith(
-        expect.objectContaining({ request: { proxy: undefined } }),
-      );
-    } finally {
-      vi.unstubAllEnvs();
     }
   });
 
@@ -435,4 +433,169 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBe(expected);
     },
   );
+});
+
+describe("buildGuardedModelFetch headers", () => {
+  const headerModel = makeProviderModelFixture<"openai-responses">({
+    id: "fixture-model",
+    provider: "openai",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+  });
+  const url = `${headerModel.baseUrl}/responses`;
+  const egressHeaders = () => new Headers(fetchWithSsrFGuardMock.mock.lastCall?.[0]?.init?.headers);
+
+  installProviderTransportFetchTestHooks();
+
+  it.each(["Request", "custom iterator"] as const)(
+    "resolves %s header sentinels only at egress without mutating the caller",
+    async (form) => {
+      const secret = form === "Request" ? "request-form-secret" : "iterable-header-secret";
+      const sentinel = mintSecretSentinel(secret, { label: "header-form" });
+      const header = form === "Request" ? "authorization" : "x-api-key";
+      const prefix = form === "Request" ? "Bearer " : "";
+      const original = form === "Request" ? `${prefix}${sentinel}` : "original-value";
+      const headers = new Headers({ [header]: original });
+      if (form === "custom iterator") {
+        headers[Symbol.iterator] = function* () {
+          yield [header, sentinel];
+          return undefined;
+        };
+      }
+      const headerRequest =
+        form === "Request"
+          ? new Request(url, { method: "POST", headers, body: '{"stream":true}' })
+          : undefined;
+      await (
+        await buildGuardedModelFetch(headerModel)(
+          headerRequest ?? url,
+          headerRequest ? undefined : { headers },
+        )
+      ).text();
+      expect(egressHeaders().get(header)).toBe(`${prefix}${secret}`);
+      expect(headers.get(header)).toBe(original);
+      if (headerRequest) {
+        expect(
+          new Headers(ensureModelProviderLocalServiceMock.mock.lastCall?.[1]).get(header),
+        ).toBe(original);
+        expect(headerRequest.headers.get(header)).toBe(original);
+        const init = fetchWithSsrFGuardMock.mock.lastCall?.[0]?.init;
+        expect(init.method).toBe("POST");
+        await expect(new Response(init.body).text()).resolves.toBe('{"stream":true}');
+      }
+    },
+  );
+
+  it("escapes resolved query credentials without changing URL structure", async () => {
+    const sentinel = mintSecretSentinel("gemini&scope=two+#%", { label: "gemini-query" });
+    await (await buildGuardedModelFetch(headerModel)(`${url}?key=${sentinel}`)).text();
+    expect(latestGuardedFetchParams().url).toBe(`${url}?key=gemini%26scope%3Dtwo%2B%23%25`);
+  });
+
+  it("rejects unregistered sentinels before guarded fetch", async () => {
+    const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
+    await expect(
+      buildGuardedModelFetch(headerModel)(url, {
+        headers: { Authorization: `Bearer ${unknown}` },
+      }),
+    ).rejects.toThrow(
+      `Secret sentinel ${unknown} is not registered in this process; refusing to send request`,
+    );
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildGuardedModelFetch SSE readability", () => {
+  const completionModel = makeProviderModelFixture<"openai-completions">({
+    id: "fixture-model",
+    provider: "openrouter",
+    api: "openai-completions",
+    baseUrl: "https://openrouter.ai/api/v1",
+  });
+  const url = `${completionModel.baseUrl}/chat/completions`;
+
+  function respond(chunks: string[], contentType?: string) {
+    return mockResponse(
+      new Response(responseStream(chunks).stream, {
+        headers: contentType ? { "content-type": contentType } : undefined,
+      }),
+    );
+  }
+
+  installProviderTransportFetchTestHooks();
+
+  it.each(["prepared HTML", "untyped HTML"])(
+    "rejects %s instead of returning a successful stream",
+    async (mode) => {
+      const release = respond(
+        ["<html>not the API</html>"],
+        mode === "prepared HTML" ? "text/html" : undefined,
+      );
+      const body =
+        mode === "prepared HTML"
+          ? (await prepareModelRequestBody(undefined)({ model: completionModel.id, stream: true }))
+              .body
+          : '{"stream":true}';
+      await expect(
+        buildGuardedModelFetch(completionModel)(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        }),
+      ).rejects.toMatchObject({
+        name: "ProviderHttpError",
+        status: 200,
+        code: "invalid_provider_content_type",
+        errorType: "invalid_response",
+        message: expect.stringMatching(/baseUrl.*\/v1 path prefix/),
+      });
+      expect(release).toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "official OpenAI event-only frames",
+      target: { ...completionModel, provider: "openai", baseUrl: "https://api.openai.com/v1" },
+      input: new Request("https://api.openai.com/v1/responses", { method: "POST" }),
+      init: undefined,
+      chunks: ['event: response.created\n\ndata: {"ok": true}\n\n'],
+      expected: 'event: response.created\n\ndata: {"ok": true}\n\n',
+    },
+    {
+      name: "mixed chunked framing and multiline data, excluding blank keepalives",
+      target: completionModel,
+      input: url,
+      init: { method: "POST" },
+      chunks: [
+        "event: ping\ndata\ndata:\ndata: \t\uFEFF\u00A0\n\nData: ignored\n data: ignored\ndatabase: ignored\n\n",
+        'data: {"ok"',
+        ": true}\n",
+        "\n",
+        "event: ping\r",
+        "\rdata: \u0085\r",
+        "\rdata: \u200B\r\r",
+        'data:\r\ndata: {\r\ndata: "ok": true}\r\ndata: \t\r',
+        "\n\r",
+        "\n",
+        "event: ping\ndata\ndata: \t\uFEFF\u00A0",
+      ],
+      expected:
+        'data: {"ok": true}\n\ndata: \u0085\r\rdata: \u200B\r\r' +
+        'data:\r\ndata: {\r\ndata: "ok": true}\r\ndata: \t\r\n\r\n',
+    },
+    {
+      name: "a readable EOF tail ending with a blank data line",
+      target: completionModel,
+      input: url,
+      init: undefined,
+      chunks: ['data: {"ok": true}\ndata: \t'],
+      expected: 'data: {"ok": true}\ndata: \t',
+    },
+  ])("preserves $name", async ({ target, input, init, chunks, expected }) => {
+    respond(chunks, "text/event-stream");
+    await expect((await buildGuardedModelFetch(target)(input, init)).text()).resolves.toBe(
+      expected,
+    );
+  });
 });

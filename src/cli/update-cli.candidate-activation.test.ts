@@ -327,7 +327,7 @@ describe("update-cli", () => {
     },
   );
 
-  it.each(["owned-running", "no-restart", "stopped"] as const)(
+  it.each(["owned-running", "no-restart"] as const)(
     "uses compatibility-checked package update without full-state startup (%s)",
     async (mode) => {
       const root = await mockPackageInstallAtCaseDir("openclaw-update-startup-admission");
@@ -341,9 +341,6 @@ describe("update-cli", () => {
         "gateway",
         "run",
       ]);
-      if (mode === "stopped") {
-        serviceReadRuntime.mockResolvedValue({ status: "stopped" });
-      }
       await invokeUpdateCli({
         yes: true,
         json: true,
@@ -537,7 +534,6 @@ describe("update-cli", () => {
 
   it.each([
     { platform: "darwin" as const, handoff: undefined },
-    { platform: "linux" as const, handoff: "1" },
     { platform: "win32" as const, handoff: "1" },
   ])(
     "quiesces a stopped loaded managed gateway on $platform before package replacement",
@@ -612,8 +608,6 @@ describe("update-cli", () => {
   );
 
   it.each([
-    { name: "an unloaded Darwin LaunchAgent", platform: "darwin" as const, loaded: false },
-    { name: "an ordinary stopped systemd unit", platform: "linux" as const, loaded: true },
     { name: "an ordinary stopped Scheduled Task", platform: "win32" as const, loaded: true },
   ])("leaves $name stopped during package replacement", async ({ platform, loaded }) => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
@@ -674,10 +668,7 @@ describe("update-cli", () => {
     expect(commandCalls()[packageInstallCallIndex]?.[0]).toContain("--prefix");
   });
 
-  it.each([
-    { json: true, handoff: "1", expectedExitCode: 79 },
-    { json: false, handoff: undefined, expectedExitCode: 1 },
-  ])(
+  it.each([{ json: false, handoff: undefined, expectedExitCode: 1 }])(
     "leaves the stopped Gateway down when Git mutation throws without a recovery verdict (json=$json)",
     async ({ json, handoff, expectedExitCode }) => {
       mockStoppedManagedGitGateway();

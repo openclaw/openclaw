@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { supportsContextEngineDurableTurnAdvancement } from "../../context-engine/host-compat.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { openContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
@@ -65,6 +66,8 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
     const store = openContextEngineTurnOutboxWorkerStore({
       agentId: target.agentId,
       path: databasePath,
+      sessionKey: target.sessionKey,
+      sessionId: target.sessionId,
     });
     const owner = {
       engineId: params.lease.effectiveEngineId,
@@ -125,6 +128,7 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
     }
     params.recorder.setAdmissionHandler(enqueueAdmission);
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     const message = error instanceof Error ? error.message : String(error);
     warn(`[context-engine] failed to retry pending turn advancement: ${message}`);
     params.lease.degradeBeforeStart(
@@ -144,12 +148,15 @@ export async function discardContextEngineTurnAttemptIntent(params: {
     await openContextEngineTurnOutboxWorkerStore({
       agentId: admission.agentId,
       path: admission.storePath,
+      sessionKey: admission.sessionKey,
+      sessionId: admission.sessionId,
     }).discardIntent({
       admission,
       engineId: params.lease.effectiveEngineId,
       ownerPluginId: params.lease.effectiveEnginePluginId,
     });
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     warn(
       `[context-engine] failed to discard unaccepted turn intent: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -207,6 +214,8 @@ export async function finalizeAcceptedContextEngineTurn(params: {
     const store = openContextEngineTurnOutboxWorkerStore({
       agentId: admission.agentId,
       path: admission.storePath,
+      sessionKey: admission.sessionKey,
+      sessionId: admission.sessionId,
     });
     const accepted = {
       boundary: params.facts.boundary,
@@ -244,15 +253,18 @@ export async function finalizeAcceptedContextEngineTurn(params: {
         onDeferredMaintenance: (promise) => params.lease.deferDisposalUntil(promise),
       });
     };
-    await drainContextEngineTurnOutbox({
-      store,
-      engine: params.lease.engine,
-      engineId: params.lease.effectiveEngineId,
-      ownerPluginId: params.lease.effectiveEnginePluginId,
-      sessionId: admission.sessionId,
-      onCommitted,
-      warn,
-    });
+    const drainSession = (sessionId: string, limit?: number) =>
+      drainContextEngineTurnOutbox({
+        store,
+        engine: params.lease.engine,
+        engineId: params.lease.effectiveEngineId,
+        ownerPluginId: params.lease.effectiveEnginePluginId,
+        sessionId,
+        ...(limit === undefined ? {} : { limit }),
+        onCommitted,
+        warn,
+      });
+    await drainSession(admission.sessionId);
     // Prioritize the accepted session, then preserve one bounded retry opportunity per
     // other pending session without immediately retrying a failed accepted-session row.
     const retrySessionIds = await store.listPendingSessions({
@@ -264,16 +276,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       if (sessionId === admission.sessionId) {
         continue;
       }
-      await drainContextEngineTurnOutbox({
-        store,
-        engine: params.lease.engine,
-        engineId: params.lease.effectiveEngineId,
-        ownerPluginId: params.lease.effectiveEnginePluginId,
-        sessionId,
-        limit: 1,
-        onCommitted,
-        warn,
-      });
+      await drainSession(sessionId, 1);
     }
     // Finish draining before maintenance can read engine state. Replayed rows use their own
     // target and latest model facts; one offer per session lets the scheduler own coalescing.
@@ -281,6 +284,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       await runContextEngineMaintenance(maintenance);
     }
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     warn(
       `[context-engine] skipped accepted turn advancement: ${error instanceof Error ? error.message : String(error)}`,
     );

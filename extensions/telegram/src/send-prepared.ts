@@ -1,7 +1,8 @@
 import type { InputFile } from "grammy";
 import type { InlineKeyboardMarkup, Message } from "grammy/types";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { runAuthorizedTelegramRequest } from "./account-throttler.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
@@ -11,7 +12,6 @@ import {
 import { rethrowTelegramSendError, isSafeToRetrySendError } from "./network-errors.js";
 import {
   sendTelegramCaptionedMediaWithFallback,
-  sendTelegramOutboundMediaWithPhotoFallback,
   type TelegramOutboundMediaSender,
 } from "./outbound-media.js";
 import {
@@ -65,7 +65,10 @@ export type TelegramPreparedSendPart = {
 type TextFallback = { index: number; count: number };
 type AcceptedPart = TelegramPreparedSendPart & { messageId: number; hasInlineKeyboard: boolean };
 type ObservePart = (part: AcceptedPart) => Promise<void>;
-type PartialDeliveryResult = Parameters<typeof mergeTelegramPartialDeliveryError>[1];
+type PartialDeliveryResult = Omit<
+  Parameters<typeof mergeTelegramPartialDeliveryError>[1],
+  "messageIds" | "visibleReplySent"
+>;
 type AcceptOptions = {
   partialDeliveryResult?: () => PartialDeliveryResult;
   start?: number;
@@ -83,8 +86,7 @@ export function createTelegramPreparedSender(config: {
   chatId: string;
   request: PreparedRequest;
   warn: (message: string) => void;
-  beforeTextPage?: () => Promise<void>;
-  beforeMedia?: () => Promise<void>;
+  beforeSend?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;
   onMediaAccepted?: (mediaUrls: readonly string[]) => void;
 }) {
@@ -200,7 +202,7 @@ export function createTelegramPreparedSender(config: {
     for (const [index, page] of params.pages.entries()) {
       let prepared: ReturnType<typeof params.preparePage>;
       try {
-        await config.beforeTextPage?.();
+        await config.beforeSend?.();
         prepared = params.preparePage(index, acceptedPages);
       } catch (error) {
         reject(error);
@@ -216,8 +218,8 @@ export function createTelegramPreparedSender(config: {
           ...prepared.requestParams(fallback),
           ...(html ? { parse_mode: "HTML" as const } : {}),
         };
-        const send = () =>
-          request(
+        try {
+          return await request(
             label,
             requestParams,
             (effective) =>
@@ -229,9 +231,6 @@ export function createTelegramPreparedSender(config: {
                 !isTelegramHtmlParseError(error) && !isTelegramEmptyContentError(error),
             },
           );
-        let sent;
-        try {
-          sent = await send();
         } catch (error) {
           if (!fallback || !params.drainFallback) {
             throw error;
@@ -241,7 +240,6 @@ export function createTelegramPreparedSender(config: {
           reject(error);
           return undefined;
         }
-        return sent;
       };
       const iterator = sendTelegramTextPageParts({
         page,
@@ -267,10 +265,9 @@ export function createTelegramPreparedSender(config: {
             );
             // Quote fallback rewrites context only. Keep the prepared keyboard
             // on both physical attempts and record the fields actually accepted.
-            const acceptedParams = { ...sent.acceptedParams, ...markup };
             return {
               ...sent,
-              acceptedParams,
+              acceptedParams: { ...sent.acceptedParams, ...markup },
             };
           },
         },
@@ -309,7 +306,7 @@ export function createTelegramPreparedSender(config: {
     if (parts.length === start && firstSilentSkipError !== undefined) {
       fail(firstSilentSkipError, start);
     }
-    return parts.slice(start);
+    return parts[start]?.messageId;
   };
 
   const sendMedia = async (params: {
@@ -319,7 +316,7 @@ export function createTelegramPreparedSender(config: {
     plainCaption?: string;
   }) => {
     const send = async (sender: TelegramOutboundMediaSender) => {
-      await config.beforeMedia?.();
+      await config.beforeSend?.();
       return sendTelegramCaptionedMediaWithFallback({
         operation: sender.operation,
         requestParams: params.requestParams,
@@ -332,16 +329,25 @@ export function createTelegramPreparedSender(config: {
           request(sender.operation, requestParams, sender.send, { shouldLog }),
       });
     };
-    const delivery = await sendTelegramOutboundMediaWithPhotoFallback({
-      sender: params.sender,
-      documentSender: params.documentSender ?? params.sender,
-      send,
-    });
+    let sender = params.sender;
+    let delivery;
+    try {
+      delivery = await send(sender);
+    } catch (error) {
+      if (sender.label !== "photo" || !isTelegramPhotoLimitError(error)) {
+        throw error;
+      }
+      logVerbose(
+        `telegram sendPhoto exceeded photo limits; retrying as document: ${formatErrorMessage(error)}`,
+      );
+      sender = params.documentSender ?? sender;
+      delivery = await send(sender);
+    }
     return {
-      ...delivery.result.result,
-      plainText: delivery.result.deliveredCaption ?? "",
-      captionRemoved: delivery.result.captionRemoved,
-      sender: delivery.sender,
+      ...delivery.result,
+      plainText: delivery.deliveredCaption ?? "",
+      captionRemoved: delivery.captionRemoved,
+      sender,
     };
   };
   const sendPhotoAlbum = async (params: {
@@ -349,7 +355,7 @@ export function createTelegramPreparedSender(config: {
     requestParams: Record<string, unknown>;
     plainCaption?: string;
   }) => {
-    await config.beforeMedia?.();
+    await config.beforeSend?.();
     const delivery = await sendTelegramCaptionedMediaWithFallback({
       operation: "sendMediaGroup",
       requestParams: params.requestParams,

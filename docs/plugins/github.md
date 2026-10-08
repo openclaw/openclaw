@@ -109,6 +109,9 @@ hovercard, and GitHub links open externally.
 - Uncached hover previews share a two-second upstream request budget. Slow avatars
   or co-author lookups are omitted; slow required metadata returns a retryable
   unavailable error. The full reader keeps its longer request timeout.
+- Hover previews are shared for one minute across readers using the same GitHub
+  identity. Concurrent requests share a fetch, but each reader must still have
+  access when the result arrives. **Refresh** bypasses the cached preview.
 - **Refresh** requests the current item again. Rate limits, deleted items, and
   unavailable services show their specific explanation in the reader and hovercards,
   including GitHub's retry delay when available. Cached preview details stay visible

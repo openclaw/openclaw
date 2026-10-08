@@ -4,8 +4,6 @@ import type {
   SystemAgentWizardCancel,
   WizardAnswer,
 } from "../../../packages/gateway-protocol/src/index.js";
-// Shared server-method types define the client, context, response, and handler
-// contracts used by every gateway RPC method module.
 import type {
   ConnectParams,
   RequestFrame,
@@ -293,6 +291,7 @@ type GatewayKernelContext = {
   /** Instance-local native approval subscribers; never derived from a network client. */
   approvalEvents?: GatewayApprovalEventPublisher;
   recoveryRuntime?: GatewayRecoveryRuntime;
+  sharedGatewaySessionGenerationState?: import("../server-shared-auth-generation.js").SharedGatewaySessionGenerationState;
   /** Uses the lifecycle owner's module graph for plugin and detached agent turns. */
   createAgentTurnFacade?: InternalAgentTurnFacadeFactory;
   /** Live target facts stay with the instance owner, outside tool dispatch's import graph. */
@@ -322,11 +321,7 @@ type GatewayKernelContext = {
   systemAgentSessions: Map<string, GatewaySystemAgentSession>;
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
-  wizardRunner: (
-    opts: import("../../commands/onboard-types.js").OnboardOptions,
-    runtime: import("../../runtime.js").RuntimeEnv,
-    prompter: import("../../wizard/prompts.js").WizardPrompter,
-  ) => Promise<void>;
+  wizardRunner: import("./wizard.js").SetupWizardRunner;
   channelWizardRunner: import("./wizard.js").ChannelSetupWizardRunner;
   unavailableGatewayMethods?: ReadonlySet<string>;
 };
@@ -455,7 +450,6 @@ type GatewayResidentBridgeContext = {
   ) => void;
 };
 
-/** Complete runtime context available to gateway request handlers. */
 export type GatewayContextResolver = () => GatewayRequestContext | undefined;
 export type GatewayRequestContext = GatewayKernelContext &
   GatewayTransportContext &
@@ -498,12 +492,34 @@ export type GatewayRequestOptions = {
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
+  /** Consume fresh durable facts while their physical reader remains retained. */
+  withCurrent?: <T>(consume: () => T) => Promise<T>;
+  withPreparedCurrent?: <T>(
+    facts: {
+      agentId: string;
+      storePath: string;
+      sessionKey: string;
+      entry: import("../../config/sessions/types.js").SessionEntry | undefined;
+      readSource?: import("../../config/sessions/session-entry-read-source.types.js").CapturedSessionEntryReadSource;
+      members: readonly import("../../config/sessions/session-sharing-store.kernel.js").SessionMember[];
+    },
+    consume: () => T,
+    assertSourceCurrent: () => void,
+  ) => T;
   talkSessionTarget?: import("../talk/session-target.types.js").PreparedTalkSessionTarget;
   /** Original materialized target; Stop must match producer facts, not a later row lookup. */
   admittedTarget?: Readonly<{ agentId: string; sessionKey: string; sessionId: string }>;
   assertCurrent: () => void;
+  /** Prepare captured agent-store reads before a shared-state worker takes its write lock. */
+  prepareWorkerGrant?: () => Promise<{
+    assertCurrent: () => void;
+    assertLifetimeCurrent: () => void;
+    release: () => void | Promise<void>;
+  }>;
   /** Original host/session authority for committed input custody, without the selection precondition. */
   assertAdmittedInputCurrent?: () => void;
+  /** Fresh sharing facts for runtime custody; synchronous methods retain the released SDK contract. */
+  admittedInputAuthority?: import("../../config/sessions/session-pending-input-authority.js").SessionPendingInputAuthority;
   /** Creation-owner notification after COMMIT; binds only this request's previously absent row. */
   recordCreatedSession?: (target: {
     agentId: string;
@@ -527,6 +543,11 @@ export type GatewayRequestHandlerOptions = Omit<
 > & {
   params: Record<string, unknown>;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  /** Synchronously consume current chat.send authority without starting a turn. */
+  withSessionTurnAuthority?: <T>(
+    target: { sessionKey: string; agentId?: string; sessionId: string },
+    consume: (entry: import("../../config/sessions/types.js").InternalSessionEntry) => T,
+  ) => Promise<T>;
   markSessionSubscribePhase?: (
     phase: import("../slow-request-diagnostics.js").SessionSubscribePhase,
   ) => void;
@@ -534,8 +555,11 @@ export type GatewayRequestHandlerOptions = Omit<
   sessionAccessAuthority?: import("../session-access-authority.js").GatewaySessionAccessAuthority;
 };
 
-/** Single gateway method implementation. */
-export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<void> | void;
+export type GatewayRequestHandler = ((
+  opts: GatewayRequestHandlerOptions,
+) => Promise<void> | void) & {
+  prepareRead?: import("./prepared-read.js").GatewayReadPreparation;
+  onReadError?: import("./prepared-read.js").GatewayReadErrorHandler;
+};
 
-/** Registry fragment keyed by gateway protocol method name. */
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;

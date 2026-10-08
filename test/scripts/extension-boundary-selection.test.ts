@@ -307,7 +307,10 @@ describe("extension package PR selection", () => {
     expect(step.env.OPENCLAW_CI_EXTENSION_BOUNDARY_BASE).toBe(
       "${{ needs.preflight.outputs.diff_base_revision }}",
     );
-    expect(step.run).toContain(
+    expect(step.run).toBe("bash .ci-harness/scripts/ci-additional-checks.sh");
+    expect(
+      readFileSync(new URL("../../scripts/ci-additional-checks.sh", import.meta.url), "utf8"),
+    ).toContain(
       'run_check "test:extensions:package-boundary:canary" pnpm run test:extensions:package-boundary:canary',
     );
   });

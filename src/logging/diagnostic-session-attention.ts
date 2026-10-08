@@ -106,6 +106,12 @@ export function classifySessionAttention(params: {
       (params.activity.activeToolAgeMs ?? 0) > params.staleMs &&
       lastProgressAgeMs > params.staleMs
     ) {
+      if (
+        params.activity.activeToolDeadlineAtMs !== undefined &&
+        Date.now() < params.activity.activeToolDeadlineAtMs
+      ) {
+        return longRunning("tool_execution_wait");
+      }
       return stalled("blocked_tool_call", "blocked_tool_call");
     }
     if (

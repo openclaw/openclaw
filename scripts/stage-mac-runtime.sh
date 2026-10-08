@@ -121,7 +121,9 @@ cat > "$STAGE/runtime/lib/node_modules/openclaw/openclaw-install-owner.json" <<'
 {"schemaVersion":1,"owner":"macos-app","displayName":"OpenClaw.app","updateHint":"Update OpenClaw.app to update this Gateway."}
 JSON
 
-/bin/bash "$ROOT_DIR/scripts/stage-openclaw-bun-macos.sh" "$STAGE/runtime" "$@"
+bun_archs=()
+for arch in "$@"; do bun_archs+=("${arch/x86_64/x64}"); done
+/bin/bash "$ROOT_DIR/scripts/stage-openclaw-bun.sh" "$STAGE/runtime" darwin "${bun_archs[@]}"
 sqlite_arch="$1"
 [[ "$#" -eq 1 ]] || sqlite_arch=universal
 /bin/bash "$ROOT_DIR/scripts/build-mac-sqlite.sh" "$sqlite_arch" "$STAGE/runtime"

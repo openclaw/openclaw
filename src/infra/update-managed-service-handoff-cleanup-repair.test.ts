@@ -157,35 +157,56 @@ describe("managed handoff repair facts", () => {
       commandArgv: ["node", "update", "--timeout", "8000", "--timeout=7200"],
       expected: 8_000_000,
     },
-  ])("preserves the larger recorded $name phase budget", async ({ name, expected, ...fields }) => {
-    await helper(name, fields);
-    vi.mocked(listUpdateRunsAsync).mockResolvedValue([run("retained-run", {})]);
-    expect((await readManagedHandoffRepairFacts(lease, env)).timeoutMs).toBe(expected);
-  });
+    {
+      name: "invalid-duration",
+      commandArgv: ["--timeout=9000.5", "--timeout", "Infinity"],
+      expected: null,
+    },
+  ])(
+    "reads the recorded $name phase budget with the CLI timeout parser",
+    async ({ name, expected, ...fields }) => {
+      await helper(name, fields);
+      vi.mocked(listUpdateRunsAsync).mockResolvedValue([run("retained-run", {})]);
+      expect((await readManagedHandoffRepairFacts(lease, env)).timeoutMs).toBe(expected);
+    },
+  );
 
-  it("refuses conflicting helper and ledger run identities", async () => {
-    await helper("matching", { runId: "helper-run" });
-    vi.mocked(listUpdateRunsAsync).mockResolvedValue([
-      run("ledger-run", { driver: { ...lease.executor, host: os.hostname() } }),
-    ]);
+  it.each(["missing", "conflicting"])("refuses %s original run identity", async (identity) => {
+    if (identity === "conflicting") {
+      await helper("matching", { runId: "helper-run" });
+      vi.mocked(listUpdateRunsAsync).mockResolvedValue([
+        run("ledger-run", { driver: { ...lease.executor, host: os.hostname() } }),
+      ]);
+    }
     await expect(readManagedHandoffRepairFacts(lease, env)).rejects.toThrow(
       "Cannot identify handoff run",
     );
   });
 
-  it("preserves unresolved capture restoration instead of selecting current-installation repair", async () => {
-    vi.mocked(listUpdateRunsAsync).mockResolvedValue([
-      run("captured-run", {
-        driver: { ...lease.executor, host: os.hostname() },
-        updateRecoveryCapture: {
-          manifestSha256: "a".repeat(64),
-          configWrites: [],
-          status: "restore-failed",
-        },
-      }),
-    ]);
-    await expect(readManagedHandoffRepairFacts(lease, env)).rejects.toThrow("retains restoration");
-  });
+  it.each([false, true])(
+    "preserves unresolved capture custody (generation-bound=%s)",
+    async (bound) => {
+      vi.mocked(listUpdateRunsAsync).mockResolvedValue([
+        run("captured-run", {
+          ...(bound ? {} : { driver: { ...lease.executor, host: os.hostname() } }),
+          updateRecoveryCapture: {
+            manifestSha256: "a".repeat(64),
+            configWrites: [],
+            status: "restore-failed",
+          },
+        }),
+      ]);
+      await expect(
+        readManagedHandoffRepairFacts(lease, env, bound ? "captured-run" : undefined),
+      ).rejects.toThrow("retains restoration");
+      if (bound) {
+        expect(listUpdateRunsAsync).toHaveBeenCalledWith(
+          { limit: 100, includeRunId: "captured-run" },
+          { env },
+        );
+      }
+    },
+  );
 
   it("preserves a native recovery owner's admission refusal", async () => {
     await helper("known-native");
@@ -463,37 +484,4 @@ describe("managed handoff repair facts", () => {
       });
     },
   );
-
-  it("refuses a missing original run identity instead of substituting the lease owner", async () => {
-    await expect(readManagedHandoffRepairFacts(lease, env)).rejects.toThrow(
-      "Cannot identify handoff run",
-    );
-  });
-
-  it("rechecks retained capture custody using a generation-bound run identity", async () => {
-    vi.mocked(listUpdateRunsAsync).mockResolvedValue([
-      run("bound-run", {
-        updateRecoveryCapture: {
-          manifestSha256: "a".repeat(64),
-          configWrites: [],
-          status: "restore-failed",
-        },
-      }),
-    ]);
-    await expect(readManagedHandoffRepairFacts(lease, env, "bound-run")).rejects.toThrow(
-      "retains restoration",
-    );
-    expect(listUpdateRunsAsync).toHaveBeenCalledWith(
-      { limit: 100, includeRunId: "bound-run" },
-      { env },
-    );
-  });
-
-  it("uses the CLI timeout parser for retained command arguments", async () => {
-    await helper("invalid-duration", {
-      commandArgv: ["--timeout=9000.5", "--timeout", "Infinity"],
-    });
-    vi.mocked(listUpdateRunsAsync).mockResolvedValue([run("retained-run", {})]);
-    expect((await readManagedHandoffRepairFacts(lease, env)).timeoutMs).toBeNull();
-  });
 });

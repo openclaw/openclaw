@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { TalkClientCreateResult } from "../../../../packages/gateway-protocol/src/schema/channels.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import type { BoundedSerialQueue } from "../../../shared/bounded-serial-queue.js";
@@ -6,9 +7,9 @@ import type { RealtimeVoiceAgentControlResult } from "../../../talk/agent-run-co
 import type { createClientVoiceConfirmationReadiness } from "../../../talk/client-voice-confirmation-readiness.js";
 import type { InternalRealtimeVoiceProviderCapabilities } from "../../../talk/provider-internal.js";
 import type {
-  RealtimeVoiceBrowserAudioContract,
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceAgentConsultRunner,
+  RealtimeVoiceBrowserAudioContract,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
@@ -30,22 +31,20 @@ export const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
 
 export const noFallbackRelayOutputFlush = () => {};
 
-export type TalkRealtimeRelayEventPayload =
-  | { relaySessionId: string; type: "ready" }
-  | { relaySessionId: string; type: "responseStarted"; turnId: string }
-  | { relaySessionId: string; type: "inputAudio"; byteLength: number }
+export type TalkRealtimeRelayEventPayload = { relaySessionId: string } & (
+  | { type: "ready" }
+  | { type: "responseStarted"; turnId: string }
+  | { type: "inputAudio"; byteLength: number }
   | {
-      relaySessionId: string;
       type: "audio";
       audioBase64: string;
       itemId?: string;
       responseId?: string;
     }
-  | { relaySessionId: string; type: "audioDone"; itemId?: string; responseId?: string }
-  | { relaySessionId: string; type: "clear"; reason?: RealtimeVoiceAudioClearReason }
-  | { relaySessionId: string; type: "mark"; markName: string }
+  | { type: "audioDone"; itemId?: string; responseId?: string }
+  | { type: "clear"; reason?: RealtimeVoiceAudioClearReason }
+  | { type: "mark"; markName: string }
   | {
-      relaySessionId: string;
       type: "transcript";
       role: "user" | "assistant";
       text: string;
@@ -54,7 +53,6 @@ export type TalkRealtimeRelayEventPayload =
       transcriptId?: string;
     }
   | {
-      relaySessionId: string;
       type: "toolCall";
       itemId: string;
       callId: string;
@@ -62,11 +60,10 @@ export type TalkRealtimeRelayEventPayload =
       args: unknown;
       forced?: boolean;
     }
-  | { relaySessionId: string; type: "toolCallCancelled"; callId: string }
-  | { relaySessionId: string; type: "toolResult"; callId: string }
-  | { relaySessionId: string; type: "toolProgress"; result: RealtimeVoiceAgentControlResult }
+  | { type: "toolCallCancelled"; callId: string }
+  | { type: "toolResult"; callId: string }
+  | { type: "toolProgress"; result: RealtimeVoiceAgentControlResult }
   | {
-      relaySessionId: string;
       type: "error";
       message: string;
       code?: "realtime_unavailable";
@@ -75,7 +72,8 @@ export type TalkRealtimeRelayEventPayload =
       transport?: "gateway-relay";
       phase?: string;
     }
-  | { relaySessionId: string; type: "close"; reason: "completed" | "error" };
+  | { type: "close"; reason: "completed" | "error" }
+);
 
 type TalkRealtimeRelayEvent = TalkRealtimeRelayEventPayload & { talkEvent?: TalkEvent };
 
@@ -154,13 +152,7 @@ export class TalkRealtimeRelayOutputOwnership {
       return undefined;
     }
     const activeTurnId = this.activeTurnId();
-    if (
-      this.phase !== "cancelling" &&
-      activeTurnId &&
-      this.mode === "turn-bound" &&
-      claim &&
-      this.phase === "unowned"
-    ) {
+    if (activeTurnId && this.mode === "turn-bound" && claim && this.phase === "unowned") {
       this.cancelledTerminal = undefined;
       Object.assign(this, { phase: "owned" as const, turnId: activeTurnId });
     }
@@ -314,13 +306,11 @@ export type CreateTalkRealtimeRelaySessionParams = {
   forceAgentConsultOnFinalTranscript?: boolean;
 };
 
-export type TalkRealtimeRelaySessionResult = {
-  provider: string;
-  transport: "gateway-relay";
-  relaySessionId: string;
+export type TalkRealtimeRelaySessionResult = Omit<
+  Extract<TalkClientCreateResult, { transport: "gateway-relay" }>,
+  "voiceSessionId" | "audio"
+> & {
   audio: RealtimeVoiceBrowserAudioContract;
-  model?: string;
-  voice?: string;
   expiresAt: number;
 };
 
@@ -379,28 +369,13 @@ export function broadcastToOwner(
 ): void {
   // Classify the materialized Talk event so final results cannot be mistaken
   // for transient tool progress by individual provider callback paths.
-  const delivery = relayEventDeliveryOptions(event, event.talkEvent);
-  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), delivery);
-}
-
-function relayEventDeliveryOptions(
-  event: TalkRealtimeRelayEventPayload,
-  talkEvent?: TalkEvent,
-): {
-  dropIfSlow?: boolean;
-} {
-  switch (event.type) {
-    case "audio":
-    case "inputAudio":
-      return { dropIfSlow: true };
-    case "transcript":
-      return { dropIfSlow: !event.final };
-    case "toolProgress":
-    case "toolResult":
-      return { dropIfSlow: talkEvent?.final !== true };
-    default:
-      return { dropIfSlow: false };
-  }
+  const dropIfSlow =
+    event.type === "audio" ||
+    event.type === "inputAudio" ||
+    (event.type === "transcript" && !event.final) ||
+    ((event.type === "toolProgress" || event.type === "toolResult") &&
+      event.talkEvent?.final !== true);
+  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), { dropIfSlow });
 }
 
 export function broadcastRelaySessionClosed(

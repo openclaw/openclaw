@@ -15,15 +15,15 @@ export const PAYMENT_CREDENTIAL_QUERY_KEYS = String.raw`card[-_]?number|card[-_]
 export const PAYMENT_CREDENTIAL_JSON_KEYS = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`;
 export const AWS_SECRET_ACCESS_KEY_FIELD_KEYS = String.raw`aws[-_]?secret[-_]?access[-_]?key|awsSecretAccessKey|SecretAccessKey`;
 const AUTH_QUERY_KEYS = String.raw`access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|apikey|client[-_]?secret|app[-_]?secret|private[-_]?key|${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|credential|authorization|token|key|secret|password|pass|passwd|auth|jwt|session|code|signature|x[-_]?amz[-_]?(?:signature|security[-_]?token)`;
-const FORM_BODY_FIRST_PAIR_KEYS = String.raw`${AUTH_QUERY_KEYS}|app[-_]?secret|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
-const STANDALONE_ASSIGNMENT_SECRET_KEYS = String.raw`access_token|refresh_token|id_token|auth[-_]?token|hook[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|private[-_]?key|authorization|jwt|token|secret|password|pass|passwd|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
-const CONFIG_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
+export const FORM_BODY_FIRST_PAIR_KEYS = String.raw`${AUTH_QUERY_KEYS}|app[-_]?secret|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
+export const STANDALONE_ASSIGNMENT_SECRET_KEYS = String.raw`access_token|refresh_token|id_token|auth[-_]?token|hook[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|private[-_]?key|authorization|jwt|token|secret|password|pass|passwd|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
+export const CONFIG_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 // Bare `pass` is ordinary prose far more often than a key ("tests now pass: older clients"), so the
 // generic unquoted colon form skips it; BARE_PASS_ASSIGNMENT_MATCHER keeps config-shaped `pass:` masked, and
 // `pass=`, `pass = `, namespaced, prefixed, and quoted forms are unchanged.
 const CONFIG_COLON_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|passwd|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 const CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS = String.raw`access-token|refresh-token|id-token|auth-token|hook-token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|passphrase`;
-const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS = String.raw`password|passphrase|pass|passwd`;
+export const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS = String.raw`password|passphrase|pass|passwd`;
 const CLI_SECRET_FLAG_KEYS = String.raw`${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 
 export const BODY_SECRET_KEYS = new Set([
@@ -70,10 +70,10 @@ const ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRE
 const ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`;
 // Quoted values may contain the other quote characters; only the matching closing quote ends
 // the value. The unquoted variant accepts one leading quote so unterminated values still mask.
-const STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN = String.raw`(^|[\s,;({\["])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`;
+export const STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN = String.raw`(^|[\s,;({\["])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`;
 const STANDALONE_ASSIGNMENT_REDACT_PATTERN = String.raw`(^|[\s,;({\["])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60]?[^\s&#"'\x60<>]+)`;
-const CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
-const CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`;
+export const CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
+export const CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`;
 const CONFIG_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_COLON_ASSIGNMENT_SECRET_KEYS})\s*:\s*|(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`;
 const CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS})=([^\s#"'\x60<>]+)/g`;
 const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;
@@ -85,7 +85,7 @@ const AMBIGUOUS_QUOTED_AUTH_FIELD_REDACT_PATTERN = String.raw`(^|[\s,{])["']?(?:
 // Pure-base64 prefixes require a non-alphanumeric boundary and skip explicit data-URL payloads.
 // Match the token first: the lookbehind rescans the whole base64 run, quadratic per `+`/`/`/`=`.
 const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])`;
-const base64SafeToken = (token: string) =>
+export const base64SafeToken = (token: string) =>
   String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(?=${token})(?<!;base64,[A-Za-z0-9+/=]*)(${token})`;
 export const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
 
@@ -103,15 +103,20 @@ function isAwsValueCharacter(char: string): boolean {
 
 const AWS_SECRET_ACCESS_KEY_VALUE_RE =
   /(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[G-Zg-z/+=])[A-Za-z0-9/+=]{40}/u;
-const AWS_SECRET_ACCESS_KEY_RUN_RE = /[A-Za-z0-9/+=]{40}/u;
-
 function couldMatchAwsSecretAccessKey(text: string): boolean {
-  // Reject short word runs before the value rule retries its lookaheads at every character.
-  return (
-    text.length >= 40 &&
-    AWS_SECRET_ACCESS_KEY_RUN_RE.test(text) &&
-    AWS_SECRET_ACCESS_KEY_VALUE_RE.test(text)
-  );
+  // A delimiter invalidates every 40-character window containing it. Search backwards
+  // within each candidate window, then skip directly past that delimiter.
+  for (let end = 39; end < text.length;) {
+    let cursor = end;
+    while (cursor > end - 40 && isAwsValueCharacter(text[cursor]!)) {
+      cursor--;
+    }
+    if (cursor === end - 40) {
+      return AWS_SECRET_ACCESS_KEY_VALUE_RE.test(text);
+    }
+    end = cursor + 40;
+  }
+  return false;
 }
 
 const AWS_VALUE_WHITESPACE_RE = /\s/;
@@ -287,17 +292,22 @@ export const AWS_SECRET_ACCESS_KEY_MATCHER = Object.freeze({
 // the colon may include line breaks, as in the generic rule, so YAML explicit keys and indented
 // continuations stay covered. One forward pass classifies every key, so the cost is linear in the text
 // regardless of line length or key count.
-const BARE_PASS_KEY_PATTERN = String.raw`(?<![A-Za-z0-9])(pass|${CONFIG_COLON_ASSIGNMENT_SECRET_KEYS})\s*:\s*`;
-const BARE_PASS_VALUE_PATTERN = String.raw`[^\s#"'\x60<>]+`;
+const BARE_PASS_KEY_RE = new RegExp(
+  String.raw`(?<![A-Za-z0-9])(pass|${CONFIG_COLON_ASSIGNMENT_SECRET_KEYS})\s*:\s*`,
+  "gi",
+);
+const BARE_PASS_VALUE_RE = /[^\s#"'\x60<>]+/y;
 const ASCII_WORD_CHAR_RE = /[A-Za-z0-9]/;
 const INLINE_WHITESPACE_RE = /[ \t\r\n]/;
 
 function* matchBarePassAssignments(text: string): Iterable<RedactMatch> {
-  const keys = [...text.matchAll(new RegExp(BARE_PASS_KEY_PATTERN, "gi"))];
+  if (!/pass\s*:/.test(text)) {
+    return;
+  }
+  const keys = [...text.matchAll(BARE_PASS_KEY_RE)];
   if (keys.length === 0) {
     return;
   }
-  const valueRe = new RegExp(BARE_PASS_VALUE_PATTERN, "y");
   let next = 0;
   let assignmentSeen = false;
   for (let index = 0; index < text.length; index++) {
@@ -320,8 +330,8 @@ function* matchBarePassAssignments(text: string): Iterable<RedactMatch> {
         assignmentSeen = true;
         let end = index + key[0].length;
         if (!owned) {
-          valueRe.lastIndex = end;
-          const value = valueRe.exec(text)?.[0];
+          BARE_PASS_VALUE_RE.lastIndex = end;
+          const value = BARE_PASS_VALUE_RE.exec(text)?.[0];
           if (value) {
             end += value.length;
             yield { match: text.slice(index, end), groups: [value], input: text, offset: index };
@@ -421,6 +431,68 @@ const DEFAULT_REDACT_FIELD_PATTERNS: readonly RedactPattern[] = [
   PEM_REDACT_PATTERN_SOURCE,
   String.raw`(^|[\s,{])["']?(?:${AWS_SECRET_ACCESS_KEY_FIELD_KEYS})["']?\s*[:=]\s*(["']?)([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])\2`,
 ];
+
+// Necessary conditions only: the canonical rules still decide boundaries, captures and masks.
+// Probes are stateless and run against each rule's current input, including earlier replacements.
+const CONFIG_KEY_PROBE = new RegExp(
+  String.raw`[:=](?<=(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=])`,
+);
+const CONFIG_QUOTED_PROBE = new RegExp(
+  String.raw`[:=](?<=(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=])\s*["'\x60]`,
+);
+const CONFIG_NAMESPACED_PROBE = new RegExp(
+  String.raw`[:=](?<=\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=])`,
+);
+const STANDALONE_ASSIGNMENT_PROBE = new RegExp(
+  String.raw`=(?<=(?:^|[\s,;({\["])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=)`,
+  "i",
+);
+export const REDACT_PATTERN_PREFILTERS = new Map<string, (text: string) => boolean>([
+  [
+    ENV_ASSIGNMENT_REDACT_PATTERN,
+    (text) => /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CARD|CVC|CVV|SECURITY|PAYMENT/.test(text),
+  ],
+  [ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN, (text) => text.includes("\\")],
+  [STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN, (text) => /[=]["'`]/.test(text)],
+  [STANDALONE_ASSIGNMENT_REDACT_PATTERN, (text) => STANDALONE_ASSIGNMENT_PROBE.test(text)],
+  [
+    CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN,
+    (text) => /["'`]/.test(text) && CONFIG_QUOTED_PROBE.test(text),
+  ],
+  [
+    CONFIG_ASSIGNMENT_REDACT_PATTERN,
+    (text) => (text.includes(":") || text.includes("=")) && CONFIG_KEY_PROBE.test(text),
+  ],
+  [CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN, (text) => text.includes("=")],
+  [
+    CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN,
+    (text) => /[-_](?:password|passphrase|pass|passwd)\s*[:=]/.test(text),
+  ],
+  [CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN, (text) => CONFIG_NAMESPACED_PROBE.test(text)],
+  [AMBIGUOUS_QUOTED_SECRET_FIELD_REDACT_PATTERN, (text) => /["']/.test(text)],
+  [AMBIGUOUS_QUOTED_AUTH_FIELD_REDACT_PATTERN, (text) => /["']/.test(text)],
+  ...HTTP_AUTH_HEADER_REDACT_PATTERNS.slice(0, 4).map(
+    (raw): [string, (text: string) => boolean] => [raw, (text) => /authorization/i.test(text)],
+  ),
+  [
+    CREDENTIAL_STYLE_COLON_HEADER_REDACT_PATTERN,
+    (text) => /api-key|apikey|api-token|access-token/i.test(text),
+  ],
+  [
+    CREDENTIAL_STYLE_EQUALS_ASSIGNMENT_REDACT_PATTERN,
+    (text) => /api-key|apikey|api-token|access-token/i.test(text),
+  ],
+  [STRUCTURED_JSON_SECRET_REDACT_PATTERN, (text) => text.includes('"')],
+  [STRUCTURED_JSON_PAYMENT_REDACT_PATTERN, (text) => text.includes('"')],
+  [
+    GATEWAY_SECURITY_COLON_HEADER_REDACT_PATTERN,
+    (text) => /x-openclaw-token|x-pomerium-jwt-assertion|x-api-key|x-auth-token/i.test(text),
+  ],
+  [
+    GATEWAY_SECURITY_EQUALS_ASSIGNMENT_REDACT_PATTERN,
+    (text) => /x-openclaw-token|x-pomerium-jwt-assertion|x-api-key|x-auth-token/i.test(text),
+  ],
+]);
 
 export const VENDOR_TOKEN_REDACT_PATTERNS: readonly string[] = [
   String.raw`\b(sk-[A-Za-z0-9_-]{8,})\b`,

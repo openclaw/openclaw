@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, vi } from "vitest";
-import { TSDOWN_NON_SDK_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
+import { TSDOWN_UNIFIED_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "../../scripts/lib/tsdown-declaration-generator-inputs.mts";
-import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createDeclarationFixture as createFixture,
   createDeclarationTest,
@@ -133,7 +132,7 @@ describe("write-unified-entry-dts", () => {
     }
   });
 
-  it("reuses unaffected canonical groups while rebuilding runtime after input edits", ({
+  it("compiles declarations once and restores them while rebuilding runtime after input edits", ({
     command,
     onTestFailed,
   }) =>
@@ -171,9 +170,8 @@ describe("write-unified-entry-dts", () => {
         }
       };
       const { root, write, production, declarations } = await measurePhase("fixture", () =>
-        createFixture(command, TSDOWN_NON_SDK_DTS_CONFIG_GROUPS),
+        createFixture(command, TSDOWN_UNIFIED_DTS_CONFIG_GROUPS),
       );
-      await measurePhase("native-compiler-fixture", () => materializeNativeCompiler(root));
       expect(Object.values(declarations).every((entries) => entries.length > 0)).toBe(true);
       expect(production).toHaveLength(Object.values(declarations).flat().length);
       write("extensions/fixture-a/runtime-only.js", 'export const runtimeOnly = "runtime";');
@@ -190,7 +188,7 @@ describe("write-unified-entry-dts", () => {
           'export { typedRuntime } from "./typed-runtime.js";',
         ].join("\n"),
       );
-      // Keep external type compatibility in a cached group during the isolated edit.
+      // Preserve external type compatibility when another entry changes.
       fs.appendFileSync(
         path.join(root, "extensions/fixture-b/index.ts"),
         [
@@ -241,7 +239,7 @@ describe("write-unified-entry-dts", () => {
       expect(initial.status, initial.stdout + initial.stderr).toBe(0);
       expect(
         (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/\d finished/gu),
-      ).toHaveLength(7);
+      ).toHaveLength(2);
       for (const entry of production) {
         expect(fs.statSync(path.join(root, `dist/${entry}.d.ts`)).size, entry).toBeGreaterThan(0);
       }
@@ -340,10 +338,10 @@ describe("write-unified-entry-dts", () => {
           /\[tsdown-build\] invocation \d\/\d finished/gu,
         ),
       ).toHaveLength(2);
-      expect(records).toHaveLength(TSDOWN_NON_SDK_DTS_CONFIG_GROUPS.length);
+      expect(records).toHaveLength(TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
       expect(records.filter((record) => record.inputs?.includes(pluginInput))).toHaveLength(1);
       expect(records.filter((record) => record.inputs?.includes("src/shared.ts"))).toHaveLength(
-        TSDOWN_NON_SDK_DTS_CONFIG_GROUPS.length,
+        TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length,
       );
       const changedDeclaration = readPluginDeclaration();
       expect(changedDeclaration).toContain('pluginRevision = "fixture_alpha"');
@@ -366,36 +364,36 @@ describe("write-unified-entry-dts", () => {
       );
       expect(cold.status, cold.stdout + cold.stderr).toBe(0);
       expect(
-        (cold.stdout + cold.stderr).match(/\[tsdown-build\] invocation \d\/6 finished/gu),
-      ).toHaveLength(6);
+        (cold.stdout + cold.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
+      ).toHaveLength(1);
       expect(
         await measurePhase("cold-dist-hash", () => treeHashes(path.join(root, "dist"))),
       ).toEqual(mixedGeneration);
       expectStagingClean(root);
     }));
 
-  it.concurrent("records successful empty partitions for a bounded plugin selection", ({
+  it.concurrent("caches the complete declaration program for a bounded plugin selection", ({
     command,
   }) =>
     command.lifetime.run(async () => {
-      const { root } = createFixture(command, TSDOWN_NON_SDK_DTS_CONFIG_GROUPS);
+      const { root } = createFixture(command, TSDOWN_UNIFIED_DTS_CONFIG_GROUPS);
       const env = { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "fixture-a" };
       const initial = await runUnifiedWriter(command, root, env);
       expect(initial.status, initial.stdout + initial.stderr).toBe(0);
-      for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+      for (const group of TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
         expect(initial.stderr).toContain(
           `[tsdown-unified] ${group}: cache miss (record-unavailable)`,
         );
       }
       expect(
-        (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/6 finished/gu),
-      ).toHaveLength(6);
+        (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
+      ).toHaveLength(1);
       expect(fs.existsSync(path.join(root, "dist/extensions/fixture-a/index.d.ts"))).toBe(true);
       expect(fs.existsSync(path.join(root, "dist/extensions/fixture-b/index.d.ts"))).toBe(false);
       const before = treeHashes(path.join(root, "dist"));
       const repeated = await runUnifiedWriter(command, root, env);
       expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
-      for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+      for (const group of TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
         expect(repeated.stderr).toContain(`[tsdown-unified] ${group}: cache hit (fresh-cache)`);
       }
       expect(repeated.stdout + repeated.stderr).not.toContain("[tsdown-build] invocation");
@@ -404,21 +402,21 @@ describe("write-unified-entry-dts", () => {
     }));
 
   it.concurrent.for([
-    "last compiler failure",
+    "compiler failure",
     "missing successful receipt",
-    "cached input mutation after emit",
+    "input mutation after emit",
   ])("preserves the previous generation on %s", (failure, { command }) =>
     command.lifetime.run(async () => {
       const { root, write, declarations } = createFixture(
         command,
-        TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+        TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
       );
       write("dist/index.d.ts", "previous root declaration");
       write("dist/extensions/retained/index.d.ts", "previous plugin declaration");
       let before = treeHashes(path.join(root, "dist"));
       let cached: Record<string, string> = {};
-      const last = TSDOWN_NON_SDK_DTS_CONFIG_GROUPS.at(-1)!;
-      if (failure === "last compiler failure") {
+      const last = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.at(-1)!;
+      if (failure === "compiler failure") {
         write(declarations[last]![0]!, 'export type { Missing } from "@openclaw/llm-core";');
       } else {
         write(
@@ -433,7 +431,7 @@ ${
     ? '  hooks.clearHook("build:done");'
     : `  hooks.hook("build:done", () => {
     if (fs.existsSync(".artifacts/mutate-cached-input")) {
-      fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_NON_SDK_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
+      fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
     }
   });`
 }
@@ -441,7 +439,7 @@ ${
 `,
         );
       }
-      if (failure === "cached input mutation after emit") {
+      if (failure === "input mutation after emit") {
         const initial = await runUnifiedWriter(command, root);
         expect(initial.status, initial.stdout + initial.stderr).toBe(0);
         before = treeHashes(path.join(root, "dist"));
@@ -451,13 +449,9 @@ ${
       }
       const failed = await runUnifiedWriter(command, root);
       expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
+      expect(failed.stdout + failed.stderr).toContain("invocation 1/1 finished");
       expect(failed.stdout + failed.stderr).toContain(
-        failure === "cached input mutation after emit"
-          ? "invocation 1/1 finished"
-          : "invocation 6/6 finished",
-      );
-      expect(failed.stdout + failed.stderr).toContain(
-        failure === "last compiler failure"
+        failure === "compiler failure"
           ? "TS2305"
           : failure === "missing successful receipt"
             ? "Missing successful compiler membership"

@@ -1,10 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   assertTransactionUsable,
-  runSqliteImmediateTransactionSync,
+  runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
-import { recordContextEngineTurnOutboxSchemaCommitted } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
+import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import {
   executeContextEngineTurnOutboxCommand,
@@ -14,31 +13,18 @@ import {
 /** Borrows the canonical agent connection for one admitted outbox operation. */
 export function bindSqliteWorkerBackend(
   _input: undefined,
-  context: {
-    databasePath: string;
-    database: DatabaseSync;
-    admit(stage: "transaction" | "commit"): void;
-  },
+  context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<ContextEngineTurnOutboxWorkerOperations> {
   const db = context.database;
   return {
     execute(command) {
-      return runSqliteImmediateTransactionSync(
-        db,
-        () => {
-          context.admit("transaction");
-          return executeContextEngineTurnOutboxCommand(db, command);
-        },
+      return runSqliteWorkerTransactionSync(
+        context,
+        () => executeContextEngineTurnOutboxCommand(db, command),
         {
           operationLabel: `context-engine.turn-outbox.${command.type}`,
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
           databaseLabel: context.databasePath,
-          withCommit(commit) {
-            context.admit("commit");
-            commit();
-            // The first command's in-transaction DDL is now durable; later commands skip it.
-            recordContextEngineTurnOutboxSchemaCommitted(db);
-          },
         },
       );
     },

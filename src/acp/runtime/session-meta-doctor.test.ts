@@ -216,7 +216,11 @@ it.each(["global", "shared-project"])(
       expect(result.warnings).toEqual([]);
       expect(result.changes.length).toBeGreaterThan(0);
       const migrated = readAcpSessionMeta({ cfg, env: state.env, agentId: "work", sessionKey });
-      expect(migrated?.identity?.acpxRecordId).toMatch(/^openclaw-owner-v1-/);
+      if (explicit) {
+        expect(migrated?.identity?.acpxRecordId).toBe("agent:work:shared-project");
+      } else {
+        expect(migrated?.identity?.acpxRecordId).toMatch(/^openclaw-owner-v1-/);
+      }
       expect(
         (await readOnly.inspectAcpSessionClaims!()).claims.find(
           (claim) => claim.agentId === "free-harness",

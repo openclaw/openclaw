@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { registerListener } from "../../shared/listeners.js";
 import { resolveRuntimeStoreKey } from "./mutation-lineage.js";
 
 /** Secret-free proof that one exact provider/model transport completed with usable auth. */
@@ -36,8 +37,7 @@ function notify(agentDir?: string): void {
 export function registerRuntimeAuthMaterializationMutationListener(
   listener: RuntimeAuthMaterializationMutationListener,
 ): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  return registerListener(listeners, listener);
 }
 
 /** Records successful auth at the boundary that proved one exact runtime route. */

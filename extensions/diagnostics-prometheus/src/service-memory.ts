@@ -45,6 +45,22 @@ export function recordMemorySample(
   ] as const) {
     store.gauge(name, "Worker isolate counts.", {}, numericValue(memory[field]));
   }
+  store.clearGauges("openclaw_heap_space_bytes");
+  for (const space of memory.heapSpaces ?? []) {
+    for (const [stat, field] of [
+      ["used", "space_used_size"],
+      ["size", "space_size"],
+      ["available", "space_available_size"],
+      ["physical", "physical_space_size"],
+    ] as const) {
+      store.gauge(
+        "openclaw_heap_space_bytes",
+        "Latest main-isolate V8 heap space usage in bytes.",
+        { space: space.space_name, stat },
+        space[field],
+      );
+    }
+  }
   // The resource owner supplies bounded script names and retires stale/exit samples.
   const workerHeaps = new Map<string, number>();
   for (const worker of memory.workerHeaps ?? []) {

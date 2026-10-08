@@ -1,6 +1,10 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -30,7 +34,6 @@ describe("pending final delivery restart proof", () => {
   ): Promise<void> {
     const entry: SessionEntry = {
       sessionId: "session",
-      status: "running",
       startedAt: 10,
       lifecycleRunId: "active-run",
       updatedAt,
@@ -66,7 +69,17 @@ describe("pending final delivery restart proof", () => {
     await writePendingFinal("handled-reply", "delivered", 1);
     const identity = getReplyPayloadMetadata(pendingFinalPayload())?.pendingFinalDeliveryCompletion;
 
-    await clearPendingFinalDeliveryAfterSuccess(identity, { preserveActivity: true });
+    const sql = observeHostDataSql();
+    try {
+      await clearPendingFinalDeliveryAfterSuccess(identity, { preserveActivity: true });
+      expect(
+        sql.queries.filter((query) =>
+          /session_nodes|session_entry_snapshots|\b(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(query),
+        ),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
 
     const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry | undefined;
     expect(entry?.pendingFinalDelivery).toBeUndefined();
@@ -119,7 +132,7 @@ describe("pending final delivery restart proof", () => {
     const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry;
     expect(entry.pendingFinalDelivery).toBeUndefined();
     expect(entry.restartRecoverySourceIngress).toBeUndefined();
-    expect(entry.status).toBe("running");
+    expect(entry.status).toBeUndefined();
     expect(entry.lifecycleRunId).toBe("active-run");
     expect(entry.updatedAt).toBe(1);
   });
@@ -138,13 +151,22 @@ describe("pending final delivery restart proof", () => {
       },
     );
 
+    let target: SessionEntryTargetPatchScope | undefined;
+    await readSessionEntryInWorker(
+      { agentId: "main", storePath, sessionKey },
+      () => {},
+      undefined,
+      (prepared) => {
+        target = prepared;
+      },
+    );
+    assert(target);
     await expect(
       retireTerminalRestartRecoverySourceClaim({
-        agentId: "main",
+        target,
+        assertCurrent: () => {},
         sessionId: "session",
-        sessionKey,
         sourceTurnId: "source-1",
-        storePath,
       }),
     ).resolves.toBeUndefined();
 

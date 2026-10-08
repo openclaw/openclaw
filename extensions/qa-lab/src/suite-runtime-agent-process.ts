@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolveIntegerOption, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError } from "./errors.js";
 import { extractGatewayMessageText } from "./gateway-log-sentinel.js";
@@ -53,7 +53,6 @@ const MANAGED_DREAMING_PROMPT = "__openclaw_memory_core_short_term_promotion_dre
 const QA_HISTORY_RETRY_DEFAULT_MS = 250;
 const QA_HISTORY_RETRY_MIN_MS = 100;
 const QA_HISTORY_RETRY_MAX_MS = 5_000;
-const QA_TRANSCRIPT_EVIDENCE_TIMEOUT_MS = 5_000;
 const QA_TRANSCRIPT_EVIDENCE_POLL_MS = 50;
 
 async function startAgentRun(
@@ -175,15 +174,10 @@ function resolveRetryableHistoryDelayMs(error: unknown) {
     if (code === "UNAVAILABLE" && current.retryable === true) {
       const detailMethod = isRecord(current.details) ? current.details.method : undefined;
       if (detailMethod === "chat.history") {
-        const retryAfterMs = current.retryAfterMs;
-        const rawDelayMs =
-          typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs)
-            ? retryAfterMs
-            : QA_HISTORY_RETRY_DEFAULT_MS;
-        return Math.min(
-          Math.max(Math.floor(rawDelayMs), QA_HISTORY_RETRY_MIN_MS),
-          QA_HISTORY_RETRY_MAX_MS,
-        );
+        return resolveIntegerOption(current.retryAfterMs, QA_HISTORY_RETRY_DEFAULT_MS, {
+          min: QA_HISTORY_RETRY_MIN_MS,
+          max: QA_HISTORY_RETRY_MAX_MS,
+        });
       }
     }
     current = current.cause;
@@ -355,11 +349,12 @@ async function waitForPersistedTranscriptToolEvidence(
     sessionKey: string;
     toolName: string;
     requireSuccessfulResult: boolean;
+    timeoutMs: number;
   },
 ) {
   const startedAt = Date.now();
   let lastError: unknown;
-  while (Date.now() - startedAt < QA_TRANSCRIPT_EVIDENCE_TIMEOUT_MS) {
+  while (Date.now() - startedAt < params.timeoutMs) {
     try {
       const summary = await readSessionTranscriptSummary(env, params.sessionKey, {
         allowEmpty: true,
@@ -373,14 +368,14 @@ async function waitForPersistedTranscriptToolEvidence(
     } catch (error) {
       lastError = error;
     }
-    const remainingMs = QA_TRANSCRIPT_EVIDENCE_TIMEOUT_MS - (Date.now() - startedAt);
+    const remainingMs = params.timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) {
       break;
     }
     await sleep(Math.min(QA_TRANSCRIPT_EVIDENCE_POLL_MS, remainingMs));
   }
   throw new Error(
-    `timed out after ${QA_TRANSCRIPT_EVIDENCE_TIMEOUT_MS}ms waiting for persisted ${params.toolName} transcript evidence`,
+    `timed out after ${params.timeoutMs}ms waiting for persisted ${params.toolName} transcript evidence`,
     lastError === undefined ? undefined : { cause: lastError },
   );
 }
@@ -404,6 +399,7 @@ async function runAgentPrompt(
       sessionKey: params.sessionKey,
       toolName: params.transcriptToolName,
       requireSuccessfulResult: params.requireSuccessfulTranscriptToolResult === true,
+      timeoutMs: resolveTimerTimeoutMs(params.timeoutMs, 30_000),
     });
   }
   return {

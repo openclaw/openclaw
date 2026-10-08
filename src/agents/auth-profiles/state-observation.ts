@@ -1,7 +1,3 @@
-/**
- * Structured logging for auth profile failure state changes.
- * Log payloads keep machine-readable fields while redacting console-facing ids.
- */
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeForConsole } from "../console-sanitize.js";
@@ -9,7 +5,6 @@ import type { AuthProfileFailureReason, ProfileUsageStats } from "./types.js";
 
 const observationLog = createSubsystemLogger("agent/embedded");
 
-/** Logs an auth profile failure/cooldown/disable state transition. */
 export function logAuthProfileFailureStateChange(params: {
   runId?: string;
   profileId: string;

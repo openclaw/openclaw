@@ -57,6 +57,7 @@ import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import {
   bindGatewayConnectOperatorAccess,
   prepareGatewayConnectOperatorAccess,
+  prepareGatewayConnectOperatorDeviceSource,
   rejectGatewayConnectOperatorAccess,
 } from "./connect-operator-access.js";
 import {
@@ -225,6 +226,7 @@ export async function attachAuthenticatedGatewayConnect(
           authenticatedUserProfile?.profileId,
           preparedProfile?.authority.role ?? null,
           context.configSnapshot,
+          preparedProfile?.authority.githubLogin ?? null,
         )
       : undefined;
   const scopes = rolePolicy
@@ -356,7 +358,7 @@ export async function attachAuthenticatedGatewayConnect(
   const authenticatedControlUi =
     authenticatedOperator && connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
   const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
-  const internal = {
+  const internal: NonNullable<GatewayWsClient["internal"]> = {
     ...(isLocalClient ? { isLocalClient: true as const } : {}),
     ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
@@ -365,6 +367,13 @@ export async function attachAuthenticatedGatewayConnect(
     ...(trustedAgentRuntimeIdentity ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity } : {}),
     ...(sharedSecretOperatorOwner ? { operatorRoleActor: { kind: "system" as const } } : {}),
   };
+  if (authenticatedOperator) {
+    const source = await prepareGatewayConnectOperatorDeviceSource(context, state, deviceScopes);
+    if (source === undefined) {
+      return;
+    }
+    internal.operatorDeviceTokenIdentity = source;
+  }
   const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>
     prepareGatewayLocalUserIngress({
       authMethod,
@@ -631,7 +640,7 @@ export async function attachAuthenticatedGatewayConnect(
         });
       },
       (err) =>
-        logGateway.warn(`remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`),
+        logGateway.warn(`remote bin check failed for ${nodeSession.nodeId}: ${formatForLog(err)}`),
     );
     const sendConnectSnapshot = async (event: string, payload: unknown) => {
       if (pairingGeneration) {

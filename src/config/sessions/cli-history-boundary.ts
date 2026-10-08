@@ -6,19 +6,21 @@ export type CliHistoryWriter = {
   runId: string;
   authFingerprint: string;
   lifecycleRevision?: string;
-  expectedWriterRunId?: string;
   assertCurrent: () => void;
   assertReadable: () => void;
 };
 
 const cliHistoryWriter = new AsyncLocalStorage<CliHistoryWriter>();
 
+/** The transcript tip moved between CLI history planning and the writer's commit. */
+export const CLI_HISTORY_CHANGED_BEFORE_PREPARATION = "CLI history changed before preparation";
+
 export function runWithCliHistoryWriter<T>(writer: CliHistoryWriter | undefined, run: () => T): T {
   return writer ? cliHistoryWriter.run(writer, run) : cliHistoryWriter.exit(run);
 }
 
 export function getCliHistoryWriter(
-  target: SessionTranscriptRuntimeTarget,
+  target: Partial<SessionTranscriptRuntimeTarget>,
 ): CliHistoryWriter | undefined {
   const writer = cliHistoryWriter.getStore();
   return writer &&

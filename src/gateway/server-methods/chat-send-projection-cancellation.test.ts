@@ -57,6 +57,7 @@ it.each(["reply-observation", "commentary-media"] as const)(
         logGateway: { warn } as never,
         session: {
           ...scope,
+          entry,
           backingSessionId: scope.sessionId,
           cfg: {},
           clientRunId: runId,

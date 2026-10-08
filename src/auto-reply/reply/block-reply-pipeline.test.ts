@@ -3,11 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
-import {
-  createAudioAsVoiceBuffer,
-  createBlockReplyContentKey,
-  createBlockReplyPipeline,
-} from "./block-reply-pipeline.js";
+import { createBlockReplyContentKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
 const waitForAbort = (signal: AbortSignal | undefined): Promise<void> =>
   new Promise((resolve) => {
@@ -249,10 +245,8 @@ describe("createBlockReplyPipeline dedup with threading", () => {
         idleMs: 0,
         joiner: " ",
       },
-      buffer: createAudioAsVoiceBuffer({
-        isAudioPayload: (payload) =>
-          [payload.mediaUrl, ...(payload.mediaUrls ?? [])].some((url) => url?.endsWith(".ogg")),
-      }),
+      isAudioPayload: (payload) =>
+        [payload.mediaUrl, ...(payload.mediaUrls ?? [])].some((url) => url?.endsWith(".ogg")),
     });
 
     for (const payload of payloads) {
@@ -669,7 +663,7 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
         sent.push(payload);
       },
       timeoutMs: 5000,
-      buffer: createAudioAsVoiceBuffer({ isAudioPayload: (payload) => Boolean(payload.mediaUrl) }),
+      isAudioPayload: (payload) => Boolean(payload.mediaUrl),
     });
     pipeline.enqueue(
       setReplyPayloadMetadata(

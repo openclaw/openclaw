@@ -192,6 +192,7 @@ export function expectCiCheckoutCleanup(report: Report) {
 
 export async function withCiCheckoutFixture<T>(
   scenario: string,
+  signal: AbortSignal,
   prepare: (root: string) => NodeJS.ProcessEnv | void,
   inspect: (report: Report, result: CloseResult, stderr: string, root: string) => T | Promise<T>,
 ): Promise<T> {
@@ -215,39 +216,64 @@ export async function withCiCheckoutFixture<T>(
     throw error;
   }
   let stderr = "";
+  let closeResult: CloseResult | undefined;
   // An error can precede close, including failed spawn. Never reject this join.
   const closed = new Promise<CloseResult>((resolve) => {
-    supervisor.once("close", (code, signal) => {
-      resolve({ code, signal });
+    supervisor.once("close", (code, exitSignal) => {
+      closeResult = { code, signal: exitSignal };
+      resolve(closeResult);
     });
   });
   supervisor.stderr?.on("data", (data) => (stderr += String(data)));
   supervisor.on("error", (error) => (stderr += `${error}\n`));
-  let timer: NodeJS.Timeout | undefined;
+  const joinClose = async (deadline: number) => {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        closed.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   let report: Report | undefined;
+  let onAbort = () => {};
   try {
-    const completed = await Promise.race([
-      closed,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("Checkout supervisor did not close within 50000ms")),
-          50_000,
-        );
-      }),
-    ]);
-    clearTimeout(timer);
+    // The owning test bounds the run; a slow host never races a fixture deadline.
+    // Vitest does not unwind a suspended body on timeout, so its abort must reject
+    // this join to reach cleanup. Same contract as withinTest, kept inline because
+    // the outer-runner proof loads this module in plain Node.
+    const completed = await new Promise<CloseResult>((resolve, reject) => {
+      onAbort = () => {
+        const reason: unknown = signal.reason;
+        reject(reason instanceof Error ? reason : new Error("test aborted", { cause: reason }));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) {
+        onAbort();
+      }
+      void closed.then(resolve);
+    });
     report = reportSchema.parse(JSON.parse(readFileSync(path.join(root, "report.json"), "utf8")));
     return await inspect(report, completed, stderr, root);
   } finally {
-    clearTimeout(timer);
+    signal.removeEventListener("abort", onAbort);
     if (report) {
       // A consumer assertion failure does not revoke the producer's release receipt.
       rmSync(root, { recursive: true, force: true });
     } else {
-      const deadline = Date.now() + 4_000;
       // Keep IPC attached through termination: explicit disconnect can suppress Node's close.
       // Let lease-bound Git descendants stop even if the supervisor cannot run cleanup.
       rmSync(path.join(root, "lease"), { force: true });
+      if (!closeResult && supervisor.connected) {
+        // A cancelled run still has a live owner: let it retire its shell group and actors.
+        supervisor.send({ type: "ci-checkout:cancel" }, () => {});
+        await joinClose(Date.now() + 4_000);
+      }
+      const deadline = Date.now() + 4_000;
       const termination = terminateManagedChild(supervisor, "SIGKILL", {
         taskkillTimeoutMs: 2_000,
         processGroupFallback: "never",

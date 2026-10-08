@@ -137,27 +137,34 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
   const continueFromCurrentTranscript = vi.fn();
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
-    runParams: {
-      runId: "run:transport-drop",
-      config: scenario.config,
-      retryConnectionErrors: scenario.retryConnectionErrors,
-    } as Parameters<typeof createEmbeddedRunFailoverRetryController>[0]["runParams"],
-    provider,
-    modelId,
-    globalLane: "test",
-    agentDir: "/tmp/provider-recovery-test",
-    fallbackConfigured: scenario.fallbackConfigured ?? false,
-    profileFailureStore: { version: 1, profiles: {} },
-    getLastProfileId: () => undefined,
+    runInput: {
+      runParams: {
+        runId: "run:transport-drop",
+        config: scenario.config,
+        retryConnectionErrors: scenario.retryConnectionErrors,
+      } as Parameters<typeof createEmbeddedRunFailoverRetryController>[0]["runInput"]["runParams"],
+      globalLane: "test",
+      agentDir: "/tmp/provider-recovery-test",
+      fallbackConfigured: scenario.fallbackConfigured ?? false,
+    },
+    preparedRuntime: {
+      provider,
+      modelId,
+      profileFailureStore: { version: 1, profiles: {} },
+      snapshot: () => ({
+        lastProfileId: undefined,
+        pluginHarnessOwnsTransport: scenario.pluginHarnessOwnsTransport ?? false,
+        agentHarness: { id: "embedded" },
+      }),
+      getApiKeyInfo: () => null,
+      advanceAttemptAuthProfile: vi.fn(async () => false),
+    },
     getSessionId: () => "session:transport-drop",
-    harnessOwnsTransport: () => scenario.pluginHarnessOwnsTransport ?? false,
-    getRuntimeAuthOwnerId: () => "embedded",
-    getApiKeyInfo: () => null,
-    advanceAuthProfile: vi.fn(async () => false),
   });
   if (scenario.retryAvailable === false) {
     failoverRetryController.observeAttempt({ providerRetryMaxRetries: 0 });
   }
+  vi.spyOn(failoverRetryController, "advanceAuthProfile");
   vi.spyOn(failoverRetryController, "maybeMarkAuthProfileFailure");
   const onAgentEvent = vi.fn();
   const recover = () =>

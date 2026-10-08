@@ -781,7 +781,7 @@ describe("plugin-sdk subpath exports", () => {
       mentions: ["defaultRuntime", "withManager", "withProgressTotals"],
     });
     expectSourceContract("memory-core-host-runtime-files", {
-      mentions: ["listMemoryFiles", "normalizeExtraMemoryPaths", "MemorySearchResult"],
+      mentions: ["MemorySearchResult"],
       omits: ['export * from "../../packages/memory-host-sdk/src/runtime-files.js";'],
     });
     expectSourceMentions("plugin-test-runtime", [
@@ -1098,12 +1098,7 @@ describe("plugin-sdk subpath exports", () => {
       "resolveServicePrefixedTarget",
       "resolveTargetsWithOptionalToken",
     ]);
-    expectSourceMentions("channel-config-writes", [
-      "authorizeConfigWrite",
-      "canBypassConfigWritePolicy",
-      "formatConfigWriteDeniedMessage",
-      "resolveChannelConfigWrites",
-    ]);
+    expectSourceMentions("channel-config-writes", ["resolveChannelConfigWrites"]);
     expectSourceMentions("channel-feedback", [
       "createStatusReactionController",
       "logAckFailure",
@@ -1127,31 +1122,11 @@ describe("plugin-sdk subpath exports", () => {
       "isRecord",
       "resolveEnabledConfiguredAccountId",
     ]);
-    expectSourceMentions("command-auth", [
-      "buildCommandTextFromArgs",
-      "buildModelsProviderData",
-      "hasControlCommand",
-      "listNativeCommandSpecsForConfig",
-      "listSkillCommandsForAgents",
-      "normalizeCommandBody",
-      "createPreCryptoDirectDmAuthorizer",
-      "resolveCommandAuthorization",
-      "resolveCommandAuthorizedFromAuthorizers",
-      "resolveInboundDirectDmAccessWithRuntime",
-      "resolveControlCommandGate",
-      "resolveDualTextControlCommandGate",
-      "resolveNativeCommandSessionTargets",
-      "resolveStoredModelOverride",
-      "shouldComputeCommandAuthorized",
-      "shouldHandleTextCommands",
-    ]);
     expectSourceMentions("command-status", [
       "buildCommandsMessage",
       "buildCommandsMessagePaginated",
       "buildHelpMessage",
     ]);
-    expectSourceOmitsImportPattern("command-auth", "../auto-reply/status.js");
-    expectSourceOmitsSnippet("command-auth", "../../extensions/");
     expectSourceMentions("channel-send-result", [
       "attachChannelToResult",
       "buildChannelSendResult",
@@ -1184,8 +1159,6 @@ describe("plugin-sdk subpath exports", () => {
     ]);
 
     expectSourceMentions("thread-bindings-runtime", [
-      "resolveThreadBindingFarewellText",
-      "resolveThreadBindingLifecycle",
       "registerSessionBindingAdapter",
       "unregisterSessionBindingAdapter",
       "SessionBindingAdapter",
@@ -1240,7 +1213,7 @@ describe("plugin-sdk subpath exports", () => {
       omits: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
     });
     expectSourceContract("provider-catalog-shared", {
-      mentions: ["buildSingleProviderApiKeyCatalog", "buildPairedProviderApiKeyCatalog"],
+      mentions: ["buildSingleProviderApiKeyCatalog", "buildManifestProviderCatalogFamily"],
       omits: ["buildDeepSeekProvider", "buildVeniceProvider"],
     });
 

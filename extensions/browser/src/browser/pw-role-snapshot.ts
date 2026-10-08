@@ -1,8 +1,3 @@
-/**
- * Playwright role snapshot helpers.
- *
- * Preserves native AI refs and finalizes browser snapshot budgets and deltas.
- */
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
@@ -14,7 +9,6 @@ type RoleRef = {
   nth?: number;
 };
 
-/** Mapping from generated role refs to role/name metadata. */
 export type RoleRefMap = Record<string, RoleRef>;
 
 /** Identity strategy used to compare consecutive ref-bearing snapshots. */
@@ -37,7 +31,6 @@ export type RoleSnapshotResult<T extends RoleRef = RoleRef> = {
 
 const ROLE_SNAPSHOT_TRUNCATION_MARKER = "[...TRUNCATED - page too large]";
 
-/** Options for filtering and compacting role snapshots. */
 export type RoleSnapshotOptions = {
   /** Only include interactive elements (buttons, links, inputs, etc.). */
   interactive?: boolean;
@@ -292,7 +285,6 @@ function compactTree(lines: readonly string[]) {
   return compacted || "(empty)";
 }
 
-/** Normalize a role snapshot ref accepted by browser actions. */
 export function parseRoleRef(raw: string): string | null {
   const trimmed = raw.trim();
   const normalized = trimmed.startsWith("@")

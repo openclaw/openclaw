@@ -1,13 +1,13 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { BrowserContextOptions, CDPSession, Page } from "playwright-core";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import type { PageState } from "./pw-session-contracts.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import {
   assertInteractionCurrent,
-  awaitActionWithAbort,
   type InteractionTargetOptions,
-  createAbortPromiseWithListener,
 } from "./pw-tools-core.interactions.navigation.js";
 
 type DeviceSize = { width: number; height: number };
@@ -71,7 +71,6 @@ export async function runPageEmulationTransition<T>(params: {
   const signal = params.signal
     ? AbortSignal.any([params.signal, interrupted.signal])
     : interrupted.signal;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
   const previous = emulation.transitionTail ?? Promise.resolve();
   const transition = previous
     .catch(() => {})
@@ -106,11 +105,9 @@ export async function runPageEmulationTransition<T>(params: {
       }
     });
   emulation.transitionTail = tail;
-  try {
-    return await awaitActionWithAbort(transition, abortPromise);
-  } finally {
-    cleanup();
-  }
+  return await racePromiseWithAbortSignal(transition, signal, ({ reason }) =>
+    toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
+  );
 }
 
 export async function setOfflineViaPlaywright(

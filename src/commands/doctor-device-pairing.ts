@@ -253,9 +253,9 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
   return findings;
 }
 
-function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): { deviceId: string } | null {
+function readLocalIdentity(): { deviceId: string } | null {
   try {
-    return loadDeviceIdentityIfPresent({ env });
+    return loadDeviceIdentityIfPresent({ env: process.env });
   } catch {
     return null;
   }

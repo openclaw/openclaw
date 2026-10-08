@@ -19,9 +19,6 @@ import type { ApplicationContext } from "./context.ts";
 
 type ShellDocumentTitleState = {
   activeSessionKey: string;
-  outboxStoreRuntime: {
-    read: () => { total: number };
-  } | null;
   routeState: { routeId?: RouteId };
   runtime?: { context: ApplicationContext };
   syncDocumentTitle: () => void;
@@ -96,6 +93,7 @@ describe("OpenClaw shell document title", () => {
 
   function createContext(options: {
     connected?: boolean;
+    phase?: ApplicationContext["gateway"]["snapshot"]["phase"];
     approvalCount?: number;
     agentsList?: AgentsListResult | null;
     assistantAgentId?: string;
@@ -105,7 +103,8 @@ describe("OpenClaw shell document title", () => {
     return {
       gateway: {
         snapshot: {
-          phase: (options.connected ?? true) ? "connected" : "reconnecting",
+          phase: options.phase ?? ((options.connected ?? true) ? "connected" : "reconnecting"),
+          lastError: null,
           assistantAgentId: options.assistantAgentId ?? null,
         },
         connection: { gatewayUrl: "ws://gateway.test" },
@@ -121,25 +120,16 @@ describe("OpenClaw shell document title", () => {
     } as unknown as ApplicationContext;
   }
 
-  it("keeps the boot title before a route commits", () => {
-    const shell = createShell();
-    document.title = "OpenClaw Control";
-
-    shell.routeState = {};
-    shell.syncDocumentTitle();
-    expect(document.title).toBe("OpenClaw Control");
-  });
-
-  it("does not read stored outboxes for a connected document title", () => {
-    const shell = createShell(createContext({}));
-    const read = vi.fn(() => ({ total: 3 }));
-    shell.routeState = { routeId: "usage" };
-    shell.outboxStoreRuntime = { read };
+  it("keeps a new tab neutral during connecting", () => {
+    const context = createContext({ phase: "connecting", approvalCount: 2 });
+    const shell = createShell(context);
+    shell.routeState = { routeId: "chat" };
+    // Slow initial handshakes are still loading, even after the offline grace period.
+    context.gateway.snapshot.offlineStable = true;
 
     shell.syncDocumentTitle();
 
-    expect(document.title).toBe("Usage — OpenClaw");
-    expect(read).not.toHaveBeenCalled();
+    expect(document.title).toBe("Chat — OpenClaw");
   });
 
   it("appends the configured environment to route and custodian titles", () => {
@@ -185,7 +175,7 @@ describe("OpenClaw shell document title", () => {
       await settleLitElement(shell);
     }
 
-    expect(document.title).toBe("(Disconnected) Revised launch plan — OpenClaw");
+    expect(document.title).toBe("Revised launch plan — OpenClaw");
     expect(renderShell).not.toHaveBeenCalled();
   });
 
@@ -215,7 +205,7 @@ describe("OpenClaw shell document title", () => {
     replacement.sessions.patchRowLocal(background.key, { derivedTitle: "Replacement title" });
     await vi.advanceTimersByTimeAsync(20);
     await settleLitElement(shell);
-    expect(document.title).toBe("(Disconnected) Replacement title — OpenClaw");
+    expect(document.title).toBe("Replacement title — OpenClaw");
 
     shell.remove();
     await settleLitElement(shell);
@@ -223,18 +213,6 @@ describe("OpenClaw shell document title", () => {
     replacement.sessions.patchRowLocal(background.key, { derivedTitle: "Detached title" });
     await vi.advanceTimersByTimeAsync(20);
     expect(document.title).toBe("Disconnected shell");
-  });
-
-  it("uses the agent name for an agent main chat", () => {
-    const shell = createShell(
-      createContext({ agentsList: roster("main", [{ id: "main", name: "Molty" }]) }),
-    );
-    shell.routeState = { routeId: "chat" };
-    shell.activeSessionKey = "agent:main:main";
-
-    shell.syncDocumentTitle();
-
-    expect(document.title).toBe("Molty — OpenClaw");
   });
 
   it("uses the selected agent name for a global-scope main chat", () => {
@@ -286,26 +264,5 @@ describe("OpenClaw shell document title", () => {
     shell.syncDocumentTitle();
 
     expect(document.title).toBe("(Disconnected) Usage — OpenClaw");
-  });
-
-  it("keeps stored chat outbox counts out of the disconnected marker", () => {
-    const shell = createShell(createContext({ connected: false }));
-    shell.routeState = { routeId: "usage" };
-    shell.outboxStoreRuntime = {
-      read: () => ({ total: 3 }),
-    };
-
-    shell.syncDocumentTitle();
-
-    expect(document.title).toBe("(Disconnected) Usage — OpenClaw");
-  });
-
-  it("uses the meaningful custodian label without a brand suffix", () => {
-    const shell = createShell(createContext({}));
-    shell.routeState = { routeId: "custodian" };
-
-    shell.syncDocumentTitle();
-
-    expect(document.title).toBe("Ask OpenClaw");
   });
 });

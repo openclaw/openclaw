@@ -35,7 +35,7 @@ describe("readLastGatewayErrorLine", () => {
     const homeDir = makeTempStateDir();
     const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
     const stateLogs = resolveGatewayLogPaths(env);
-    const launchdLogs = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
+    const launchdLogs = resolveGatewaySupervisorLogPaths(env);
     fs.mkdirSync(stateLogs.logDir, { recursive: true });
     fs.mkdirSync(launchdLogs.logDir, { recursive: true });
     fs.writeFileSync(stateLogs.stderrPath, "failed to bind gateway socket stale\n", "utf8");

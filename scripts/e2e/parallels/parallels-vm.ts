@@ -37,13 +37,12 @@ export function waitForVmStatus(
   while (Date.now() < deadline) {
     const status = run("prlctl", ["status", vmName], {
       check: false,
-      quiet: true,
       timeoutMs: options.probeTimeoutMs?.() ?? PRLCTL_STATUS_TIMEOUT_MS,
     }).stdout;
     if (status.includes(` ${expected}`)) {
       return;
     }
-    run("sleep", ["1"], { quiet: true });
+    run("sleep", ["1"]);
   }
   throw new Error(`VM ${vmName} did not reach ${expected}`);
 }
@@ -62,19 +61,17 @@ export function ensureVmRunning(
     if (status === "stopped") {
       say(`Start ${vmName} before update phase`);
       run("prlctl", ["start", vmName], {
-        quiet: true,
         timeoutMs: options.transitionTimeoutMs?.() ?? PRLCTL_TRANSITION_TIMEOUT_MS,
       });
     } else if (status === "suspended" || status === "paused") {
       say(`Resume ${vmName} before update phase`);
       run("prlctl", ["resume", vmName], {
-        quiet: true,
         timeoutMs: options.transitionTimeoutMs?.() ?? PRLCTL_TRANSITION_TIMEOUT_MS,
       });
     } else if (status === "missing") {
       die(`VM not found before update phase: ${vmName}`);
     }
-    run("sleep", ["5"], { quiet: true });
+    run("sleep", ["5"]);
   }
   die(`VM did not become running before update phase: ${vmName}`);
 }
@@ -120,7 +117,6 @@ export function resolveMacosVmName(requested: string, explicit = false): string 
 function listVms(timeoutMs = PRLCTL_STATUS_TIMEOUT_MS): PrlctlVmListItem[] {
   return JSON.parse(
     run("prlctl", ["list", "--all", "--json"], {
-      quiet: true,
       timeoutMs,
     }).stdout,
   ) as PrlctlVmListItem[];

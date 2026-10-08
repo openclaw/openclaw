@@ -1584,16 +1584,15 @@ describe("codex conversation binding", () => {
             },
           },
           agents: {
-            list: [
-              {
-                id: "bot-a",
+            entries: {
+              "bot-a": {
                 tools: {
                   exec: {
                     mode: "auto",
                   },
                 },
               },
-            ],
+            },
           },
         } as never,
         sessionFile,
@@ -1883,12 +1882,7 @@ describe("codex conversation binding", () => {
           },
           tools: { exec: { host: "gateway" } },
           agents: {
-            list: [
-              {
-                id: "bot-a",
-                tools: { exec: { host: "node", node: "worker-1" } },
-              },
-            ],
+            entries: { "bot-a": { tools: { exec: { host: "node", node: "worker-1" } } } },
           },
         } as never,
       },
@@ -1927,16 +1921,15 @@ describe("codex conversation binding", () => {
             },
           },
           agents: {
-            list: [
-              {
-                id: "bot-a",
+            entries: {
+              "bot-a": {
                 tools: {
                   exec: {
                     mode: "auto",
                   },
                 },
               },
-            ],
+            },
           },
         } as never,
       },

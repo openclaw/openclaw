@@ -60,7 +60,7 @@ export async function waitForTailscaleBackendReady(params: {
     try {
       const { stdout } = await exec(params.bin, [...(params.prefix ?? []), "status", "--json"], {
         timeoutMs: 5000,
-        maxBuffer: 400_000,
+        maxBuffer: 16 * 1024 * 1024,
         logOutput: false,
       });
       const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};

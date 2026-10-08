@@ -249,18 +249,6 @@ const SystemAgentToolSchema = Type.Object({
   ),
 });
 
-function createCaptureRuntime(): RuntimeEnv & { read: () => string } {
-  const lines: string[] = [];
-  return {
-    log: (...args) => lines.push(args.join(" ")),
-    error: (...args) => lines.push(args.join(" ")),
-    exit: (code) => {
-      throw new Error(`openclaw operation exited with code ${String(code)}`);
-    },
-    read: () => lines.join("\n").trim(),
-  };
-}
-
 function requireParam(params: Record<string, unknown>, name: string): string {
   const value = readToolStringParam(params, name);
   if (!value) {
@@ -285,8 +273,32 @@ function readSetupTarget(
   throw new ToolInputError(`openclaw: unknown setup target "${target}"`);
 }
 
+const SIMPLE_ACTIONS = new Map<string, SystemAgentOperation>([
+  ["status", { kind: "status" }],
+  ["models", { kind: "models" }],
+  ["agents", { kind: "agents" }],
+  ["audit", { kind: "audit" }],
+  ["doctor", { kind: "doctor" }],
+  ["channels", { kind: "channel-list" }],
+  ["validate_config", { kind: "config-validate" }],
+  ["gateway_status", { kind: "gateway-status" }],
+  ["plugin_list", { kind: "plugin-list" }],
+  ["configure_skills", { kind: "skills-setup" }],
+  ["configure_search", { kind: "search-setup" }],
+  ["configure_gateway", { kind: "gateway-config-setup" }],
+  ["import_memory", { kind: "memory-import" }],
+  ["manage_model_accounts", { kind: "model-accounts" }],
+  ["gateway_start", { kind: "gateway-start" }],
+  ["gateway_stop", { kind: "gateway-stop" }],
+  ["gateway_restart", { kind: "gateway-restart" }],
+]);
+
 function operationForAction(params: Record<string, unknown>): SystemAgentOperation {
   const action = readToolStringParam(params, "action", { required: true });
+  const simple = SIMPLE_ACTIONS.get(action);
+  if (simple) {
+    return { ...simple };
+  }
   const optionalStrings = <K extends string>(...keys: K[]): Partial<Record<K, string>> => {
     const fields: Partial<Record<K, string>> = {};
     for (const key of keys) {
@@ -298,40 +310,16 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     return fields;
   };
   switch (action) {
-    case "status":
-    case "models":
-    case "agents":
-    case "audit":
-    case "doctor":
-      return { kind: action };
-    case "channels":
-      return { kind: "channel-list" };
     case "channel_info":
       return { kind: "channel-info", channel: requireParam(params, "channel").toLowerCase() };
-    case "validate_config":
-      return { kind: "config-validate" };
     case "config_get":
       return { kind: "config-get", path: requireParam(params, "path") };
     case "config_schema":
       return { kind: "config-schema", ...optionalStrings("path") };
-    case "gateway_status":
-      return { kind: "gateway-status" };
-    case "plugin_list":
-      return { kind: "plugin-list" };
     case "connect_channel":
       return { kind: "channel-setup", channel: requireParam(params, "channel").toLowerCase() };
-    case "configure_skills":
-      return { kind: "skills-setup" };
-    case "configure_search":
-      return { kind: "search-setup" };
-    case "configure_gateway":
-      return { kind: "gateway-config-setup" };
-    case "import_memory":
-      return { kind: "memory-import" };
     case "configure_model_provider":
       return { kind: "model-setup", ...optionalStrings("workspace") };
-    case "manage_model_accounts":
-      return { kind: "model-accounts" };
     case "open_agent":
       return { kind: "open-tui", ...optionalStrings("agentId", "workspace") };
     case "open_setup": {
@@ -343,12 +331,6 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
         ...(channel ? { channel } : {}),
       };
     }
-    case "gateway_start":
-      return { kind: "gateway-start" };
-    case "gateway_stop":
-      return { kind: "gateway-stop" };
-    case "gateway_restart":
-      return { kind: "gateway-restart" };
     case "plugin_search":
       return { kind: "plugin-search", query: requireParam(params, "query") };
     case "plugin_install": {
@@ -594,7 +576,14 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
           {},
         );
       }
-      const capture = createCaptureRuntime();
+      const lines: string[] = [];
+      const capture: RuntimeEnv = {
+        log: (...values) => lines.push(values.join(" ")),
+        error: (...values) => lines.push(values.join(" ")),
+        exit: (code) => {
+          throw new Error(`openclaw operation exited with code ${String(code)}`);
+        },
+      };
       try {
         await executeSystemAgentOperation(operation, capture, {
           approved: false,
@@ -608,11 +597,14 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return textResult([capture.read(), `error: ${message}`].filter(Boolean).join("\n"), {
-          error: true,
-        });
+        return textResult(
+          [lines.join("\n").trim(), `error: ${message}`].filter(Boolean).join("\n"),
+          {
+            error: true,
+          },
+        );
       }
-      return textResult(capture.read() || "done", {});
+      return textResult(lines.join("\n").trim() || "done", {});
     },
   };
 }

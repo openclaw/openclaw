@@ -73,23 +73,29 @@ struct GatewayTLSRoute: Equatable, Sendable {
               other.allowsTrustedPinReplacement
         else { return false }
 
-        let firstUseRoute: GatewayTLSRoute
         let persistedRoute: GatewayTLSRoute
         if self.params.allowTOFU, self.params.expectedFingerprint == nil {
-            firstUseRoute = self
             persistedRoute = other
         } else if other.params.allowTOFU, other.params.expectedFingerprint == nil {
-            firstUseRoute = other
             persistedRoute = self
         } else {
             return false
         }
-        guard firstUseRoute.params.storeKey == persistedRoute.params.storeKey,
-              !persistedRoute.params.allowTOFU,
+        guard !persistedRoute.params.allowTOFU,
               let storeKey = persistedRoute.params.storeKey,
               let expectedFingerprint = persistedRoute.params.expectedFingerprint
         else { return false }
         return GatewayTLSStore.claimedFirstUseFingerprint(stableID: storeKey) == expectedFingerprint
+    }
+
+    /// Only a fresh, read-only connection preflight may cross a learned-pin renewal.
+    /// Connected routes and mutations continue to use hasSameConnectionIdentity.
+    static func hasSameTrustPolicy(_ lhs: GatewayTLSRoute?, _ rhs: GatewayTLSRoute?) -> Bool {
+        if lhs == rhs { return true }
+        guard let lhs, let rhs,
+              lhs.allowsTrustedPinReplacement, rhs.allowsTrustedPinReplacement
+        else { return false }
+        return lhs.params.required == rhs.params.required && lhs.params.storeKey == rhs.params.storeKey
     }
 
     func permitsTrustedPinReplacement(
@@ -108,14 +114,17 @@ struct GatewayTLSRoute: Equatable, Sendable {
               failure.port == (url.port ?? 443)
         else { return false }
 
-        return LoopbackHost.isLoopback(routeHost) || routeHost == "ts.net" || routeHost.hasSuffix(".ts.net")
+        // Stored pins are learned only after platform trust succeeds. Ordinary CA
+        // renewal follows that same hostname-validated trust contract; a configured
+        // fingerprint remains a strict pin through allowsTrustedPinReplacement.
+        return true
     }
 }
 
-actor GatewayTLSRepairCoordinator {
-    static let shared = GatewayTLSRepairCoordinator()
-
-    func repair(
+enum GatewayTLSRepairCoordinator {
+    /// Keep lifecycle-owner validation and repair on the same executor. The store's
+    /// conditional update owns cross-connection CAS, not a separate actor hop.
+    nonisolated static func repairOnCurrentExecutor(
         route: GatewayTLSRoute?,
         url: URL,
         failure: GatewayTLSValidationFailure) -> Bool
@@ -126,15 +135,27 @@ actor GatewayTLSRepairCoordinator {
               let observedFingerprint = failure.observedFingerprint
         else { return false }
 
-        if GatewayTLSStore.loadFingerprint(stableID: storeKey) == observedFingerprint {
+        guard !Task.isCancelled else { return false }
+        let current = GatewayTLSStore.loadFingerprint(stableID: storeKey)
+        // Keychain reads can block; cancellation may arrive while they are in flight.
+        guard !Task.isCancelled else { return false }
+        if current == observedFingerprint {
             return true
         }
         guard route.params.expectedFingerprint != nil,
               let failedFingerprint = failure.expectedFingerprint
         else { return false }
-        return GatewayTLSStore.replaceFingerprint(
+        if GatewayTLSStore.replaceFingerprint(
             observedFingerprint,
             ifCurrent: failedFingerprint,
             stableID: storeKey)
+        {
+            return true
+        }
+        // Another connection may have won after our read. Only its identical
+        // trusted certificate satisfies this repair; never overwrite a different pin.
+        guard !Task.isCancelled else { return false }
+        let winner = GatewayTLSStore.loadFingerprint(stableID: storeKey)
+        return !Task.isCancelled && winner == observedFingerprint
     }
 }

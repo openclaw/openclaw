@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -14,23 +15,24 @@ import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-pr
 
 const CHANGED_EVENT = "controlUi.sessionPullRequests.changed";
 const READY: ControlUiSessionPullRequests = { pullRequests: [], rateLimited: false };
-let active: ReturnType<typeof createTestControlUiSessionPrSubscriptions> | undefined;
-let clock: ReturnType<typeof createGatewaySchedulerClock>;
-let scheduler: ReturnType<typeof createTestGatewayScheduler>;
-
-beforeEach(() => {
-  clock = createGatewaySchedulerClock(Date.now());
-  scheduler = createTestGatewayScheduler(clock.clock);
-});
-
-afterEach(async () => {
-  await active?.stop();
-  await scheduler.stop();
-  active = undefined;
-  vi.useRealTimers();
-});
 
 describe("recipient publication lifetimes", () => {
+  let active: ReturnType<typeof createTestControlUiSessionPrSubscriptions> | undefined;
+  let clock: ReturnType<typeof createGatewaySchedulerClock>;
+  let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+
+  beforeEach(() => {
+    clock = createGatewaySchedulerClock(Date.now());
+    scheduler = createTestGatewayScheduler(clock.clock);
+  });
+
+  afterEach(async () => {
+    await active?.stop();
+    await scheduler.stop();
+    active = undefined;
+    vi.useRealTimers();
+  });
+
   const target: ControlUiSessionPrTarget = {
     params: { sessionKey: "shared", agentId: "main" },
     identity: "shared",
@@ -116,62 +118,84 @@ describe("recipient publication lifetimes", () => {
     },
   );
 
-  it("retries an unchanged snapshot missed during recipient preparation without duplicating delivery", async () => {
-    vi.useFakeTimers();
-    const entered = createDeferred();
-    const release = createDeferred();
-    let generation = 0;
-    let holdRecipient = false;
-    let snapshot = READY;
-    const broadcastToConnIds = vi.fn();
-    active = createTestControlUiSessionPrSubscriptions({
-      scheduler,
-      broadcastToConnIds,
-      load: async () => snapshot,
-      prepareRead: async (connId) => async () => {
-        const captured = generation;
-        const prepared = {
-          ...target,
-          assertCurrent: () => {
-            if (captured !== generation) {
-              throw new Error("Prepared selection changed");
-            }
-          },
-        };
-        if (connId === "recipient" && holdRecipient) {
-          holdRecipient = false;
-          entered.resolve();
-          await release.promise;
+  it.each(["selection", "grant"] as const)(
+    "continues delivery when a recipient's prepared %s changes",
+    async (boundary) => {
+      vi.useFakeTimers();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const access = new AbortController();
+      let generation = 0;
+      let holdRecipient = false;
+      let snapshot = READY;
+      const broadcastToConnIds = vi.fn();
+      active = createTestControlUiSessionPrSubscriptions({
+        scheduler,
+        broadcastToConnIds,
+        load: async () => snapshot,
+        prepareRead: async (connId) => async () => {
+          if (boundary === "grant" && connId === "recipient" && access.signal.aborted) {
+            return undefined;
+          }
+          const captured = generation;
+          const prepared = {
+            ...target,
+            assertCurrent: () => {
+              if (boundary === "selection" && captured !== generation) {
+                throw new Error("Prepared selection changed");
+              }
+              if (boundary === "grant" && connId === "recipient") {
+                access.signal.throwIfAborted();
+              }
+            },
+          };
+          if (connId === "recipient" && holdRecipient) {
+            holdRecipient = false;
+            entered.resolve();
+            await release.promise;
+          }
+          return prepared;
+        },
+      });
+      for (const connId of boundary === "grant"
+        ? ["first", "recipient", "last"]
+        : ["first", "recipient"]) {
+        await active.replace(connId, ["shared"]);
+      }
+      broadcastToConnIds.mockClear();
+      broadcastToConnIds.mockImplementationOnce(() => {
+        holdRecipient = true;
+      });
+      snapshot = changed;
+      const poll = active.pollNow();
+      try {
+        await entered.promise;
+        generation++;
+        access.abort(new Error("Recipient access retired"));
+        release.resolve();
+        await poll;
+        if (boundary === "selection") {
+          expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(...publication("first"));
+          await active.pollNow();
+          expect(broadcastToConnIds.mock.calls).toEqual(
+            ["first", "recipient"].map((connId) => publication(connId)),
+          );
+          await active.pollNow();
+          expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+        } else {
+          expect(broadcastToConnIds.mock.calls).toEqual(
+            ["first", "last"].map((connId) => publication(connId)),
+          );
+          broadcastToConnIds.mockClear();
+          await active.pollNow();
+          expect(broadcastToConnIds).not.toHaveBeenCalled();
         }
-        return prepared;
-      },
-    });
-    await active.replace("first", ["shared"]);
-    await active.replace("recipient", ["shared"]);
-    broadcastToConnIds.mockClear();
-    broadcastToConnIds.mockImplementationOnce(() => {
-      holdRecipient = true;
-    });
-    snapshot = changed;
-    const poll = active.pollNow();
-    try {
-      await entered.promise;
-      generation++;
-      release.resolve();
-      await poll;
-      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(...publication("first"));
-
-      await active.pollNow();
-      expect(broadcastToConnIds.mock.calls).toEqual(
-        ["first", "recipient"].map((connId) => publication(connId)),
-      );
-      await active.pollNow();
-      expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
-    } finally {
-      release.resolve();
-      await poll;
-    }
-  });
+      } finally {
+        release.resolve();
+        await poll;
+      }
+    },
+  );
 
   it("acknowledges a forced result equal to the normal poll queued before it", async () => {
     vi.useFakeTimers();
@@ -602,56 +626,105 @@ describe("recipient publication lifetimes", () => {
       }
     },
   );
+});
 
-  it("continues to later recipients after one prepared authority rejects the shared snapshot", async () => {
-    vi.useFakeTimers();
-    const entered = createDeferred();
-    const held = createDeferred<ControlUiSessionPrTarget>();
-    const access = new AbortController();
-    const rejectedTarget = { ...target, assertCurrent: () => access.signal.throwIfAborted() };
-    let holdRecipient = false;
-    let snapshot = READY;
-    const broadcastToConnIds = vi.fn();
-    active = createTestControlUiSessionPrSubscriptions({
+describe("one-shot session PR reads", () => {
+  const scheduler = createTestGatewayScheduler();
+  let owner: ReturnType<typeof createTestControlUiSessionPrSubscriptions> | undefined;
+
+  afterEach(async () => {
+    await owner?.stop();
+    owner = undefined;
+  });
+
+  const target: ControlUiSessionPrTarget = {
+    params: { sessionKey: "agent:main:change", agentId: "main" },
+    identity: "original-session",
+    readSource: { agentId: "main", path: "unused" },
+    source: null,
+  };
+
+  it("keeps a forced watcher snapshot when an older prepared read settles later", async ({
+    signal,
+  }) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const selected = { ...target, source: "/synthetic/repository" };
+    owner = createTestControlUiSessionPrSubscriptions({
       scheduler,
-      broadcastToConnIds,
-      load: async () => snapshot,
-      prepareRead: async (connId) => () => {
-        if (connId === "rejected") {
-          if (holdRecipient) {
-            holdRecipient = false;
-            entered.resolve();
-            return held.promise;
-          }
-          return Promise.resolve(access.signal.aborted ? undefined : rejectedTarget);
+      broadcastToConnIds: vi.fn(),
+      prepareRead: async () => async () => selected,
+      load: async ({ refresh }) => {
+        if (!refresh) {
+          entered.resolve();
+          await release.promise;
         }
-        return Promise.resolve(target);
+        return {
+          pullRequests: [],
+          rateLimited: false,
+          repository: { owner: "synthetic", repo: refresh ? "fresh" : "old" },
+        };
       },
     });
-    for (const connId of ["first", "rejected", "last"]) {
-      await active.replace(connId, ["shared"]);
-    }
-    broadcastToConnIds.mockClear();
-    broadcastToConnIds.mockImplementationOnce(() => {
-      holdRecipient = true;
-    });
-    snapshot = changed;
-    const poll = active.pollNow();
+    expect(owner.readPrepared(selected)).toBeUndefined();
+    const reading = owner.read(selected, () => {});
     try {
-      await entered.promise;
-      access.abort(new Error("Recipient access retired"));
-      held.resolve(rejectedTarget);
-      await poll;
-
-      expect(broadcastToConnIds.mock.calls).toEqual(
-        ["first", "last"].map((connId) => publication(connId)),
-      );
-      broadcastToConnIds.mockClear();
-      await active.pollNow();
-      expect(broadcastToConnIds).not.toHaveBeenCalled();
+      await withinTest(entered.promise, signal);
+      const { sessionKey } = selected.params;
+      await withinTest(owner.replace("viewer", [sessionKey], new Set([sessionKey])), signal);
+      expect(owner.readPrepared(selected)?.repository?.repo).toBe("fresh");
+      release.resolve();
+      await withinTest(reading, signal);
+      expect(owner.readPrepared(selected)?.repository?.repo).toBe("fresh");
     } finally {
-      held.resolve(rejectedTarget);
-      await poll;
+      release.resolve();
+      await reading;
     }
   });
+
+  it.each(["caller", "session", "owner"] as const)(
+    "does not disclose an in-flight result after the %s retires",
+    async (retired) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("Read authority retired");
+        }
+      };
+      owner = createTestControlUiSessionPrSubscriptions({
+        scheduler,
+        broadcastToConnIds: vi.fn(),
+        load: async () => {
+          entered.resolve();
+          await release.promise;
+          return { pullRequests: [], rateLimited: false };
+        },
+      });
+      const reading = owner.read(
+        { ...target, ...(retired === "session" ? { assertCurrent } : {}) },
+        retired === "caller" ? assertCurrent : () => {},
+        "publication",
+      );
+      const rejected = expect(reading).rejects.toThrow(/retired|closed/);
+      await entered.promise;
+      current = false;
+      let stopped = false;
+      const stopping =
+        retired === "owner"
+          ? owner.stop().then(() => {
+              stopped = true;
+            })
+          : undefined;
+      expect(stopped).toBe(false);
+      release.resolve();
+      await rejected;
+      await stopping;
+      if (retired === "owner") {
+        expect(stopped).toBe(true);
+        expect(() => owner?.read(target, () => {})).toThrow("closed");
+      }
+    },
+  );
 });
