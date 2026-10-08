@@ -1523,8 +1523,6 @@
 ["extensions/slack/src/monitor/events/channels.test.ts","openclaw/plugin-sdk/channel-config-writes","0feaefabfaa3712abc7ffdfa74ec91c9b0f41fad96bc27d2fbf56e22b45e6299",1]
 ["extensions/slack/src/monitor/events/channels.test.ts","openclaw/plugin-sdk/config-mutation","18ff8d6e6cb39b5e721d8f805cb963d82373c753bb4c82e7f0e7b483485dec13",1]
 ["extensions/slack/src/monitor/events/channels.test.ts","openclaw/plugin-sdk/system-event-runtime","59e2e9c873bef9f96e9062ec27848ea426a3bf3768a2a28fe4ec9fcc5d5891b0",1]
-["extensions/slack/src/monitor/events/interactions.approval-policy.test.ts","../../actions.js","bcd71b9d50c3b3ddaf1caeccf1738388e5b8491929ed4ceeb5b6064115b376ad",1]
-["extensions/slack/src/monitor/events/interactions.approval-policy.test.ts","openclaw/plugin-sdk/approval-gateway-runtime","f5d0bf06ce648cd1106c7566ac936403e7cdca547d328fc7884979d9a39c55b7",1]
 ["extensions/slack/src/monitor/events/interactions.test.ts","../../actions.js","bcd71b9d50c3b3ddaf1caeccf1738388e5b8491929ed4ceeb5b6064115b376ad",1]
 ["extensions/slack/src/monitor/events/interactions.test.ts","openclaw/plugin-sdk/approval-gateway-runtime","f5d0bf06ce648cd1106c7566ac936403e7cdca547d328fc7884979d9a39c55b7",1]
 ["extensions/slack/src/monitor/events/interactions.test.ts","openclaw/plugin-sdk/question-gateway-runtime","12f105ade6efe1c55cfb0f9b9ca8fcfd113651144752587ef9095c82009327a5",1]
