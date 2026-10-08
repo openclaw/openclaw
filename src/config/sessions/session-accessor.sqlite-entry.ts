@@ -40,7 +40,6 @@ import {
   readSessionKeyBySessionIdInDatabase,
 } from "./session-accessor.sqlite-entry-read.js";
 import {
-  readExactSessionEntryRowValidated,
   readSessionEntryRow,
   readLifecycleTargetSnapshot,
   readSessionEntrySelectionSnapshot,
@@ -200,18 +199,20 @@ export function listSessionTranscriptInstances(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, continuation, () => {
         const currentEntries =
-          options.sessionId !== undefined
-            ? {
-                get: (sessionKey: string) =>
-                  readExactSessionEntryRowValidated(database, sessionKey, scope.projection)?.entry,
-              }
+          options.sessionId !== undefined || options.sessionIds !== undefined
+            ? undefined
             : new Map(
                 listSqliteSessionEntriesFromDatabase(database, resolved, {
                   ...scope,
                   clone: false,
                 }).map(({ sessionKey, entry }) => [sessionKey, entry]),
               );
-        return listTranscriptInstancesFromDatabase({ currentEntries, database, options });
+        return listTranscriptInstancesFromDatabase({
+          currentEntries,
+          database,
+          options,
+          entryProjection: scope.projection,
+        });
       }),
     toDatabaseOptions(resolved),
   );

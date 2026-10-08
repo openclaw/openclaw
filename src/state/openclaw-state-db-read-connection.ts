@@ -45,7 +45,10 @@ import {
 } from "./openclaw-state-db-integrity-admission.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
-import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
+import {
+  assertSupportedStateSchemaVersion,
+  type StateSchemaContentVersionRowReader,
+} from "./openclaw-state-db-schema-version.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
 export type OpenClawStateReadConnection = {
@@ -198,6 +201,7 @@ function assertStateReadSchemaForPolicy(
   pathname: string,
   existingSchema: boolean,
   integrityPolicy?: OpenClawStateIntegrityPolicy,
+  readContentVersionRow?: StateSchemaContentVersionRowReader,
 ): void {
   if (existingSchema) {
     assertExistingOpenClawStateRuntimeSchema(
@@ -207,7 +211,7 @@ function assertStateReadSchemaForPolicy(
       integrityPolicy,
     );
   } else {
-    assertSupportedStateSchemaVersion(database, pathname);
+    assertSupportedStateSchemaVersion(database, pathname, undefined, readContentVersionRow);
   }
 }
 
@@ -247,6 +251,7 @@ export function withOpenClawStateReadOnlyLocation<T>(
   expectedIdentity?: string,
   snapshotRoot?: string,
   retainConnection = false,
+  readContentVersionRow?: StateSchemaContentVersionRowReader,
 ): T {
   const result = readOpenClawStateReadOnlyLocation(
     operation,
@@ -256,6 +261,7 @@ export function withOpenClawStateReadOnlyLocation<T>(
     expectedIdentity,
     snapshotRoot,
     retainConnection,
+    readContentVersionRow,
   );
   if (result.status === "unavailable") {
     throw result.error;
@@ -272,6 +278,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
   expectedIdentity?: string,
   snapshotRoot?: string,
   retainConnection = false,
+  readContentVersionRow?: StateSchemaContentVersionRowReader,
 ): OpenClawStateSettledRead<T> {
   const opening =
     retainConnection && source === pathname && !snapshotRoot
@@ -293,7 +300,13 @@ export function readOpenClawStateReadOnlyLocation<T>(
         status: "available",
         value: runSqliteReadOperationSync(opened.database.db, () => {
           admitStateReadSchemaFacts(opened.database.db, pathname);
-          assertStateReadSchemaForPolicy(opened.database.db, pathname, existingSchema);
+          assertStateReadSchemaForPolicy(
+            opened.database.db,
+            pathname,
+            existingSchema,
+            undefined,
+            readContentVersionRow,
+          );
           return operation(opened.database);
         }),
       };

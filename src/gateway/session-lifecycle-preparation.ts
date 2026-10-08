@@ -386,7 +386,11 @@ export async function commitPreparedSessionWorkspace(params: {
         };
       },
       {
-        assertCommitAllowed: assertCurrent,
+        // Inherited source callbacks can read other stores and retain native atomicity.
+        // Source-free bindings use worker grants without transacting on a retained reader.
+        ...(prepared.withCommit
+          ? { assertCommitAllowed: assertCurrent }
+          : { workerGuard: { assertCurrent } }),
         requireWriteSuccess: true,
         skipMaintenance: true,
         onCommitted: params.onCommitted,

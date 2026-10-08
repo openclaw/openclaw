@@ -1,5 +1,8 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { readAcpSessionCommand } from "../acp/runtime/session-meta-read.worker.js";
+import {
+  prepareAcpSessionMetadataRead,
+  readAcpSessionCommand,
+} from "../acp/runtime/session-meta-read.worker.js";
 import {
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
@@ -109,6 +112,7 @@ import {
 import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
 import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
+import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.worker.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadResult,
@@ -228,6 +232,10 @@ serveOwnedWorkerTasks(
                 },
               };
         }
+        const metadataRead =
+          command.type === "acpSessions.metadata"
+            ? prepareAcpSessionMetadataRead(command)
+            : undefined;
         const result = withOpenClawStateReadOnlyLocation(
           ({ db }): OpenClawStateReadResult => {
             sourceAdmitted = true;
@@ -274,7 +282,7 @@ serveOwnedWorkerTasks(
               command.type === "acpSessions.list" ||
               command.type === "acpSessions.metadata"
             ) {
-              return readAcpSessionCommand(db, command);
+              return metadataRead ? metadataRead.read(db) : readAcpSessionCommand(db, command);
             }
             if (isChannelIngressReadCommand(command)) {
               return readChannelIngressInDatabase(db, command);
@@ -587,38 +595,7 @@ serveOwnedWorkerTasks(
               };
             }
             if (command.type === "sessionRows.sharedFacts") {
-              const readSharedFacts = () => {
-                const acp = readAcpSessionCommand(db, {
-                  type: "acpSessions.metadata",
-                  entries: command.entries.flatMap((entry) => entry.acp ?? []),
-                });
-                if (acp.type !== "acpSessions.metadata") {
-                  throw new Error("Unexpected ACP session metadata cohort");
-                }
-                let acpIndex = 0;
-                return {
-                  type: command.type,
-                  rows: command.entries.map((entry) => {
-                    const workspace = entry.repositoryWorkspace
-                      ? findSessionRepositoryWorkspaceInDatabase(db, entry.repositoryWorkspace)
-                      : undefined;
-                    return {
-                      ...(entry.acp ? { acp: acp.rows[acpIndex++] ?? null } : {}),
-                      ...(entry.repositoryWorkspace
-                        ? {
-                            repositoryWorkspace:
-                              workspace?.workspaceId === entry.repositoryWorkspace.workspaceId
-                                ? workspace
-                                : null,
-                          }
-                        : {}),
-                    };
-                  }),
-                };
-              };
-              return command.entries.some((entry) => entry.repositoryWorkspace)
-                ? runSqliteDeferredTransactionSync(db, readSharedFacts)
-                : readSharedFacts();
+              return readSessionRowsSharedFacts(db, command);
             }
             if (command.type === "workerPlacements.changeSnapshot") {
               return {
@@ -668,6 +645,7 @@ serveOwnedWorkerTasks(
               : readStateRegistryCommand(db, command);
           },
           ...locationArgs,
+          metadataRead?.readContentVersionRow,
         );
         return { ok: true, sourceAdmitted: true, ...result };
       };

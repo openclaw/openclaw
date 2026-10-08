@@ -413,8 +413,8 @@ describe("captured model decisions", () => {
       isCurrent: () => true,
     });
     const assertCurrent = vi.fn();
-    await prepared.prepareSelectedAccountCatalog(assertCurrent, { allowDiscovery: true });
-    await prepared.prepareSelectedAccountCatalog(assertCurrent, { allowDiscovery: true });
+    await prepared.prepareSelectedAccountCatalog(assertCurrent, { refresh: true });
+    await prepared.prepareSelectedAccountCatalog(assertCurrent, {});
     expect(catalog).toHaveBeenCalledOnce();
     expect(assertCurrent).toHaveBeenCalled();
     expect(sharedSnapshot).not.toHaveProperty("providerOutcomes");
@@ -475,7 +475,7 @@ describe("captured model decisions", () => {
       isCurrent: () => current,
     });
     await expect(
-      prepared.prepareSelectedAccountCatalog(() => {}, { allowDiscovery: true }),
+      prepared.prepareSelectedAccountCatalog(() => {}, { refresh: true }),
     ).rejects.toThrow("changed");
     expect(prepared.snapshot.providerOutcomes).toEqual([]);
   });

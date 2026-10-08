@@ -125,6 +125,9 @@ export async function commitAcpSessionMutation(
   assertCurrent: () => void,
   authorize?: (stage: "transaction" | "commit") => void,
 ) {
+  if ("kind" in input.source && input.source.kind === "reset" && !authorize) {
+    throw new Error("ACP reset publication requires its retained lifecycle guard");
+  }
   const nonce = randomUUID();
   let admitted:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
@@ -210,7 +213,9 @@ export async function commitAcpSessionMutation(
           return {
             nativeLocations: [
               context.admission.databasePath,
-              ...("kind" in input.source ? [] : [input.source.path]),
+              ...("kind" in input.source && input.source.kind === "ephemeral"
+                ? []
+                : [input.source.path]),
             ],
             admission,
           };
