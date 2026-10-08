@@ -347,14 +347,18 @@ export async function buildDynamicTools(
     !(input.pluginConfig.codexDynamicToolsExclude ?? []).some(
       (name) => normalizeCodexDynamicToolName(name) === "web_search",
     );
-  // A missing managed provider does not remove Codex's hosted implementation.
-  // Resolve permission independently when no managed tool carries that fact.
-  const nativeHostedWebSearch = webSearchPlan.kind === "native-hosted";
+  // A turn-scoped native restriction must not erase persistent hosted availability.
+  // Permission still comes from the policy owner, independently of managed tools.
+  const persistentHostedWebSearchEligible =
+    resolveCodexWebSearchPlan({
+      config: params.config,
+      nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
+    }).kind === "native-hosted";
   let nativeWebSearchAllowed = false;
   let persistentWebSearchAllowed = webSearchPresent;
   if (
     (input.onPersistentWebSearchPolicyResolved ||
-      (nativeHostedWebSearch &&
+      (webSearchPlan.kind === "native-hosted" &&
         (input.onWebSearchPolicyResolved || webSearchPlan.webFetchHostnameAllowlist))) &&
     !webSearchPresent &&
     persistentCodexWebSearchSurface
@@ -368,7 +372,7 @@ export async function buildDynamicTools(
       agentId: input.policyAgentId,
       sessionKey: input.sandboxSessionKey,
       sessionId: params.sessionId,
-      ...(nativeHostedWebSearch
+      ...(persistentHostedWebSearchEligible
         ? { runtimeToolAllowlist: toolRunContext.runtimeToolAllowlist }
         : {}),
       sandboxToolPolicy: input.sandbox?.tools,
@@ -388,9 +392,13 @@ export async function buildDynamicTools(
     });
     persistentWebSearchAllowed =
       webSearchPolicy.persistentAllowed &&
-      (nativeHostedWebSearch || !webSearchPolicy.allowed || isCodexMemoryFlushRun(params));
+      (persistentHostedWebSearchEligible ||
+        !webSearchPolicy.allowed ||
+        isCodexMemoryFlushRun(params));
     nativeWebSearchAllowed =
-      nativeHostedWebSearch && webSearchPolicy.allowed && !isCodexMemoryFlushRun(params);
+      webSearchPlan.kind === "native-hosted" &&
+      webSearchPolicy.allowed &&
+      !isCodexMemoryFlushRun(params);
   }
   input.onPersistentWebSearchPolicyResolved?.(persistentWebSearchAllowed);
   const filteredTools = applyEmbeddedAttemptToolsAllow(

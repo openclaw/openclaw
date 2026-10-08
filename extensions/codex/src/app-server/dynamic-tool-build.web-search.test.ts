@@ -97,8 +97,9 @@ describe("Codex app-server dynamic tool search policy", () => {
       allowed: false,
     },
     {
-      name: "effective policy denial",
+      name: "effective policy denial despite a runtime cap",
       config: { tools: { deny: ["web_search"] } },
+      toolsAllow: ["message"],
       source: ["message"],
       exposed: ["message"],
       persistent: false,
@@ -184,6 +185,7 @@ describe("Codex app-server dynamic tool search policy", () => {
     const allowed = vi.fn();
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled: shouldEnableCodexAppServerNativeToolSurface(params),
       nativeProviderWebSearchSupport: testCase.nativeProviderWebSearchSupport,
       pluginConfig: { codexDynamicToolsExclude: testCase.excludes },
       onPersistentWebSearchPolicyResolved: persistent,

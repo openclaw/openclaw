@@ -16,6 +16,11 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import {
+  buildDynamicTools,
+  shouldEnableCodexAppServerNativeToolSurface,
+} from "./dynamic-tool-build.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type {
@@ -47,7 +52,7 @@ import {
   retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, createCodexTestModel } from "./test-support.js";
 import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
 import { registerThreadPolicyRefreshTests } from "./thread-lifecycle-policy-refresh.test-support.js";
 import { registerRequiredRootThreadPolicyTests } from "./thread-lifecycle-rooted.test-support.js";
@@ -2760,42 +2765,69 @@ describe("Codex app-server thread lifecycle bindings", () => {
   it("uses a transient Codex thread when runtime toolsAllow denies web_search", async () => {
     const { sessionFile, workspaceDir } = createPaths();
     const params = createParams(sessionFile, workspaceDir);
-    params.disableTools = false;
+    params.model = createCodexTestModel("codex");
+    setCodexTestToolFactory(params, () => []);
 
     const fixture = await createSequentialLifecycleHarness(() => threadStartResult("thread-1"));
     const { client, request } = fixture;
+    const policies: Array<{ persistent: boolean | undefined; current: boolean }> = [];
+    const start = async () => {
+      const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+      let persistentWebSearchAllowed: boolean | undefined;
+      let webSearchAllowed = false;
+      const tools = await buildDynamicTools({
+        params,
+        resolvedWorkspace: workspaceDir,
+        effectiveWorkspace: workspaceDir,
+        sandboxSessionKey: params.sessionKey!,
+        sandbox: null,
+        nativeToolSurfaceEnabled,
+        runAbortController: new AbortController(),
+        sessionAgentId: "main",
+        policyAgentId: "main",
+        pluginConfig: {},
+        onYieldDetected: () => {},
+        onPersistentWebSearchPolicyResolved: (allowed) => {
+          persistentWebSearchAllowed = allowed;
+        },
+        onWebSearchPolicyResolved: (allowed) => {
+          webSearchAllowed = allowed;
+        },
+      });
+      expect(tools).toEqual([]);
+      policies.push({ persistent: persistentWebSearchAllowed, current: webSearchAllowed });
+      return startOrResumeThread({
+        client,
+        params,
+        nativeCodeModeEnabled: nativeToolSurfaceEnabled,
+        persistentWebSearchAllowed,
+        webSearchAllowed,
+      });
+    };
 
-    await startOrResumeThread({
-      client,
-      params,
-      dynamicTools: [createDeferredNamedDynamicTool("web_search")],
-      webSearchAllowed: true,
-    });
+    await start();
     params.toolsAllow = ["message"];
     await fixture.endTurn("thread-1");
-    const restrictedBinding = await startOrResumeThread({
-      client,
-      params,
-      dynamicTools: [createDeferredNamedDynamicTool("web_search")],
-      webSearchAllowed: false,
-    });
+    const restrictedBinding = await start();
     const savedAfterRestriction = await readCodexAppServerBinding(sessionFile);
     params.toolsAllow = undefined;
     await fixture.endTurn("thread-2");
-    const resumedBinding = await startOrResumeThread({
-      client,
-      params,
-      dynamicTools: [createDeferredNamedDynamicTool("web_search")],
-      webSearchAllowed: true,
-    });
+    const resumedBinding = await start();
 
     expect(restrictedBinding.threadId).toBe("thread-2");
     expect(restrictedBinding).not.toHaveProperty("liveThreadConfigFingerprint");
     expect(savedAfterRestriction?.threadId).toBe("thread-1");
     expect(resumedBinding.threadId).toBe("thread-1");
-    expect(request.mock.calls.map(([method]) => method)).toEqual(
-      twoStartsThenResumeMethods(PREFLIGHT_METHODS),
-    );
+    expect(policies).toEqual([
+      { persistent: true, current: true },
+      { persistent: true, current: false },
+      { persistent: true, current: true },
+    ]);
+    expect(
+      request.mock.calls
+        .map(([method]) => method)
+        .filter((method) => method === "thread/start" || method === "thread/resume"),
+    ).toEqual(["thread/start", "thread/start", "thread/resume"]);
     expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toMatchObject({
       config: { web_search: "cached" },
     });
