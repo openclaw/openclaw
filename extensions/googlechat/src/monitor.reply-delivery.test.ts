@@ -89,17 +89,20 @@ describe("Google Chat reply delivery", () => {
     expect(statusSink).not.toHaveBeenCalled();
   });
 
-  it("continues later chunks in the provider fallback thread", async () => {
+  it.each([
+    ["provider fallback", "spaces/AAA/threads/fallback", "spaces/AAA/threads/fallback"],
+    ["requested when metadata is omitted", undefined, "spaces/AAA/threads/requested"],
+  ])("continues later chunks in the %s thread", async (_name, threadName, expectedThread) => {
     const core = createCore({ chunks: ["first chunk", "second chunk"] });
     const runtime = createRuntimeSpies();
     mocks.sendGoogleChatMessage
       .mockResolvedValueOnce({
         messageName: "spaces/AAA/messages/first",
-        threadName: "spaces/AAA/threads/fallback",
+        threadName,
       })
       .mockResolvedValueOnce({
         messageName: "spaces/AAA/messages/second",
-        threadName: "spaces/AAA/threads/fallback",
+        threadName,
       });
 
     await deliverGoogleChatReply({
@@ -121,7 +124,7 @@ describe("Google Chat reply delivery", () => {
       account,
       space: "spaces/AAA",
       text: "second chunk",
-      thread: "spaces/AAA/threads/fallback",
+      thread: expectedThread,
     });
   });
 

@@ -882,6 +882,19 @@ describe("plugin-owned CLI execution host boundary", () => {
 });
 
 describe("plugin-owned CLI ask_user timeout", () => {
+  it("keeps the earlier overall deadline authoritative", async () => {
+    vi.useFakeTimers();
+    const deadline = Date.now() + 3_610_000;
+    const { run } = await startBlockedRun({ timeoutMs: 150, getDeadline: () => deadline });
+
+    await vi.advanceTimersByTimeAsync(150);
+    await expect(run).resolves.toMatchObject({
+      reason: "overall-timeout",
+      timedOut: true,
+      noOutputTimedOut: false,
+    });
+  });
+
   it("uses the exact question deadline", async () => {
     vi.useFakeTimers();
     const deadline = Date.now() + 3_610_000;

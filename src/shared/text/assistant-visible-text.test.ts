@@ -35,6 +35,11 @@ describe("stripAssistantInternalScaffolding", () => {
       "Prefix\n\nSuffix",
     ],
     [
+      "does not let </tool_result> close a <tool_call> block",
+      'Prefix\n<tool_call>{"name":"x"}</tool_result>LEAK</tool_call>\nSuffix',
+      "Prefix\n\nSuffix",
+    ],
+    [
       "hides dangling legacy uppercase TOOL_CALL blocks to end-of-string",
       'Before\n[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}',
       "Before\n",
