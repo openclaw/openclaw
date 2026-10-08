@@ -16,6 +16,7 @@ import {
 import {
   resolveAnnounceDeliveryDeadline,
   resolveDeferredCleanupDecision,
+  resolveEffectiveCleanupMode,
   shouldSuspendPendingFinalDelivery,
 } from "./subagent-registry-cleanup.js";
 import {
@@ -45,7 +46,7 @@ import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 export const finalizeSubagentCleanup = async (
   context: SubagentLifecycleAnnounceCleanupContext,
   observedEntry: SubagentRunRecord,
-  cleanup: "delete" | "keep",
+  requestedCleanup: "delete" | "keep",
   announceOutcome: SubagentAnnounceFlowOutcome,
   cleanupGeneration: number,
   stateContext: OpenClawStateWorkerContext,
@@ -62,6 +63,9 @@ export const finalizeSubagentCleanup = async (
   }
   let entry = publishedEntry;
   const runtimeKey = getSubagentRunRuntimeKey(observedEntry);
+  // Re-resolved against the committed outcome: an unconfirmed child must not
+  // have its session or attachments destroyed by this attempt.
+  const cleanup = resolveEffectiveCleanupMode(entry, requestedCleanup);
   if (!context.isCleanupAttemptCurrent(entry, cleanupGeneration)) {
     await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
     return;

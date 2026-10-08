@@ -387,6 +387,8 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             callerSessionKey: controller.callerSessionKey,
             callerIsSubagent: controller.callerIsSubagent,
             total: list.total,
+            sharedCwdGroupTotal: list.sharedCwdGroupTotal,
+            sharedCwdGroups: list.sharedCwdGroups,
             active: list.active.map(({ line: _line, ...view }) => view),
             recent: list.recent.map(({ line: _line, ...view }) => view),
             text: list.text,

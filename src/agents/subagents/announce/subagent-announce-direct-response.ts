@@ -20,10 +20,12 @@ import {
   buildRequesterCompletionDeliveryResult,
   hasMessagingToolDeliveryToSource,
   isGatewayAgentRunPending,
+  isStillRunningSubagentCompletion,
   resolvePrivateCompletionDeliveryResult,
 } from "./subagent-announce-completion-delivery.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import type { DeliveryContext } from "./subagent-announce-origin.js";
+import type { AgentInternalEvent } from "../../internal-events.js";
 
 type DirectAnnounceResponseContext = {
   params: {
@@ -38,6 +40,7 @@ type DirectAnnounceResponseContext = {
   shouldDeliverAgentFinal: boolean;
   requiresMessageToolDelivery: boolean;
   isSubagentCompletion: boolean;
+  trustedCompletionEvent: AgentInternalEvent | undefined;
   hasSuccessfulTrustedSubagentNoOutputCompletion: boolean;
   hasRequiredSubagentNoOutputCompletion: boolean;
   subagentDirectMessageCompletionRequiresMessageTool: boolean;
@@ -69,6 +72,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     shouldDeliverAgentFinal,
     requiresMessageToolDelivery,
     isSubagentCompletion,
+    trustedCompletionEvent,
     hasSuccessfulTrustedSubagentNoOutputCompletion,
     hasRequiredSubagentNoOutputCompletion,
     subagentDirectMessageCompletionRequiresMessageTool,
@@ -291,8 +295,12 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
                 ? normalizeMessageChannel(origin.channel) === INTERNAL_MESSAGE_CHANNEL
                 : !origin?.to,
             )));
+      // A subagent completion owes a visible result, but a still-running
+      // observation of one does not, so an intentionally silent requester turn
+      // settles it instead of being retried forever.
       const acceptsIntentionalSilentCompletion =
-        hasIntentionalSilentCompletionReply && !isSubagentCompletion;
+        hasIntentionalSilentCompletionReply &&
+        (!isSubagentCompletion || isStillRunningSubagentCompletion(trustedCompletionEvent));
       if (
         !hasVisibleCompletionReply &&
         (params.requireVisibleReply ||

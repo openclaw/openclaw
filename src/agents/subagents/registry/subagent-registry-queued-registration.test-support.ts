@@ -107,6 +107,7 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
     notifyContextEngineSubagentEnded: async () => {},
     completeCleanupBookkeeping: vi.fn(async () => {}),
     completeSubagentRun: async () => {},
+    reportSubagentWaitExpiry: async () => {},
   } satisfies SubagentManagerOptions;
   const manager = createSubagentRunManager(options);
   const registration: RegisterSubagentRunParams = {

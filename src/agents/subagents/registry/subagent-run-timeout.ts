@@ -7,6 +7,7 @@ import { asDateTimestampMs, asFiniteNumber } from "@openclaw/normalization-core/
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentChildStopUnconfirmed } from "./subagent-session-metrics.js";
 
 type SubagentRunDeadlineRecord = Pick<
   SubagentRunRecord,
@@ -53,8 +54,15 @@ export function resolveCompletionAfterHardRunDeadline(params: {
   entry: SubagentRunRecord;
   observedStartedAt?: number;
   observedEndedAt?: number;
+  observedSuccess?: boolean;
   now: number;
 }): number | undefined {
+  // A prior nonterminal observation is not an irrevocable timeout result.
+  // Let the child's subsequent terminal snapshot reach the lifecycle owner;
+  // explicit timeout snapshots still take completeAsRunTimeout below.
+  if (params.observedSuccess && isSubagentChildStopUnconfirmed(params.entry)) {
+    return undefined;
+  }
   const deadlineMs = resolveSubagentRunDeadlineMs(params.entry, params.observedStartedAt);
   if (deadlineMs === undefined) {
     return undefined;

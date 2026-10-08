@@ -6,6 +6,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { blocksSwarmGroupArchival } from "./subagent-registry-cleanup.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
@@ -99,10 +100,7 @@ export const isSessionCleanupDeferred = (entry: SubagentRunRecord) =>
       entry.delivery.disposition === "session_queued"));
 
 export const isCollectorArchiveReady = (entry: SubagentRunRecord, now: number): boolean =>
-  entry.collectorCompletion !== undefined &&
-  entry.collectorLaunchCleanupPending !== true &&
-  entry.archiveAtMs !== undefined &&
-  entry.archiveAtMs <= now;
+  !blocksSwarmGroupArchival(entry, now);
 
 export function isCleanupCurrent(
   current: SubagentRunRecord | undefined,

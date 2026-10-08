@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
@@ -24,6 +27,7 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
@@ -782,6 +786,204 @@ describe("subagent registry recovery scheduling", () => {
       }
     },
   );
+
+  it("discards suspended retired recovery delivery without touching its child session", async () => {
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const { entry, completeCleanupBookkeeping, emitSubagentEndedHookForRun, sweeper } =
+      createHarness(runtime);
+    entry.execution = {
+      status: "terminal",
+      startedAt: Date.now() - 60_000,
+      endedAt: Date.now() - 55_000,
+      outcome: { status: "error", error: "retired Gateway lifecycle" },
+      suppressSessionEffects: true,
+    };
+    entry.endedReason = "subagent-error";
+    entry.expectsCompletionMessage = true;
+    entry.delivery = {
+      status: "suspended",
+      suspendedAt: Date.now() - 8 * 24 * 60 * 60_000,
+      suspendedReason: "expiry",
+      payload: {
+        requesterSessionKey: entry.requesterSessionKey,
+        requesterDisplayKey: entry.requesterDisplayKey,
+        childSessionKey: entry.childSessionKey,
+        childRunId: entry.runId,
+        task: entry.task,
+      },
+    };
+
+    await sweeper.sweepOnce();
+
+    expect(removeInternalSessionEffectsSession).not.toHaveBeenCalled();
+    expect(emitSubagentEndedHookForRun).not.toHaveBeenCalled();
+    expect(completeCleanupBookkeeping).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: entry.runId, entry }),
+    );
+  });
+
+  it("defers suspended-delivery expiry cleanup while the child stop is unconfirmed", async () => {
+    // The suspended-delivery branch runs at sweep phase 1, ahead of the
+    // unconfirmed-child reconciliation branch, so a `child-unconfirmed` row
+    // reaches seven-day retention expiry without ever passing the provisional
+    // guard. A retention clock is not stop evidence: the expiry may abandon the
+    // stale delivery, but nothing here may retire child-owned resources.
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const { entry, completeCleanupBookkeeping, sweeper } = createHarness(runtime);
+    const attachmentId = "9b1e4c2a-7d3f-4a2e-8b5c-6f0d1a2b3c4d";
+    const stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-suspended-expiry-"));
+    const attachmentsDir = path.join(
+      resolveSubagentSessionAttachmentRootDir({
+        agentId: "main",
+        childSessionKey: entry.childSessionKey,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+      attachmentId,
+    );
+    fsSync.mkdirSync(attachmentsDir, { recursive: true });
+    const artifactPath = path.join(attachmentsDir, "child-output.txt");
+    fsSync.writeFileSync(artifactPath, "written by a child that may still be running");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    entry.cleanup = "delete";
+    entry.attachmentId = attachmentId;
+    entry.expectsCompletionMessage = true;
+    entry.execution = {
+      status: "terminal",
+      startedAt: Date.now() - 60_000,
+      endedAt: Date.now() - 55_000,
+      outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+    };
+    entry.delivery = {
+      status: "suspended",
+      suspendedAt: Date.now() - 8 * 24 * 60 * 60_000,
+      suspendedReason: "expiry",
+      payload: {
+        requesterSessionKey: entry.requesterSessionKey,
+        requesterDisplayKey: entry.requesterDisplayKey,
+        childSessionKey: entry.childSessionKey,
+        childRunId: entry.runId,
+        task: entry.task,
+      },
+    };
+
+    try {
+      await sweeper.sweepOnce();
+
+      // Terminal cleanup deferred. `cleanup: "keep"` is the load-bearing value:
+      // in the real bookkeeping, `"delete"` with `skipRequesterSettleWake` takes
+      // the `retireAfterSettle` path and calls `runs.delete(runId)`, and a
+      // retired row can never be promoted by a later observed stop at all.
+      expect(completeCleanupBookkeeping).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: entry.runId, entry, cleanup: "keep" }),
+      );
+      expect(fsSync.existsSync(artifactPath)).toBe(true);
+
+      // Anti-vacuity control: the same expired suspended row, once the child's
+      // stop has actually been observed, does reach the deletion. Without this
+      // half the assertions above could pass on an unreachable code path.
+      completeCleanupBookkeeping.mockClear();
+      entry.execution = {
+        ...entry.execution,
+        outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
+      };
+      entry.cleanupCompletedAt = undefined;
+
+      await sweeper.sweepOnce();
+
+      expect(completeCleanupBookkeeping).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: entry.runId, entry, cleanup: "delete" }),
+      );
+      expect(fsSync.existsSync(attachmentsDir)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      fsSync.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("archives a retired recovery row without deleting its newer child session", async () => {
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const { entry, runs, callGateway, notifyContextEngineSubagentEnded, sweeper } =
+      createHarness(runtime);
+    entry.cleanup = "delete";
+    entry.archiveAtMs = Date.now() - 1;
+    entry.execution = {
+      status: "terminal",
+      startedAt: Date.now() - 60_000,
+      endedAt: Date.now() - 55_000,
+      outcome: { status: "error", error: "retired Gateway lifecycle" },
+      suppressSessionEffects: true,
+    };
+    entry.endedReason = "subagent-error";
+
+    await sweeper.sweepOnce();
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
+    expect(runs.has(entry.runId)).toBe(false);
+  });
+
+  it("retires an archived stale owner when guarded deletion sees a successor", async () => {
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const { entry, runs, callGateway, notifyContextEngineSubagentEnded, sweeper } =
+      createHarness(runtime);
+    entry.cleanup = "delete";
+    entry.archiveAtMs = Date.now() - 1;
+    entry.execution = {
+      status: "terminal",
+      startedAt: Date.now() - 60_000,
+      endedAt: Date.now() - 55_000,
+      outcome: { status: "ok" },
+    };
+    const successor = createSubagentRunRecord({
+      runId: "successor-run",
+      childSessionKey: entry.childSessionKey,
+      requesterSessionKey: entry.requesterSessionKey,
+      requesterDisplayKey: entry.requesterDisplayKey,
+      task: "current successor",
+      cleanup: "keep",
+      generation: 2,
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+    });
+    entry.generation = 1;
+    runs.set(successor.runId, successor);
+    getAgentRunContext.mockImplementation((runId: string) =>
+      runId === successor.runId ? {} : undefined,
+    );
+    callGateway.mockImplementation(async (request) => {
+      if (request.method !== "sessions.delete") {
+        return {};
+      }
+      killSessionEntry.current = {
+        sessionId: "successor-session",
+        lifecycleRevision: "successor-revision",
+        updatedAt: Date.now(),
+      };
+      throw Object.assign(new Error("session changed"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+        details: { reason: "session-changed" },
+      });
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: entry.childSessionKey,
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+        expectedSessionId: "session-id",
+        expectedLifecycleRevision: "session-revision",
+      },
+      timeoutMs: 10_000,
+      assertDispatchCurrent: expect.any(Function),
+    });
+    expect(runs.has(entry.runId)).toBe(false);
+    expect(runs.get(successor.runId)).toBe(successor);
+    expect(notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
+  });
 
   it.each(["suppressed recovery", "session replacement"] as const)(
     "archives a stale row without touching its successor after %s",

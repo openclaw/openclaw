@@ -6,6 +6,7 @@ import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-too
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { markRequesterSettleWakePending } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
   CleanupBookkeepingParams,
@@ -55,7 +56,11 @@ export async function completeCleanupBookkeeping(
         rowOwnershipMatches &&
         cleanupParams.isCurrent?.() !== false &&
         !context.newerGenerationOwnsSession(entry) &&
-        context.sessionEffectsHostCurrent(entry)
+        context.sessionEffectsHostCurrent(entry) &&
+        // Every tail below retires a resource the child owns. A deadline alone
+        // is not evidence it stopped, so none of them may run until an observed
+        // stop promotes the row out of `child-unconfirmed`.
+        !shouldDeferTerminalCleanupForUnconfirmedChild(entry)
       );
     };
     const runCleanupTail = (label: string, run: () => Promise<unknown>) => {

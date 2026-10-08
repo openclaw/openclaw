@@ -8,6 +8,7 @@ import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
 import {
   mapToolContextToSpawnedRunMetadata,
+  resolveExplicitSpawnedCwd,
   resolveSpawnedWorkspaceInheritance,
 } from "../../spawned-context.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
@@ -41,6 +42,11 @@ export async function resolveSubagentChildPlan(params: {
    * status so durable-lineage key substitution does not weaken sandbox admission. */
   requesterSandboxed?: boolean;
 }) {
+  // The explicit-only form (the request's own cwd, ignoring a sender-restricted
+  // forced inheritance below) is what gets persisted and read back by the
+  // shared-cwd advisory: inheritance is not a user-chosen directory, and the
+  // advisory must stay silent for it.
+  const explicitSpawnedCwd = resolveExplicitSpawnedCwd(params.request.cwd);
   const requestedCwd = normalizeOptionalString(params.request.cwd);
   const senderRestricted = params.ctx.inheritedToolPolicySource === "sender";
   const requesterRoot = params.ctx.sessionPermissionPolicy?.root ?? params.ctx.workspaceDir;
@@ -193,7 +199,7 @@ export async function resolveSubagentChildPlan(params: {
   return {
     ok: true as const,
     resolved: {
-      spawnedCwd,
+      spawnedCwd: explicitSpawnedCwd,
       toolSpawnMetadata,
       spawnedWorkspaceDir,
       requesterOrigin,

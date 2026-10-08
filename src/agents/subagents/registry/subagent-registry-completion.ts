@@ -4,7 +4,7 @@ import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   SUBAGENT_KILL_TASK_ERROR,
-  type SubagentKillTargetState,
+  type SubagentTerminalState,
 } from "./subagent-control.types.js";
 import {
   SUBAGENT_ENDED_OUTCOME_ERROR,
@@ -15,54 +15,55 @@ import {
   type SubagentLifecycleEndedOutcome,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
-export function resolveSubagentKillTargetState(
+/**
+ * Returns terminal execution facts only after completion capture has settled
+ * and the child's stop has actually been observed.
+ */
+export function resolveFinalizedSubagentTaskState(
   entry: SubagentRunRecord,
-): SubagentKillTargetState | undefined {
-  if (
-    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-    entry.suppressAnnounceReason !== "steer-restart"
-  ) {
-    const taskEndedAt = resolveKilledSubagentTaskEndedAt(entry);
-    return typeof taskEndedAt === "number"
-      ? {
-          state: "terminal",
-          task: {
-            status: "cancelled",
-            endedAt: taskEndedAt,
-            error: SUBAGENT_KILL_TASK_ERROR,
-          },
-        }
-      : undefined;
-  }
+): SubagentTerminalState | undefined {
   const endedAt = entry.execution.endedAt;
   const outcome = entry.execution.outcome;
   const completion = entry.completion;
-  if (typeof endedAt !== "number" || entry.pauseReason === "sessions_yield") {
-    return undefined;
-  }
   if (
+    typeof endedAt !== "number" ||
     !outcome ||
+    entry.pauseReason === "sessions_yield" ||
     (completion?.resultText === undefined && typeof completion?.capturedAt !== "number")
   ) {
-    return { state: "finalizing" };
+    return undefined;
   }
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    // A deadline-only expiry observed nothing about the child, so it must not
+    // read as a terminal fact: a still-running child would otherwise be
+    // reported stopped. Stay nonterminal; promotion resolves through this same
+    // function with an observed outcome.
+    return undefined;
+  }
+  const status =
+    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.suppressAnnounceReason !== "steer-restart"
+      ? "cancelled"
+      : outcome.status === "ok"
+        ? "succeeded"
+        : outcome.status === "timeout"
+          ? "timed_out"
+          : "failed";
   return {
-    state: "terminal",
-    task: {
-      status:
-        outcome.status === "ok"
-          ? "succeeded"
-          : outcome.status === "timeout"
-            ? "timed_out"
-            : "failed",
-      endedAt,
-      error: outcome.status === "error" ? outcome.error : undefined,
-    },
+    status,
+    endedAt,
+    error:
+      status === "cancelled"
+        ? SUBAGENT_KILL_TASK_ERROR
+        : outcome.status === "error"
+          ? outcome.error
+          : undefined,
   };
 }
 

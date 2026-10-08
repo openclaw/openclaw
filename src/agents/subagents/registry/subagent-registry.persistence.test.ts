@@ -834,42 +834,64 @@ describe("subagent registry persistence", () => {
     waitForRegistryWork,
   });
 
-  it("finalizes restored interrupted runs without replay", async () => {
-    vi.mocked(callGateway).mockResolvedValueOnce({ status: "pending" });
-    const now = Date.now();
-    const runId = "run-stale-aborted-restore";
-    const childSessionKey = "agent:main:subagent:stale-aborted-restore";
-    await persistRuns(
-      [
-        makeRun(runId, {
-          childSessionKey,
-          createdAt: now - 3 * 60 * 60 * 1_000,
-          startedAt: now - 3 * 60 * 60 * 1_000,
-        }),
-      ],
-      false,
-    );
-    await writeChildSessionEntry({
-      sessionKey: childSessionKey,
-      sessionId: "sess-stale-aborted-restore",
-      // A retained interruption is reconciled even when its last activity is old.
-      updatedAt: now - 3 * 60 * 60 * 1_000,
-      abortedLastRun: true,
-    });
+  it.each([false, true])(
+    "finalizes restored interrupted runs without replay (wait expired: %s)",
+    async (waitExpired) => {
+      vi.mocked(callGateway).mockImplementationOnce(async (request) => {
+        expect(request).toMatchObject({
+          method: "agent.wait",
+        });
+        expect((request as { params?: unknown }).params).toMatchObject({
+          runId: "run-stale-aborted-restore",
+        });
+        return {
+          status: "pending",
+        };
+      });
+      const now = Date.now();
+      const runId = "run-stale-aborted-restore";
+      const childSessionKey = "agent:main:subagent:stale-aborted-restore";
+      await writePersistedRegistry(
+        {
+          version: 2,
+          runs: {
+            [runId]: {
+              runId,
+              childSessionKey,
+              requesterSessionKey: "agent:main:main",
+              requesterDisplayKey: "main",
+              task: "stale restart-recoverable work",
+              cleanup: "keep",
+              createdAt: now - 3 * 60 * 60 * 1_000,
+              startedAt: now - 3 * 60 * 60 * 1_000,
+              ...(waitExpired ? { waitExpiryObservedAt: now - 2 * 60 * 60 * 1_000 } : {}),
+            },
+          },
+        },
+        { seedChildSessions: false },
+      );
+      await writeChildSessionEntry({
+        sessionKey: childSessionKey,
+        sessionId: "sess-stale-aborted-restore",
+        // A retained interruption is reconciled even when its last activity is old.
+        updatedAt: now - 3 * 60 * 60 * 1_000,
+        abortedLastRun: true,
+      });
 
-    await restartRegistry();
-    await flushQueuedRegistryWork();
-    await testing.sweepOnceForTests();
+      await restartRegistry();
+      await flushQueuedRegistryWork();
+      await testing.sweepOnceForTests();
 
-    // The dead pre-restart run is terminalized without querying its stale run id.
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(
-      (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.outcome,
-    ).toMatchObject({
-      status: "error",
-      error: expect.stringContaining("Gateway restart"),
-    });
-  });
+      // The dead pre-restart run is terminalized without querying its stale run id.
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(
+        (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.outcome,
+      ).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("Gateway restart"),
+      });
+    },
+  );
 
   it("resume preserves steer-restart ownership when the child session is missing", async () => {
     await fixture.allocateStateDir();

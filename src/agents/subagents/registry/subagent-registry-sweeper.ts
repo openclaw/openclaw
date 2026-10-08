@@ -16,6 +16,11 @@ import {
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import {
+  clearUnconfirmedCollectorRetention,
+  settleSubagentRunFromSessionStore,
+  shouldDeferTerminalCleanupForUnconfirmedChild,
+} from "./subagent-registry-cleanup.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleController,
@@ -351,6 +356,21 @@ export function createSubagentRegistrySweeper(params: {
         if (await recovery.recover(runId, entry)) {
           continue;
         }
+        if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+          if (clearUnconfirmedCollectorRetention(entry)) {
+            mutatedRunIds.add(runId);
+          }
+          // Restart evidence above keeps its existing owner. In the absence of
+          // that evidence, neither missing local context nor retention expiry
+          // proves that a child stopped. Use the child's own terminal record.
+          await settleSubagentRunFromSessionStore(params.completeSubagentRunWithRecovery, {
+            runId,
+            entry,
+            now,
+            source: "sweeper-unconfirmed-child",
+          });
+          continue;
+        }
         if (typeof entry.execution.endedAt !== "number") {
           // Queued collectors have no run context until FIFO dispatch; the scheduler owns them.
           const notStale = entry.execution.status === "queued" || getAgentRunContext(runId);
@@ -422,7 +442,14 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
 
-        if (entry.collect && entry.collectorCompletion) {
+        if (clearUnconfirmedCollectorRetention(entry)) {
+          mutatedRunIds.add(runId);
+        }
+        if (
+          entry.collect &&
+          entry.collectorCompletion &&
+          !shouldDeferTerminalCleanupForUnconfirmedChild(entry)
+        ) {
           if (entry.collectorLaunchCleanupPending) {
             let suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
             if (!suppressSessionEffects) {

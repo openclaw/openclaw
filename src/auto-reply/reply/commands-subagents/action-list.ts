@@ -18,15 +18,25 @@ export async function handleSubagentsListAction(
   });
   const formatRows = (rows: typeof list.active) =>
     rows.length ? rows.map((entry) => entry.line).join("\n") : "(none)";
-  return commandReply(
-    [
-      "active subagents:",
-      "-----",
-      formatRows(list.active),
+  const lines = [
+    "active subagents:",
+    "-----",
+    formatRows(list.active),
+    "",
+    `recent subagents (last ${RECENT_WINDOW_MINUTES}m):`,
+    "-----",
+    formatRows(list.recent),
+  ];
+  if (list.sharedCwdGroupTotal > 0) {
+    lines.push(
       "",
-      `recent subagents (last ${RECENT_WINDOW_MINUTES}m):`,
-      "-----",
-      formatRows(list.recent),
-    ].join("\n"),
-  );
+      `shared working directories (${list.sharedCwdGroups.length}/${list.sharedCwdGroupTotal} shown):`,
+    );
+    for (const group of list.sharedCwdGroups) {
+      lines.push(
+        `[cwd ${group.id}] ${group.runCount} runs: ${group.path} (sample: ${group.runIds.join(", ")})`,
+      );
+    }
+  }
+  return commandReply(lines.join("\n"));
 }

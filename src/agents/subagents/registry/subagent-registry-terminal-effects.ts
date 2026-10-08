@@ -1,6 +1,7 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { recordSubagentTerminalState } from "../../../sessions/subagent-terminal-state.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -8,6 +9,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
 import {
@@ -103,16 +105,91 @@ export async function completeTerminalEffects(
     await retireSupersededSession(entry);
     return;
   }
-  if (entry.collect) {
+  // One derivation for every provisional terminal projection this callback owns:
+  // the durable signal-log record, the child's own session-timing write, the
+  // `progress ended` presentation event, and the resource teardown below. A
+  // `child-unconfirmed` row is terminal only in the sense that the parent's wait
+  // ended; nothing observed the child stop, so no claim about the child may be
+  // published and no child-owned resource may be torn down until an observed
+  // stop promotes the row.
+  const deferForUnconfirmedChild = shouldDeferTerminalCleanupForUnconfirmedChild(entry);
+  // The swarm slot is the child's, not the row's. `releaseSwarmRun` deletes the
+  // lane's active reservation and immediately pumps the queue
+  // (`swarm-scheduler.ts`), so releasing it here on a bare deadline starts the
+  // next queued collector while this one may still be running. Hold the slot;
+  // the promotion that observes the stop re-enters this function with
+  // `deferForUnconfirmedChild === false` and releases it then.
+  if (entry.collect && !deferForUnconfirmedChild) {
     releaseSwarmRun(entry.schedulerSlotId ?? entry.runId);
   }
   await refreshSessionEffectsSuppression();
   if (!isCurrentTerminalCallback()) {
     return;
   }
+  // Record only the current, non-superseded callback with a committed outcome; the
+  // run-terminal dedupe key is first-write-wins, so a provisional/stale status here
+  // would permanently mislabel the signal-log terminal kind. A `child-unconfirmed`
+  // timeout is provisional in exactly that sense: no stop was ever observed, so
+  // publishing "child run timed out" would tell every signal-log observer
+  // (sessions.status) that a possibly-live child died, and first-write-wins means
+  // a later authoritative promotion could not replace it. Promotion re-enters this
+  // path with an observed disposition, which is where the true terminal state
+  // is published from.
+  const terminalOutcome = entry.execution.outcome;
+  const outcomeStatus = terminalOutcome?.status;
+  if (
+    !suppressSessionEffects &&
+    entry.killReconciliation === undefined &&
+    !deferForUnconfirmedChild &&
+    outcomeStatus &&
+    outcomeStatus !== "unknown"
+  ) {
+    const signal = {
+      childSessionKey: entry.childSessionKey,
+      runId: entry.runId,
+      requesterSessionKey: entry.requesterSessionKey,
+      outcomeStatus,
+      sessionEntryCurrent: context.getSessionEffects(entry)?.nativeCheck,
+    };
+    const terminalEndedAt = entry.execution.endedAt;
+    const hasCurrentTerminalOutcome = () =>
+      entry.killReconciliation === undefined &&
+      entry.execution.status === "terminal" &&
+      entry.execution.outcome === terminalOutcome &&
+      entry.execution.outcome?.status === outcomeStatus &&
+      entry.execution.endedAt === terminalEndedAt &&
+      entry.runId === signal.runId &&
+      entry.childSessionKey === signal.childSessionKey &&
+      entry.requesterSessionKey === signal.requesterSessionKey;
+    await recordSubagentTerminalState(signal, () => {
+      if (!isCurrentSessionEffectsOwner() || !hasCurrentTerminalOutcome()) {
+        throw new Error("Subagent terminal signal owner changed before commit");
+      }
+    });
+    if (!isCurrentTerminalCallback()) {
+      return;
+    }
+    await refreshSessionEffectsSuppression();
+    if (!isCurrentTerminalCallback()) {
+      return;
+    }
+    if (context.newerGenerationOwnsSession(entry)) {
+      await retireSupersededSession(entry);
+      return;
+    }
+    if (!hasCurrentTerminalOutcome()) {
+      return;
+    }
+  }
   const isProvisionalKill = entry.killReconciliation !== undefined;
 
-  if (!suppressSessionEffects) {
+  // This write stamps the registry's own derived status (`timeout`) and end
+  // timing onto the CHILD's session entry. For an unconfirmed child that is
+  // both a terminal effect on a possibly-live session and self-defeating: the
+  // child's session entry is the only independent record of whether it is
+  // still running, and overwriting it would make our own guess look like the
+  // child's own stop evidence. Leave it to the child until a stop is observed.
+  if (!suppressSessionEffects && !deferForUnconfirmedChild) {
     try {
       const assertSessionEffectsOwnerCurrent = () => {
         if (!isCurrentSessionEffectsOwner()) {
@@ -168,7 +245,16 @@ export async function completeTerminalEffects(
       label: entry.label,
     });
     // The enclosing steer/session-effects guard admits only the real terminal generation.
-    if (!isProvisionalKill && !context.progressEndedEntries.has(getSubagentRunRuntimeKey(entry))) {
+    // `progress ended` is a plugin-visible claim that this child finished, and
+    // the progress-ended set is a once-per-entry latch — emitting it now would both
+    // tell subscribers a possibly-live child ended and consume the latch, so the
+    // truthful event could never follow. Promotion re-enters here with the latch
+    // still unset and `mutated` true, so the event fires exactly once, then.
+    if (
+      !isProvisionalKill &&
+      !deferForUnconfirmedChild &&
+      !context.progressEndedEntries.has(getSubagentRunRuntimeKey(entry))
+    ) {
       context.progressEndedEntries.add(getSubagentRunRuntimeKey(entry));
       await params.emitSubagentProgressEndedForRun(entry);
       await refreshSessionEffectsSuppression();
@@ -238,8 +324,15 @@ export async function completeTerminalEffects(
   // runId in embedded mode. Dedupe only the browser driver tab-close IPC
   // with an admitted claim. The retire + announce tail below must still
   // run for every caller, so a slow or held first browser cleanup cannot
-  // strand a duplicate caller's completion behind it.
-  if (!suppressSessionEffects && entry.browserCleanupDispatchedAt === undefined) {
+  // strand a duplicate caller's completion behind it. Closing the child's
+  // browser sessions and retiring its run-mode MCP runtime tear down resources a
+  // still-live child is using, so both wait for the observed stop that promotes
+  // this row out of `child-unconfirmed`.
+  if (
+    !suppressSessionEffects &&
+    !deferForUnconfirmedChild &&
+    entry.browserCleanupDispatchedAt === undefined
+  ) {
     let dispatchedBrowserCleanup = false;
     let cleanupBrowserSessions: typeof cleanupBrowserSessionsForLifecycleEnd | undefined =
       params.cleanupBrowserSessionsForLifecycleEnd;
@@ -336,7 +429,7 @@ export async function completeTerminalEffects(
     }
   }
 
-  if (!suppressSessionEffects) {
+  if (!suppressSessionEffects && !deferForUnconfirmedChild) {
     if (!isCurrentTerminalCallback()) {
       return;
     }

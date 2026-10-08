@@ -246,6 +246,11 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/worktree-provision.mts!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/print-live-docker-plugin-selection.mjs!",
+  // Maintainer proof harnesses are invoked manually from PR evidence.
+  "scripts/proof-126924-isolated-gateway.ts!",
+  "scripts/proof-126924-live-gateway-wait-expiry.ts!",
+  "scripts/proof-126924-store-upgrade-rollback.ts!",
+  "scripts/proof-135480-subagent-shared-cwd-advisory.ts!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   // qa/README.md delegates campaign Git execution to this guarded CLI by path.

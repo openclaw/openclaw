@@ -70,6 +70,12 @@ export type SubagentManagerOptions = {
   >["notifyContextEngineSubagentEnded"];
   completeCleanupBookkeeping(args: CleanupBookkeepingParams): Promise<void>;
   completeSubagentRun(args: SubagentCompletionRequest): Promise<void>;
+  reportSubagentWaitExpiry(args: {
+    entry: SubagentRunRecord;
+    observedAt: number;
+    startedAt?: number;
+    lifecycleGeneration: string;
+  }): Promise<void>;
 };
 
 export abstract class SubagentWaitManager {
@@ -104,6 +110,7 @@ export abstract class SubagentWaitManager {
     const stateContext = captureOpenClawStateWorkerContext();
     let waitedEntry: SubagentRunRecord | undefined;
     let completionAttempted = false;
+    let waitExpiryForRetry: Parameters<typeof this.options.reportSubagentWaitExpiry>[0] | undefined;
     let releaseCompletionWork: (() => void) | null = null;
     const currentEntry = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
@@ -251,7 +258,7 @@ export abstract class SubagentWaitManager {
       entry = currentEntry();
       const completeAsRunTimeout = (endedAt?: number, startedAt?: number) =>
         complete({
-          outcome: { status: "timeout" },
+          outcome: { status: "timeout", disposition: "exited" },
           reason: SUBAGENT_ENDED_REASON_COMPLETE,
           terminalReply: wait.terminalReply,
           ...(typeof endedAt === "number" ? { endedAt } : {}),
@@ -262,11 +269,13 @@ export abstract class SubagentWaitManager {
         endedAt: number | undefined,
         now: number,
         fallback: () => Promise<void>,
+        observedSuccess?: boolean,
       ) => {
         const timeoutAt = resolveCompletionAfterHardRunDeadline({
           entry,
           observedStartedAt: startedAt,
           observedEndedAt: endedAt,
+          observedSuccess,
           now,
         });
         return timeoutAt === undefined ? fallback() : completeAsRunTimeout(timeoutAt, startedAt);
@@ -296,22 +305,59 @@ export abstract class SubagentWaitManager {
         entry = currentEntry();
         if (completion) {
           const completionStartedAt = observedStartedAt ?? completion.startedAt;
-          await completeWithDeadline(completionStartedAt, completion.endedAt, now, () =>
-            complete({
-              endedAt: completion.endedAt,
-              outcome: completion.outcome,
-              reason: completion.reason,
-              startedAt: completionStartedAt,
-            }),
+          await completeWithDeadline(
+            completionStartedAt,
+            completion.endedAt,
+            now,
+            () =>
+              complete({
+                endedAt: completion.endedAt,
+                outcome: completion.outcome,
+                reason: completion.reason,
+                startedAt: completionStartedAt,
+              }),
+            completion.outcome.status === "ok",
           );
           return;
         }
         if (isTerminalWaitTimeout || hardRunTimeoutEndedAt !== undefined) {
-          const timeoutEndedAt =
+          let timeoutEndedAt =
             typeof wait.endedAt === "number" ? wait.endedAt : hardRunTimeoutEndedAt;
-          await completeWithDeadline(observedStartedAt, timeoutEndedAt, now, () =>
-            completeAsRunTimeout(timeoutEndedAt, observedStartedAt),
-          );
+          const timeoutAfterDeadline = resolveCompletionAfterHardRunDeadline({
+            entry,
+            observedStartedAt,
+            observedEndedAt: timeoutEndedAt,
+            now,
+          });
+          if (timeoutAfterDeadline !== undefined) {
+            timeoutEndedAt = timeoutAfterDeadline;
+          }
+          // Only `isTerminalWaitTimeout` carries evidence that the run stopped.
+          // Reaching the stored deadline is clock arithmetic on our own budget:
+          // it earns the parent a wake, but must stay outside terminal completion
+          // because that path owns browser/MCP/session cleanup.
+          if (!isTerminalWaitTimeout) {
+            // The recorded observation is this row's publication identity, and
+            // the registry accepts a retry only under that exact value. A child
+            // that starts between attempts moves the computed deadline from
+            // `createdAt + timeout` to `startedAt + timeout`, so a recomputed
+            // timestamp would be refused and the parent would never be woken.
+            // Republish the persisted observation; the lifecycle fences still
+            // decide whether this wait may speak for the row at all.
+            waitExpiryForRetry = {
+              entry,
+              observedAt: entry.waitExpiryObservedAt ?? timeoutEndedAt ?? now,
+              startedAt: observedStartedAt,
+              lifecycleGeneration,
+            };
+            await this.options.reportSubagentWaitExpiry(waitExpiryForRetry);
+            // Do not keep a second long-poll alive after the parent has been
+            // notified. The periodic registry sweeper remains the settlement
+            // backstop: it reconciles persisted terminal session evidence,
+            // retaining this row while the child's stop remains unconfirmed.
+            return;
+          }
+          await completeAsRunTimeout(timeoutEndedAt, observedStartedAt);
           return;
         }
         if (observedStartedAt !== undefined) {
@@ -354,19 +400,25 @@ export abstract class SubagentWaitManager {
         );
         return;
       }
-      await completeWithDeadline(observedStartedAt, wait.endedAt, Date.now(), () => {
-        const endedAt = typeof wait.endedAt === "number" ? wait.endedAt : Date.now();
-        return complete({
-          endedAt,
-          outcome: withSubagentOutcomeTiming(observedCompletion.outcome, {
-            startedAt: observedStartedAt ?? entry.execution.startedAt,
+      await completeWithDeadline(
+        observedStartedAt,
+        wait.endedAt,
+        Date.now(),
+        () => {
+          const endedAt = typeof wait.endedAt === "number" ? wait.endedAt : Date.now();
+          return complete({
             endedAt,
-          }),
-          reason: observedCompletion.reason,
-          startedAt: observedStartedAt,
-          terminalReply: wait.terminalReply,
-        });
-      });
+            outcome: withSubagentOutcomeTiming(observedCompletion.outcome, {
+              startedAt: observedStartedAt ?? entry.execution.startedAt,
+              endedAt,
+            }),
+            reason: observedCompletion.reason,
+            startedAt: observedStartedAt,
+            terminalReply: wait.terminalReply,
+          });
+        },
+        observedCompletion.outcome.status === "ok",
+      );
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;
@@ -388,6 +440,14 @@ export abstract class SubagentWaitManager {
         !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
         !isSameSubagentRunOwner(this.options.runs.get(runId), current)
       ) {
+        return;
+      }
+      if (waitExpiryForRetry && typeof current.execution.endedAt !== "number") {
+        scheduleWaitRetry(
+          current,
+          "failed to publish subagent wait expiry; scheduling recovery",
+          error instanceof Error ? error.message : String(error),
+        );
         return;
       }
       current = currentEntry();

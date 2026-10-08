@@ -156,6 +156,13 @@ const subagentSessionListPaths = [
   "execution.startedAt",
   "execution.endedAt",
   "execution.outcome.status",
+  "execution.outcome.disposition",
+  // Read straight out of the retained payload like every sibling path above
+  // it, so the lean session-list projection reports the same liveness the
+  // full record does. Dropping it here made a cross-process reader see a
+  // deadline-only expiry as an ordinary timeout.
+  "execution.outcome.timeoutDisposition",
+  "waitExpiryObservedAt",
   "completion.required",
   "delivery.status",
   "delivery.disposition",
