@@ -6,7 +6,12 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import { bm25RankToScore, buildFtsQuery, buildMatchQueryFromTerms } from "./keyword-query.js";
+import {
+  bm25RankToScore,
+  buildFtsQuery,
+  buildMatchQueryFromTerms,
+  buildStrictFtsQuery,
+} from "./keyword-query.js";
 import {
   projectMemorySearchRow,
   resolveSnippetProjection,
@@ -222,10 +227,11 @@ function planKeywordSearch(params: {
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
   includeCombiningMarks?: boolean;
+  strict?: boolean;
 }): { matchQuery: string | null; substringTerms: string[] } {
   if (params.ftsTokenizer !== "trigram") {
     return {
-      matchQuery: buildFtsQuery(params.query),
+      matchQuery: (params.strict ? buildStrictFtsQuery : buildFtsQuery)(params.query),
       substringTerms: [],
     };
   }
@@ -278,6 +284,9 @@ function planPathKeywordSearch(params: {
       ...params,
       query,
       includeCombiningMarks: true,
+      // Filename search stays strict so "foo.md" cannot match unrelated
+      // ".md" paths while body recall OR-joins tokens (issue #160839).
+      strict: true,
     });
     addPlan(query, plan);
   }
@@ -318,6 +327,10 @@ export async function searchKeyword(params: {
     return [];
   }
 
+  // Reserve a complete-match tier so partial OR hits can never push a row
+  // matching every query token out of the bounded candidate window.
+  const strictMatchQuery = buildStrictFtsQuery(params.query);
+
   // Lexical FTS is model-agnostic (issue #48300), but old databases may
   // already contain orphaned FTS rows from prior model-scoped cleanup.
   const liveChunkClause = ` AND EXISTS (SELECT 1 FROM memory_index_chunks c WHERE c.id = ${params.ftsTable}.id)`;
@@ -334,16 +347,25 @@ export async function searchKeyword(params: {
     const matchClause = matchQuery
       ? `${params.ftsTable} MATCH ? AND ${params.ftsTable}.rank MATCH 'bm25()'`
       : "1=1";
+    const tiered = Boolean(matchQuery && strictMatchQuery && strictMatchQuery !== matchQuery);
     return params.db
       .prepare(
         `SELECT id, path, source, start_line, end_line, text,\n` +
-          `       ${matchQuery ? `${params.ftsTable}.rank` : "0"} AS rank\n` +
-          `  FROM ${params.ftsTable}\n` +
+          `       ${matchQuery ? `${params.ftsTable}.rank` : "0"} AS rank` +
+          (tiered
+            ? `,\n       CASE WHEN id IN (SELECT id FROM ${params.ftsTable} WHERE ${params.ftsTable} MATCH ?) THEN 0 ELSE 1 END AS coverage_tier`
+            : "") +
+          `\n  FROM ${params.ftsTable}\n` +
           ` WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}\n` +
-          (matchQuery ? ` ORDER BY rank ASC\n` : "") +
+          (matchQuery
+            ? tiered
+              ? ` ORDER BY coverage_tier ASC, rank ASC\n`
+              : ` ORDER BY rank ASC\n`
+            : "") +
           ` LIMIT ?`,
       )
       .all(
+        ...(tiered && strictMatchQuery ? [strictMatchQuery] : []),
         ...(matchQuery ? [matchQuery] : []),
         ...terms,
         ...params.sourceFilter.params,
