@@ -1,13 +1,17 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { AgentEntryConfig } from "../config/types.agents.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "./home-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
-import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
+import {
+  resolveUpdateCandidateAvatar,
+  resolveUpdateCandidateStatePath,
+} from "./update-candidate-paths.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
@@ -80,6 +84,18 @@ function isolatedConfig(
       : Object.fromEntries((copied.agents?.list ?? []).map(({ id, ...agent }) => [id, agent])));
   const isolateAgent = (id: string, agent: AgentEntryConfig): AgentEntryConfig => ({
     ...agent,
+    // Pre-Doctor input can be malformed; validation reports non-string avatars.
+    ...(typeof agent.identity?.avatar === "string"
+      ? {
+          identity: {
+            ...agent.identity,
+            avatar: resolveUpdateCandidateAvatar(
+              resolveAgentWorkspaceDir(config, id, sourceEnv),
+              agent.identity.avatar,
+            ),
+          },
+        }
+      : {}),
     workspace: path.join(workspace, id),
     cwd: path.join(workspace, id),
     agentDir: agent.agentDir

@@ -29,8 +29,10 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
@@ -47,11 +49,7 @@ import { prepareSessionWorkspaceForRun } from "../server-methods/session-create-
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
-import {
-  buildAbortedAgentPayload,
-  setAbortedAgentDedupeEntries,
-  setGatewayDedupeEntries,
-} from "./agent-dedupe.js";
+import { buildAbortedAgentPayload, setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { yieldAfterAgentAcceptedAck } from "./agent-handler-helpers.js";
 import { captureAgentJobSession } from "./agent-job.js";
 import {
@@ -61,6 +59,7 @@ import {
 import { dispatchAgentRunWithCommentaryMedia } from "./agent-run-commentary-media.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
+import { projectWithdrawnAgentInput } from "./agent-run-dispatch-outcome.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
@@ -247,20 +246,19 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         }
         await settleUnstartedFollowup(outcome);
         publishFinalAfterCleanup = () => {
-          setAbortedAgentDedupeEntries({
+          const payload = projectWithdrawnAgentInput(
+            buildAbortedAgentPayload(params.runId, stopReason, {
+              agentId: params.activeSessionAgentId,
+            }),
+            readWithdrawnUserTurnInputId(prepared.userTurn.recorder),
+          );
+          setGatewayDedupeEntries({
             dedupe: params.context.dedupe,
             keys: params.agentDedupeKeys,
             session: captureAgentJobSession(jobSessionBinding),
-            agentId: params.activeSessionAgentId,
-            runId: params.runId,
-            stopReason,
+            entry: diagnostics.forReplay({ ts: Date.now(), ok: true, payload }),
           });
-          params.io.emitFinal(
-            [true, buildAbortedAgentPayload(params.runId, stopReason), undefined],
-            {
-              runId: params.runId,
-            },
-          );
+          params.io.emitFinal([true, payload, undefined], { runId: params.runId });
         };
       };
       try {
@@ -349,9 +347,6 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             execApprovalContinuationPromptRange,
           }));
         }
-        const senderIsOwner = prepared.userTurn.senderIsOwner;
-        const userTurnTranscriptRecorder = prepared.userTurn.recorder;
-
         const ingressAgentId = params.resolvedSessionKey
           ? params.activeSessionAgentId
           : params.agentId;
@@ -458,7 +453,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
               )
             : undefined;
         finalizePreparedAgentRunUserTurn(prepared.userTurn);
-        const execution = dispatchAdmittedAgentRun(
+        await dispatchAdmittedAgentRun(
           withAgentRunDispatchExecutionIdentity(
             {
               assertCurrent: assertDispatchCurrent,
@@ -541,7 +536,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
                 inputProvenance: params.inputProvenance,
                 privateCompletion: prepared.userTurn.privateCompletion,
-                senderIsOwner,
+                senderIsOwner: prepared.userTurn.senderIsOwner,
                 sessionEffects: params.sessionEffects,
                 skipInitialSessionTouch: params.skipAgentInitialSessionTouch,
                 preserveUserFacingSessionModelState:
@@ -578,7 +573,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 internalDeliverySuppressErrors:
                   params.client?.internal?.internalDeliverySuppressErrors,
                 suppressPromptPersistence: prepared.userTurn.suppressPromptPersistence,
-                userTurnTranscriptRecorder,
+                userTurnTranscriptRecorder: prepared.userTurn.recorder,
                 cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
                 abortSignal: prepared.activeRunAbort.controller.signal,
                 lifecycleGeneration: params.lifecycleGeneration,
@@ -613,6 +608,11 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 }),
                 onSessionIdChanged: (sessionId) => {
                   if (prepared.activeRunAbort.entry) {
+                    adoptExecRequestSession({
+                      runId: params.runId,
+                      previousSessionId: prepared.activeRunAbort.entry.sessionId,
+                      sessionId,
+                    });
                     prepared.activeRunAbort.entry.sessionId = sessionId;
                   }
                 },
@@ -655,7 +655,6 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             executionIdentitySpawnFacts,
           ),
         );
-        await execution;
       } catch (err) {
         if (prepared.activeRunAbort.controller.signal.aborted && isAbortError(err)) {
           await finishUndispatchedAbort();

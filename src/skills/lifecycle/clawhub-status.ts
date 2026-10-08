@@ -11,6 +11,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import {
+  describeClawHubSkillRefMismatch,
   normalizeDownloadedArtifactLock,
   normalizeOptionalStringValue,
   normalizeSkillFileLock,
@@ -345,21 +346,12 @@ export async function resolveClawHubSkillVerificationTarget(
           error: "--version and --tag are not supported for skills-sh references.",
         };
       }
-      if (requestedRef.ownerHandle && ownerHandle !== requestedRef.ownerHandle) {
-        const trackedRef = ownerHandle ? `@${ownerHandle}/${trackedSlug}` : trackedSlug;
-        return {
-          ok: false,
-          error: `Skill "${trackedSlug}" is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${trackedSlug}.`,
-        };
-      }
-      if (
-        requestedRef.requestedReference &&
-        requestedReference !== requestedRef.requestedReference
-      ) {
-        return {
-          ok: false,
-          error: `Skill "${trackedSlug}" is not tracked from ${requestedRef.requestedReference}.`,
-        };
+      const mismatch = describeClawHubSkillRefMismatch(requestedRef, {
+        ownerHandle,
+        requestedReference,
+      });
+      if (mismatch) {
+        return { ok: false, error: mismatch };
       }
       const selector: ClawHubSkillVerificationSelector = version
         ? "version"
@@ -467,22 +459,12 @@ export async function resolveRequestedUpdateSlug(
   if (!trackedOrigin && !trackedLockEntry) {
     return validateRequestedSkillSlug(requestedRef.slug);
   }
-  const trackedOwnerHandle = trackedOrigin?.ownerHandle ?? trackedLockEntry?.ownerHandle;
-  if (requestedRef.ownerHandle && trackedOwnerHandle !== requestedRef.ownerHandle) {
-    const trackedRef = trackedOwnerHandle ? `@${trackedOwnerHandle}/${trackedSlug}` : trackedSlug;
-    throw new Error(
-      `Skill "${trackedSlug}" is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${trackedSlug}.`,
-    );
-  }
-  const trackedRequestedReference =
-    trackedOrigin?.requestedReference ?? trackedLockEntry?.requestedReference;
-  if (
-    requestedRef.requestedReference &&
-    trackedRequestedReference !== requestedRef.requestedReference
-  ) {
-    throw new Error(
-      `Skill "${trackedSlug}" is not tracked from ${requestedRef.requestedReference}.`,
-    );
+  const mismatch = describeClawHubSkillRefMismatch(requestedRef, {
+    ownerHandle: trackedOrigin?.ownerHandle ?? trackedLockEntry?.ownerHandle,
+    requestedReference: trackedOrigin?.requestedReference ?? trackedLockEntry?.requestedReference,
+  });
+  if (mismatch) {
+    throw new Error(mismatch);
   }
   return trackedSlug;
 }

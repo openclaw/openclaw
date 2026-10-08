@@ -1,5 +1,4 @@
 import path from "node:path";
-import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
@@ -191,7 +190,6 @@ export async function executeMutableUpdate(
     readUpdateCandidateSource(env, params.legacyConfigPlan, { configValidation });
   const getDoctorContext: PackageInstallUpdateParams["getDoctorContext"] = () => {
     doctorEntered = true;
-    const capable = doctorConfigWrites;
     const runId = originalRun?.runId;
     const executorFence = originalRun?.executorFence;
     const requester = requesterAuthority?.requester;
@@ -206,7 +204,7 @@ export async function executeMutableUpdate(
       onStateHandoff,
     };
     assertExecutionCurrent();
-    if (!capable) {
+    if (!doctorConfigWrites) {
       return undefined;
     }
     if (!runId || !executorFence || inputHash === undefined) {
@@ -214,7 +212,7 @@ export async function executeMutableUpdate(
         "Validated Doctor requires its live update executor and captured config hash.",
       );
     }
-    return { ...context, runId, executorFence, inputHash: inputHash ?? hashConfigRaw(null) };
+    return { ...context, runId, executorFence, inputHash };
   };
   const originalRecovery = () => readOriginalUpdateRecovery(params, updateStepTimeoutMs);
   const gitMutationRoots =

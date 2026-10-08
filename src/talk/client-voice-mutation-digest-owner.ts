@@ -1,15 +1,22 @@
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { captureSessionStoreCandidateIdentities } from "../config/sessions/session-store-read-candidates.js";
+import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveSessionDeliveryTarget } from "../infra/outbound/targets-session.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import type { ClientVoiceSessionSource } from "./client-voice-session-source.js";
 import {
   type ClientVoiceSessionRecord,
-  type ClientVoiceToolEffect,
   readVoiceSessionRecord,
   readVoiceSessionRecordInTransaction,
   writeVoiceSessionRecordInTransaction,
@@ -26,20 +33,11 @@ export const CLIENT_VOICE_MUTATION_DIGEST_POLICY = {
   failureRetentionMs: 5 * 60_000,
 } as const;
 
-function formatMutationDigest(effects: ClientVoiceToolEffect[]): string | undefined {
-  if (effects.length === 0) {
-    return undefined;
-  }
-  return [
-    "Voice call changes",
-    ...effects
-      .slice(0, 12)
-      .map(
-        (effect) =>
-          `- ${effect.toolName}: ${effect.status === "started" ? "outcome not confirmed" : effect.status}`,
-      ),
-  ].join("\n");
-}
+type MutationDigestConversation = {
+  storePath: string;
+  identities: ReturnType<typeof captureSessionStoreCandidateIdentities>;
+  selected?: DatabasePathIdentity;
+};
 
 type MutationDigestDelivery = {
   deliveredAt?: number;
@@ -53,55 +51,98 @@ async function deliverClientVoiceMutationDigest(
   signal: AbortSignal,
   source: ClientVoiceSessionSource,
   delivery: MutationDigestDelivery,
+  conversation: MutationDigestConversation,
 ): Promise<void> {
   if (record.digestDeliveredAt) {
     return;
   }
   if (delivery.deliveredAt === undefined) {
-    const text = formatMutationDigest(record.effects);
-    if (!text) {
+    const effects = record.effects;
+    if (effects.length === 0) {
       return;
     }
-    const entry = loadSessionEntryReadOnly({
-      agentId: record.agentId,
-      sessionKey: record.sessionKey,
-      storePath: source.options.path,
-      env: source.options.env,
-    });
-    const target = resolveSessionDeliveryTarget({ entry, requestedChannel: "last" });
-    if (!target.channel || target.channel === "webchat" || !target.to) {
-      return;
-    }
-    const { sendDurableMessageBatchCore, durableMessageBatchMayHaveReachedRecipient } =
-      await loadMessageRuntime();
-    source.assertCurrent();
-    const send = await sendDurableMessageBatchCore({
-      cfg: config,
-      channel: target.channel,
-      to: target.to,
-      ...(target.accountId ? { accountId: target.accountId } : {}),
-      ...(target.threadId != null ? { threadId: target.threadId } : {}),
-      payloads: [{ text }],
-      durability: "required",
-      requireUnknownSendReconciliation: true,
-      signal,
-      session: buildOutboundSessionContext({
-        cfg: config,
+    const text = [
+      "Voice call changes",
+      ...effects
+        .slice(0, 12)
+        .map(
+          (effect) =>
+            `- ${effect.toolName}: ${effect.status === "started" ? "outcome not confirmed" : effect.status}`,
+        ),
+    ].join("\n");
+    const assertCurrent = () => {
+      source.assertCurrent();
+      const selected = conversation.selected;
+      if (selected) {
+        assertExistingDatabaseIdentity(selected.canonicalPath, selected.key, selected.birthtime);
+      }
+    };
+    await withSessionEntryReadOnlyInWorker(
+      {
         agentId: record.agentId,
         sessionKey: record.sessionKey,
-        policySessionKey: record.sessionKey,
-      }),
-    });
-    if (durableMessageBatchMayHaveReachedRecipient(send)) {
-      delivery.mayHaveReachedRecipient = true;
+        storePath: conversation.selected?.canonicalPath ?? conversation.storePath,
+        env: source.options.env,
+        projection: "list",
+      },
+      assertCurrent,
+      async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        const entry = read.value;
+        if (!entry) {
+          throw new Error(`Voice mutation digest conversation not found (${record.sessionKey})`);
+        }
+        if (owner.scope && !conversation.selected) {
+          const selected = readDatabasePathIdentitySync(owner.scope.storePath);
+          const captured = conversation.identities.get(selected.canonicalPath);
+          if (!captured) {
+            throw new Error("Voice mutation digest conversation store changed before delivery");
+          }
+          assertExistingDatabaseIdentity(selected.canonicalPath, captured.key, captured.birthtime);
+          conversation.selected = selected;
+        }
+        const target = resolveSessionDeliveryTarget({ entry, requestedChannel: "last" });
+        if (!target.channel || target.channel === "webchat" || !target.to) {
+          return;
+        }
+        const { sendDurableMessageBatchCore, durableMessageBatchMayHaveReachedRecipient } =
+          await loadMessageRuntime();
+        assertCurrent();
+        owner.assertCurrent();
+        const send = await sendDurableMessageBatchCore({
+          cfg: config,
+          channel: target.channel,
+          to: target.to,
+          ...(target.accountId ? { accountId: target.accountId } : {}),
+          ...(target.threadId != null ? { threadId: target.threadId } : {}),
+          payloads: [{ text }],
+          durability: "required",
+          requireUnknownSendReconciliation: true,
+          signal,
+          session: buildOutboundSessionContext({
+            cfg: config,
+            agentId: record.agentId,
+            sessionKey: record.sessionKey,
+            policySessionKey: record.sessionKey,
+          }),
+        });
+        if (durableMessageBatchMayHaveReachedRecipient(send)) {
+          delivery.mayHaveReachedRecipient = true;
+        }
+        if (send.status === "failed" || send.status === "partial_failed") {
+          throw send.error;
+        }
+        if (send.status === "suppressed" && delivery.mayHaveReachedRecipient) {
+          throw new Error("voice mutation digest delivery outcome is uncertain");
+        }
+        delivery.deliveredAt = Date.now();
+      },
+    );
+    if (delivery.deliveredAt === undefined) {
+      return;
     }
-    if (send.status === "failed" || send.status === "partial_failed") {
-      throw send.error;
-    }
-    if (send.status === "suppressed" && delivery.mayHaveReachedRecipient) {
-      throw new Error("voice mutation digest delivery outcome is uncertain");
-    }
-    delivery.deliveredAt = Date.now();
   }
   const deliveredAt = delivery.deliveredAt;
   source.assertCurrent();
@@ -463,6 +504,7 @@ type MutationDigestContext = {
   config: OpenClawConfig;
   source: ClientVoiceSessionSource;
   delivery?: MutationDigestDelivery;
+  conversation?: MutationDigestConversation;
 };
 
 function sameMutationDigestSource(previous: MutationDigestContext, next: MutationDigestContext) {
@@ -480,7 +522,22 @@ export function createClientVoiceMutationDigestDeliveryOptions(
   ) => MutationDigestSettlement,
 ): MutationDigestOptions<MutationDigestContext> {
   return {
-    captureAttempt: (context) => captureAttempt(context.source.settlementContext),
+    captureAttempt: (context) => {
+      if (!context.conversation) {
+        const storePath = resolveSessionStorePathForScope(
+          { agentId: context.source.options.agentId, env: context.source.options.env },
+          context.config,
+        );
+        // Capture configured conversation files before a delivery slot or consult can defer work.
+        context.conversation = {
+          storePath,
+          identities: captureSessionStoreCandidateIdentities(
+            captureSessionStoreReadCandidates(storePath),
+          ),
+        };
+      }
+      return captureAttempt(context.source.settlementContext);
+    },
     // The same file can reopen under a different shared-state admission.
     matchesRetryContext: (previous, next) =>
       sameMutationDigestSource(previous, next) &&
@@ -499,6 +556,7 @@ export function createClientVoiceMutationDigestDeliveryOptions(
       return {
         config: next.config,
         source: previous.source,
+        conversation: previous.conversation,
         ...(previous.delivery ? { delivery: previous.delivery } : {}),
       };
     },
@@ -513,7 +571,18 @@ export function createClientVoiceMutationDigestDeliveryOptions(
         return false;
       }
       const delivery = (context.delivery ??= {});
-      await deliverClientVoiceMutationDigest(record, config, signal, source, delivery);
+      const conversation = context.conversation;
+      if (!conversation) {
+        throw new Error("Voice mutation digest conversation source was not captured");
+      }
+      await deliverClientVoiceMutationDigest(
+        record,
+        config,
+        signal,
+        source,
+        delivery,
+        conversation,
+      );
       return true;
     },
     warn: (message) => console.warn(`[talk] deferred voice mutation digest failed: ${message}`),

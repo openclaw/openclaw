@@ -37,6 +37,7 @@ import {
   type PreparedSessionSourceAuthority,
   type SessionSourcePredicateFacts,
 } from "./session-source-authority.js";
+import { withLockedSessionTranscriptReads } from "./session-transcript-execution-read.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -46,6 +47,7 @@ import { captureOwnedTranscriptWriteAssertion } from "./transcript-write-context
 export async function withWorkerTranscriptWriteLock<T>(
   scope: SessionTranscriptWriteScope &
     ResolvedTranscriptScope & { env: NodeJS.ProcessEnv; path: string; storePath: string },
+  ownerScope: SessionTranscriptWriteScope,
   run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
   native: <R>(
     scope: SessionTranscriptWriteScope,
@@ -53,9 +55,12 @@ export async function withWorkerTranscriptWriteLock<T>(
     alreadyLocked?: boolean,
     snapshot?: SqliteTranscriptSnapshotState,
     onSnapshot?: (snapshot: SqliteTranscriptSnapshotState | undefined) => void,
+    ownerScope?: SessionTranscriptWriteScope,
   ) => Promise<R>,
 ): Promise<T> {
-  const assertOwned = captureOwnedTranscriptWriteAssertion(scope);
+  // Ownership keeps the caller's locator while storage retains its physical pin.
+  // Replacing either with the other rejects valid owners or reroutes awaited writes.
+  const assertOwned = captureOwnedTranscriptWriteAssertion(ownerScope);
   const custody = captureSessionPendingInputWorkerCustody();
   const database = { ...toDatabaseOptions(scope), path: scope.path };
   const identity = readDatabasePathIdentitySync(scope.path);
@@ -92,7 +97,7 @@ export async function withWorkerTranscriptWriteLock<T>(
         releaseExecution = false;
         await execution.release();
         assertDatabasePathIdentity(scope.path, identity);
-        return await native(fenced, run);
+        return await native(fenced, run, false, undefined, undefined, ownerScope);
       } finally {
         await owned.release?.();
       }
@@ -226,6 +231,7 @@ export async function withWorkerTranscriptWriteLock<T>(
       },
       onCommitted: (candidate) => candidate,
       async run(worker, commit) {
+        const claim = execution.captureGenerationClaim();
         const target = {
           scope: resolved,
           fence: {
@@ -237,11 +243,11 @@ export async function withWorkerTranscriptWriteLock<T>(
         };
         let snapshot: SqliteTranscriptSnapshotState | undefined;
         const value = await withTranscriptLockSettlement((queue) => {
-          const queued = <R>(operation: () => Promise<R>): Promise<R> =>
+          const queued = <R>(operation: () => Promise<R>, signal?: AbortSignal): Promise<R> =>
             queue(() => {
               assertCurrent();
               return operation();
-            });
+            }, signal);
           const mutate = async (
             input: SessionMessageRewriteOperations["session.transcript.lock.commit"]["input"],
           ) => {
@@ -330,6 +336,7 @@ export async function withWorkerTranscriptWriteLock<T>(
                   (next) => {
                     snapshot = next;
                   },
+                  ownerScope,
                 );
               } finally {
                 await authority.release?.();
@@ -340,7 +347,19 @@ export async function withWorkerTranscriptWriteLock<T>(
             try {
               let message: TMessage | undefined = originalMessage;
               if (prepare && expected && !expected.pending && !expected.existing) {
-                message = await prepare(originalMessage);
+                // Preparation may await a delta read; settle it before this append commits.
+                message = await withTranscriptLockSettlement((queueRead) =>
+                  withLockedSessionTranscriptReads(
+                    {
+                      canonicalPath: identity.canonicalPath,
+                      claim,
+                      worker,
+                      assertCurrent,
+                      queue: queueRead,
+                    },
+                    () => prepare(originalMessage),
+                  ),
+                );
               }
               assertCurrent();
               const preparedMessageJson =
@@ -378,47 +397,62 @@ export async function withWorkerTranscriptWriteLock<T>(
               await authority.release?.();
             }
           };
-          return run({
-            publishUpdate: (update) => queued(() => publishTranscriptUpdate(fenced, update)),
-            readEvents: () =>
-              queued(async () => {
-                const read = await executeSessionMessageRewriteOperation(worker, database.agentId, {
-                  type: "session.transcript.lock.read",
-                  input: { scope: resolved },
-                });
-                assertCurrent();
-                snapshot = { kind: "current", rows: read.rows };
-                return read.events;
+          return withLockedSessionTranscriptReads(
+            {
+              canonicalPath: identity.canonicalPath,
+              claim,
+              worker,
+              assertCurrent,
+              queue: queued,
+            },
+            () =>
+              run({
+                publishUpdate: (update) => queued(() => publishTranscriptUpdate(fenced, update)),
+                readEvents: () =>
+                  queued(async () => {
+                    const read = await executeSessionMessageRewriteOperation(
+                      worker,
+                      database.agentId,
+                      {
+                        type: "session.transcript.lock.read",
+                        input: { scope: resolved },
+                      },
+                    );
+                    assertCurrent();
+                    snapshot = { kind: "current", rows: read.rows };
+                    return read.events;
+                  }),
+                readMessageFacts: (params) =>
+                  queued(async () => {
+                    const facts = await executeSessionMessageRewriteOperation(
+                      worker,
+                      database.agentId,
+                      { type: "session.transcript.lock.facts", input: { ...target, ...params } },
+                    );
+                    assertCurrent();
+                    for (const anchor of facts.anchorsByIdempotencyKey.values()) {
+                      Object.freeze(anchor);
+                    }
+                    return facts;
+                  }),
+                appendMessage: (options) =>
+                  queued(async () => (await append(options, false)).result),
+                appendMessageWithMessageSequence: (options) => queued(() => append(options, true)),
+                replaceEvents: (events) =>
+                  queued(async () => {
+                    if (snapshot?.kind === "stale") {
+                      throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
+                    }
+                    const receipt = await mutate({
+                      ...target,
+                      kind: "replace",
+                      events,
+                      snapshot,
+                    });
+                    snapshot = receipt.snapshot;
+                  }),
               }),
-            readMessageFacts: (params) =>
-              queued(async () => {
-                const facts = await executeSessionMessageRewriteOperation(
-                  worker,
-                  database.agentId,
-                  { type: "session.transcript.lock.facts", input: { ...target, ...params } },
-                );
-                assertCurrent();
-                for (const anchor of facts.anchorsByIdempotencyKey.values()) {
-                  Object.freeze(anchor);
-                }
-                return facts;
-              }),
-            appendMessage: (options) => queued(async () => (await append(options, false)).result),
-            appendMessageWithMessageSequence: (options) => queued(() => append(options, true)),
-            replaceEvents: (events) =>
-              queued(async () => {
-                if (snapshot?.kind === "stale") {
-                  throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
-                }
-                const receipt = await mutate({
-                  ...target,
-                  kind: "replace",
-                  events,
-                  snapshot,
-                });
-                snapshot = receipt.snapshot;
-              }),
-          });
+          );
         });
         execution.assertCurrent();
         return { value };

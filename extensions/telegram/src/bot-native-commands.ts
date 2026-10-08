@@ -47,23 +47,18 @@ type RegisterTelegramNativeCommandsParams = Omit<
 };
 
 export const registerTelegramNativeCommands = ({
-  bot,
   cfg,
-  runtime,
-  accountId,
   telegramCfg,
-  mediaMaxBytes,
   nativeEnabled,
   nativeSkillsEnabled,
-  resolveGroupPolicy,
-  resolveTelegramGroupConfig,
   shouldSkipUpdate,
   telegramDeps = defaultTelegramNativeCommandDeps,
-  opts,
+  ...executorParams
 }: RegisterTelegramNativeCommandsParams): {
   nativeCommandNames: ReadonlyMap<string, string>;
   nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher;
 } => {
+  const { bot, runtime, accountId, opts } = executorParams;
   const boundRoute =
     nativeEnabled && nativeSkillsEnabled
       ? resolveAgentRoute({ cfg, channel: "telegram", accountId })
@@ -140,16 +135,14 @@ export const registerTelegramNativeCommands = ({
     })
     .filter((command) => command !== null);
   const customCommandNames = new Set(customCommands.map((command) => command.command));
-  const fullCommandCatalog = buildCappedTelegramMenuCommands({
-    allCommands: [
-      ...customCommands,
-      ...nativeMenuCommands.filter((command) => !command.isAlias),
-      ...(nativeEnabled
-        ? pluginCatalog.commands.filter((command) => !customCommandNames.has(command.command))
-        : []),
-      ...nativeMenuCommands.filter((command) => command.isAlias),
-    ],
-  });
+  const fullCommandCatalog = buildCappedTelegramMenuCommands([
+    ...customCommands,
+    ...nativeMenuCommands.filter((command) => !command.isAlias),
+    ...(nativeEnabled
+      ? pluginCatalog.commands.filter((command) => !customCommandNames.has(command.command))
+      : []),
+    ...nativeMenuCommands.filter((command) => command.isAlias),
+  ]);
   if (fullCommandCatalog.skillCommandsOmitted) {
     runtime.log?.(
       "Telegram menu pressure omitted per-skill commands; removing per-skill commands and keeping /skill.",
@@ -211,21 +204,6 @@ export const registerTelegramNativeCommands = ({
     botToken: opts.token,
   });
 
-  const buildExecutorParams = (params: {
-    botUser: Context["me"];
-    msg: NonNullable<Context["message"]>;
-    rawText: string;
-  }) => ({
-    ...params,
-    bot,
-    runtime,
-    accountId,
-    mediaMaxBytes,
-    resolveGroupPolicy,
-    resolveTelegramGroupConfig,
-    telegramDeps,
-    opts,
-  });
   let handleLoginCallback:
     | ((
         botUser: Context["me"],
@@ -243,7 +221,11 @@ export const registerTelegramNativeCommands = ({
     ): Promise<TelegramBuiltinCommandResult> => {
       const { executeTelegramBuiltinCommand } = await loadTelegramBuiltinCommandExecutor();
       return await executeTelegramBuiltinCommand({
-        ...buildExecutorParams({ botUser, msg, rawText }),
+        ...executorParams,
+        telegramDeps,
+        botUser,
+        msg,
+        rawText,
         commandName: command.name,
         shouldSkip,
       });
@@ -280,11 +262,11 @@ export const registerTelegramNativeCommands = ({
       }
       const { executeTelegramPluginCommand } = await loadTelegramPluginCommandExecutor();
       await executeTelegramPluginCommand({
-        ...buildExecutorParams({
-          botUser: ctx.me,
-          msg: ctx.message,
-          rawText: ctx.match?.trim() ?? "",
-        }),
+        ...executorParams,
+        telegramDeps,
+        botUser: ctx.me,
+        msg: ctx.message,
+        rawText: ctx.match?.trim() ?? "",
         commandName: pluginCommand.command,
         candidate: pluginCommand.spec,
       });

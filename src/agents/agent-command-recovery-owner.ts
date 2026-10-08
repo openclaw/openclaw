@@ -26,7 +26,6 @@ import {
   type MainSessionRecoveryOwnerLease,
   type MainSessionRecoveryPendingTarget,
 } from "./main-session-recovery/main-session-recovery-store.js";
-import { createAgentRunRestartAbortError, isAgentRunDirectAbortReason } from "./run-termination.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 const COMMAND_ADMISSION_OWNER = Symbol.for("openclaw.agentCommand");
@@ -91,12 +90,10 @@ async function claimAgentCommandRecoveryOwner(params: {
       (transferredLease.agentId === undefined ||
         transferredLease.agentId === params.prepared.sessionAgentId) &&
       path.resolve(transferredLease.storePath) === path.resolve(params.prepared.storePath);
-    if (!matchesPreparedTarget) {
-      // Gateway transfers a persisted fence before preparation; bind it again after
-      // session resolution so rollover or rerouting cannot execute under another row's lease.
-      throw new Error("main-session recovery owner changed during ingress preparation; retry");
-    }
-    const snapshot = await refreshMainSessionRecoveryOwner(transferredLease, params.opts.runId);
+    // Bind the transferred fence again after preparation before refreshing its durable owner.
+    const snapshot = matchesPreparedTarget
+      ? await refreshMainSessionRecoveryOwner(transferredLease, params.opts.runId)
+      : undefined;
     if (!snapshot) {
       throw new Error("main-session recovery owner changed during ingress preparation; retry");
     }
@@ -261,10 +258,7 @@ export async function runWithAgentCommandRecoveryOwner<
           owner: COMMAND_ADMISSION_OWNER,
           serializeOwner: true,
           signal: params.opts.abortSignal,
-          onInterrupt: (reason) =>
-            interrupted.abort(
-              isAgentRunDirectAbortReason(reason) ? reason : createAgentRunRestartAbortError(),
-            ),
+          onInterrupt: (reason) => interrupted.abort(reason),
           assertAllowed: () => {
             params.opts.abortSignal?.throwIfAborted();
             assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);

@@ -55,7 +55,6 @@ const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
-const SKILL_WORKSHOP_RELOCATION_CHECK_ID = "core/doctor/skill-workshop-relocation";
 
 async function listGatewayCronJobsWithRuntime(
   ctx: HealthCheckContext,
@@ -207,63 +206,6 @@ const skillWorkshopToolPolicyCheck: CoreHealthCheck = {
   },
 };
 
-const skillWorkshopRelocationCheck: CoreHealthCheck = {
-  id: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
-  description: "Skill Workshop files and proposals use each agent's Workshop directory.",
-  async detect(ctx) {
-    const { inspectLegacySkillWorkshopMigration } =
-      await import("../commands/doctor-skill-workshop-sqlite.js");
-    const inspection = await inspectLegacySkillWorkshopMigration({
-      config: ctx.cfg,
-      env: ctx.env,
-      stateEnv: process.env,
-    });
-    const automationFindings = (inspection.automationReferences ?? []).map((reference) => ({
-      checkId: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
-      severity: "warning" as const,
-      target: reference.automationId,
-      path: reference.field,
-      message: reference.message,
-      fixHint: reference.fixHint,
-    }));
-    if (inspection.externalProposalCount === 0 && inspection.legacyBackupRootCount === 0) {
-      return automationFindings;
-    }
-    const fixHints: string[] = [];
-    if (
-      inspection.externalProposalCount > 0 ||
-      inspection.legacyBackupRootCount > inspection.preservedLegacyBackupRootCount
-    ) {
-      fixHints.push(
-        ctx.mode === "doctor"
-          ? "If Workshop repair has not run, use `openclaw doctor --fix`. Otherwise review the remaining targets and migration warnings above. Resolve their ownership or recovery blockers before retrying Doctor; repeating the same repair alone will not resolve them."
-          : "Run `openclaw doctor --fix` to process eligible Workshop relocations and legacy collection backups.",
-      );
-    }
-    if (inspection.preservedLegacyBackupRootCount > 0) {
-      fixHints.push(
-        "Preserved roots need manual review of workspace ownership, backup manifests, and workspace migration blockers; Doctor leaves them untouched until resolved. Do not delete backups to clear this warning.",
-      );
-    }
-    return [
-      ...automationFindings,
-      {
-        checkId: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
-        severity: "warning",
-        message: `Skill Workshop has ${inspection.externalProposalCount} proposal target${inspection.externalProposalCount === 1 ? "" : "s"} outside agent directories (${Object.entries(
-          inspection.externalProposalCountsByAgent,
-        )
-          .map(([agentId, count]) => `${agentId}: ${count}`)
-          .join(
-            ", ",
-          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"} (${inspection.preservedLegacyBackupRootCount} preserved for review).${inspection.externalProposalDetails?.length ? `\nRemaining proposal targets (showing ${inspection.externalProposalDetails.length} of ${inspection.externalProposalCount}):\n${inspection.externalProposalDetails.join("\n")}` : ""}`,
-        path: "skills.workshop",
-        fixHint: fixHints.join(" "),
-      },
-    ];
-  },
-};
-
 const gatewayAuthCheck: CoreHealthCheck = {
   id: "core/doctor/gateway-auth",
   description: "Local Gateway auth mode has a usable token or another explicit auth mode.",
@@ -276,27 +218,26 @@ const hooksModelCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { collectHooksModelIssues } = await import("../commands/doctor-hooks-model.js");
     return (await collectHooksModelIssues(ctx.cfg)).map(({ kind, model }): HealthFinding => {
-      if (kind === "unresolved") {
-        return {
-          checkId: "core/doctor/hooks-model",
-          severity: "warning",
-          path: "hooks.gmail.model",
-          message: `hooks.gmail.model "${model}" could not be resolved.`,
-        };
-      }
-      return {
+      const finding: HealthFinding = {
         checkId: "core/doctor/hooks-model",
         severity: "warning",
         path: "hooks.gmail.model",
         message:
-          kind === "not-allowed"
-            ? `hooks.gmail.model "${model}" is not allowed by agents.defaults.modelPolicy.allow.`
-            : `hooks.gmail.model "${model}" is not in the model catalog.`,
-        fixHint:
-          kind === "not-allowed"
-            ? "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model."
-            : "Choose a model from the configured provider catalog.",
+          kind === "unresolved"
+            ? `hooks.gmail.model "${model}" could not be resolved.`
+            : kind === "not-allowed"
+              ? `hooks.gmail.model "${model}" is not allowed by agents.defaults.modelPolicy.allow.`
+              : `hooks.gmail.model "${model}" is not in the model catalog.`,
       };
+      if (kind !== "unresolved") {
+        Object.assign(finding, {
+          fixHint:
+            kind === "not-allowed"
+              ? "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model."
+              : "Choose a model from the configured provider catalog.",
+        });
+      }
+      return finding;
     });
   },
 };
@@ -441,26 +382,19 @@ function createNoteCollector(checkId: string): {
   readonly noteFn: (message: unknown) => void;
 } {
   const findings: HealthFinding[] = [];
-  const noteFn = (message: unknown): void => {
-    const text = noteMessageToText(message);
-    if (!text.trim()) {
-      return;
-    }
-    const severity = inferCapturedNoteSeverity(text);
-    if (severity === "info") {
-      return;
-    }
-    findings.push(
-      noteTextToFinding({
-        checkId,
-        severity,
-        text,
-      }),
-    );
-  };
   return {
     findings,
-    noteFn,
+    noteFn(message: unknown): void {
+      const text = noteMessageToText(message);
+      if (!text.trim()) {
+        return;
+      }
+      const severity = inferCapturedNoteSeverity(text);
+      if (severity === "info") {
+        return;
+      }
+      findings.push(noteTextToFinding({ checkId, severity, text }));
+    },
   };
 }
 
@@ -941,7 +875,6 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     }),
     workspaceSuggestionsCheck,
     skillWorkshopToolPolicyCheck,
-    skillWorkshopRelocationCheck,
     ...(isExperimentalClawsEnabled()
       ? [
           {

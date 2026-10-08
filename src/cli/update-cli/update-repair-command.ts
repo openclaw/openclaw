@@ -14,7 +14,7 @@ import { compareSemverStrings, resolveNpmChannelTag } from "../../infra/update-c
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
-import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import {
   inspectUpdateRepairDriverAdmission,
@@ -113,11 +113,9 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     !env.OPENCLAW_UPDATE_RUN_HANDOFF &&
     !env[POST_CORE_UPDATE_ENV] &&
     (opts.channel === undefined || normalizeUpdateChannel(opts.channel))
-      ? await createManagedHandoffLeaseStore().prepareRepair(
-          await resolveUpdateRoot(),
-          env,
-          timeoutMs,
-        )
+      ? await (
+          await prepareManagedHandoffLeaseStore()
+        ).prepareRepair(await resolveUpdateRoot(), env, timeoutMs)
       : null;
   // Capture Doctor-visible history before finalization admits its own newer run.
   // Terminal age limits the shortcut below, not successful repair acknowledgment.
@@ -219,7 +217,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
       config: context.config,
       port,
       attempts: 1,
-      deadlineAt: Date.now() + Math.min(timeoutMs ?? 3_000, 3_000),
+      deadlineAt: performance.now() + Math.min(timeoutMs ?? 3_000, 3_000),
       delayMs: 0,
     }),
     readPackageVersion(root),

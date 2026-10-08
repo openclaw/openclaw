@@ -1,4 +1,8 @@
-import { emitModelTransportDebug, formatModelTransportDebugUrl } from "@openclaw/ai/diagnostics";
+import {
+  emitModelTransportDebug,
+  emitModelTransportError,
+  formatModelTransportDebugUrl,
+} from "@openclaw/ai/diagnostics";
 import { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "@openclaw/ai/internal/retry-after";
 import {
   isCloudMetadataIpAddress,
@@ -498,20 +502,6 @@ export function resolveModelRequestTimeoutMs(
   );
 }
 
-function buildModelRequestSignal(
-  baseSignal: AbortSignal | undefined,
-  timeoutMs: number | undefined,
-): AbortSignal | undefined {
-  if (timeoutMs === undefined) {
-    return baseSignal;
-  }
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  if (!baseSignal) {
-    return timeoutSignal;
-  }
-  return AbortSignal.any([baseSignal, timeoutSignal]);
-}
-
 function resolveHttpOrigin(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
@@ -673,7 +663,12 @@ export function buildGuardedModelFetch(
       requestInit ??
       (swappedEgress.headers && init ? { ...init, headers: swappedEgress.headers } : init);
     const baseSignal = baseInit?.signal ?? undefined;
-    const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
+    const timeoutSignal =
+      requestTimeoutMs === undefined ? undefined : AbortSignal.timeout(requestTimeoutMs);
+    const localServiceSignal =
+      baseSignal && timeoutSignal
+        ? AbortSignal.any([baseSignal, timeoutSignal])
+        : (baseSignal ?? timeoutSignal);
     const guardedFetchOptions = {
       url,
       init: baseInit,
@@ -721,9 +716,12 @@ export function buildGuardedModelFetch(
         providerId: model.provider,
         url,
       });
-      log.warn(
-        `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
+      emitModelTransportError(
+        log,
+        "model-fetch",
+        `provider=${model.provider} api=${model.api} model=${model.id} ` +
           `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeProviderTransportError(remediatedError)}`,
+        baseSignal,
       );
       localServiceLease?.release();
       throw remediatedError;

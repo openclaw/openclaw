@@ -111,6 +111,10 @@ export type SessionListSnapshot = Pick<
 > & {
   /** Outcome of the latest settled managed-list read, including suppressed availability errors. */
   readSucceeded?: boolean;
+  /** Accepted server-window membership before local visibility and generation filters. */
+  pagination?: Pick<SessionsListResult, "totalCount" | "hasMore" | "nextOffset"> & {
+    count: number;
+  };
 };
 
 export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;

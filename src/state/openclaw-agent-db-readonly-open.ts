@@ -13,6 +13,7 @@ import {
   runSqliteReadOperationSync,
 } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -107,18 +108,37 @@ export function hasOpenClawAgentReadOnlySchema(database: OpenClawAgentReadOnlyDa
   );
 }
 
+/** Admit ownership and consume its rows in the same freshly pinned snapshot. */
+export function readOpenClawAgentDatabaseSnapshot<T>(
+  database: OpenClawAgentReadOnlyDatabase,
+  operation: (database: OpenClawAgentReadOnlyDatabase) => T,
+): OpenClawAgentDatabaseReadOnlyResult<T> {
+  let result: OpenClawAgentDatabaseReadOnlyResult<T> = { found: false, reason: "schema-missing" };
+  runSqliteDeferredTransactionSync(database.db, () => {
+    if (hasAdmittedAgentReadOnlySchema(database)) {
+      result = readOpenClawAgentDatabase(database, operation);
+      // Return the callback value so the transaction owner rejects asynchronous kernels.
+      return result.value;
+    }
+    return undefined;
+  });
+  return result;
+}
+
 /** Fresh-only callers do not need the writable runtime's process-held connection cache. */
 export function withFreshOpenClawAgentDatabaseReadOnly<T>(
   operation: (database: OpenClawAgentReadOnlyDatabase) => T,
   options: OpenClawAgentDatabaseOptions,
-  behavior: { allowExtension?: boolean } = {},
+  behavior: { allowExtension?: boolean; snapshot?: boolean } = {},
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
   const opened = openOpenClawAgentDatabaseReadOnly(options, behavior);
   if (!opened.found) {
     return opened;
   }
   try {
-    return readOpenClawAgentDatabase(opened.database, operation);
+    return behavior.snapshot
+      ? readOpenClawAgentDatabaseSnapshot(opened.database, operation)
+      : readOpenClawAgentDatabase(opened.database, operation);
   } finally {
     opened.database.close();
   }

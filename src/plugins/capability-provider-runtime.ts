@@ -313,6 +313,24 @@ function filterPolicyAllowedCapabilityProviders<K extends CapabilityProviderRegi
   }) as PluginRegistry[K];
 }
 
+function selectActiveCapabilityProviders<K extends CapabilityProviderRegistryKey>(
+  params: { key: K; cfg?: OpenClawConfig },
+  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
+) {
+  const registry =
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getLoadedRuntimePluginRegistry();
+  const project = onSelectedRegistry?.(registry);
+  const providers = projectCapabilityProviderEntries(
+    filterPolicyAllowedCapabilityProviders({
+      ...params,
+      entries: registry?.[params.key] ?? [],
+      registry,
+    }),
+    project,
+  );
+  return { registry, providers };
+}
+
 function prepareCapabilityProviderLoad<K extends CapabilityProviderRegistryKey>(
   params: {
     key: K;
@@ -443,17 +461,9 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
     return provider ? (projections.get(provider)?.() ?? provider) : undefined;
   };
 
-  const activeRegistry =
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getLoadedRuntimePluginRegistry();
-  const project = selectRegistry?.(activeRegistry);
-  const activeProviders = projectCapabilityProviderEntries(
-    filterPolicyAllowedCapabilityProviders({
-      entries: activeRegistry?.[params.key] ?? [],
-      registry: activeRegistry,
-      cfg: params.cfg,
-      key: params.key,
-    }),
-    project,
+  const { registry: activeRegistry, providers: activeProviders } = selectActiveCapabilityProviders(
+    params,
+    selectRegistry,
   );
   const activeProvider = selectProvider(activeProviders);
   if (activeProvider) {
@@ -509,17 +519,9 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
     };
   }
 
-  const activeRegistry =
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getLoadedRuntimePluginRegistry();
-  const project = onSelectedRegistry?.(activeRegistry);
-  const activeProviders = projectCapabilityProviderEntries(
-    filterPolicyAllowedCapabilityProviders({
-      entries: activeRegistry?.[params.key] ?? [],
-      registry: activeRegistry,
-      cfg: params.cfg,
-      key: params.key,
-    }),
-    project,
+  const { registry: activeRegistry, providers: activeProviders } = selectActiveCapabilityProviders(
+    params,
+    onSelectedRegistry,
   );
   const requested =
     collectRequestedCapabilityProviderIds({

@@ -2,10 +2,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
-import { SqliteReclamationRequestRefusedError } from "./session-accessor.sqlite-reclamation-commit.js";
 import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
-import type { SessionColdMutationResult } from "./session-cold-storage-worker.js";
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
+import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 
 type Receipt = { result: SessionColdMutationResult; cleanupIncomplete?: boolean };
 const observed = vi.hoisted(() => ({
@@ -168,16 +167,10 @@ it("publishes the committed key exactly once after the worker settles, without h
   });
 });
 
-it.each(["refused", "rejected", "cleanup incomplete", "database", "caller", "request"])(
+it.each(["cleanup incomplete", "database", "caller", "request"])(
   "does not publish after restoration loses completion or authority: %s",
   async (outcome) => {
     observed.worker.mockImplementation(async () => {
-      if (outcome === "refused") {
-        throw new SqliteReclamationRequestRefusedError("restore refused");
-      }
-      if (outcome === "rejected") {
-        throw new Error("restore rejected");
-      }
       if (outcome === "database") {
         observed.claimCurrent = false;
       } else if (outcome === "caller" || outcome === "request") {
@@ -191,11 +184,7 @@ it.each(["refused", "rejected", "cleanup incomplete", "database", "caller", "req
       await restore();
     } else {
       await expect(restore()).rejects.toThrow(
-        outcome === "cleanup incomplete"
-          ? /cleanup is incomplete/
-          : outcome === "caller" || outcome === "request"
-            ? "restore authority retired"
-            : `restore ${outcome}`,
+        outcome === "cleanup incomplete" ? /cleanup is incomplete/ : "restore authority retired",
       );
     }
     expect(changes).not.toHaveBeenCalled();

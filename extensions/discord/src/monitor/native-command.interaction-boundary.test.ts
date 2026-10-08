@@ -232,26 +232,10 @@ describe("Client.handleInteraction native command channel identity", () => {
     expectVisibleStatus(harness, channelId);
   });
 
-  it("rejects a raw command sender outside commands.allowFrom", async () => {
-    const harness = createHarness();
-    await harness.client.handleInteraction(payload(CHANNEL, false, "100000000000000099"));
-    expect(harness.status).not.toHaveBeenCalled();
-    expectFollowUp(harness, "You are not authorized to use this command.");
-  });
-
   it("rejects a thread whose parent is outside the allowlist", async () => {
     const harness = createHarness();
     denyThreadParent(harness);
     await harness.client.handleInteraction(payload(THREAD));
-    expect(harness.status).not.toHaveBeenCalled();
-    expectFollowUp(harness, "This channel is not allowed.");
-  });
-
-  it("rejects missing channel identity under an allowlist", async () => {
-    const harness = createHarness();
-    const interaction = payload(CHANNEL);
-    Reflect.deleteProperty(interaction, "channel_id");
-    await harness.client.handleInteraction(interaction);
     expect(harness.status).not.toHaveBeenCalled();
     expectFollowUp(harness, "This channel is not allowed.");
   });

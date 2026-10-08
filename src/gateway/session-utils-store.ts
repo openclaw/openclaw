@@ -180,6 +180,7 @@ function loadSessionEntryWithMode(
     ...(target.readSource ? { readSource: target.readSource } : {}),
     ...(target.capturedReadSource ? { capturedReadSource: target.capturedReadSource } : {}),
     ...(target.capturedReadSources ? { capturedReadSources: target.capturedReadSources } : {}),
+    ...(target.lifecycleTimestamps ? { lifecycleTimestamps: target.lifecycleTimestamps } : {}),
     entry,
     canonicalKey: target.canonicalKey,
     storeKeys: target.storeKeys,

@@ -7,7 +7,6 @@ import {
   resolveSandboxContext,
   type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSideQuestionResult,
-  type EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
@@ -60,7 +59,7 @@ import {
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import { resolveCodexDynamicToolsLoading } from "./dynamic-tool-profile.js";
-import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
+import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
@@ -108,7 +107,6 @@ import {
   CODEX_SESSION_PERMISSION_EXEC_MODES,
   resolveCodexEffectiveSessionPermissionPolicy,
   resolveCodexSessionPermissionCwd,
-  type CodexEffectiveSessionPermissionPolicy,
 } from "./session-permission-policy.js";
 import {
   getLeasedSharedCodexAppServerClient,
@@ -134,11 +132,7 @@ import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 import { buildCodexTemporalAdditionalContext } from "./turn-params.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
 import { buildCodexUserInput } from "./user-input.js";
-import {
-  resolveCodexWebSearchPlan,
-  type CodexNativeWebSearchSupport,
-  type CodexWebSearchPlan,
-} from "./web-search.js";
+import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 
@@ -426,6 +420,77 @@ export async function runCodexAppServerSideQuestion(
     sandboxEnvironmentClient = targetClient;
   };
 
+  async function createCodexSideToolBridge(
+    nativeProviderWebSearchSupport: CodexNativeWebSearchSupport,
+  ) {
+    const resolvedWorkspace = effectiveParams.workspaceDir ?? cwd;
+    const sandboxSessionKey =
+      sideRunParams.sandboxSessionKey?.trim() ||
+      sideRunParams.sessionKey?.trim() ||
+      sideRunParams.sessionId ||
+      sessionAgentId;
+    const sandbox =
+      sideRunParams.sandbox !== undefined
+        ? sideRunParams.sandbox
+        : await resolveSandboxContext({
+            config: sideRunParams.config,
+            sessionKey: sandboxSessionKey,
+            workspaceDir: cwd,
+          });
+    let webSearchAllowed = false;
+    const tools = await buildDynamicTools({
+      params: sideRunParams,
+      resolvedWorkspace,
+      effectiveWorkspace: cwd,
+      sandboxSessionKey,
+      sandbox,
+      nativeToolSurfaceEnabled,
+      nativeProviderWebSearchSupport,
+      sessionPermissionPolicy,
+      runAbortController,
+      sessionAgentId,
+      policyAgentId: sessionAgentId,
+      pluginConfig,
+      onYieldDetected: () => {},
+      onWebSearchPolicyResolved: (allowed) => {
+        webSearchAllowed = allowed;
+      },
+    });
+    const requestedWebSearchPlan = resolveCodexWebSearchPlan({
+      config: sideRunParams.config,
+      nativeToolSurfaceEnabled,
+      nativeProviderWebSearchSupport,
+      webSearchAllowed,
+    });
+    // Forks inherit dynamic declarations; BTW retains its native-only search policy.
+    const webSearchPlan =
+      requestedWebSearchPlan.kind === "managed"
+        ? resolveCodexWebSearchPlan({ config: sideRunParams.config, webSearchAllowed: false })
+        : requestedWebSearchPlan;
+    // Side threads do not own the compaction lifecycle that expires screenshot coordinates.
+    const exposedTools = tools.filter(
+      (tool) => tool.name !== "web_search" && tool.name !== "computer",
+    );
+    return {
+      toolBridge: createCodexDynamicToolBridge({
+        tools: exposedTools,
+        signal: runAbortController.signal,
+        loading: resolveCodexDynamicToolsLoading(pluginConfig),
+        hookContext: {
+          agentId: sessionAgentId,
+          config: sideRunParams.config,
+          contextWindowTokens: sideRunParams.model.contextWindow,
+          sessionId: sideRunParams.sessionId,
+          sessionKey: sideRunParams.sessionKey,
+          runId: sideRunParams.runId,
+          currentChannelProvider: resolveCodexMessageToolProvider(sideRunParams),
+          ...buildAgentHookContextChannelFields(sideRunParams),
+        },
+      }),
+      webSearchPlan,
+    };
+  }
+
   try {
     assertCurrent();
     const autoApproveMcpTools = shouldAutoApproveCodexAppServerApprovals(appServer);
@@ -461,17 +526,9 @@ export async function runCodexAppServerSideQuestion(
             signal: runAbortController.signal,
           })
         : "unsupported";
-    const { toolBridge, webSearchPlan } = await createCodexSideToolBridge({
-      params: sideRunParams,
-      cwd,
-      resolvedWorkspace: effectiveParams.workspaceDir ?? cwd,
-      pluginConfig,
-      sessionAgentId,
-      nativeToolSurfaceEnabled,
+    const { toolBridge, webSearchPlan } = await createCodexSideToolBridge(
       nativeProviderWebSearchSupport,
-      sessionPermissionPolicy,
-      runAbortController,
-    });
+    );
     const handleServerRequest = async (
       request: CodexAppServerServerRequest,
       _scope: CodexThreadRouteScope,
@@ -536,14 +593,13 @@ export async function runCodexAppServerSideQuestion(
       });
       setExecutionTimeoutMs?.(timeoutMs);
       const toolStartedAt = Date.now();
-      const diagnosticContext = {
+      const diagnostics = createCodexDynamicToolDiagnostics({
         call,
         agentId: sessionAgentId,
         runId: sideRunParams.runId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
-      };
-      const diagnostics = createCodexDynamicToolDiagnostics(diagnosticContext);
+      });
       diagnostics.started();
       const toolCall = handleDynamicToolCallWithTimeout({
         call,
@@ -948,85 +1004,6 @@ export async function runCodexAppServerSideQuestion(
       ],
     });
   }
-}
-
-async function createCodexSideToolBridge(input: {
-  params: EmbeddedRunAttemptParamsV2;
-  cwd: string;
-  resolvedWorkspace: string;
-  pluginConfig: ReturnType<typeof readCodexPluginConfig>;
-  sessionAgentId: string;
-  nativeToolSurfaceEnabled: boolean;
-  nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
-  sessionPermissionPolicy?: CodexEffectiveSessionPermissionPolicy;
-  runAbortController: AbortController;
-}): Promise<{ toolBridge: CodexDynamicToolBridge; webSearchPlan: CodexWebSearchPlan }> {
-  const { params } = input;
-  const sandboxSessionKey =
-    params.sandboxSessionKey?.trim() ||
-    params.sessionKey?.trim() ||
-    params.sessionId ||
-    input.sessionAgentId;
-  const sandbox =
-    params.sandbox !== undefined
-      ? params.sandbox
-      : await resolveSandboxContext({
-          config: params.config,
-          sessionKey: sandboxSessionKey,
-          workspaceDir: input.cwd,
-        });
-  let webSearchAllowed = false;
-  const tools = await buildDynamicTools({
-    params,
-    resolvedWorkspace: input.resolvedWorkspace,
-    effectiveWorkspace: input.cwd,
-    sandboxSessionKey,
-    sandbox,
-    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
-    sessionPermissionPolicy: input.sessionPermissionPolicy,
-    runAbortController: input.runAbortController,
-    sessionAgentId: input.sessionAgentId,
-    policyAgentId: input.sessionAgentId,
-    pluginConfig: input.pluginConfig,
-    onYieldDetected: () => {},
-    onWebSearchPolicyResolved: (allowed) => {
-      webSearchAllowed = allowed;
-    },
-  });
-  const requestedWebSearchPlan = resolveCodexWebSearchPlan({
-    config: params.config,
-    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
-    webSearchAllowed,
-  });
-  // Forks inherit dynamic declarations; BTW retains its native-only search policy.
-  const webSearchPlan =
-    requestedWebSearchPlan.kind === "managed"
-      ? resolveCodexWebSearchPlan({ config: params.config, webSearchAllowed: false })
-      : requestedWebSearchPlan;
-  // Side threads do not own the compaction lifecycle that expires screenshot coordinates.
-  const exposedTools = tools.filter(
-    (tool) => tool.name !== "web_search" && tool.name !== "computer",
-  );
-  return {
-    toolBridge: createCodexDynamicToolBridge({
-      tools: exposedTools,
-      signal: input.runAbortController.signal,
-      loading: resolveCodexDynamicToolsLoading(input.pluginConfig),
-      hookContext: {
-        agentId: input.sessionAgentId,
-        config: params.config,
-        contextWindowTokens: params.model.contextWindow,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        runId: params.runId,
-        currentChannelProvider: resolveCodexMessageToolProvider(params),
-        ...buildAgentHookContextChannelFields(params),
-      },
-    }),
-    webSearchPlan,
-  };
 }
 
 async function forkCodexSideThread(

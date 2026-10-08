@@ -11,7 +11,7 @@ import type {
   MemoryEntryOriginBinding,
   MemoryEntryOriginOperations,
 } from "./memory-entry-origins-task.js";
-import { withMemoryIndexMutationGeneration } from "./memory/manager-index-generation-lease.js";
+import { withMemoryIndexGeneration } from "./memory/manager-index-generation-lease.js";
 
 const loadEntrypoints = createLazyRuntimeModule(
   () => import("./memory/manager-cpu-entrypoints.js"),
@@ -25,7 +25,7 @@ export async function withMemoryForgetWorker<T>(
   operation: (scope: Pick<SqliteWorkerStore<MemoryEntryOriginOperations>, "execute">) => Promise<T>,
 ): Promise<T> {
   const { memoryCpuProcessEntrypoints } = await loadEntrypoints();
-  return withMemoryIndexMutationGeneration(resolveOpenClawAgentSqlitePath(options), () =>
+  return withMemoryIndexGeneration(resolveOpenClawAgentSqlitePath(options), "mutation", () =>
     runOpenClawAgentWriteAdmission(
       options,
       async (_identity, assertAdmission) => {

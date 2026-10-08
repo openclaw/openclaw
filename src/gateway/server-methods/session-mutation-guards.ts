@@ -433,19 +433,18 @@ export function withSessionMutationCommitGuard(
     authorization?.assertCurrent,
   ]);
   const admitted = authorization?.admittedInputAuthority;
+  const withCommitGuards = <T>(consume: () => T): T => {
+    assertExpectedProfile?.();
+    assertCommitAllowed?.();
+    return consume();
+  };
   return {
     ...authorization,
     ...(authorization?.prepareWorkerGrant
       ? {
           prepareWorkerGrant: async () => {
-            assertExpectedProfile?.();
-            assertCommitAllowed?.();
-            const prepared = await authorization.prepareWorkerGrant!();
-            const wrap = (assertSource: () => void) => () => {
-              assertExpectedProfile?.();
-              assertCommitAllowed?.();
-              assertSource();
-            };
+            const prepared = await withCommitGuards(() => authorization.prepareWorkerGrant!());
+            const wrap = (assertSource: () => void) => () => withCommitGuards(assertSource);
             return {
               ...prepared,
               assertCurrent: wrap(prepared.assertCurrent),
@@ -465,11 +464,7 @@ export function withSessionMutationCommitGuard(
     ...(authorization?.withCurrent
       ? {
           withCurrent: <T>(consume: () => T) =>
-            authorization.withCurrent!(() => {
-              assertExpectedProfile?.();
-              assertCommitAllowed?.();
-              return consume();
-            }),
+            authorization.withCurrent!(() => withCommitGuards(consume)),
         }
       : {}),
     ...(authorization?.withPreparedCurrent
@@ -481,11 +476,7 @@ export function withSessionMutationCommitGuard(
           ) =>
             authorization.withPreparedCurrent!(
               facts,
-              () => {
-                assertExpectedProfile?.();
-                assertCommitAllowed?.();
-                return consume();
-              },
+              () => withCommitGuards(consume),
               assertSourceCurrent,
             ),
         }
@@ -495,10 +486,7 @@ export function withSessionMutationCommitGuard(
       assertCommitAllowed,
       authorization?.assertCurrent,
     ]),
-    assertTargetCurrent: (target) => {
-      assertExpectedProfile?.();
-      assertCommitAllowed?.();
-      authorization?.assertTargetCurrent(target);
-    },
+    assertTargetCurrent: (target) =>
+      withCommitGuards(() => authorization?.assertTargetCurrent(target)),
   };
 }

@@ -414,6 +414,21 @@ describe("acceptCompactionSuccessor", () => {
     });
   });
 
+  it("does not recreate a removed predecessor store during successor validation", async () => {
+    await withAcceptanceFixture({}, async (fixture) => {
+      const { closeOpenClawAgentDatabaseByPathAsync } =
+        await import("../../state/openclaw-agent-db.js");
+      await closeOpenClawAgentDatabaseByPathAsync(fixture.target.storePath);
+      await fs.rm(fixture.target.storePath);
+
+      await expect(fixture.accept({ result: { ok: true, compacted: true } })).rejects.toThrow(
+        "session writer claim changed",
+      );
+      await expect(fs.access(fixture.target.storePath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(fixture.facts).toEqual([]);
+    });
+  });
+
   it("preserves the caller error and predecessor when cancellation precedes commit", async () => {
     await withAcceptanceFixture({}, async (fixture) => {
       const before = fixture.loadEntry();

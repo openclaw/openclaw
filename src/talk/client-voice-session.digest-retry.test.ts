@@ -37,7 +37,7 @@ import { clientVoiceSessionTesting } from "./client-voice-session.test-support.j
 import { VoiceTranscriptOperationRegistry } from "./voice-transcript.js";
 
 // Install digest mocks before the persistence graph loads.
-const { useClientVoiceDigestHarness } = await vi.hoisted(
+const { useClientVoiceDigestHarness, withClientVoiceDigestSettlement } = await vi.hoisted(
   () => import("./client-voice-session.digest-harness.test-support.js"),
 );
 
@@ -336,189 +336,195 @@ describe("client voice session lifecycle", () => {
   });
 
   it("retries a deferred digest on the next lifecycle trigger after run completion", async () => {
-    await seedSession("agent:main:main", {
-      channel: "discord",
-      to: "channel:voice-updates",
-    });
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-    });
-    registerClientVoiceConsultRun({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      runId: "run-live",
-    });
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.started",
-      runId: "run-live",
-      toolCallId: "call-run-live",
-      toolName: "message",
-      mutatingAction: true,
-    });
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.completed",
-      runId: "run-live",
-      toolCallId: "call-run-live",
-      toolName: "message",
-      durationMs: 5,
-    });
-    // Call ends while the consult still runs, so the digest is deferred.
-    await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
-      config: {},
-    });
-    sendDurableMessageBatch.mockRejectedValueOnce(new Error("channel offline"));
-    await completeRun("run-live");
-    await vi.waitFor(() =>
-      expect(clientVoiceSessionTesting.digestDeliverySnapshot().active).toBe(0),
-    );
-    expect(
-      clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
-    ).toBeUndefined();
-
-    await closeStaleClientVoiceSessions({ agentId: "main", config: {} });
-    await vi.waitFor(() =>
-      expect(
-        clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
-      ).toEqual(expect.any(Number)),
-    );
-    expect(sendDurableMessageBatch).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps a failed digest while a late consult owns the retry", async () => {
-    await seedSession("agent:main:main", {
-      channel: "discord",
-      to: "channel:voice-updates",
-    });
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-    });
-    recordMutation(voiceSessionId);
-    await completeRun(`run-${voiceSessionId}`);
-    sendDurableMessageBatch.mockRejectedValueOnce(new Error("channel offline"));
-
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
+    await withClientVoiceDigestSettlement(async (settle) => {
+      await seedSession("agent:main:main", {
+        channel: "discord",
+        to: "channel:voice-updates",
+      });
+      const voiceSessionId = createOrResumeClientVoiceSession({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        origin: "client",
+      });
+      registerClientVoiceConsultRun({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        voiceSessionId,
+        runId: "run-live",
+      });
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.started",
+        runId: "run-live",
+        toolCallId: "call-run-live",
+        toolName: "message",
+        mutatingAction: true,
+      });
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.completed",
+        runId: "run-live",
+        toolCallId: "call-run-live",
+        toolName: "message",
+        durationMs: 5,
+      });
+      // Call ends while the consult still runs, so the digest is deferred.
       await closeClientVoiceSession({
         agentId: "main",
         sessionKey: "agent:main:main",
         voiceSessionId,
         config: {},
       });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(clientVoiceSessionTesting.digestDeliverySnapshot()).toMatchObject({
-        active: 0,
-        pending: 0,
-        retained: 1,
-      });
+      sendDurableMessageBatch.mockRejectedValueOnce(new Error("channel offline"));
+      await completeRun("run-live");
+      await settle();
+      expect(clientVoiceSessionTesting.digestDeliverySnapshot().active).toBe(0);
+      expect(
+        clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
+      ).toBeUndefined();
 
-      // The run can register before config arrives; an identical replay must
-      // still re-arm the closed session's digest, not return at binding reuse.
-      registerClientVoiceConsultRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        voiceSessionId,
-        runId: "late-run",
-      });
-      registerClientVoiceConsultRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        voiceSessionId,
-        runId: "late-run",
-        config: {},
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(
-        clientVoiceSessionTesting.digestDeliveryPolicy.failureRetentionMs + 1,
-      );
-      expect(clientVoiceSessionTesting.digestDeliverySnapshot().retained).toBe(1);
-
-      recordMutation(voiceSessionId, "late-run");
-      await completeRun("late-run");
-      await vi.advanceTimersByTimeAsync(0);
+      await closeStaleClientVoiceSessions({ agentId: "main", config: {} });
+      await settle();
       expect(
         clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
       ).toEqual(expect.any(Number));
       expect(sendDurableMessageBatch).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
+    });
+  });
+
+  it("keeps a failed digest while a late consult owns the retry", async () => {
+    await withClientVoiceDigestSettlement(async (settle) => {
+      await seedSession("agent:main:main", {
+        channel: "discord",
+        to: "channel:voice-updates",
+      });
+      const voiceSessionId = createOrResumeClientVoiceSession({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        origin: "client",
+      });
+      recordMutation(voiceSessionId);
+      await completeRun(`run-${voiceSessionId}`);
+      sendDurableMessageBatch.mockRejectedValueOnce(new Error("channel offline"));
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        await closeClientVoiceSession({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          voiceSessionId,
+          config: {},
+        });
+        await settle();
+        expect(clientVoiceSessionTesting.digestDeliverySnapshot()).toMatchObject({
+          active: 0,
+          pending: 0,
+          retained: 1,
+        });
+
+        // The run can register before config arrives; an identical replay must
+        // still re-arm the closed session's digest, not return at binding reuse.
+        registerClientVoiceConsultRun({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          voiceSessionId,
+          runId: "late-run",
+        });
+        registerClientVoiceConsultRun({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          voiceSessionId,
+          runId: "late-run",
+          config: {},
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(
+          clientVoiceSessionTesting.digestDeliveryPolicy.failureRetentionMs + 1,
+        );
+        expect(clientVoiceSessionTesting.digestDeliverySnapshot().retained).toBe(1);
+
+        recordMutation(voiceSessionId, "late-run");
+        await completeRun("late-run");
+        await settle();
+        expect(
+          clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
+        ).toEqual(expect.any(Number));
+        expect(sendDurableMessageBatch).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("delivers one mutation digest and skips webchat or missing targets", async () => {
-    await seedSession("agent:main:main", {
-      channel: "discord",
-      to: "channel:voice-updates",
-    });
-    const delivered = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      origin: "client",
-    });
-    recordMutation(delivered);
-    await completeRun(`run-${delivered}`);
-    await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId: delivered,
-      config: {},
-    });
-    await closeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId: delivered,
-      config: {},
-    });
-    await vi.waitFor(() => expect(sendDurableMessageBatch).toHaveBeenCalledTimes(1));
-    expect(sendDurableMessageBatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        durability: "required",
-        requireUnknownSendReconciliation: true,
-        payloads: [{ text: "Voice call changes\n- message: succeeded" }],
-      }),
-    );
-
-    for (const [voiceSessionId, route] of [
-      ["voice-webchat", { channel: "webchat", to: "browser" }],
-      ["voice-no-target", {}],
-    ] as const) {
-      const sessionKey = `agent:main:${voiceSessionId}`;
-      await seedSession(sessionKey, route);
-      createOrResumeClientVoiceSession({
+    await withClientVoiceDigestSettlement(async (settle) => {
+      await seedSession("agent:main:main", {
+        channel: "discord",
+        to: "channel:voice-updates",
+      });
+      const delivered = createOrResumeClientVoiceSession({
         agentId: "main",
-        sessionKey,
+        sessionKey: "agent:main:main",
         origin: "client",
-        voiceSessionId,
       });
-      registerClientVoiceConsultRun({
-        agentId: "main",
-        sessionKey,
-        voiceSessionId,
-        runId: `run-${voiceSessionId}`,
-      });
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.started",
-        runId: `run-${voiceSessionId}`,
-        toolCallId: `call-${voiceSessionId}`,
-        toolName: "message",
-        mutatingAction: true,
-      });
-      await completeRun(`run-${voiceSessionId}`);
+      recordMutation(delivered);
+      await completeRun(`run-${delivered}`);
       await closeClientVoiceSession({
         agentId: "main",
-        sessionKey,
-        voiceSessionId,
+        sessionKey: "agent:main:main",
+        voiceSessionId: delivered,
         config: {},
       });
-    }
-    expect(sendDurableMessageBatch).toHaveBeenCalledTimes(1);
+      await closeClientVoiceSession({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        voiceSessionId: delivered,
+        config: {},
+      });
+      await settle();
+      expect(sendDurableMessageBatch).toHaveBeenCalledTimes(1);
+      expect(sendDurableMessageBatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          durability: "required",
+          requireUnknownSendReconciliation: true,
+          payloads: [{ text: "Voice call changes\n- message: succeeded" }],
+        }),
+      );
+
+      for (const [voiceSessionId, route] of [
+        ["voice-webchat", { channel: "webchat", to: "browser" }],
+        ["voice-no-target", {}],
+      ] as const) {
+        const sessionKey = `agent:main:${voiceSessionId}`;
+        await seedSession(sessionKey, route);
+        createOrResumeClientVoiceSession({
+          agentId: "main",
+          sessionKey,
+          origin: "client",
+          voiceSessionId,
+        });
+        registerClientVoiceConsultRun({
+          agentId: "main",
+          sessionKey,
+          voiceSessionId,
+          runId: `run-${voiceSessionId}`,
+        });
+        emitTrustedDiagnosticEvent({
+          type: "tool.execution.started",
+          runId: `run-${voiceSessionId}`,
+          toolCallId: `call-${voiceSessionId}`,
+          toolName: "message",
+          mutatingAction: true,
+        });
+        await completeRun(`run-${voiceSessionId}`);
+        await closeClientVoiceSession({
+          agentId: "main",
+          sessionKey,
+          voiceSessionId,
+          config: {},
+        });
+      }
+      await settle();
+      expect(sendDurableMessageBatch).toHaveBeenCalledTimes(1);
+    });
   });
   describe("stale recovery", () => {
     it.each(["original", "successor"] as const)(

@@ -246,10 +246,18 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   sessionKey: string;
   agentId: string;
   expectedTarget?: ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore>;
+  expectedEntry?: Pick<
+    NonNullable<ReturnType<typeof loadSessionEntryReadOnly>>,
+    "lifecycleRevision" | "worktree" | "repositoryWorkspaceId"
+  >;
   errorMessage: string;
+  readTarget?: (
+    cfg: OpenClawConfig,
+  ) => ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore>;
 }) {
   const worktreeContext = captureWorktreeRunEndContext(process.env);
   const resolveTarget = (cfg: OpenClawConfig) =>
+    params.readTarget?.(cfg) ??
     resolveWorkerPlacementSessionStoreTarget(params.sessionRuntime, cfg, params);
   const initialTarget = resolveTarget(params.config);
   const initialEntry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
@@ -266,7 +274,11 @@ export async function resolveWorkerPlacementSessionTarget(params: {
     initialTarget.canonicalKey !== expected.canonicalKey ||
     initialTarget.agentId !== expected.agentId ||
     !initialEntry ||
-    initialEntry.sessionId !== params.sessionId
+    initialEntry.sessionId !== params.sessionId ||
+    (params.expectedEntry !== undefined &&
+      (initialEntry.lifecycleRevision !== params.expectedEntry.lifecycleRevision ||
+        initialEntry.worktree?.id !== params.expectedEntry.worktree?.id ||
+        initialEntry.repositoryWorkspaceId !== params.expectedEntry.repositoryWorkspaceId))
   ) {
     throw targetChangedError();
   }

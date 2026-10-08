@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { repairAcpSessionMetaKeysForDoctor } from "../../acp/runtime/session-meta-doctor.js";
 import { buildAcpDatabaseSessionKey } from "../../acp/runtime/session-meta-keys.js";
@@ -9,7 +7,6 @@ import {
 } from "../../acp/runtime/session-meta.js";
 import { noteSessionTranscriptHealth } from "../../commands/doctor-session-transcripts.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
@@ -39,6 +36,12 @@ it("startup requires offline ACP repair before handing restored stores to runtim
     const literalKey = buildAcpDatabaseSessionKey("absent", "other");
     const owners = new Set<string>();
     for (const { shape, agentId, sessionKey, sourceKey } of [
+      {
+        shape: "raw-key",
+        agentId: "main",
+        sessionKey: "agent:main:acp:raw",
+        sourceKey: "agent:main:acp:raw",
+      },
       {
         shape: "ownerless-key",
         agentId: "main",
@@ -166,14 +169,9 @@ it("startup requires offline ACP repair before handing restored stores to runtim
   });
 });
 
-it.each([
-  { shared: false, ownerless: false },
-  { shared: true, ownerless: false },
-  { shared: false, ownerless: true },
-  { shared: true, ownerless: true },
-])(
-  "ACP refusal follows physical store scope ($shared, ownerless: $ownerless)",
-  async ({ shared, ownerless }) => {
+it.each([false, true])(
+  "ownerless ACP refusal follows physical store scope (shared: %s)",
+  async (shared) => {
     await withOpenClawTestState({ scenario: "empty" }, async (state) => {
       const storePath = shared ? state.statePath("shared.sqlite") : undefined;
       const cfg = {
@@ -190,7 +188,7 @@ it.each([
             agentId,
             storePath,
             env: state.env,
-            sessionKey: ownerless ? "global" : `agent:${agentId}:acp:scoped`,
+            sessionKey: "global",
           },
           {
             sessionId: `scope-${agentId}`,
@@ -201,7 +199,7 @@ it.each([
       }
       writeAcpSessionMetaForMigration({
         env: state.env,
-        sessionKey: ownerless ? "global" : "agent:ops:acp:scoped",
+        sessionKey: "global",
         lifecycleRevision: "revision-ops",
         meta: {
           backend: "fixture",
@@ -236,43 +234,71 @@ it.each([
   },
 );
 
-it("scoped ACP admission does not probe unreadable literal-key candidates in another store", async () => {
+it("startup preserves unbound ACP rows retained by Doctor without serving their metadata", async () => {
   await withOpenClawTestState({ scenario: "empty" }, async ({ env, writeConfig }) => {
-    const cfg = { agents: { ownership: "explicit" as const, entries: { main: {}, ops: {} } } };
+    const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
     await writeConfig(cfg);
-    const sessionKey = "agent:main:acp:healthy";
-    replaceSessionEntrySync(
-      { agentId: "main", env, sessionKey },
-      { sessionId: "healthy-session", lifecycleRevision: "healthy-revision", updatedAt: 100 },
-    );
-    writeAcpSessionMetaForMigration({
+    const entry = {
+      sessionId: "current-session",
+      lifecycleRevision: "current-revision",
+      updatedAt: 100,
+    };
+    replaceSessionEntrySync({ agentId: "main", env, sessionKey: "agent:main:main" }, entry);
+    const staleKey = "agent:main:acp:stale";
+    replaceSessionEntrySync({ agentId: "main", env, sessionKey: staleKey }, entry);
+    const keys = [
+      "agent:main:acp:absent",
+      "agent:main:acp:binding:absent",
+      staleKey,
+      "orphan-bare-key",
+      "agent:retired:acp:absent",
+    ];
+    for (const sessionKey of keys) {
+      writeAcpSessionMetaForMigration({
+        env,
+        sessionKey,
+        lifecycleRevision: "old-revision",
+        meta: {
+          backend: "fixture",
+          agent: "main",
+          runtimeSessionName: "retained-runtime",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 50,
+        },
+        now: () => 50,
+      });
+    }
+    const { db } = openOpenClawStateDatabase({ env });
+    const before = db.prepare("SELECT * FROM acp_sessions ORDER BY session_key").all();
+    const repair = await repairAcpSessionMetaKeysForDoctor({
+      cfg,
       env,
-      sessionKey: buildAcpDatabaseSessionKey(sessionKey, "main"),
-      lifecycleRevision: "healthy-revision",
-      meta: {
-        backend: "fixture",
-        agent: "main",
-        runtimeSessionName: "healthy-runtime",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: 100,
-      },
-      now: () => 100,
+      apply: true,
+      authority: { assertCurrent() {} },
     });
-    const unreadable = resolveOpenClawAgentSqlitePath({ agentId: "ops", env });
-    fs.mkdirSync(path.dirname(unreadable), { recursive: true });
-    fs.writeFileSync(unreadable, "unreadable unrelated database");
+    expect(repair.repaired).toBe(0);
+    expect(repair.warnings).toHaveLength(keys.length);
     const handoffDatabase = vi.fn(async () => {});
     await expect(
       runSessionStartupMigration({
         cfg,
         env,
-        agentIds: new Set(["main"]),
         log: { info: vi.fn(), warn: vi.fn() },
         handoffDatabase,
       }),
     ).resolves.toBeUndefined();
     expect(handoffDatabase).toHaveBeenCalledTimes(1);
-    expect(fs.readFileSync(unreadable, "utf8")).toBe("unreadable unrelated database");
+    for (const sessionKey of keys) {
+      expect(
+        readAcpSessionMeta({
+          cfg,
+          env,
+          agentId: sessionKey.startsWith("agent:retired:") ? "retired" : "main",
+          sessionKey,
+        }),
+      ).toBeUndefined();
+    }
+    expect(db.prepare("SELECT * FROM acp_sessions ORDER BY session_key").all()).toEqual(before);
   });
 });

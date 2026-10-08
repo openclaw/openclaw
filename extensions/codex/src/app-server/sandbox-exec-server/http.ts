@@ -137,11 +137,13 @@ async function runSandboxHttpRequest(
     }
     return termination;
   };
-  const abortOnSessionClose = () => {
-    lifecycle.failed = true;
-    void terminate().catch((error: unknown) => {
+  const cleanup = () =>
+    terminate().catch((error: unknown) => {
       embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
     });
+  const abortOnSessionClose = () => {
+    lifecycle.failed = true;
+    void cleanup();
   };
   notifications.signal.addEventListener("abort", abortOnSessionClose, { once: true });
   child.once("close", () => {
@@ -171,9 +173,7 @@ async function runSandboxHttpRequest(
       }
       failed = true;
       lifecycle.failed = true;
-      void terminate().catch((error: unknown) => {
-        embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
-      });
+      void cleanup();
       if (headerResolved) {
         notifications.send("http/request/bodyDelta", {
           requestId,
@@ -314,9 +314,7 @@ async function runSandboxHttpRequest(
   } catch (error) {
     lifecycle.failed = true;
     response.reject(error);
-    await terminate().catch((cleanupError: unknown) => {
-      embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error: cleanupError });
-    });
+    await cleanup();
     throw error;
   } finally {
     notifications.signal.removeEventListener("abort", abortOnSessionClose);

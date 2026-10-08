@@ -21,7 +21,7 @@ import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
 import { resolveAgentConfig, resolveAgentModelConfigForRuntime } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
-import { hasExactConfiguredProviderModel } from "./configured-provider-model.js";
+import { hasExactConfiguredProviderModelRef } from "./configured-provider-model.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
@@ -559,18 +559,21 @@ export function resolveModelRefFromString(
   if (!model) {
     return null;
   }
+  const slash = model.indexOf("/");
+  const aliasIndex = hasExactConfiguredProviderModelRef(params.cfg, model)
+    ? undefined
+    : params.aliasIndex;
   const aliasKey = normalizeLowercaseStringOrEmpty(model);
-  const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
+  const aliasMatch = aliasIndex?.byAlias.get(aliasKey);
   if (aliasMatch) {
     return { ref: aliasMatch.ref, alias: aliasMatch.alias };
   }
-  const slash = model.indexOf("/");
   if (slash > 0) {
     const providerAliasMatch =
-      params.aliasIndex?.byProviderAlias?.get(
+      aliasIndex?.byProviderAlias?.get(
         providerAliasKey(model.slice(0, slash), params.raw.trim().slice(slash + 1)),
       ) ??
-      params.aliasIndex?.byProviderAlias?.get(
+      aliasIndex?.byProviderAlias?.get(
         providerAliasKey(model.slice(0, slash), model.slice(slash + 1)),
       );
     if (providerAliasMatch) {
@@ -629,9 +632,11 @@ export function resolveConfiguredModelRef(
         ...(qualifiedModel ? [qualifiedModel] : []),
       ].map(normalizeLowercaseStringOrEmpty),
     );
-    const hasPossibleAlias = listModelAliasCandidates(params.cfg, params.agentId).some(
-      (candidate) => aliasKeys.has(normalizeLowercaseStringOrEmpty(candidate.alias)),
-    );
+    const hasPossibleAlias =
+      !hasExactConfiguredProviderModelRef(params.cfg, modelWithoutProfile) &&
+      listModelAliasCandidates(params.cfg, params.agentId).some((candidate) =>
+        aliasKeys.has(normalizeLowercaseStringOrEmpty(candidate.alias)),
+      );
     // Resolving alias targets can require workspace manifests. Keep ordinary
     // primary selection on the static path when it cannot match an alias.
     const aliasCandidates = hasPossibleAlias
@@ -659,14 +664,7 @@ export function resolveConfiguredModelRef(
           trimmed.slice(providerSeparator + 1),
           qualifiedProvider,
         ) ?? findModelAliasCandidate(aliasCandidates, qualifiedModel, qualifiedProvider);
-      if (
-        qualifiedAliasCandidate &&
-        !hasExactConfiguredProviderModel({
-          cfg: params.cfg,
-          provider: qualifiedProvider,
-          model: qualifiedModel,
-        })
-      ) {
+      if (qualifiedAliasCandidate) {
         return qualifiedAliasCandidate.ref;
       }
     }

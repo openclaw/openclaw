@@ -263,8 +263,6 @@ export type ChatEventPayload = {
   retry?: NonNullable<Extract<ChatEvent, { state: "status" }>["retry"]>;
   message?: unknown;
   deltaText?: string;
-  itemId?: string;
-  itemStartOffset?: number;
   replace?: boolean;
   errorMessage?: string;
   errorKind?: Extract<ChatEvent, { state: "error" }>["errorKind"];

@@ -7,27 +7,25 @@ import {
   parseOptionalField,
 } from "../../../cron/delivery-field-schemas.js";
 
-function parseLegacyDeliveryHintsInput(payload: Record<string, unknown>) {
-  return {
-    deliver: parseOptionalField(z.boolean(), payload.deliver),
-    bestEffortDeliver: parseOptionalField(z.boolean(), payload.bestEffortDeliver),
-    channel: parseOptionalField(LowercaseNonEmptyStringFieldSchema, payload.channel),
-    provider: parseOptionalField(LowercaseNonEmptyStringFieldSchema, payload.provider),
-    to: parseOptionalField(TrimmedNonEmptyStringFieldSchema, payload.to),
-    threadId: parseOptionalField(
-      DeliveryThreadIdFieldSchema.transform((value) => String(value)),
-      payload.threadId,
-    ),
-  };
-}
-
 /** Normalize delivery and strip consumed legacy delivery fields from the payload. */
 export function normalizeLegacyDeliveryInput(params: {
   delivery?: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;
 }) {
   const { payload } = params;
-  const hints = payload ? parseLegacyDeliveryHintsInput(payload) : undefined;
+  const hints = payload
+    ? {
+        deliver: parseOptionalField(z.boolean(), payload.deliver),
+        bestEffortDeliver: parseOptionalField(z.boolean(), payload.bestEffortDeliver),
+        channel: parseOptionalField(LowercaseNonEmptyStringFieldSchema, payload.channel),
+        provider: parseOptionalField(LowercaseNonEmptyStringFieldSchema, payload.provider),
+        to: parseOptionalField(TrimmedNonEmptyStringFieldSchema, payload.to),
+        threadId: parseOptionalField(
+          DeliveryThreadIdFieldSchema.transform((value) => String(value)),
+          payload.threadId,
+        ),
+      }
+    : undefined;
   if (!payload || !hints || !Object.values(hints).some((value) => value !== undefined)) {
     return {
       delivery: params.delivery ?? undefined,

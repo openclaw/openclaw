@@ -35,7 +35,7 @@ describe("renderAssistantRequestFailureCopy", () => {
   it.each([
     [
       "Invalid session transcript entry: model_change PRIVATE_CANARY",
-      "OpenClaw couldn't read this conversation's history. Try /compact, or start a new conversation with /new.",
+      "OpenClaw couldn't read this conversation's history. Ask the Gateway operator to try `openclaw doctor --fix`. If it still fails, preserve the history and contact support with the Gateway logs.",
     ],
     [
       "invalid session",

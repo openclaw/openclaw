@@ -35,7 +35,7 @@ import {
 } from "./bot-processing-outcome.js";
 import { withResolvedTelegramForumFlag } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import type { TelegramCallbackButton } from "./button-types.js";
+import { normalizeTelegramButtonStyle, type TelegramCallbackButton } from "./button-types.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalAuthorizedSender,
@@ -90,12 +90,17 @@ export function createTelegramCallbackApprovalRuntime(params: {
   const { accountId, telegramDeps, runtimeCfg, senderId, actions } = params;
   const { clearCallbackButtons, editCallbackMessage, replyToCallbackChat } = actions;
 
-  const resolveApprovalAuthorizations = () => {
+  const resolveAuthorizedApprovalKinds = (): ChannelApprovalKind[] => {
     const context = { cfg: runtimeCfg, accountId, senderId };
-    return {
-      pluginApprovalAuthorizedSender: isTelegramExecApprovalApprover(context),
-      execApprovalAuthorizedSender: isTelegramExecApprovalAuthorizedSender(context),
-    };
+    const pluginApprover = isTelegramExecApprovalApprover(context);
+    const kinds: ChannelApprovalKind[] = [];
+    if (isTelegramExecApprovalAuthorizedSender(context) || pluginApprover) {
+      kinds.push("exec");
+    }
+    if (pluginApprover) {
+      kinds.push("plugin");
+    }
+    return kinds;
   };
 
   const clearTerminalApprovalButtons = async () => {
@@ -168,13 +173,8 @@ export function createTelegramCallbackApprovalRuntime(params: {
     );
 
   const handleCanonical = async (approvalCallback: TelegramApprovalCallback): Promise<void> => {
-    const { execApprovalAuthorizedSender, pluginApprovalAuthorizedSender } =
-      resolveApprovalAuthorizations();
-    const authorizedApprovalSender =
-      approvalCallback.approvalKind === "plugin"
-        ? pluginApprovalAuthorizedSender
-        : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
-    if (!authorizedApprovalSender) {
+    const authorizationKind = approvalCallback.approvalKind === "plugin" ? "plugin" : "exec";
+    if (!resolveAuthorizedApprovalKinds().includes(authorizationKind)) {
       logVerbose(
         `Blocked telegram approval callback from ${senderId || "unknown"} (not authorized)`,
       );
@@ -205,9 +205,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
   };
 
   const handleMalformedReserved = async (): Promise<void> => {
-    const { execApprovalAuthorizedSender, pluginApprovalAuthorizedSender } =
-      resolveApprovalAuthorizations();
-    if (!execApprovalAuthorizedSender && !pluginApprovalAuthorizedSender) {
+    if (resolveAuthorizedApprovalKinds().length === 0) {
       logVerbose(
         `Blocked malformed telegram approval callback from ${senderId || "unknown"} (not authorized)`,
       );
@@ -218,15 +216,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
   };
 
   const handleLegacy = async (approvalCallback: LegacyApprovalCallback): Promise<void> => {
-    const { execApprovalAuthorizedSender, pluginApprovalAuthorizedSender } =
-      resolveApprovalAuthorizations();
-    const approvalKinds: ChannelApprovalKind[] = [];
-    if (execApprovalAuthorizedSender || pluginApprovalAuthorizedSender) {
-      approvalKinds.push("exec");
-    }
-    if (pluginApprovalAuthorizedSender) {
-      approvalKinds.push("plugin");
-    }
+    const approvalKinds = resolveAuthorizedApprovalKinds();
     if (approvalKinds.length === 0) {
       logVerbose(
         `Blocked telegram approval callback from ${senderId || "unknown"} (not authorized)`,
@@ -292,7 +282,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
     }
 
     logVerbose(`telegram: approval callback not found ${approvalCallback.approvalId}`);
-    if (!pluginApprovalAuthorizedSender) {
+    if (!approvalKinds.includes("plugin")) {
       return;
     }
     await terminalizeLegacyApproval({
@@ -341,10 +331,7 @@ const cloneInlineKeyboardButtons = (message: Message): TelegramCallbackButton[][
         if (!("callback_data" in button) || typeof button.callback_data !== "string") {
           return [];
         }
-        const style =
-          button.style === "danger" || button.style === "success" || button.style === "primary"
-            ? button.style
-            : undefined;
+        const style = normalizeTelegramButtonStyle(button.style);
         return [
           { text: button.text, callback_data: button.callback_data, ...(style ? { style } : {}) },
         ];
@@ -352,38 +339,10 @@ const cloneInlineKeyboardButtons = (message: Message): TelegramCallbackButton[][
     )
     .filter((row) => row.length > 0);
 
-const stripMultiSelectPrefix = (text: string): string => text.replace(/^✅\s*/, "");
 const isSelectedMultiButton = (button: TelegramCallbackButton): boolean =>
   /^✅\s*/.test(button.text);
 const isMultiToggleButton = (button: TelegramCallbackButton): boolean =>
   button.callback_data.startsWith(MULTI_SELECT_TOGGLE_PREFIX);
-const resolveMultiSelectedValues = (buttons: TelegramCallbackButton[][]): string[] =>
-  buttons
-    .flat()
-    .filter((button) => isMultiToggleButton(button) && isSelectedMultiButton(button))
-    .map((button) => button.callback_data.slice(MULTI_SELECT_TOGGLE_PREFIX.length));
-const updateMultiSelectKeyboard = (
-  message: Message,
-  action: "toggle" | "clear",
-  value = "",
-): TelegramCallbackButton[][] =>
-  cloneInlineKeyboardButtons(message).map((row) =>
-    row.map((button) => {
-      if (!isMultiToggleButton(button)) {
-        return button;
-      }
-      const buttonValue = button.callback_data.slice(MULTI_SELECT_TOGGLE_PREFIX.length);
-      const baseText = stripMultiSelectPrefix(button.text);
-      const selected =
-        action === "clear"
-          ? false
-          : buttonValue === value
-            ? !isSelectedMultiButton(button)
-            : isSelectedMultiButton(button);
-      return { ...button, text: selected ? `${SELECTED_PREFIX}${baseText}` : baseText };
-    }),
-  );
-
 const isReplySessionInitConflictError = (err: unknown): boolean =>
   REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(String(err instanceof Error ? err.message : err));
 
@@ -453,6 +412,12 @@ export async function handleTelegramInteractiveCallback(params: {
       participant?.settle(result);
       return result.kind;
     };
+    const waitForRetry = (delayMs: number) => {
+      logVerbose(
+        `telegram plugin callback submitText hit active reply session; retrying in ${delayMs}ms`,
+      );
+      return sleepWithAbort(delayMs, participant?.abortSignal);
+    };
     for (let attempt = 0; ; attempt++) {
       try {
         const result = await processMessageWithReplyChain({
@@ -476,20 +441,14 @@ export async function handleTelegramInteractiveCallback(params: {
         if (!isReplySessionInitConflictResult(result) || retryDelayMs === undefined) {
           throw new TelegramRetryableCallbackError(result.error);
         }
-        logVerbose(
-          `telegram plugin callback submitText hit active reply session; retrying in ${retryDelayMs}ms`,
-        );
-        await sleepWithAbort(retryDelayMs, participant?.abortSignal);
+        await waitForRetry(retryDelayMs);
       } catch (err) {
         const retryDelayMs = TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS[attempt];
         if (!isReplySessionInitConflictError(err) || retryDelayMs === undefined) {
           settle(buildFailedProcessingResult(err));
           throw err;
         }
-        logVerbose(
-          `telegram plugin callback submitText hit active reply session; retrying in ${retryDelayMs}ms`,
-        );
-        await sleepWithAbort(retryDelayMs, participant?.abortSignal);
+        await waitForRetry(retryDelayMs);
       }
     }
   };
@@ -513,7 +472,6 @@ export async function handleTelegramInteractiveCallback(params: {
 
   const pluginCallback = await dispatchTelegramPluginInteractiveHandler({
     data: pluginCallbackData,
-    callbackId: callback.id,
     ctx: {
       accountId,
       callbackId: callback.id,
@@ -576,10 +534,19 @@ export async function handleTelegramInteractiveCallback(params: {
     return false;
   }
   if (selectCallback.type === "multi-toggle" || selectCallback.type === "multi-clear") {
-    const buttons = updateMultiSelectKeyboard(
-      callbackMessage,
-      selectCallback.type === "multi-clear" ? "clear" : "toggle",
-      selectCallback.type === "multi-toggle" ? selectCallback.value : "",
+    const buttons = cloneInlineKeyboardButtons(callbackMessage).map((row) =>
+      row.map((button) => {
+        if (!isMultiToggleButton(button)) {
+          return button;
+        }
+        const buttonValue = button.callback_data.slice(MULTI_SELECT_TOGGLE_PREFIX.length);
+        const baseText = button.text.replace(/^✅\s*/, "");
+        const wasSelected = isSelectedMultiButton(button);
+        const selected =
+          selectCallback.type === "multi-toggle" &&
+          (buttonValue === selectCallback.value ? !wasSelected : wasSelected);
+        return { ...button, text: selected ? `${SELECTED_PREFIX}${baseText}` : baseText };
+      }),
     );
     if (buttons.length > 0) {
       try {
@@ -595,7 +562,10 @@ export async function handleTelegramInteractiveCallback(params: {
 
   let text: string;
   if (selectCallback.type === "multi-submit") {
-    const selected = resolveMultiSelectedValues(cloneInlineKeyboardButtons(callbackMessage));
+    const selected = cloneInlineKeyboardButtons(callbackMessage)
+      .flat()
+      .filter((button) => isMultiToggleButton(button) && isSelectedMultiButton(button))
+      .map((button) => button.callback_data.slice(MULTI_SELECT_TOGGLE_PREFIX.length));
     text = `Multi-select submitted: ${selected.length > 0 ? selected.join(", ") : "none"}`;
   } else {
     try {

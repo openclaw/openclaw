@@ -166,6 +166,12 @@ packages. These records identify the tested version and the files that shipped.
 Later documentation updates may improve the release notes without rebuilding
 or replacing packages.
 
+Beta release notes show changes since the version selected by npm's `beta`
+channel before publication. That baseline can be a stable version when `beta`
+and `latest` select the same package; it is not necessarily the last GitHub
+prerelease. Each beta freezes its own changelog and contribution record.
+Stable release notes remain cumulative since the previous stable release.
+
 For dependency review, see [Dependency locking](/gateway/security/dependency-locking).
 Release dependency archives include npm-format locks separately from the
 package tarballs.

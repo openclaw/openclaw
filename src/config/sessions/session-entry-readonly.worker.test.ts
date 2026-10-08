@@ -71,7 +71,9 @@ it("resolves runtime targets through one fresh admitted reader", async () => {
       });
     await read();
     const queries = trackSqliteStatementExecutions(database.db, ["freshness"], (sql) =>
-      /^PRAGMA data_version;?$/iu.test(sql) ? "freshness" : null,
+      /^PRAGMA data_version;?$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
+        ? "freshness"
+        : null,
     );
     try {
       expect(await read()).toMatchObject({

@@ -558,13 +558,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-state.worker.ts",
     ],
   },
-  ...[
-    "src/commands/doctor-skill-workshop-relocation.reservations.test.ts",
-    "src/commands/doctor-skill-workshop-sqlite.relocation.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: ["src/skills/workshop/store.worker.ts"],
-  })),
   {
     testFile: "src/commands/models/auth.minimax-chat.test.ts",
     watchGlobs: [
@@ -688,22 +681,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/config/sessions/session-transcript-reconcile.worker.ts",
       "src/infra/sqlite-store.worker.ts",
       "src/state/openclaw-agent-execution.worker.ts",
-    ],
-  })),
-  ...[
-    "src/fleet/doctor.runtime.test.ts",
-    "src/fleet/registry-read.test.ts",
-    "src/fleet/service-removal.runtime.test.ts",
-    "src/fleet/service-upgrade.runtime.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/fleet/registry.kernel.ts",
-      "src/fleet/registry.worker.ts",
-      "src/state/openclaw-state-read-registry.ts",
-      "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
-      "src/state/openclaw-state.worker.ts",
     ],
   })),
   {
@@ -1102,7 +1079,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ...[
     "src/infra/sqlite-worker-transcripts.test.ts",
     "src/meeting-bot/transcripts-bridge.test.ts",
-    "src/transcripts/status.producer.shutdown.test.ts",
+    "src/transcripts/status.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
@@ -1213,17 +1190,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/skills/library/persistence.test.ts",
     watchGlobs: ["src/skills/library/persistence-child.test-support.ts"],
-  },
-  {
-    testFile: "src/skills/workshop/experience-review.apply.test.ts",
-    watchGlobs: [
-      "src/infra/sqlite-store.worker.ts",
-      "src/skills/workshop/curator.kernel.ts",
-      "src/skills/workshop/store-proposal.kernel.ts",
-      "src/skills/workshop/store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
   },
   {
     testFile: "src/state/openclaw-agent-participants-migration.test.ts",
@@ -1758,16 +1724,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/infra/state-migrations.snapshot.worker.ts"],
   },
   {
-    testFile: "src/infra/state-migrations.skill-workshop.test.ts",
-    watchGlobs: ["src/state/openclaw-state.worker.ts"],
-  },
-  ...[
-    "src/infra/update-candidate-state.test.ts",
-    "src/infra/update-candidate-workspace-rehearsal.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
+    testFile: "src/infra/update-candidate-state.test.ts",
     watchGlobs: ["src/infra/update-candidate-state.worker.ts"],
-  })),
+  },
   {
     testFile: "src/state/agent-database-admission.test.ts",
     watchGlobs: [
@@ -2037,7 +1996,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["ui/index.html", "ui/src/**/*.css", "ui/src/**/*.ts"],
   },
   ...[
-    "src/cron/service.stream-trigger.test.ts",
     "src/cron/service.stream-validation.test.ts",
     "src/cron/service/timer.timeout-watchdog.test.ts",
   ].map((testFile) => ({

@@ -30,6 +30,13 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
       },
     );
   const owner = {
+    matchesDatabase(context: OpenClawStateWorkerContext) {
+      const identity = context.admission.identity;
+      return (
+        admission.identity.key === identity.key &&
+        admission.identity.birthtime === identity.birthtime
+      );
+    },
     retainGateway() {
       if (closing) {
         work = new AsyncWorkScope();
@@ -72,8 +79,19 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
       ) {
         closing = true;
         await Promise.all([...scopes].map(drain));
-        lifetimes.delete(admission.coordinationKey);
-        unregister();
+        if (gateways > 0) {
+          // A store reopen retires admitted work, not the Gateways that still own cleanup.
+          work = new AsyncWorkScope();
+          scopes.add(work);
+          closing = false;
+        } else {
+          for (const [key, lifetime] of lifetimes) {
+            if (lifetime === owner) {
+              lifetimes.delete(key);
+            }
+          }
+          unregister();
+        }
       }
     },
   });
@@ -83,7 +101,9 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
 function lifetime(context: OpenClawStateWorkerContext) {
   let owner = lifetimes.get(context.admission.coordinationKey);
   if (!owner) {
-    owner = createLifetime(context);
+    // First creation preserves a path coordination key; reopening the same file gets a file key.
+    owner = [...lifetimes.values()].find((candidate) => candidate.matchesDatabase(context));
+    owner ??= createLifetime(context);
     lifetimes.set(context.admission.coordinationKey, owner);
   }
   return owner;

@@ -1214,6 +1214,43 @@ function describeFormSchedule(form: CronFormState): string | null {
   return form.scheduleKind === "stream" ? t("cron.form.repeatStream") : null;
 }
 
+function renderDurationRow(props: CronProps, kind: "every" | "stagger") {
+  const recurring = kind === "every";
+  const amountField = recurring ? "everyAmount" : "staggerAmount";
+  const unitField = recurring ? "everyUnit" : "staggerUnit";
+  const label = t(recurring ? "cron.form.every" : "cron.form.staggerWindow");
+  const required = recurring ? true : undefined;
+  const disabled = recurring ? undefined : props.form.scheduleExact;
+  const units = recurring ? ["seconds", "minutes", "hours", "days"] : ["seconds", "minutes"];
+  return renderFieldRow({
+    label,
+    controlId: inputIdForField(amountField),
+    required,
+    error: props.fieldErrors[amountField],
+    errorId: errorIdForField(amountField),
+    control: html`
+      <div class="cron-inline-controls">
+        ${renderCronInput(props, amountField, {
+          inline: true,
+          label,
+          required,
+          disabled,
+          errorKey: amountField,
+          placeholder: t(
+            recurring ? "cron.form.everyAmountPlaceholder" : "cron.form.staggerPlaceholder",
+          ),
+        })}
+        ${renderCronSelect(props, unitField, {
+          label: t(recurring ? "cron.form.unit" : "cron.form.staggerUnit"),
+          inline: true,
+          disabled,
+          options: units.map((value) => ({ value, label: t(`cron.form.${value}`) })),
+        })}
+      </div>
+    `,
+  });
+}
+
 function renderScheduleSection(props: CronProps) {
   const form = props.form;
   const isOnExit = form.scheduleKind === "on-exit";
@@ -1266,38 +1303,7 @@ function renderScheduleSection(props: CronProps) {
             })
           : nothing
       }
-      ${
-        form.scheduleKind === "every"
-          ? renderFieldRow({
-              label: t("cron.form.every"),
-              controlId: "cron-every-amount",
-              required: true,
-              error: props.fieldErrors.everyAmount,
-              errorId: errorIdForField("everyAmount"),
-              control: html`
-                <div class="cron-inline-controls">
-                  ${renderCronInput(props, "everyAmount", {
-                    inline: true,
-                    label: t("cron.form.every"),
-                    required: true,
-                    errorKey: "everyAmount",
-                    placeholder: t("cron.form.everyAmountPlaceholder"),
-                  })}
-                  ${renderCronSelect(props, "everyUnit", {
-                    label: t("cron.form.unit"),
-                    inline: true,
-                    options: [
-                      { value: "seconds", label: t("cron.form.seconds") },
-                      { value: "minutes", label: t("cron.form.minutes") },
-                      { value: "hours", label: t("cron.form.hours") },
-                      { value: "days", label: t("cron.form.days") },
-                    ],
-                  })}
-                </div>
-              `,
-            })
-          : nothing
-      }
+      ${form.scheduleKind === "every" ? renderDurationRow(props, "every") : nothing}
       ${
         form.scheduleKind === "cron"
           ? html`
@@ -1468,32 +1474,7 @@ function renderAdvanced(
                     label: t("cron.form.exactTiming"),
                     help: t("cron.form.exactTimingHelp"),
                   })}
-                  ${renderFieldRow({
-                    label: t("cron.form.staggerWindow"),
-                    controlId: "cron-stagger-amount",
-                    error: props.fieldErrors.staggerAmount,
-                    errorId: errorIdForField("staggerAmount"),
-                    control: html`
-                      <div class="cron-inline-controls">
-                        ${renderCronInput(props, "staggerAmount", {
-                          inline: true,
-                          label: t("cron.form.staggerWindow"),
-                          disabled: props.form.scheduleExact,
-                          errorKey: "staggerAmount",
-                          placeholder: t("cron.form.staggerPlaceholder"),
-                        })}
-                        ${renderCronSelect(props, "staggerUnit", {
-                          label: t("cron.form.staggerUnit"),
-                          inline: true,
-                          disabled: props.form.scheduleExact,
-                          options: [
-                            { value: "seconds", label: t("cron.form.seconds") },
-                            { value: "minutes", label: t("cron.form.minutes") },
-                          ],
-                        })}
-                      </div>
-                    `,
-                  })}
+                  ${renderDurationRow(props, "stagger")}
                 `
               : nothing
           }

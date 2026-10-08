@@ -782,6 +782,8 @@ describe("SQLite session branches", () => {
     const sessionId = "large-branches-source";
     const scope = { agentId, env, sessionId, sessionKey };
     await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
+    // Keep reader startup outside the graph-work budget; replacement below forces a fresh scan.
+    await expect(listSessionBranches(scope)).resolves.toEqual({ status: "ok", branches: [] });
     const events: Parameters<typeof replaceTranscriptEvents>[1] = [
       {
         type: "session",

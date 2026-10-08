@@ -48,28 +48,21 @@ export function runRespawnChildWithSignalBridge(params: {
     signalHardExitTimer = undefined;
   };
   const signalChild = (signal: "SIGTERM" | "SIGKILL"): void => {
-    if (detachForProcessTree && typeof child.pid === "number" && child.pid > 0) {
-      signalProcessTree(child.pid, signal, { detached: true });
-      return;
-    }
-    child.kill(signal === "SIGKILL" && process.platform === "win32" ? "SIGTERM" : signal);
-  };
-  const forceKillChild = (): void => {
     try {
-      signalChild("SIGKILL");
+      if (detachForProcessTree && typeof child.pid === "number" && child.pid > 0) {
+        signalProcessTree(child.pid, signal, { detached: true });
+      } else {
+        child.kill(signal === "SIGKILL" && process.platform === "win32" ? "SIGTERM" : signal);
+      }
     } catch {
       // Best-effort shutdown fallback.
     }
   };
   const requestChildTermination = (): void => {
-    try {
-      signalChild("SIGTERM");
-    } catch {
-      // Best-effort shutdown fallback.
-    }
+    signalChild("SIGTERM");
     signalForceKillTimer = setTimeout(() => {
       hardKillBackstopStarted = true;
-      forceKillChild();
+      signalChild("SIGKILL");
       signalHardExitTimer = setTimeout(() => {
         runtime.exit(1);
       }, RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS);
@@ -94,7 +87,7 @@ export function runRespawnChildWithSignalBridge(params: {
 
   child.once("exit", (code, signal) => {
     if (firstForwardedSignal && detachForProcessTree) {
-      forceKillChild();
+      signalChild("SIGKILL");
     }
     clearSignalTimers();
     if (signal) {

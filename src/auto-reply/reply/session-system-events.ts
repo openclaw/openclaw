@@ -51,24 +51,18 @@ function compactSystemEvent(event: SystemEvent): string | null {
 
 function resolveSystemEventTimezone(cfg: OpenClawConfig) {
   const raw = normalizeOptionalString(cfg.agents?.defaults?.userTimezone);
-  if (!raw) {
-    return { mode: "local" as const };
-  }
   const lowered = normalizeLowercaseStringOrEmpty(raw);
   if (lowered === "utc" || lowered === "gmt") {
     return { mode: "utc" as const };
   }
-  if (lowered === "local" || lowered === "host") {
+  if (!raw || lowered === "local" || lowered === "host") {
     return { mode: "local" as const };
   }
-  if (lowered === "user") {
-    return {
-      mode: "iana" as const,
-      timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
-    };
-  }
-  const explicit = resolveTimezone(raw);
-  return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
+  const timeZone =
+    lowered === "user"
+      ? resolveUserTimezone(cfg.agents?.defaults?.userTimezone)
+      : resolveTimezone(raw);
+  return timeZone ? { mode: "iana" as const, timeZone } : { mode: "local" as const };
 }
 
 function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
@@ -97,6 +91,7 @@ export async function drainFormattedSystemEvents(params: {
   isNewSession: boolean;
   events?: readonly SystemEvent[];
   deferredEventIds?: readonly string[];
+  onEventsAdmitted?: (events: readonly SystemEvent[]) => void;
 }): Promise<string | undefined> {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
@@ -109,6 +104,7 @@ export async function drainFormattedSystemEvents(params: {
     ),
     { deferredEventIds: params.deferredEventIds },
   );
+  params.onEventsAdmitted?.(queued);
   const sessionStateNotices = queued.flatMap((event) => {
     const targetSessionKey = event.contextKey
       ? decodeSessionStateNoticeContextKey(event.contextKey)

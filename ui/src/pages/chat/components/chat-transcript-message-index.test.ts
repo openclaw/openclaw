@@ -324,7 +324,7 @@ describe("completed reply frame ownership", () => {
     },
   );
 
-  it("does not pull pre-steer work across the intervening user message", () => {
+  it("keeps resumed work with its final answer above the steer", () => {
     const messages = replyHistory(["run-u", "run-1"]);
     const steer = {
       role: "user",
@@ -334,18 +334,19 @@ describe("completed reply frame ownership", () => {
     };
     messages.splice(2, 0, steer);
     const chain = project(messages);
-    const [before, after] = frames(chain);
+    const [frame] = frames(chain);
     expect(chain.transcriptItems).toEqual([
       expect.objectContaining({ role: "user" }),
-      before,
+      frame,
       expect.objectContaining({ role: "user" }),
-      after,
     ]);
-    expect(messagesIn([before!])).toEqual([messages[1]]);
-    expect(before?.runId).toBe("run-u");
-    expect(messagesIn([after!])).toEqual(messages.slice(3));
-    expect(before?.parts[0]?.kind).toBe("work-group");
-    expect(after?.parts[0]?.kind).toBe("work-group");
+    expect(frame?.runId).toBe("run-1");
+    expect(messagesIn([frame!])).toEqual([messages[1], ...messages.slice(3)]);
+    expect(frame?.parts[0]?.kind).toBe("work-group");
+    expect(frame?.outcome).toMatchObject({
+      kind: "completed",
+      actionOwner: { message: messages.at(-1) },
+    });
     expect(new Set(chain.transcriptItems.map((item) => item.key)).size).toBe(
       chain.transcriptItems.length,
     );
@@ -420,7 +421,7 @@ describe("transcript structure cache", () => {
     expect(projectTranscriptChain(items, { ...chainOptions, searchActive: true })).not.toBe(chain);
     const streamed = projectTranscriptChain(items, chainOptions);
     // Message-less terminals record their outcome beside published history.
-    rememberLiveTerminalRun(partial, "run-1", undefined, "error");
+    rememberLiveTerminalRun(partial, "run-1", "error");
     expect(projectTranscriptChain(items, chainOptions)).not.toBe(streamed);
 
     const settled = projectTranscriptChain(items, chainOptions);

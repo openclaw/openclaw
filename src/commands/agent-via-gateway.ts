@@ -14,10 +14,6 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { AgentsListResult } from "../../packages/gateway-protocol/src/index.js";
 import {
-  buildAgentRunTerminalOutcome,
-  classifyAgentRunTerminalOutcome,
-} from "../agents/agent-run-terminal-outcome.js";
-import {
   AgentSelectionRequiredError,
   listAgentIds,
   tryResolveAgentOperationAgentId,
@@ -86,6 +82,8 @@ type GatewayAgentResponse = {
   runId?: string;
   status?: string;
   summary?: string;
+  reason?: string;
+  pendingInputId?: string;
   result?: AgentGatewayResult;
   deliveryStatus?: unknown;
 };
@@ -814,24 +812,11 @@ function markAgentRunExitCode(
   status: unknown,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
 ): void {
-  // Gateway responses carry an open `status` string, so an unrecognized value must
-  // not read as success: only the known success words map to exit 0, and any other
-  // reported status fails closed. An absent status stays unmapped because callers
-  // that never observed a terminal state have nothing to report.
-  const waitStatus =
-    status === "ok" || status === "completed"
-      ? "ok"
-      : status === "timeout"
-        ? "timeout"
-        : status === undefined || status === null || status === ""
-          ? undefined
-          : "error";
-  if (!waitStatus) {
+  if (status === undefined || status === null || status === "") {
     return;
   }
-  const outcome = buildAgentRunTerminalOutcome({ status: waitStatus });
-  // Let Node drain structured or text stdout before the process exits.
-  signalBridge.setExitCode(classifyAgentRunTerminalOutcome(outcome) === "success" ? 0 : 1);
+  // Unknown reported statuses fail closed; let Node drain stdout before exiting.
+  signalBridge.setExitCode(status === "ok" || status === "completed" ? 0 : 1);
 }
 
 function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): string {
@@ -1038,6 +1023,13 @@ async function agentViaGatewayCommand(
         err instanceof GatewayProtocolRequestError
           ? asOptionalRecord(err.responsePayload)
           : undefined;
+      if (
+        payload?.reason === "input_withdrawn_before_turn" &&
+        typeof payload.pendingInputId === "string"
+      ) {
+        response = { ...payload, status: "cancelled" };
+        break;
+      }
       // Only Gateway responses establish provenance; the idempotency fallback is cancellation-only.
       recordCliGatewayRunFailure(
         err,
@@ -1057,6 +1049,11 @@ async function agentViaGatewayCommand(
   }
 
   const payloads = response.result?.payloads ?? [];
+
+  if (response.reason === "input_withdrawn_before_turn") {
+    runtime.error?.(response.summary);
+    return response;
+  }
 
   if (response.status === "in_flight") {
     runtime.error?.(formatInFlightGatewayAgentMessage(response));

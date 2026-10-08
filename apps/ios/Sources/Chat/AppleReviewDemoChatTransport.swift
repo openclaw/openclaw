@@ -489,7 +489,18 @@ private actor LocalFixtureChatStore {
                     OpenClawChatInFlightRun(
                         runId: $0,
                         text: String(repeating: "Streaming layout response. ", count: 12))
-                } : nil))
+                } : nil),
+            activity: ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture")
+                ? JSONDecoder().decode([OpenClawChatHistoryActivity].self, from: Data("""
+                [{"messageId":"fixture-step-call","items":[
+                  {"itemId":"tool:fixture-exec","toolCallId":"fixture-exec","kind":"tool","phase":"end",
+                   "title":"Exec — outcome unknown","name":"exec"},
+                  {"itemId":"tool:fixture-no-result","toolCallId":"fixture-no-result","kind":"tool","phase":"end",
+                   "title":"Exec — outcome unknown","name":"exec"},
+                  {"itemId":"tool:fixture-success","toolCallId":"fixture-success","kind":"tool","phase":"end",
+                   "title":"Exec","name":"exec","status":"completed"}
+                ]}]
+                """.utf8)) : nil)
     }
 
     func sendMessage(
@@ -819,6 +830,56 @@ private actor LocalFixtureChatStore {
 
     private static func seedMessages(fixture: LocalChatFixture) -> [OpenClawChatMessage] {
         let now = Date().timeIntervalSince1970 * 1000
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
+            return [
+                self.message(
+                    role: "user",
+                    text: "Check local readiness.",
+                    timestamp: now,
+                    transcriptMessageID: "fixture-step-prompt"),
+                OpenClawChatMessage(
+                    role: "assistant",
+                    content: [
+                        OpenClawChatMessageContent(
+                            type: "toolCall",
+                            id: "fixture-exec",
+                            name: "exec",
+                            arguments: AnyCodable(["command": "printf ready"])),
+                        OpenClawChatMessageContent(
+                            type: "toolCall",
+                            id: "fixture-no-result",
+                            name: "exec",
+                            arguments: AnyCodable(["command": "printf missing"])),
+                        OpenClawChatMessageContent(
+                            type: "toolCall",
+                            id: "fixture-success",
+                            name: "exec",
+                            arguments: AnyCodable(["command": "printf complete"])),
+                    ],
+                    timestamp: now + 1,
+                    transcriptMessageID: "fixture-step-call",
+                    stopReason: "toolUse"),
+                OpenClawChatMessage(
+                    role: "toolResult",
+                    content: [OpenClawChatMessageContent(type: "text", text: "ready")],
+                    timestamp: now + 2,
+                    transcriptMessageID: "fixture-step-result",
+                    toolCallId: "fixture-exec",
+                    toolName: "exec"),
+                OpenClawChatMessage(
+                    role: "toolResult",
+                    content: [OpenClawChatMessageContent(type: "text", text: "complete")],
+                    timestamp: now + 3,
+                    transcriptMessageID: "fixture-success-result",
+                    toolCallId: "fixture-success",
+                    toolName: "exec"),
+                self.message(
+                    role: "assistant",
+                    text: "Local readiness checked.",
+                    timestamp: now + 4,
+                    transcriptMessageID: "fixture-step-answer"),
+            ]
+        }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-long-chat-fixture") {
             return [
                 self.message(

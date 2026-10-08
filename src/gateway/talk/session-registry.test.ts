@@ -2,6 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { captureClientVoiceSessionSettlement } from "../../talk/client-voice-session-lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -11,6 +15,31 @@ import {
 } from "./session-registry.js";
 
 describe("Talk connection cleanup registry", () => {
+  it("keeps a live Gateway's cleanup admission after its store reopens", async () => {
+    await withOpenClawTestState(
+      { scenario: "minimal", label: "talk-cleanup-store-reopen" },
+      async () => {
+        openOpenClawStateDatabase();
+        const log = { warn: vi.fn() };
+        const cleanup = vi.fn();
+        const original = prepareTalkConnectionClose([{ connId: "original" }], log);
+        registerTalkConnectionCleanup("original", "realtime-relay", cleanup);
+        let nested: ReturnType<typeof prepareTalkConnectionClose> | undefined;
+        try {
+          await closeOpenClawStateDatabaseAsync();
+          openOpenClawStateDatabase();
+          nested = prepareTalkConnectionClose([], log);
+          await nested.drain();
+          await original.drain();
+          expect(cleanup).toHaveBeenCalledOnce();
+          expect(log.warn).not.toHaveBeenCalled();
+        } finally {
+          await Promise.allSettled([original.drain(), nested?.drain()]);
+        }
+      },
+    );
+  });
+
   it("joins all connection cleanups after settlement admission is lost", async () => {
     await withOpenClawTestState(
       { scenario: "minimal", label: "talk-cleanup-refusal" },

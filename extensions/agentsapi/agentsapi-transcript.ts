@@ -8,7 +8,10 @@ import type {
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { NativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
-import { appendSessionTranscriptMessageByIdentityStrict } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  appendSessionTranscriptMessageByIdentityStrict,
+  publishSessionTranscriptUpdateByIdentity,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AgentsApiFunctionCall, AgentsApiItem } from "./agentsapi-client.js";
 import {
@@ -199,17 +202,35 @@ export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMes
   params: AgentHarnessAttemptParamsV2,
   message: TMessage,
   assertCurrent: TranscriptAssertion,
+  assistantItemIds?: readonly string[],
 ): Promise<TMessage> {
   await assertTranscriptCurrent(assertCurrent);
+  const target = requireAgentsApiSessionTarget(params);
   const append = await appendSessionTranscriptMessageByIdentityStrict({
-    ...requireAgentsApiSessionTarget(params),
+    ...target,
     config: params.config,
+    runId: params.runId,
     message,
     beforeFreshMessageCommit: assertCurrent,
   });
   await assertTranscriptCurrent(assertCurrent);
   if (append.kind !== "result") {
     throw new Error("Agents API transcript append was refused");
+  }
+  if (assistantItemIds) {
+    await publishSessionTranscriptUpdateByIdentity({
+      ...target,
+      update: {
+        message: append.result.message,
+        messageId: append.result.messageId,
+        ...(append.result.anchor
+          ? { messageSeq: append.result.anchor.activeMessagePosition + 1 }
+          : {}),
+        runId: params.runId,
+        assistantItemIds,
+      },
+    });
+    await assertTranscriptCurrent(assertCurrent);
   }
   return append.result.message;
 }

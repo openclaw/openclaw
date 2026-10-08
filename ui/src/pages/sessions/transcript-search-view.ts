@@ -32,15 +32,6 @@ export type TranscriptSearchProps = {
   onNavigateToChat: (sessionKey: string) => void;
 };
 
-function transcriptSearchSessionLabel(hit: SessionsSearchHit, rows: GatewaySessionRow[]): string {
-  const row = rows.find((candidate) => candidate.key === hit.sessionKey);
-  return (
-    normalizeOptionalString(row?.label) ??
-    normalizeOptionalString(row?.displayName) ??
-    hit.sessionKey
-  );
-}
-
 export function renderTranscriptSearch(props: TranscriptSearchProps) {
   const hasQuery = props.transcriptSearchQuery.trim().length > 0;
   const state = props.transcriptSearch;
@@ -183,6 +174,11 @@ export function renderTranscriptSearch(props: TranscriptSearchProps) {
                   </div>
                   <div class="sessions-transcript-search__list">
                     ${results.map((hit) => {
+                      const row = rows.find((candidate) => candidate.key === hit.sessionKey);
+                      const label =
+                        normalizeOptionalString(row?.label) ??
+                        normalizeOptionalString(row?.displayName) ??
+                        hit.sessionKey;
                       const timestamp =
                         hit.timestamp > 0 ? formatRelativeTimestamp(hit.timestamp) : t("common.na");
                       const timestampTitle =
@@ -194,7 +190,7 @@ export function renderTranscriptSearch(props: TranscriptSearchProps) {
                           @click=${() => props.onNavigateToChat(hit.sessionKey)}
                         >
                           <span class="sessions-transcript-search__result-header">
-                            <strong>${transcriptSearchSessionLabel(hit, rows)}</strong>
+                            <strong>${label}</strong>
                             <span class="muted" title=${timestampTitle}>
                               ${t(`sessionsView.${hit.role}`)} · ${timestamp}
                             </span>

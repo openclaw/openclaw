@@ -4,6 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { resetClientVoiceConfirmationStateForTest } from "./client-voice-confirmation.test-support.js";
+import { prepareClientVoiceSessionClose } from "./client-voice-session-lifecycle.js";
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
 
 const { sendDurableMessageBatch } = vi.hoisted(() => ({
@@ -43,4 +44,19 @@ export function useClientVoiceDigestHarness() {
       return stateDir;
     },
   };
+}
+
+/** Give each delivery attempt its real settlement barrier without sealing later test phases. */
+export async function withClientVoiceDigestSettlement(
+  run: (settle: () => Promise<void>) => Promise<void>,
+): Promise<void> {
+  let close = prepareClientVoiceSessionClose();
+  try {
+    await run(async () => {
+      await close.drain();
+      close = prepareClientVoiceSessionClose();
+    });
+  } finally {
+    await close.drain();
+  }
 }

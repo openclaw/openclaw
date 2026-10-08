@@ -23,7 +23,7 @@ import { isFullGitObjectId, type DevUpdateTarget } from "./update-dev-target.js"
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
-import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
+import { createGitStepFactory, gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import { runClassifiedGitStep } from "./update-runner-git-steps.js";
 import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
@@ -411,22 +411,18 @@ export async function fetchGitUpdateTarget(params: {
   steps: UpdateStepResult[];
 }): Promise<{ ok: boolean; refreshedRemotes: string[]; releaseRemote?: string }> {
   const { root, channel, devTarget, name, step: targetStep, workStep, steps } = params;
+  const step = createGitStepFactory(root, targetStep);
+  const work = createGitStepFactory(root, workStep);
   const refreshedRemotes: string[] = [];
   const result = (ok: boolean) => ({ ok, refreshedRemotes });
   if (channel === "dev" && devTarget?.mode === "detached" && isFullGitObjectId(devTarget.ref)) {
     // A pinned commit needs no remote freshness. Probe privately without allowing
     // promised-object hydration; the normal candidate/transfer owners still verify its contents.
-    const options = targetStep(
+    const options = step(
       "git-resolve-target",
-      [
-        "git",
-        "-C",
-        root,
-        "--no-lazy-fetch",
-        "cat-file",
-        "--batch-check=%(objectname) %(objecttype)",
-      ],
-      root,
+      "--no-lazy-fetch",
+      "cat-file",
+      "--batch-check=%(objectname) %(objecttype)",
     );
     const cachedTarget = await runClassifiedGitStep(
       { ...options, input: `${devTarget.ref}\n` },
@@ -451,17 +447,13 @@ export async function fetchGitUpdateTarget(params: {
       return result(cachedTarget.available);
     }
   }
-  const remote = await runStep(targetStep("git-remote", ["git", "-C", root, "remote"], root));
+  const remote = await runStep(step("git-remote", "remote"));
   if (remote.exitCode !== 0) {
     return result(false);
   }
   const remotes = normalizeStringEntries((remote.stdoutTail ?? "").split("\n"));
   const tracked = await runStep(
-    targetStep(
-      "git-config-update-upstream",
-      ["git", "-C", root, "config", "--get", `branch.${DEV_BRANCH}.remote`],
-      root,
-    ),
+    step("git-config-update-upstream", "config", "--get", `branch.${DEV_BRANCH}.remote`),
   );
   if (tracked.exitCode !== 0 && tracked.exitCode !== 1) {
     return result(false);
@@ -499,11 +491,7 @@ export async function fetchGitUpdateTarget(params: {
         : trackedRemote || undefined;
   if (channel === "dev" && !devTarget && !authority) {
     const main = await runStep(
-      targetStep(
-        "git-show-branch",
-        ["git", "-C", root, "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`],
-        root,
-      ),
+      step("git-show-branch", "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`),
     );
     if (main.exitCode === 0) {
       return result(true);
@@ -520,10 +508,13 @@ export async function fetchGitUpdateTarget(params: {
     if (fetchRemote === ".") {
       continue;
     }
-    const options = workStep(
+    const options = work(
       authority ? name : `${name}:${fetchRemote}`,
-      ["git", "-C", root, "fetch", fetchRemote, "--prune", "--no-tags", "--no-prune-tags"],
-      root,
+      "fetch",
+      fetchRemote,
+      "--prune",
+      "--no-tags",
+      "--no-prune-tags",
     );
     const fetchOutcome = await runClassifiedGitStep(options, (fetch) => {
       const interrupted =
@@ -566,20 +557,14 @@ export async function fetchGitUpdateTarget(params: {
   // Only the release authority may replace shared tag refs. Disable pruning
   // even when Git config enables it, so operator-only tags survive.
   const tags = await runStep(
-    workStep(
+    work(
       "git-fetch-tags",
-      [
-        "git",
-        "-C",
-        root,
-        "fetch",
-        "--no-tags",
-        "--no-prune",
-        "--no-prune-tags",
-        tagRemote,
-        "+refs/tags/*:refs/tags/*",
-      ],
-      root,
+      "fetch",
+      "--no-tags",
+      "--no-prune",
+      "--no-prune-tags",
+      tagRemote,
+      "+refs/tags/*:refs/tags/*",
     ),
   );
   return {

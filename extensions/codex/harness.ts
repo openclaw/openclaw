@@ -267,12 +267,10 @@ export function createCodexAppServerAgentHarness(
       return await loadCodexEffectiveMcpCatalog(params, { bindingStore: options.bindingStore });
     },
     supports: (ctx) => {
+      const unsupported = (reason: string) => ({ supported: false as const, reason });
       const provider = ctx.provider.trim().toLowerCase();
       if (!providerIds.has(provider)) {
-        return {
-          supported: false,
-          reason: `provider is not one of: ${[...providerIds].toSorted().join(", ")}`,
-        };
+        return unsupported(`provider is not one of: ${[...providerIds].toSorted().join(", ")}`);
       }
       if (ctx.modelProvider?.requestTransportOverrides === "present") {
         return {
@@ -301,26 +299,17 @@ export function createCodexAppServerAgentHarness(
           (id) => id.trim().toLowerCase() === normalizedHarnessRuntimeId,
         );
         if (!compatible) {
-          return {
-            supported: false,
-            reason: "Codex cannot reproduce the prepared provider route",
-          };
+          return unsupported("Codex cannot reproduce the prepared provider route");
         }
       } else if (ctx.modelProvider && provider !== "codex" && !nativeAccountOwnsUnobservedModel) {
-        return {
-          supported: false,
-          reason: "provider route compatibility with Codex is not declared",
-        };
+        return unsupported("provider route compatibility with Codex is not declared");
       }
       if (preparedAuth?.requirement === "subscription") {
         const reproducibleSubscription =
           preparedAuth.source === "profile" &&
           (preparedAuth.mode === "oauth" || preparedAuth.mode === "token");
         if (!reproducibleSubscription) {
-          return {
-            supported: false,
-            reason: "Codex subscription auth requires a prepared OAuth or token profile",
-          };
+          return unsupported("Codex subscription auth requires a prepared OAuth or token profile");
         }
       } else if (preparedAuth?.requirement === "api-key") {
         const reproducibleApiKey =
@@ -328,10 +317,7 @@ export function createCodexAppServerAgentHarness(
           preparedAuth.source !== "harness" &&
           (preparedAuth.mode === "api-key" || preparedAuth.mode === "api_key");
         if (!reproducibleApiKey) {
-          return {
-            supported: false,
-            reason: "Codex Platform auth requires a prepared API key",
-          };
+          return unsupported("Codex Platform auth requires a prepared API key");
         }
       }
       return { supported: true, priority: 100 };

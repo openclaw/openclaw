@@ -2127,10 +2127,6 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["chat", "config"],
     sessionMenuOwnerRoots,
   ),
-  pageWatch("ui/src/e2e/skill-workshop-revision-integrity.e2e.test.ts", [
-    "skill-workshop",
-    "skills",
-  ]),
   pageWatch(
     "ui/src/e2e/skills-any-bin-requirements.e2e.test.ts",
     ["skills"],
