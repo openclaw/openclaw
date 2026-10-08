@@ -280,7 +280,14 @@ docker_e2e_cleanup_package_tgz() {
   local pack_dir
   pack_dir="$(dirname "$package_tgz")"
   if [ -f "$pack_dir/.openclaw-docker-e2e-generated-package" ]; then
-    rm -rf "$pack_dir"
+    if [ "${2:-}" = retain ]; then
+      # Revoke the existing disposable-artifact marker, including for a caller's
+      # later EXIT cleanup outside the logging subshell. Never discard its input.
+      rm -f "$pack_dir/.openclaw-docker-e2e-generated-package" || return $?
+      echo "Retaining package input after unresolved container cleanup: $package_tgz" >&2
+    else
+      rm -rf "$pack_dir"
+    fi
   fi
 }
 
@@ -296,7 +303,7 @@ docker_e2e_cleanup_package_mount_args() {
   local arg
   for arg in "${DOCKER_E2E_PACKAGE_ARGS[@]:-}"; do
     if [ "$expect_volume_path" = "1" ]; then
-      docker_e2e_cleanup_package_tgz "${arg%%:*}"
+      docker_e2e_cleanup_package_tgz "${arg%%:*}" "${1:-}"
       expect_volume_path=0
       continue
     fi
@@ -309,14 +316,20 @@ docker_e2e_cleanup_package_mount_args() {
 docker_e2e_cleanup_container_cidfile() {
   local cidfile="${1:-}"
   [ -n "$cidfile" ] || return 0
-  if [ -f "$cidfile" ]; then
-    local container_id
-    container_id="$(head -n 1 "$cidfile" 2>/dev/null || true)"
-    if [ -n "$container_id" ]; then
-      docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
-    fi
-    rm -f "$cidfile"
+  local container_id=""
+  if [ ! -L "$cidfile" ] && [ -f "$cidfile" ]; then
+    container_id="$(cat "$cidfile")" || return $?
   fi
+  if ! [[ "$container_id" =~ ^[a-f0-9]{64}$ ]]; then
+    echo "Docker container custody unresolved; retain CID path and mounted inputs: $cidfile" >&2
+    return 1
+  fi
+  # Only the daemon's successful removal settles this container, not CLI/PID exit.
+  if ! docker_e2e_docker_cmd rm -f "$container_id" >/dev/null; then
+    echo "Docker container removal failed; retain CID and mounted inputs: $cidfile" >&2
+    return 1
+  fi
+  rm -f "$cidfile"
 }
 
 docker_e2e_print_failed_container_state() {
@@ -428,9 +441,17 @@ docker_e2e_run_with_harness() {
     trap - INT TERM HUP
     terminate_harness_docker_run
     wait "$docker_run_pid" 2>/dev/null || true
-    docker_e2e_cleanup_container_cidfile "$cidfile"
-    rmdir "$cid_dir" 2>/dev/null || true
-    docker_e2e_cleanup_package_mount_args
+    local DOCKER_E2E_PHASE_DEADLINE="${DOCKER_E2E_CLEANUP_DEADLINE:-${DOCKER_E2E_PHASE_DEADLINE:-}}"
+    if docker_e2e_cleanup_container_cidfile "$cidfile"; then
+      rmdir "$cid_dir" 2>/dev/null || true
+      docker_e2e_cleanup_package_mount_args || {
+        [ "$cleanup_status" -ne 0 ] || cleanup_status=1
+      }
+    else
+      docker_e2e_cleanup_package_mount_args retain || true
+      DOCKER_E2E_PACKAGE_CUSTODY_UNRESOLVED=1
+      [ "$cleanup_status" -ne 0 ] || cleanup_status=1
+    fi
     if [ -n "$harness_stdin_fd" ]; then
       eval "exec ${harness_stdin_fd}<&-"
     fi
@@ -473,8 +494,7 @@ docker_e2e_run_with_harness() {
   if [ "$run_status" -ne 0 ]; then
     docker_e2e_print_failed_container_state "$cidfile"
   fi
-  cleanup_harness_run 0
-  return "$run_status"
+  cleanup_harness_run "$run_status"
 }
 
 docker_e2e_run_detached_with_harness() {

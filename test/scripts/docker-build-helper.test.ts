@@ -325,7 +325,7 @@ if (args[0] === "inspect") {
 }
 if (args[0] !== "run") throw new Error("unexpected Docker command");
 const cid = args.indexOf("--cidfile");
-if (cid !== -1) fs.writeFileSync(args[cid + 1], "fixture-container\\n");
+if (cid !== -1) fs.writeFileSync(args[cid + 1], "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\\n");
 if (args.includes("-i")) fs.writeFileSync(process.env.FIXTURE_STDIN, fs.readFileSync(0));
 console.log("fixture container output");
 if (scenario === "signal") {
@@ -1806,8 +1806,8 @@ docker() {
 
   test -n "$cidfile"
   test ! -e "$cidfile"
-  printf "container-%s\\n" "\${DOCKER_STUB_STATUS:-0}" >"$cidfile"
-  printf "run container-%s\\n" "\${DOCKER_STUB_STATUS:-0}" >>"$TMPDIR/docker-lifecycle"
+  printf "%064d\\n" "\${DOCKER_STUB_STATUS:-0}" >"$cidfile"
+  printf "run %064d\\n" "\${DOCKER_STUB_STATUS:-0}" >>"$TMPDIR/docker-lifecycle"
   test -n "$mount_path"
   test -f "$mount_path"
   printf "%s\\n" "$mount_path" >"$TMPDIR/package-mount-seen"
@@ -1831,10 +1831,10 @@ docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/failure-stderr" 
 test "$(trap -p INT TERM HUP)" = "$original_traps"
 test "\${run_status:-0}" = "7"
 test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3s"
-grep -qx "container-7" "$TMPDIR/docker-rm-seen"
-test "$(sed -n '1p' "$TMPDIR/docker-lifecycle")" = "run container-7"
-test "$(sed -n '2p' "$TMPDIR/docker-lifecycle")" = "inspect container-7"
-test "$(sed -n '3p' "$TMPDIR/docker-lifecycle")" = "rm container-7"
+grep -qx "0000000000000000000000000000000000000000000000000000000000000007" "$TMPDIR/docker-rm-seen"
+test "$(sed -n '1p' "$TMPDIR/docker-lifecycle")" = "run 0000000000000000000000000000000000000000000000000000000000000007"
+test "$(sed -n '2p' "$TMPDIR/docker-lifecycle")" = "inspect 0000000000000000000000000000000000000000000000000000000000000007"
+test "$(sed -n '3p' "$TMPDIR/docker-lifecycle")" = "rm 0000000000000000000000000000000000000000000000000000000000000007"
 grep -q '^Docker container state:$' "$TMPDIR/failure-stderr"
 grep -q '^ExitCode=137$' "$TMPDIR/failure-stderr"
 grep -q '^OOMKilled=true$' "$TMPDIR/failure-stderr"
@@ -1854,7 +1854,7 @@ docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/inspect-failure-
 test "\${inspect_failure_status:-0}" = "23"
 grep -q "Docker container state unavailable (inspect exit 9): daemon unavailable" "$TMPDIR/inspect-failure-stderr"
 tail -n 3 "$TMPDIR/docker-lifecycle" >"$TMPDIR/inspect-failure-lifecycle"
-printf "run container-23\\ninspect container-23\\nrm container-23\\n" >"$TMPDIR/expected-inspect-failure-lifecycle"
+printf "run 0000000000000000000000000000000000000000000000000000000000000023\\ninspect 0000000000000000000000000000000000000000000000000000000000000023\\nrm 0000000000000000000000000000000000000000000000000000000000000023\\n" >"$TMPDIR/expected-inspect-failure-lifecycle"
 cmp "$TMPDIR/expected-inspect-failure-lifecycle" "$TMPDIR/inspect-failure-lifecycle"
 
 unset DOCKER_STUB_STATUS DOCKER_STUB_EXIT_CODE DOCKER_STUB_OOM DOCKER_STUB_ERROR
@@ -1864,8 +1864,8 @@ rm -f "$TMPDIR/docker-timeout-seen"
 docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/success-stderr"
 test "$(trap -p INT TERM HUP)" = "$original_traps"
 test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3600s"
-grep -qx "container-0" "$TMPDIR/docker-rm-seen"
-test "$(tail -n 2 "$TMPDIR/docker-lifecycle")" = $'run container-0\\nrm container-0'
+grep -qx "0000000000000000000000000000000000000000000000000000000000000000" "$TMPDIR/docker-rm-seen"
+test "$(tail -n 2 "$TMPDIR/docker-lifecycle")" = $'run 0000000000000000000000000000000000000000000000000000000000000000\\nrm 0000000000000000000000000000000000000000000000000000000000000000'
 test ! -s "$TMPDIR/success-stderr"
 test -f "$external_dir/openclaw-current.tgz"
 `,
@@ -1951,7 +1951,7 @@ docker() {
   done
 
   test -n "$cidfile"
-  printf "container-term\\n" >"$cidfile"
+  printf "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n" >"$cidfile"
   printf "started\\n" >"$TMPDIR/docker-started"
   printf "docker running\\n"
   trap 'exit 143' TERM
@@ -1970,7 +1970,7 @@ test -s "$TMPDIR/docker-started"
 kill -TERM "$wrapper_pid" 2>/dev/null || true
 wait "$wrapper_pid" 2>/dev/null || true
 # The joined harness removes its container before the heartbeat wrapper returns.
-grep -qx "container-term" "$TMPDIR/docker-rm-seen"
+grep -qx "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "$TMPDIR/docker-rm-seen"
 test -z "$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-container.*' -print)"
 `,
     },
@@ -4874,6 +4874,7 @@ ${PASSTHROUGH_TIMEOUT_SETUP}
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 docker() {
+  if [ "$1" = rm ]; then return 0; fi
   local cidfile=""
   local expect_cidfile=0
   local arg
@@ -4888,7 +4889,7 @@ docker() {
     fi
   done
   test -n "$cidfile"
-  printf "container-fd\n" >"$cidfile"
+  printf "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n" >"$cidfile"
   cat >/dev/null
 }
 export -f docker
@@ -4979,7 +4980,7 @@ if (command === "docker") {
     const packagePath = fs.readFileSync(packageRecord, "utf8");
     if (!args.includes(packagePath + ":/tmp/openclaw-current.tgz:ro")) throw new Error("package mount missing");
     if (fs.readFileSync(packagePath, "utf8") !== "fixture package") throw new Error("package unavailable during run");
-    fs.writeFileSync(args[args.indexOf("--cidfile") + 1], "fixture-container\\n");
+    fs.writeFileSync(args[args.indexOf("--cidfile") + 1], "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\\n");
     const evidenceMount = args.find(arg => arg.endsWith(":/tmp/release-upgrade-evidence"));
     if (evidenceMount) fs.writeFileSync(path.join(evidenceMount.split(":")[0], "result.txt"), "keep run evidence");
     console.log("fixture container output");

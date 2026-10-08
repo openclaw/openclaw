@@ -48,6 +48,7 @@ export type ServiceChildAnchorPayload =
   | {
       type: "ready";
       commandPid: number;
+      commandStartIdentity?: number;
       anchorPid: number;
       treeOwnership?: "linux-subreaper";
     }
@@ -96,6 +97,35 @@ export type ServiceChildRelayMessage =
   | ServiceChildStart
   | ServiceChildRelayRetirement
   | { type: "relay-error"; generation: string; error: string };
+
+export type ServiceChildRootIdentity = Readonly<{ pid: number; startIdentity: number }>;
+
+/** Validate the selected transport's ready contract before publishing its birth fact. */
+export function readServiceChildReady(
+  message: Extract<ServiceChildAnchorPayload, { type: "ready" }>,
+  native: boolean,
+): { ok: true; identity?: ServiceChildRootIdentity } | { ok: false; error: string } {
+  if ((message.treeOwnership === "linux-subreaper") !== native) {
+    return { ok: false, error: "process owner did not admit the selected ownership contract" };
+  }
+  if (message.commandStartIdentity === undefined) {
+    return { ok: true };
+  }
+  if (
+    !native ||
+    !Number.isSafeInteger(message.commandStartIdentity) ||
+    message.commandStartIdentity < 0
+  ) {
+    return { ok: false, error: "invalid native root birth identity" };
+  }
+  return {
+    ok: true,
+    identity: Object.freeze({
+      pid: message.commandPid,
+      startIdentity: message.commandStartIdentity,
+    }),
+  };
+}
 
 export function readServiceChildMessage(
   raw: unknown,

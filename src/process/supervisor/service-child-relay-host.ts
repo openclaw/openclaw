@@ -19,6 +19,7 @@ import { isOwnedProcessGroupGone } from "./service-child-group-ownership.js";
 import { createOutputRelay } from "./service-child-output-relay.js";
 import {
   readServiceChildMessage,
+  readServiceChildReady,
   sendServiceChildMessage,
   type ServiceChildAnchorMessage,
   type ServiceChildStart,
@@ -110,6 +111,7 @@ export async function createServiceChildRelayAdapter(
 
   let state: AuthorityState = "starting";
   let commandPid: number | undefined;
+  let nativeRootIdentity: ServiceChildRelayAdapter["nativeRootIdentity"];
   let anchorPid: number | undefined = useLinuxSubreaper ? child.pid : undefined;
   let outboundSequence = 0;
   let inboundSequence = 0;
@@ -395,11 +397,13 @@ export async function createServiceChildRelayAdapter(
     } else if (message.type === "ready" && state === "starting") {
       // Ready is not construction-complete: secret delivery can still be
       // blocked. Keep abort protection until the adapter returns.
-      if ((message.treeOwnership === "linux-subreaper") !== useLinuxSubreaper) {
-        loseIdentity("process owner did not admit the selected ownership contract");
+      const ready = readServiceChildReady(message, useLinuxSubreaper);
+      if (!ready.ok) {
+        loseIdentity(ready.error);
         return;
       }
       commandPid = message.commandPid;
+      nativeRootIdentity = ready.identity;
       anchorPid = useLinuxSubreaper ? child.pid : message.anchorPid;
       state = "active";
       startup.resolve();
@@ -685,6 +689,9 @@ export async function createServiceChildRelayAdapter(
         : await resultCompletion.promise;
     },
     ...(useLinuxSubreaper ? { treeOwnership: "linux-subreaper" as const } : {}),
+    get nativeRootIdentity() {
+      return nativeRootIdentity;
+    },
     waitForExtinction: () => cleanup.promise,
     confirmExtinction: () =>
       state === "closed" ||

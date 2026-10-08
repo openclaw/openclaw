@@ -304,7 +304,17 @@ export async function resolveMutableUpdateFailure(params: {
   ) {
     throw params.cause;
   }
-  const failure = { cause: params.cause, detail: formatErrorMessage(params.cause) };
+  const failure = {
+    cause: params.cause,
+    // Source artifact admission already translated the retained-lock diagnostic.
+    // Preserve the cause graph for cleanup policy without repeating helper codes.
+    detail: formatErrorMessage(
+      params.cause instanceof UpdatePreMutationError &&
+        params.cause.reason === "source-artifact-ownership"
+        ? params.cause.message
+        : params.cause,
+    ),
+  };
   defaultRuntime.error(failure.detail);
   let phase: string | undefined;
   if (params.run) {

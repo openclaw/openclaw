@@ -16,7 +16,10 @@ import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
-function createVitestWorkerDirectory(env: NodeJS.ProcessEnv) {
+function createVitestWorkerDirectory(
+  env: NodeJS.ProcessEnv,
+  profile: "tests" | "artifact-custody",
+) {
   const parent = path.join(root, ".artifacts", "vitest-workers");
   fs.mkdirSync(parent, { recursive: true });
   let directory: string;
@@ -25,7 +28,8 @@ function createVitestWorkerDirectory(env: NodeJS.ProcessEnv) {
   } else {
     // A retained or live generation keeps its slot. Only joined disposal releases it.
     for (let slot = 0; ; slot++) {
-      directory = path.join(parent, `run-cache-${slot}`);
+      const prefix = profile === "tests" ? "run-cache" : "run-artifact-cache";
+      directory = path.join(parent, `${prefix}-${slot}`);
       try {
         fs.mkdirSync(directory, { mode: 0o700 });
         break;
@@ -40,12 +44,25 @@ function createVitestWorkerDirectory(env: NodeJS.ProcessEnv) {
   return directory;
 }
 
+/** A completed compiler exit, distinct from incomplete or failed process cleanup. */
+export class CompiledSubprocessExitError extends Error {
+  readonly exitCode: number;
+  constructor(exitCode: number) {
+    super("Compiled subprocess build failed with exit code " + exitCode);
+    this.exitCode = exitCode;
+  }
+}
+
 /** The invocation owns preparation and waits for every real borrower before disposal. */
 export function createVitestWorkerRun(
   env: NodeJS.ProcessEnv = process.env,
   parent?: VitestWorkerDescriptor,
+  profile: "tests" | "artifact-custody" = "tests",
 ) {
-  const directory = parent?.directory ?? createVitestWorkerDirectory(env);
+  if (parent && profile !== "tests") {
+    throw new Error("Artifact custody requires its own compiled runtime generation");
+  }
+  const directory = parent?.directory ?? createVitestWorkerDirectory(env, profile);
   let preparation: Promise<VitestWorkerManifest> | undefined;
   let retainArtifacts:
     | typeof import("./vitest-worker-cache.mts").retainVitestWorkerArtifacts
@@ -91,7 +108,11 @@ export function createVitestWorkerRun(
       compilerJoined = false;
       const code = await runManagedCommand({
         bin: process.execPath,
-        args: [fileURLToPath(new URL("./vitest-worker-compiler.mts", import.meta.url)), directory],
+        args: [
+          fileURLToPath(new URL("./vitest-worker-compiler.mts", import.meta.url)),
+          directory,
+          ...(profile === "tests" ? [] : [profile]),
+        ],
         cwd: root,
         env,
         shell: false,
@@ -119,6 +140,9 @@ export function createVitestWorkerRun(
         },
       );
       if (code !== 0) {
+        if (profile === "artifact-custody") {
+          throw new CompiledSubprocessExitError(code);
+        }
         throw new Error(`Compiled subprocess build failed with exit code ${code}`);
       }
       const manifest: VitestWorkerManifest = JSON.parse(
@@ -136,6 +160,15 @@ export function createVitestWorkerRun(
   return {
     descriptor: { directory } satisfies VitestWorkerDescriptor,
     prepare,
+    /** Native adapters already join process extinction; retain their generation on uncertainty. */
+    join<T>(completion: Promise<T>): Promise<T> {
+      if (disposal) {
+        throw new Error("Compiled subprocess owner is closing");
+      }
+      borrowers.push(completion);
+      void completion.catch(() => {});
+      return completion;
+    },
     borrow<T>(
       child: ChildProcess,
       completion: Promise<T>,

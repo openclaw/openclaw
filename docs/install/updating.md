@@ -410,10 +410,40 @@ results. See
 
 Source updates also admit build-artifact ownership and runtime staging access in
 the installed checkout before stopping the Gateway. A retained
-`.artifacts/dist-artifacts.lock` refuses the update with the recorded owner,
-timestamp, and exact recovery command while the serving Gateway stays running.
-Verify that all associated build/check processes, including detached descendants,
-have stopped before releasing that lock; a dead owner PID alone is insufficient.
+`.artifacts/dist-artifacts.lock` refuses admission when descendant custody is
+unresolved, while the serving Gateway stays running. New owner records include
+available native process identity and generation-bound child claims. Legacy, malformed,
+and incompletely settled records remain unresolved: PID death or reuse, a
+completed process group, an empty callback inventory, and disappearance of a
+memory cgroup are not proof that every artifact writer has stopped.
+
+The message reports unavailable identity and heartbeat fields explicitly and
+gives process-inspection guidance, not an unsafe recursive-delete command. Let
+the original build/check owner finish and retry. If that owner cannot finish,
+independent inspection must account for detached descendants; age and a missing
+heartbeat do not authorize release. Normal builds retain their explicit-release
+contract on all platforms. That contract is distinct from automatic recovery,
+which requires complete native settlement evidence bound to the same owner
+record and generation, never a caller assertion that a callback finished.
+
+On Linux with the complete source toolchain, the noninteractive, one-shot `run-tsgo` typecheck entry
+uses OpenClaw's compiled native descendant owner. Its private helper generation
+is prepared and verified before artifact admission without writing checkout
+`dist`. After the entire local command tree and output have settled, the owner
+can record a generation-bound receipt. If unlinking the fence is interrupted,
+a later source update can recover it after verifying that receipt and the
+original process's retirement. Detached process groups and migrated cgroups
+remain under the native descendant owner; cgroup disappearance is not the proof.
+
+A controller that dies before recording settlement, changed command inputs,
+unknown loader/preload work, and externally delegated services do not receive
+that recovery guarantee. Metrics-enabled checks can invoke configurable Git
+helpers, so they also remain noncertifying. Terminal input and output keep the
+ordinary entry rather than being taken over by the native admission channel.
+Watch and compiler-server modes also keep that entry and their original input stream.
+Other build callbacks, partial toolchains, macOS, and
+Windows keep their normal explicit-release behavior; their abandoned fences
+remain unresolved without sufficient native custody evidence.
 The updater keeps that ownership until its work has settled and carries the
 prepared runtime result into completion. Already-current repairs reuse the admitted
 ownership; promoted runtime outputs do not need regeneration. Published updaters

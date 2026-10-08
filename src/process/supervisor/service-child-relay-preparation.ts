@@ -7,7 +7,10 @@ import {
   getInheritedProcessLineageFds,
 } from "./inherited-process-lineage.js";
 import { assertProcessGroupControl } from "./service-child-group-ownership.js";
-import { supportsNodeWorkerProcessOwner } from "./service-child-protocol.js";
+import {
+  supportsNodeWorkerProcessOwner,
+  type ServiceChildRootIdentity,
+} from "./service-child-protocol.js";
 import { reserveStdioEntry } from "./service-child-stdio.js";
 import type { ProcessAdapterConstruction, SpawnProcessAdapter, SpawnSecretInput } from "./types.js";
 
@@ -38,6 +41,8 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
 
 export type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
   treeOwnership?: "linux-subreaper";
+  /** Birth observed under the native owner's retained root; not current liveness. */
+  readonly nativeRootIdentity?: ServiceChildRootIdentity;
   waitForExtinction: () => Promise<void>;
   confirmExtinction: () => boolean;
   openStartGate?: () => Promise<void>;

@@ -1,3 +1,4 @@
+import { DistArtifactCustodyError } from "../../../scripts/lib/dist-artifact-lock.mts";
 import { inspectSourceUpdateArtifacts } from "../../../scripts/lib/source-update-artifact-preflight.mts";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { UpdateRunnerOptions } from "../../infra/update-runner-types.js";
@@ -22,9 +23,12 @@ export async function admitSourceUpdateArtifacts(
     }
     return prepared.sourceRuntimePrepared;
   } catch (cause) {
-    throw new UpdatePreMutationError("source-artifact-ownership", formatErrorMessage(cause), {
-      cause,
-    });
+    // The artifact owner already supplies one complete verdict and inspection action.
+    // Keep its original cause for diagnostics, not as additional user-facing causes.
+    const message = formatErrorMessage(
+      cause instanceof DistArtifactCustodyError ? cause.message : cause,
+    );
+    throw new UpdatePreMutationError("source-artifact-ownership", message, { cause });
   }
 }
 

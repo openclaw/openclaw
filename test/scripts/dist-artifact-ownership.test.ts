@@ -21,6 +21,7 @@ import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { installDistArtifactScripts as installScripts } from "./dist-artifact-fixture.js";
 import {
+  captureNativeFixtureGeneration,
   materializeNativeCompiler,
   overrideNativeFixtureExecutable,
   resolveInstalledNativeCompiler,
@@ -34,6 +35,11 @@ const sourceRoot = process.cwd();
 const declarationPath = "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts";
 const tsgoArgs = ["-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"];
 const buildArgs = ["--config", "fixture.tsdown.config.ts", "--out-dir", "dist"];
+
+const retainedEntries = (directory: string) =>
+  fs
+    .readdirSync(directory, { recursive: true, encoding: "utf8" })
+    .map((name) => path.basename(name));
 
 function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
   // Crash cases deliberately remove the compiler's owner. Its checkpoint socket
@@ -387,7 +393,7 @@ describe("native check launchers in paths with spaces", () => {
         const lock = resolveDistArtifactLockPath(root);
         expect(fs.existsSync(path.join(lock, "owner.json"))).toBe(true);
         if (!compiler) {
-          expect(fs.readdirSync(lock)).toContain(`child-${child.pid}`);
+          expect(retainedEntries(lock)).toContain(`child-${child.pid}`);
         }
         expect(fs.existsSync(settled)).toBe(false);
         expect(fs.existsSync(consumed)).toBe(false);
@@ -647,8 +653,8 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         expect(result.code, result.output).toBe(0);
         const directory = resolveDistArtifactLockPath(root);
         expect(fs.existsSync(path.join(directory, "owner.json"))).toBe(true);
-        expect(fs.existsSync(path.join(directory, "unjoined"))).toBe(false);
-        expect(fs.readdirSync(directory).filter((name) => name.startsWith("child-"))).toHaveLength(
+        expect(retainedEntries(directory).includes("unjoined")).toBe(false);
+        expect(retainedEntries(directory).filter((name) => name.startsWith("child-"))).toHaveLength(
           nested ? 1 : 0,
         );
         const owner = fs.readFileSync(path.join(directory, "owner.json"), "utf8");
@@ -709,7 +715,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         const result = await start(root, probe).done;
         const directory = resolveDistArtifactLockPath(root);
         expect(fs.existsSync(path.join(directory, "owner.json"))).toBe(true);
-        expect(fs.existsSync(path.join(directory, "unjoined"))).toBe(true);
+        expect(retainedEntries(directory).includes("unjoined")).toBe(true);
         expect(result.code, result.output).toBe(0);
       }, signal);
     },
@@ -803,9 +809,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
           true,
         );
-        expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/unjoined"))).toBe(
-          true,
-        );
+        expect(retainedEntries(resolveDistArtifactLockPath(root)).includes("unjoined")).toBe(true);
         expect(
           fs
             .readdirSync(path.join(root, ".artifacts"))
@@ -1004,24 +1008,47 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       const supervisor = start(root, owner, [], resourceOwner);
       const compilerGate = await supervisor.event("orphan-ready");
       const compilerPid = Number(fs.readFileSync(path.join(root, "compiler.pid"), "utf8"));
+      const artifactDirectory = resolveDistArtifactLockPath(root);
+      const originalOwner = JSON.parse(
+        fs.readFileSync(path.join(artifactDirectory, "owner.json"), "utf8"),
+      );
+      const custody = path.join(artifactDirectory, originalOwner.custodyId);
+      const native =
+        originalOwner.treeOwnership === "linux-subreaper"
+          ? captureNativeFixtureGeneration(
+              JSON.parse(fs.readFileSync(path.join(custody, "launch"), "utf8")).pid,
+              [compilerPid],
+            )
+          : undefined;
       (await waitEvent("exit-owner")).write("exit");
       expect(await supervisor.done).toMatchObject({ code: 2 });
-      const build = start(root, path.join(sourceRoot, "scripts/tsdown-build.mts"), buildArgs);
-      await Promise.race([build.waiting, waitEvent("orphan-build-started"), build.done]);
-      expect(
-        fs.existsSync(path.join(root, declarationPath)),
-        "exit hooks must not release an active compiler's output",
-      ).toBe(true);
-      expect(await build.done).toMatchObject({
-        code: 1,
-        output: expect.stringContaining("PID death alone is not sufficient."),
-      });
-      expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
-        true,
-      );
-      expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
-      compilerGate.write("continue");
-      await waitForForeignProcessExit(compilerPid, signal);
+      try {
+        const build = start(root, path.join(sourceRoot, "scripts/tsdown-build.mts"), buildArgs);
+        await Promise.race([build.waiting, waitEvent("orphan-build-started"), build.done]);
+        expect(
+          fs.existsSync(path.join(root, declarationPath)),
+          "exit hooks must not release an active compiler's output",
+        ).toBe(true);
+        expect(await build.done).toMatchObject({
+          code: 1,
+          output: expect.stringContaining("PID death alone cannot authorize release."),
+        });
+        expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
+          true,
+        );
+        if (native) {
+          expect(
+            fs.readFileSync(path.join(native.directory, ".vitest-resource-owner/owner"), "utf8"),
+          ).toBe(native.identity);
+          expect(fs.existsSync(path.join(custody, "settled"))).toBe(false);
+        } else {
+          expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+        }
+      } finally {
+        compilerGate.write("continue");
+        await waitForForeignProcessExit(compilerPid, signal);
+        await native?.joinAndRemove(signal);
+      }
     }, signal);
   }, 30_000);
 

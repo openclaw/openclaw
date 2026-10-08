@@ -246,6 +246,13 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     ]);
   });
 
+  it("keeps the source custody job alive beyond its four-cell lane budget", () => {
+    const [lane] = expandedPlan("source-update-custody", "", "").scheduledLanes;
+    const [group] = planTargetedDockerLaneGroups({ lanes: "source-update-custody" });
+    expect(lane?.timeoutMs).toBeGreaterThan(0);
+    expect(group?.timeout_minutes).toBeGreaterThan(lane!.timeoutMs! / 60_000);
+  });
+
   it("gives the restart-auth lane a job timeout above its lane budget", () => {
     expect(
       planTargetedDockerLaneGroups({

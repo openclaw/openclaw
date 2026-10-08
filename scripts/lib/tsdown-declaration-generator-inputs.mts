@@ -46,7 +46,17 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     "typescript/package.json",
   );
   const dynamicOwners = new Map<string, { expressions: string[]; targets: string[] }>([
-    ["scripts/lib/dist-artifact-lock.mts", { expressions: ["script"], targets: [generatorEntry] }],
+    [
+      "scripts/lib/dist-artifact-lock.mts",
+      {
+        // Only the source tsgo entry invokes nativeRuntimeHref. Declaration
+        // writers use the generic callback owner; its bootstrap is a byte input,
+        // not an executable declaration dependency. The native compiler profile
+        // separately captures and verifies that bootstrap's entire launch graph.
+        expressions: ["script", "nativeRuntimeHref"],
+        targets: [generatorEntry, "scripts/lib/dist-artifact-native.mts"],
+      },
+    ],
     [
       "scripts/lib/local-check-runtime.mts",
       {
@@ -138,7 +148,13 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     }
     if (owner) {
       observedDynamicOwners.add(id);
-      owner.targets.forEach((target) => visit(target));
+      owner.targets.forEach((target) =>
+        visit(
+          target,
+          id === "scripts/lib/dist-artifact-lock.mts" &&
+            target === "scripts/lib/dist-artifact-native.mts",
+        ),
+      );
     }
     for (const reference of collectModuleReferencesFromSource(sourceFile)) {
       if (reference.kind === "import-meta-url") {
@@ -152,11 +168,13 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
           // the declaration generator. Capture their bytes without interpreting
           // staged runtime paths as files in the source checkout.
           const targetIsCompilerSource =
-            id === "scripts/lib/managed-handoff-build-config.mts" &&
-            [
-              "../../src/shared/freebsd-process-identity.ts",
-              "../../src/infra/update-managed-service-handoff-native-loader.ts",
-            ].includes(reference.specifier);
+            (id === "scripts/lib/managed-handoff-build-config.mts" &&
+              [
+                "../../src/shared/freebsd-process-identity.ts",
+                "../../src/infra/update-managed-service-handoff-native-loader.ts",
+              ].includes(reference.specifier)) ||
+            (id === "scripts/lib/dist-artifact-lock.mts" &&
+              reference.specifier === "./dist-artifact-native.mts");
           visit(target, targetIsCompilerSource);
         }
         continue;
@@ -184,7 +202,20 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
         !path.isAbsolute(relative) &&
         !relative.split(path.sep).includes("node_modules")
       ) {
-        visit(canonical);
+        // The type-only native call contract does not execute its optional
+        // bootstrap. A value import must still walk its graph and fail closed.
+        const nativeTypeContract =
+          id === "scripts/lib/dist-artifact-lock.mts" &&
+          reference.specifier === "./dist-artifact-native.mts" &&
+          reference.kind === "import" &&
+          sourceFile.statements.every(
+            (statement) =>
+              !ts.isImportDeclaration(statement) ||
+              !ts.isStringLiteralLikeNode(statement.moduleSpecifier) ||
+              statement.moduleSpecifier.text !== reference.specifier ||
+              statement.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword,
+          );
+        visit(canonical, nativeTypeContract);
       }
       // The lockfile and installed topology own resolved package imports. Exact
       // computed package targets above remain byte inputs in this same closure.

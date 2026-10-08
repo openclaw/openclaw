@@ -144,7 +144,12 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
           expect(execution?.failure?.detail).toContain(`retained by PID ${pid}`);
           expect(execution?.failure?.detail).toContain("fixture-build-owner");
           expect(execution?.failure?.detail).toContain("2026-09-20T01:01:00.000Z");
-          expect(execution?.failure?.detail).toContain("to release and retry");
+          expect(execution?.failure?.detail).toContain("custody unresolved");
+          expect(execution?.failure?.detail).not.toContain("file_lock_stale");
+          expect(execution?.failure?.cause).toMatchObject({
+            reason: "source-artifact-ownership",
+            cause: { cause: { code: "file_lock_stale" } },
+          });
           expect(await fs.readFile(ownerFile, "utf8")).toBe(ownerRecord);
         } else {
           expect(execution?.result.status, execution?.failure?.detail).toBe("ok");
@@ -160,6 +165,24 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
         });
       }),
   );
+
+  it("preserves unexpected source-preparation cause details", async () =>
+    withTestDir({ prefix: "source-artifact-cause-" }, async (root) => {
+      await fs.mkdir(path.join(root, ".git"));
+      await fs.mkdir(path.join(root, "scripts"));
+      await fs.writeFile(
+        path.join(root, "scripts/stage-bundled-plugin-runtime.mts"),
+        'export function prepareBundledPluginRuntime() { throw new Error("outer fixture source failure", { cause: Object.assign(new Error("inner fixture source cause"), { code: "EACCES" }) }); }',
+      );
+      await expect(admitSourceUpdateArtifacts(root, undefined)).rejects.toMatchObject({
+        reason: "source-artifact-ownership",
+        message: expect.stringContaining("inner fixture source cause"),
+        cause: { cause: { code: "EACCES" } },
+      });
+      await expect(
+        fs.stat(path.join(root, ".artifacts/dist-artifacts.lock/owner.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    }));
 
   it.each([
     { kind: "package", timeoutMs: undefined },

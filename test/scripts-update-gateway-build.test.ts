@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveDistArtifactLockPath } from "../scripts/lib/dist-artifact-ownership.mts";
+import {
+  acquireDistArtifactOwnership,
+  resolveDistArtifactLockPath,
+} from "../scripts/lib/dist-artifact-lock.mts";
 import { listTsdownOutputRoots } from "../scripts/tsdown-build.mts";
 import { runUpdateGatewayBuild } from "../scripts/update-gateway-build.mts";
 import * as gatewayBindings from "../src/daemon/managed-gateway-bindings.js";
@@ -63,7 +66,12 @@ describe("source update build output transaction", () => {
     fs.readFileSync(path.join(workdir, output, "marker"), "utf8");
   const backups = () =>
     fs.readdirSync(workdir).filter((name) => name.startsWith(".update-build-backup."));
-  beforeEach(() => fs.mkdirSync(workdir));
+  beforeEach(() => {
+    fs.mkdirSync(workdir);
+    // Keep artifact ownership inside this checkout even under a repository-backed temp root.
+    fs.writeFileSync(path.join(workdir, "package.json"), '{"name":"openclaw"}\n');
+    fs.writeFileSync(path.join(workdir, "pnpm-workspace.yaml"), "packages: []\n");
+  });
 
   it("refuses publication when a shared consumer starts during candidate import", async () => {
     const command = nativeExec.runCommandWithTimeout;
@@ -246,7 +254,17 @@ describe("source update build output transaction", () => {
         ).rejects.toThrow();
         const owner = resolveDistArtifactLockPath(workdir);
         expect(fs.existsSync(path.join(owner, "owner.json"))).toBe(uncertain);
-        expect(fs.existsSync(path.join(owner, "unjoined"))).toBe(uncertain);
+        if (uncertain) {
+          const raw = fs.readFileSync(path.join(owner, "owner.json"), "utf8");
+          const payload = JSON.parse(raw) as { custodyId: string };
+          expect(fs.readFileSync(path.join(owner, payload.custodyId, "unjoined"), "utf8")).toBe(
+            "Child cleanup was not verified.\n",
+          );
+          await expect(acquireDistArtifactOwnership(workdir)).rejects.toThrow("custody unresolved");
+          expect(fs.readFileSync(path.join(owner, "owner.json"), "utf8")).toBe(raw);
+        } else {
+          expect(fs.readdirSync(owner)).toEqual([]);
+        }
         expect(command).toHaveBeenCalledTimes(1);
         expect(lifecycleMock).not.toHaveBeenCalled();
       } finally {

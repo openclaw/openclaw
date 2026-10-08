@@ -393,6 +393,12 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
   });
 
   function writeFakeTsgo(cwd: string, body: string) {
+    // The production resolver intentionally selects the containing checkout.
+    // Give this synthetic install its own boundary instead of the harness ancestor.
+    if (!fs.existsSync(path.join(cwd, "package.json"))) {
+      fs.writeFileSync(path.join(cwd, "package.json"), '{"private":true}\n');
+    }
+    fs.writeFileSync(path.join(cwd, "pnpm-workspace.yaml"), "packages: []\n");
     const binDir = path.join(cwd, "node_modules", ".bin");
     fs.mkdirSync(binDir, { recursive: true });
     const fakeTsgo = path.join(binDir, "tsgo");

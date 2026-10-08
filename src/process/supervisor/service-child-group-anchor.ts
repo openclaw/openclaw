@@ -6,6 +6,7 @@ import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
@@ -62,6 +63,7 @@ export function runServiceChildGroupAnchor(): void {
   let sequence = 0;
   let lastHostSequence = 0;
   let command: ChildProcess | undefined;
+  let commandStartIdentity: number | null = null;
   let lineageCompletion:
     | typeof import("../../node-host/node-worker-lineage-completion.js")
     | undefined;
@@ -521,6 +523,11 @@ export function runServiceChildGroupAnchor(): void {
       });
       if (command.pid) {
         subreaper?.retainLibuvChild(command.pid, command);
+        // Capture birth before yielding to libuv: this exact root cannot be
+        // reaped/reused between the retained spawn and the native identity read.
+        if (subreaper) {
+          commandStartIdentity = getProcessInstanceStartTime(command.pid);
+        }
       }
       // Failed Bun spawns have no stdio. Preserve the spawn error before checking lineage.
       await once(command, "spawn");
@@ -646,6 +653,7 @@ export function runServiceChildGroupAnchor(): void {
       void send({
         type: "ready",
         commandPid: command.pid,
+        ...(commandStartIdentity === null ? {} : { commandStartIdentity }),
         anchorPid: process.pid,
         ...(subreaper ? { treeOwnership: "linux-subreaper" as const } : {}),
       });

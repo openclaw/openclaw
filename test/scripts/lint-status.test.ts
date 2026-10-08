@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toErrorObject } from "../../scripts/lib/error-format.mts";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
@@ -12,6 +13,9 @@ import { runNodeScript } from "../helpers/run-node-script.js";
 import * as nodeScript from "../helpers/run-node-script.js";
 import { formatShimResult } from "./direct-run-entrypoints.test-support.js";
 
+const artifactPolicySources = collectRuntimeImportClosure(process.cwd(), [
+  "scripts/lib/vitest-worker-cache-policy.mts",
+]);
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 const entries = ["run-oxlint.mjs", "run-oxlint-shards.mts", "run-lint.mts"] as const;
@@ -60,6 +64,7 @@ export function waitForFile(file) {
     "lib/direct-run.mjs",
     "lib/dist-artifact-ownership.mts",
     "lib/dist-artifact-lock.mts",
+    "lib/dist-artifact-identity.mts",
     "lib/record-shared.mjs",
     "lib/failed-trailer.mts",
     "lib/managed-child-process.mts",
@@ -74,6 +79,7 @@ export function waitForFile(file) {
   for (const file of [
     "scripts/lib/process-memory.mts",
     "packages/normalization-core/src/mountinfo-path.ts",
+    ...artifactPolicySources,
   ]) {
     write(file, fs.readFileSync(path.resolve(file), "utf8"));
   }
@@ -115,7 +121,14 @@ export function waitForFile(file) {
           (id === "./managed-windows-job.mts" &&
             importer === path.join(root, "scripts/lib/managed-child-process.mts")) ||
           (id === "./tsdown-declaration-boundary.mts" &&
-            importer === path.join(root, "scripts/lib/local-check-runtime.mts")),
+            importer === path.join(root, "scripts/lib/local-check-runtime.mts")) ||
+          // This scripts-only fixture deliberately has no optional source identity
+          // runtime. Preserve the production adapter's missing-module fallback.
+          (importer === path.join(root, "scripts/lib/dist-artifact-identity.mts") &&
+            [
+              "../../src/shared/pid-alive.ts",
+              "../../src/infra/update-managed-service-handoff-boot.ts",
+            ].includes(id)),
       },
       outExtensions: () => ({ js: ".js" }),
       outputOptions: { entryFileNames: "[name].js", chunkFileNames: "[name].js" },
@@ -150,7 +163,7 @@ const mode = ${JSON.stringify(step === phase ? mode : "success")};
 const shard = process.argv.includes("scripts") ? "scripts" : process.argv.includes("src") ? "core" : "extensions";
 const name = step === "oxlint" ? shard : step;
 const lock = ".artifacts/dist-artifacts.lock";
-fs.appendFileSync("steps.jsonl", JSON.stringify({ step, shard, args: process.argv.slice(2), pid: process.pid, owned: fs.existsSync(lock + "/owner.json"), claims: fs.existsSync(lock) ? fs.readdirSync(lock).filter(name => name.startsWith("child-")) : [] }) + "\\n");
+fs.appendFileSync("steps.jsonl", JSON.stringify({ step, shard, args: process.argv.slice(2), pid: process.pid, owned: fs.existsSync(lock + "/owner.json"), claims: fs.existsSync(lock) ? fs.readdirSync(lock, { recursive: true }).filter(name => name.includes("child-")) : [] }) + "\\n");
 if (mode !== "wait") process.stdout.write(JSON.stringify({ step, shard }) + "\\n");
 process.stderr.write("diagnostic:" + name + "\\n");
 if (mode === "throw") throw new Error("fixture preparation failure");
@@ -202,7 +215,7 @@ process.stderr.write = (chunk, ...args) => {
   if (String(chunk).includes("FAILED (exit")) fs.appendFileSync("trailers.jsonl", JSON.stringify({
     text: String(chunk).trim(),
     owned: fs.existsSync(".artifacts/dist-artifacts.lock/owner.json"),
-    claims: fs.existsSync(".artifacts/dist-artifacts.lock") ? fs.readdirSync(".artifacts/dist-artifacts.lock").filter(name => name.startsWith("child-")) : [],
+    claims: fs.existsSync(".artifacts/dist-artifacts.lock") ? fs.readdirSync(".artifacts/dist-artifacts.lock", { recursive: true }).filter(name => name.includes("child-")) : [],
     live: fs.existsSync("steps.jsonl") ? fs.readFileSync("steps.jsonl", "utf8").trim().split("\\n").map(line => JSON.parse(line).pid).filter(pid => {
       try { process.kill(pid, 0); return true; } catch { return false; }
     }) : [],

@@ -17,40 +17,66 @@ import {
   verifyVitestWorkerArtifacts,
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
-import {
-  preservedModuleBuildAssets,
-  preservedModuleBuildSources,
-  vitestWorkerBuildEntries,
-} from "./vitest-worker-build-entries.mts";
 import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
-import {
-  vitestWorkerDeclarationEntries,
-  vitestWorkerRuntimeAssets,
-} from "./vitest-worker-declarations.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const require = createRequire(import.meta.url);
 
-async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
+async function compileVitestWorkerArtifacts(
+  directory: string,
+  profile: "tests" | "artifact-custody",
+): Promise<void> {
+  const artifactCustody = profile === "artifact-custody";
+  // A production tooling bootstrap must not load unrelated test/plugin sources.
+  // The normal test profile still owns and captures its complete registry.
+  const { preservedModuleBuildAssets, preservedModuleBuildSources, vitestWorkerBuildEntries } =
+    artifactCustody
+      ? {
+          preservedModuleBuildAssets: [],
+          preservedModuleBuildSources: [],
+          vitestWorkerBuildEntries: {},
+        }
+      : await import("./vitest-worker-build-entries.mts");
+  const { vitestWorkerDeclarationEntries, vitestWorkerRuntimeAssets } = artifactCustody
+    ? { vitestWorkerDeclarationEntries: {}, vitestWorkerRuntimeAssets: [] }
+    : await import("./vitest-worker-declarations.mts");
+  const preservedSources = preservedModuleBuildSources;
   const started = performance.now();
   const reportPhase = (phase: string) => {
     if (process.env.OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN === "1") {
       console.error(`[vitest-workers] ${phase} after ${Math.round(performance.now() - started)}ms`);
     }
   };
-  const compilerInputs = collectRuntimeImportClosure(
-    root,
-    [
-      "scripts/lib/vitest-worker-compiler.mts",
-      "scripts/lib/vitest-worker-run.mts",
-      "scripts/lib/vitest-cli-mode.mts",
-    ],
-    { includeDynamicImports: true },
-  );
+  const compilerInputs = artifactCustody
+    ? [
+        ...new Set([
+          ...collectRuntimeImportClosure(root, ["scripts/lib/vitest-worker-compiler.mts"]),
+          ...collectRuntimeImportClosure(
+            root,
+            [
+              "scripts/lib/vitest-worker-run.mts",
+              "scripts/lib/vitest-worker-cache.mts",
+              "scripts/run-tsgo.mts",
+              "scripts/lib/dist-artifact-ownership.mts",
+              "scripts/lib/dist-artifact-native.mts",
+            ],
+            { includeDynamicImports: true },
+          ),
+        ]),
+      ]
+    : collectRuntimeImportClosure(
+        root,
+        [
+          "scripts/lib/vitest-worker-compiler.mts",
+          "scripts/lib/vitest-worker-run.mts",
+          "scripts/lib/vitest-cli-mode.mts",
+        ],
+        { includeDynamicImports: true },
+      );
   const cache = useVitestWorkerCache(process.env, process.execArgv)
     ? await (
         await import("./vitest-worker-cache.mts")
-      ).createVitestWorkerCache(root, directory, compilerInputs)
+      ).createVitestWorkerCache(root, directory, compilerInputs, profile)
     : undefined;
   const restored = await cache?.restore();
   if (cache) {
@@ -101,10 +127,13 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   ]) {
     recordInput(path.join(root, name));
   }
-  const entry = {
-    ...vitestWorkerBuildEntries,
-    ...vitestWorkerDeclarationEntries,
-  };
+  const entry: Record<string, string> = artifactCustody
+    ? {
+        "tooling/dist-artifact-command": path.join(root, "scripts/lib/dist-artifact-command.mts"),
+        "process/supervisor/service-child-group-anchor":
+          standaloneRuntimeProcessBuildEntries["process/supervisor/service-child-group-anchor"]!,
+      }
+    : { ...vitestWorkerBuildEntries, ...vitestWorkerDeclarationEntries };
   const outDir = path.join(directory, "dist");
   const shouldBundleWorkspaceDependency = (id: string) =>
     (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
@@ -310,7 +339,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       });
     }
     reportPhase("standalone workers compiled");
-    for (const sealedConfig of createManagedHandoffBuildConfigs()) {
+    for (const sealedConfig of artifactCustody ? [] : createManagedHandoffBuildConfigs()) {
       await build({
         ...sealedConfig,
         config: false,
@@ -324,13 +353,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     reportPhase("managed handoff compiled");
   };
   const compilePreservedModules = async () => {
-    const fixtureBoundaries = new Set(
-      preservedModuleBuildSources.map((source) => path.join(root, source)),
-    );
+    const fixtureBoundaries = new Set(preservedSources.map((source) => path.join(root, source)));
     await build({
       ...config,
       // Array entries honor root; object entries infer src/ and break import.meta paths.
-      entry: preservedModuleBuildSources,
+      entry: preservedSources,
       outDir: path.join(outDir, "legacy-finalizer"),
       root,
       // Load hooks forward the complete original namespaces through query imports.
@@ -371,7 +398,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     reportPhase("preserved fixture modules compiled");
   };
   // Serial preparation measured about 3 GiB RSS; leave headroom for both graphs.
-  if (cache && process.availableMemory() >= 8 * 1024 ** 3) {
+  if (artifactCustody) {
+    // Bootstrap writes only this invocation-owned generation, never checkout dist
+    // or another protected output, and does not acquire dist artifact ownership.
+    await compileShared();
+  } else if (cache && process.availableMemory() >= 8 * 1024 ** 3) {
     // These outputs occupy separate subtrees. Join both writers even if one fails.
     const completed = await Promise.allSettled([compileShared(), compilePreservedModules()]);
     const failed = completed.find((result) => result.status === "rejected");
@@ -382,15 +413,17 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     await compileShared();
     await compilePreservedModules();
   }
-  for (const source of preservedModuleBuildSources) {
+  for (const source of preservedSources) {
     fs.accessSync(path.join(outDir, legacyOutputPrefix, source.replace(/\.[cm]?ts$/u, ".js")));
   }
   for (const name of Object.keys(entry)) {
     fs.accessSync(path.join(directory, "dist", `${name}.js`));
   }
   for (const [asset, relativeDestination] of [
-    ...vitestWorkerRuntimeAssets.map((sourceAsset) => [sourceAsset, sourceAsset] as const),
-    ...preservedModuleBuildAssets.map(
+    ...(artifactCustody ? [] : vitestWorkerRuntimeAssets).map(
+      (sourceAsset) => [sourceAsset, sourceAsset] as const,
+    ),
+    ...(artifactCustody ? [] : preservedModuleBuildAssets).map(
       (sourceAsset) => [sourceAsset, path.join("dist", legacyOutputPrefix, sourceAsset)] as const,
     ),
   ]) {
@@ -465,14 +498,18 @@ if (import.meta.main) {
     const directory = fs.realpathSync(process.argv[2]!);
     const parent = fs.realpathSync(path.join(root, ".artifacts/vitest-workers"));
     if (
-      process.argv.length !== 3 ||
+      (process.argv.length !== 3 &&
+        !(process.argv.length === 4 && process.argv[3] === "artifact-custody")) ||
       path.dirname(directory) !== parent ||
       !path.basename(directory).startsWith("run-") ||
       fs.readdirSync(directory).some((name) => name !== "package.json")
     ) {
       throw new Error("Compiled subprocess compiler requires a fresh invocation directory");
     }
-    await compileVitestWorkerArtifacts(directory);
+    await compileVitestWorkerArtifacts(
+      directory,
+      process.argv[3] === "artifact-custody" ? "artifact-custody" : "tests",
+    );
   } catch (error) {
     console.error(error);
     process.exitCode = 1;

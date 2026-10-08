@@ -3,6 +3,45 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
+import { waitForDead } from "../helpers/process-wait.js";
+
+/** Observe a gated, known fixture tree before deliberately losing its controller. */
+export function captureNativeFixtureGeneration(rootPid: number, descendants: number[]) {
+  const stat = fs.readFileSync(`/proc/${rootPid}/stat`, "utf8");
+  const guardianPid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+  const entry = fs
+    .readFileSync(`/proc/${guardianPid}/cmdline`, "utf8")
+    .split("\0")
+    .find((arg) => arg.endsWith("/dist/process/supervisor/service-child-group-anchor.js"));
+  if (!entry || !Number.isSafeInteger(guardianPid) || guardianPid <= 1) {
+    throw new Error("Fixture did not observe its actual native guardian");
+  }
+  const directory = path.resolve(path.dirname(entry), "../../..");
+  if (
+    path.dirname(directory) !== path.resolve(".artifacts/vitest-workers") ||
+    fs.realpathSync(directory) !== directory
+  ) {
+    throw new Error("Native fixture generation is outside its task runtime owner");
+  }
+  const identityPath = path.join(directory, ".vitest-resource-owner/owner");
+  const identity = fs.readFileSync(identityPath, "utf8");
+  return {
+    directory,
+    identity,
+    guardianPid,
+    async joinAndRemove(signal: AbortSignal) {
+      // This fixture launches only the enumerated compiler/root and retained
+      // native guardian. PID absence alone is never product recovery authority.
+      await Promise.all(
+        [rootPid, guardianPid, ...descendants].map((pid) => waitForDead(pid, signal)),
+      );
+      if (fs.readFileSync(identityPath, "utf8") !== identity) {
+        throw new Error("Native fixture generation changed before cleanup");
+      }
+      await fs.promises.rm(directory, { recursive: true });
+    },
+  };
+}
 
 const require = createRequire(import.meta.url);
 const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}`;
@@ -20,7 +59,7 @@ export function resolveInstalledNativeCompiler() {
 }
 
 /** Availability only; integration assertions still verify the actual kernel scope. */
-export function hasSemanticTestBackend(): boolean {
+export function hasSemanticTestBackend(env: NodeJS.ProcessEnv = process.env): boolean {
   if (process.platform !== "linux") {
     return false;
   }
@@ -30,7 +69,7 @@ export function hasSemanticTestBackend(): boolean {
         .readFileSync("/sys/fs/cgroup/cgroup.controllers", "utf8")
         .split(/\s+/u)
         .includes("memory") &&
-      spawnSync("systemctl", ["--user", "show", "--property=Version"], { timeout: 5_000 })
+      spawnSync("systemctl", ["--user", "show", "--property=Version"], { env, timeout: 5_000 })
         .status === 0
     );
   } catch {

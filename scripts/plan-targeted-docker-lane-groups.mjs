@@ -12,8 +12,11 @@ import {
 } from "./lib/upgrade-survivor-policy.mjs";
 
 const BASELINE_SHARDED_LANES = new Set(["published-upgrade-survivor", "update-migration"]);
-// The 62-minute update-restart-auth lane needs room for runner setup and artifact upload.
-const LONG_LANE_JOB_TIMEOUT_MINUTES = new Map([["update-restart-auth", 75]]);
+// Long lanes retain runner setup and artifact-upload time beyond their work budgets.
+const LONG_LANE_JOB_TIMEOUT_MINUTES = new Map([
+  ["update-restart-auth", 75],
+  ["source-update-custody", 285],
+]);
 
 function splitTokens(raw) {
   return [

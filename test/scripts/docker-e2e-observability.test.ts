@@ -93,7 +93,7 @@ docker_e2e_docker_cmd() {
 docker_e2e_docker_run_cmd() {
   while [ "$#" -gt 0 ]; do
     if [ "$1" = --cidfile ]; then
-      printf 'proof-container\\n' >"$2"
+      printf 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\n' >"$2"
       break
     fi
     shift
@@ -137,8 +137,10 @@ fi
         "container stdin proof\n",
       );
       const dockerCommands = readFileSync(path.join(tempDir, "docker-cleanup"), "utf8");
-      expect(dockerCommands.trimEnd().split("\n").at(-1)).toBe("rm -f proof-container");
-      expect(readdirSync(tempDir).sort()).toEqual(["container-stdin", "docker-cleanup"]);
+      expect(dockerCommands.trimEnd().split("\n").at(-1)).toBe(
+        "rm -f dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      );
+      expect(readdirSync(tempDir).toSorted()).toEqual(["container-stdin", "docker-cleanup"]);
       expect(result.stdout).not.toContain("old log head");
       if (status === 0) {
         expect(result.stdout).toBe("");

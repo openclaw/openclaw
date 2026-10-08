@@ -2043,6 +2043,7 @@
     "test:docker:live:all": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LIVE_MODE=only -- node scripts/test-docker-all.mjs",
     "test:docker:local:all": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LIVE_MODE=skip -- node scripts/test-docker-all.mjs",
     "test:docker:cli-installer-distribution": "bash scripts/e2e/cli-installer-distribution-docker.sh",
+    "test:docker:source-update-custody": "bash scripts/e2e/source-update-custody-docker.sh",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",
     "test:docker:mcp-code-mode-gateway": "bash scripts/e2e/mcp-code-mode-gateway-docker.sh",
     "test:docker:multi-node-update": "bash scripts/e2e/multi-node-update-docker.sh",

@@ -117,17 +117,25 @@ SCENARIO
 # over stdin: no host paths, private data, or Docker socket enter this container.
 # Docker tmpfs defaults to noexec; only the fixture's shim directory needs execution.
 file_mount_cid_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-file-mount-cid.XXXXXX")"
-trap 'docker_e2e_cleanup_container_cidfile "$file_mount_cid_dir/container.cid"; rm -rf "$file_mount_cid_dir"' EXIT
-docker_e2e_docker_run_cmd run --rm -i --cidfile "$file_mount_cid_dir/container.cid" \
+cleanup_file_mount() {
+  local status=$?
+  trap - EXIT
+  if docker_e2e_cleanup_container_cidfile "$file_mount_cid_dir/container.cid"; then
+    rmdir "$file_mount_cid_dir" || { [ "$status" -ne 0 ] || status=1; }
+  else
+    [ "$status" -ne 0 ] || status=1
+  fi
+  return "$status"
+}
+trap cleanup_file_mount EXIT
+docker_e2e_docker_run_cmd run -i --cidfile "$file_mount_cid_dir/container.cid" \
   --network none --read-only --tmpfs /tmp:rw,mode=1777 --tmpfs /home/appuser:rw \
   --tmpfs /tmp/openclaw-file-mount/bin:rw,exec,mode=0755 \
   --cap-drop ALL --cap-add SYS_ADMIN --cap-add CHOWN --cap-add DAC_OVERRIDE \
   --cap-add SETUID --cap-add SETGID --security-opt seccomp=unconfined \
   --security-opt no-new-privileges --user 0 --entrypoint node "$IMAGE_NAME" --input-type=module \
   <"$ROOT_DIR/scripts/e2e/lib/systemd-sealed-service-definition/file-mount.mjs"
-docker_e2e_cleanup_container_cidfile "$file_mount_cid_dir/container.cid"
-rmdir "$file_mount_cid_dir"
-trap - EXIT
+cleanup_file_mount
 
 mount_fixture="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-systemd-mounts.XXXXXX")"
 trap 'rm -rf "$mount_fixture"' EXIT

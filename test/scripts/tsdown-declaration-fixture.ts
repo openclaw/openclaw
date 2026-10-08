@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -16,6 +17,11 @@ import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { materializeDeclarationPackages } from "./declaration-fixture-packages.js";
 
 const sourceRoot = process.cwd();
+const artifactSupportSources = collectRuntimeImportClosure(
+  sourceRoot,
+  ["scripts/lib/dist-artifact-identity.mts", "scripts/lib/vitest-worker-cache-policy.mts"],
+  { includeDynamicImports: true },
+);
 export const loader = pathToFileURL(path.resolve("scripts/tsx.mjs")).href;
 export const declarationInputs = [
   { file: "src/contract.d.ts", name: "SourceOnly" },
@@ -142,6 +148,7 @@ export function createFixture(groups: readonly string[], root: string) {
   for (const name of [
     ".bin",
     "@openclaw/fs-safe",
+    "zod",
     "@silvia-odwyer/photon-node",
     "koffi",
     "playwright-core",
@@ -203,6 +210,7 @@ export function createFixture(groups: readonly string[], root: string) {
   // Plain paths are deliberate: owner edits do not select these suites in product PRs
   // (see "Declaration-fixture owner selection" in .agents/skills/openclaw-ci-limits).
   const runtimeEntryOwners = new Set([
+    ...artifactSupportSources,
     ...Object.values(runtimeProcessDeclarationEntries),
     "scripts/lib/managed-windows-job-launcher.mts",
     "src/process/supervisor/service-child-windows-job-native.ts",

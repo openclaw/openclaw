@@ -245,7 +245,7 @@ function readProjectNames(args: readonly string[]) {
   ];
 }
 
-function isMetadataOnlyCommand(args: readonly string[]) {
+export function isMetadataOnlyCommand(args: readonly string[]) {
   return args.some((arg) =>
     ["--help", "-h", "--version", "-v", "--init", "--showConfig"].includes(arg),
   );

@@ -81,6 +81,25 @@ function planFor(
   }).plan;
 }
 
+it("runs released-source custody proof only when explicitly selected", () => {
+  expect(planFor().lanes.map((lane) => lane.name)).not.toContain("source-update-custody");
+  expect(
+    planFor({
+      profile: RELEASE_PATH_PROFILE,
+      planReleaseAll: true,
+      releaseProfile: "full",
+    }).lanes.map((lane) => lane.name),
+  ).not.toContain("source-update-custody");
+  const selected = planFor({ selectedLaneNames: ["source-update-custody"] });
+  expect(selected.lanes.map((lane) => lane.name)).toEqual(["source-update-custody"]);
+  expect(selected.lanes[0]).toMatchObject({
+    live: false,
+    imageKind: "bare",
+    timeoutMs: 270 * 60 * 1000,
+  });
+  expect(selected.lanes[0]!.command).toContain("OPENCLAW_QA_ALLOW_SOURCE_CUSTODY_PROOF=1");
+});
+
 function requireFirstLane(plan: ReturnType<typeof planFor>) {
   const [lane] = plan.lanes;
   if (!lane) {

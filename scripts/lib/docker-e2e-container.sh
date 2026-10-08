@@ -25,6 +25,26 @@ docker_e2e_timeout_bin() {
 docker_e2e_timeout_cmd() {
   local timeout_value="$1"
   shift
+  # An opted-in lane owns one absolute phase deadline, including the watchdog's
+  # 30s kill grace. Every auxiliary command/retry consumes the same remaining time.
+  if [ -n "${DOCKER_E2E_PHASE_DEADLINE:-}" ]; then
+    local OPENCLAW_DOCKER_TIMEOUT_KILL_GRACE_MS=30000
+    export OPENCLAW_DOCKER_TIMEOUT_KILL_GRACE_MS
+    if ! [[ "$DOCKER_E2E_PHASE_DEADLINE" =~ ^[0-9]{1,10}$ ]] ||
+      ! [[ "$timeout_value" =~ ^[0-9]{1,8}s?$ ]]; then
+      echo "Deadline-bound Docker commands require epoch seconds and integer-second timeouts" >&2
+      return 2
+    fi
+    local remaining=$((10#$DOCKER_E2E_PHASE_DEADLINE - $(date +%s) - 30))
+    if [ "$remaining" -le 0 ]; then
+      echo "Docker phase deadline exhausted; command not started" >&2
+      return 124
+    fi
+    local requested="${timeout_value%s}"
+    if [ "$((10#$requested))" -eq 0 ] || [ "$((10#$requested))" -gt "$remaining" ]; then
+      timeout_value="${remaining}s"
+    fi
+  fi
   local timeout_bin
   if ! timeout_bin="$(docker_e2e_timeout_bin)"; then
     if command -v node >/dev/null 2>&1; then

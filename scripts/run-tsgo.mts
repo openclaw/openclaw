@@ -20,6 +20,7 @@ import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { findRepoRoot } from "./lib/repo-root.mjs";
 import {
   getSparseTsgoGuardError,
+  isMetadataOnlyCommand,
   shouldSkipSparseTsgoGuardError,
 } from "./lib/tsgo-sparse-guard.mts";
 
@@ -195,7 +196,15 @@ async function main(): Promise<void> {
     return;
   }
   // Preflight must refuse or skip before installed bootstrap dependencies load.
-  const { withDistArtifactOwnership } = await import("./lib/dist-artifact-ownership.mts");
+  const { withDistArtifactOwnership, runNativeTsgoArtifactEntry } =
+    await import("./lib/dist-artifact-ownership.mts");
+  const nativeCode = isMetadataOnlyCommand(command.args)
+    ? undefined
+    : await runNativeTsgoArtifactEntry(command.cwd, process.argv.slice(2), command.bin);
+  if (nativeCode !== undefined) {
+    process.exitCode = nativeCode;
+    return;
+  }
   const id = randomUUID();
   const evidenceId = `${id}:0`;
   let verified = false;

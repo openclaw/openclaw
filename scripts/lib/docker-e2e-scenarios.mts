@@ -636,9 +636,21 @@ const releasePathPluginRuntimeLanes = [
 
 const releasePathBundledChannelLanes = scheduledLaneList("plugin-update");
 
-// Public installer smoke needs a published, immutable package version. Keep it
-// selectable for post-publish verification, but out of frozen-candidate CI.
+// Published installer checks need an immutable release baseline. Keep them
+// explicitly selectable, but out of default and frozen-candidate CI matrices.
 export const publicInstallerLanes: DockerE2eLane[] = [
+  // Opt-in only: one 2400s released-source preparation plus four 3200s cells,
+  // with container cleanup/host margins. No live credentials or inference.
+  npmLane("source-update-custody", {
+    command: liveDockerScriptCommand(
+      "e2e/source-update-custody-docker.sh",
+      "OPENCLAW_QA_ALLOW_SOURCE_CUSTODY_PROOF=1",
+    ),
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 270 * 60 * 1000,
+    weight: 3,
+  }),
   liveLane("install-e2e-openai", {
     command: liveDockerScriptCommand(
       "test-install-sh-e2e-docker.sh",

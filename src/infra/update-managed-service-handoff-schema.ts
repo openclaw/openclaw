@@ -1,6 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
-import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.ts";
 
 const text = z.string().min(1).max(4096);
 const nativeProcessIdentityShape = {

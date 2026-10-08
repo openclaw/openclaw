@@ -127,7 +127,7 @@ docker_build_run_command() {
   local timeout_value="$1"
   shift
 
-  if docker_e2e_timeout_bin >/dev/null 2>&1 || docker_build_timeout_required; then
+  if [ -n "${DOCKER_E2E_PHASE_DEADLINE:-}" ] || docker_e2e_timeout_bin >/dev/null 2>&1 || docker_build_timeout_required; then
     docker_e2e_timeout_cmd "$timeout_value" "$@"
     return
   fi
@@ -260,7 +260,8 @@ docker_build_with_retries() {
     fi
     docker_build_relay_limit_warnings "$log_file"
 
-    if docker_build_signal_exit_status "$build_status"; then
+    if docker_build_signal_exit_status "$build_status" ||
+      { [ -n "${DOCKER_E2E_PHASE_DEADLINE:-}" ] && [ "$build_status" -eq 124 ]; }; then
       rm -f "$log_file"
       return "$build_status"
     fi

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect } from "vitest";
+import { acquireDistArtifactOwnership } from "../../scripts/lib/dist-artifact-lock.mts";
 import {
   pluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
@@ -54,7 +55,15 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
           .readdirSync(path.join(root, ".artifacts"))
           .filter((name) => name.startsWith("plugin-sdk-staging-")),
       ).toHaveLength(2);
-      expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/unjoined"))).toBe(true);
+      const directory = path.join(root, ".artifacts/dist-artifacts.lock");
+      const raw = fs.readFileSync(path.join(directory, "owner.json"), "utf8");
+      const owner = JSON.parse(raw) as { custodyId: string };
+      expect(fs.readFileSync(path.join(directory, owner.custodyId, "unjoined"), "utf8")).toBe(
+        "Child cleanup was not verified.\n",
+      );
+      await expect(acquireDistArtifactOwnership(root)).rejects.toThrow("custody unresolved");
+      expect(fs.readFileSync(path.join(directory, "owner.json"), "utf8")).toBe(raw);
+      expect(treeHashes(path.join(root, "dist"))).toEqual(before);
     }));
 
   it.concurrent("preserves repository input metadata during direct declaration builds", ({

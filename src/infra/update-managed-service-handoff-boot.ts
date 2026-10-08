@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.ts";
 
 /** Bind the lease environment without caching boot identity or selecting an OS early. */
 export function createManagedHandoffBootIdentityReader(serviceManagerEnv: NodeJS.ProcessEnv) {

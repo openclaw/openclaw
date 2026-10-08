@@ -17,7 +17,8 @@ import {
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
 
-const isCacheSlot = (directory: string) => /^run-cache-\d+$/u.test(path.basename(directory));
+const isCacheSlot = (directory: string) =>
+  /^run-(?:artifact-)?cache-\d+$/u.test(path.basename(directory));
 
 function cacheLocation(root: string, directory: string) {
   const cacheRoot = path.join(root, ".artifacts/vitest-worker-cache");
@@ -185,6 +186,7 @@ export async function createVitestWorkerCache(
   root: string,
   directory: string,
   compilerInputs: string[],
+  profile = "tests",
 ) {
   if (!isCacheSlot(directory)) {
     return undefined;
@@ -198,6 +200,7 @@ export async function createVitestWorkerCache(
     });
   // These absolute external URLs must return to the same exclusively reserved slot.
   const args = [
+    `profile=${profile}`,
     `output=${fs.realpathSync(directory)}`,
     `schtasks=${process.env.CI_WINDOWS_SCHTASKS_INTEGRATION ?? ""}`,
     `node-options=${process.env.NODE_OPTIONS ?? ""}`,

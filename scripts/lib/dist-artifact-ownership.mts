@@ -2,7 +2,11 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDirectRunUrl } from "./direct-run.mjs";
 import { runOwnedDistArtifactEntry } from "./dist-artifact-lock.mts";
-export { withDistArtifactOwnership, resolveDistArtifactLockPath } from "./dist-artifact-lock.mts";
+export {
+  withDistArtifactOwnership,
+  resolveDistArtifactLockPath,
+  runNativeTsgoArtifactEntry,
+} from "./dist-artifact-lock.mts";
 
 /** Source launcher for a joined, separately sized Node child that reuses the lock owner. */
 export function distArtifactEntryArgs(
@@ -19,9 +23,11 @@ export function distArtifactEntryArgs(
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  const [script, ...args] = process.argv.slice(2);
+  const native = process.argv[2] === "--native-custody";
+  const custodyId = native ? process.argv[3] : undefined;
+  const [script, ...args] = process.argv.slice(native ? 4 : 2);
   // Complete this module's evaluation before importing commands that import it back.
-  void runOwnedDistArtifactEntry(script!, args).catch((error: unknown) => {
+  void runOwnedDistArtifactEntry(script!, args, custodyId).catch((error: unknown) => {
     console.error(error);
     process.exitCode = 1;
   });
