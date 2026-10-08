@@ -155,14 +155,10 @@ export const identity = (row: RowTarget) =>
 export const physical = (storePath: string, key: string) => `physical:${storePath}\0${key}`;
 const logical = (agentId: string, key: string) => `logical:${agentId}\0${key}`;
 export function dependents(row: Row, byParent: ReadonlyMap<string, Set<string>>) {
-  const children = new Set(byParent.get(logical(row.agentId, row.key)));
-  const physicalChildren = byParent.get(physical(row.storeTarget.storePath, row.key));
-  if (physicalChildren) {
-    for (const id of physicalChildren) {
-      children.add(id);
-    }
-  }
-  return children;
+  return new Set([
+    ...(byParent.get(logical(row.agentId, row.key)) ?? []),
+    ...(byParent.get(physical(row.storeTarget.storePath, row.key)) ?? []),
+  ]);
 }
 export function markRelated(
   row: Row,
@@ -252,12 +248,7 @@ export function createIncognitoSessionRow(params: {
   entry: NonNullable<Row["storedEntry"]>;
   membership?: ReadonlySet<string>;
   source: NonNullable<Row["privateSource"]>;
-  prepared?: {
-    relatedRows: NonNullable<Row["preparedPrivate"]>["relatedRows"];
-    databaseFacts: PreparedSessionRowDatabaseFacts;
-    titleFields?: SessionTitleFields;
-    terminalModel?: { modelProvider: string; model: string };
-  };
+  prepared?: Omit<NonNullable<Row["preparedPrivate"]>, "entries">;
 }): Row {
   const { cfg, key, agentId, storePath, source, entry: storedEntry } = params;
   source.assertCurrent();
@@ -413,10 +404,9 @@ export function first(candidates: Row[], storePaths: Iterable<string>) {
     return candidates[0];
   }
   for (const sourcePath of storePaths) {
-    for (const row of candidates) {
-      if (row.storeTarget.storePath === sourcePath) {
-        return row;
-      }
+    const row = candidates.find((candidate) => candidate.storeTarget.storePath === sourcePath);
+    if (row) {
+      return row;
     }
   }
   return undefined;
@@ -600,11 +590,8 @@ export function readSessionRowParents(
   };
   addParent(storedEntry.parentSessionKey ?? resolveSessionParentSessionKey(row.key));
   addParent(storedEntry.spawnedBy);
-  const runs = context.subagentRunsByChildSessionKey.get(row.key);
-  if (runs) {
-    for (const run of runs) {
-      addParent(run.controllerSessionKey || run.requesterSessionKey);
-    }
+  for (const run of context.subagentRunsByChildSessionKey.get(row.key) ?? []) {
+    addParent(run.controllerSessionKey || run.requesterSessionKey);
   }
   return parents;
 }

@@ -76,7 +76,7 @@ import {
   createGatewayInflightAuthorityFailure,
   createGatewayInflightResult,
   createGatewayInflightSuccess,
-  createGatewayInflightUnavailableFailure,
+  createGatewayInflightFailure,
   scheduleDeliveredSourceReplyTranscriptMirror,
 } from "./message-operation-result.js";
 import { withMessageOperationRoute } from "./message-operation-route.js";
@@ -465,10 +465,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             },
           );
         } catch (err) {
-          if (!isChannelPartialDeliveryError(err) && !authorize()) {
-            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
-          }
-          return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
+          return createGatewayInflightFailure({ context, dedupeKey, channel, err }, authorize);
         }
       },
     });
@@ -788,14 +785,10 @@ export const sendHandlers: GatewayRequestHandlers = {
             channel,
           });
         } catch (err) {
-          if (
-            !isChannelPartialDeliveryError(err) &&
-            hasAgentRuntimeAuthority &&
-            !agentRuntimeAuthority.hasActive()
-          ) {
-            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
-          }
-          return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
+          return createGatewayInflightFailure(
+            { context, dedupeKey, channel, err },
+            () => !hasAgentRuntimeAuthority || agentRuntimeAuthority.hasActive(),
+          );
         }
       },
     });
@@ -910,14 +903,10 @@ export const sendHandlers: GatewayRequestHandlers = {
           const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
           return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
         } catch (err) {
-          if (
-            !isChannelPartialDeliveryError(err) &&
-            hasAgentRuntimeAuthority &&
-            !agentRuntimeAuthority.hasActive()
-          ) {
-            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
-          }
-          return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
+          return createGatewayInflightFailure(
+            { context, dedupeKey, channel, err },
+            () => !hasAgentRuntimeAuthority || agentRuntimeAuthority.hasActive(),
+          );
         }
       },
     });

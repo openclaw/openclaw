@@ -4,6 +4,7 @@ import { CORE_GATEWAY_METHOD_SPECS } from "./core-descriptors.js";
 import { isCoreGatewayMethodProfileDependent } from "./core-profile-access.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
+  gatewayMethodReadSharing,
   NODE_GATEWAY_METHOD_SCOPE,
   type GatewayMethodDescriptorInput,
   type GatewayMethodHandler,
@@ -92,13 +93,7 @@ export function createCoreGatewayMethodDescriptors(
       handler,
       owner: { kind: "core", area: "gateway" },
       scope: spec.scope,
-      ...(spec.shareKey
-        ? {
-            shareKey: spec.shareKey,
-            shareInvalidationEvents: spec.shareInvalidationEvents,
-            shareMaxAgeMs: spec.shareMaxAgeMs,
-          }
-        : {}),
+      ...gatewayMethodReadSharing(spec),
       profileAccess:
         spec.sessionAccess || isCoreGatewayMethodProfileDependent(spec.name)
           ? "required"

@@ -67,6 +67,16 @@ export type GatewayMethodDescriptorInput = Omit<GatewayMethodDescriptor, "profil
   profileAccess?: GatewayMethodProfileAccess;
 };
 
+export function gatewayMethodReadSharing(input: Partial<GatewayReadSharing>) {
+  return input.shareKey
+    ? {
+        shareKey: input.shareKey,
+        shareInvalidationEvents: input.shareInvalidationEvents,
+        shareMaxAgeMs: input.shareMaxAgeMs,
+      }
+    : {};
+}
+
 export function createPluginGatewayMethodDescriptor(
   params: {
     pluginId: string;
@@ -84,13 +94,7 @@ export function createPluginGatewayMethodDescriptor(
     owner: { kind: "plugin", pluginId: params.pluginId },
     profileAccess: params.profileAccess ?? "required",
     ...(params.sessionAccess ? { sessionAccess: params.sessionAccess } : {}),
-    ...(params.shareKey
-      ? {
-          shareKey: params.shareKey,
-          shareInvalidationEvents: params.shareInvalidationEvents,
-          shareMaxAgeMs: params.shareMaxAgeMs,
-        }
-      : {}),
+    ...gatewayMethodReadSharing(params),
     scope: normalizedScope ?? ADMIN_SCOPE,
   };
 }

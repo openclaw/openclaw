@@ -418,6 +418,14 @@ export function createManagedLinuxDesktop(
     return stderr ?? `${binary} exited with code ${exit.exitCode ?? "none"}`;
   };
 
+  const createPairAudio = (active: ManagedResources, assertCurrent: () => void) =>
+    createAudio({
+      supervisor,
+      tempDir: active.tempDir,
+      env: active.env,
+      assertCurrent,
+    });
+
   const startPair = async (active: ManagedResources, activeEpoch: number): Promise<ManagedPair> => {
     status = { state: "starting", display: active.display, port: active.port };
     stopProcesses = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
@@ -432,15 +440,10 @@ export function createManagedLinuxDesktop(
       ]);
       assertStartupCurrent(activeEpoch);
       let audioPair: ManagedPair | null = null;
-      audioOwner = createAudio({
-        supervisor,
-        tempDir: active.tempDir,
-        env: active.env,
-        assertCurrent: () => {
-          if (activeEpoch !== epoch || stopping || (audioPair && !isPairCurrent(audioPair))) {
-            throw new Error("managed Linux desktop stopped");
-          }
-        },
+      audioOwner = createPairAudio(active, () => {
+        if (activeEpoch !== epoch || stopping || (audioPair && !isPairCurrent(audioPair))) {
+          throw new Error("managed Linux desktop stopped");
+        }
       });
       const audio = await audioOwner.ready;
       // Route applications (including D-Bus activation) only after private audio
@@ -556,15 +559,10 @@ export function createManagedLinuxDesktop(
                 continue;
               }
               audioRestartTimes.push(now);
-              audioOwner = createAudio({
-                supervisor,
-                tempDir: active.tempDir,
-                env: active.env,
-                assertCurrent: () => {
-                  if (!stillOwned() || !isPairCurrent(current)) {
-                    throw new Error("managed Linux desktop stopped");
-                  }
-                },
+              audioOwner = createPairAudio(active, () => {
+                if (!stillOwned() || !isPairCurrent(current)) {
+                  throw new Error("managed Linux desktop stopped");
+                }
               });
               const recovered = await audioOwner.ready;
               if (!stillOwned()) {

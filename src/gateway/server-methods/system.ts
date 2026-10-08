@@ -313,23 +313,7 @@ export const systemHandlers: GatewayRequestHandlers = {
     const lastInputSeconds = params.tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
       ? null
       : params.lastInputSeconds;
-    const presenceUpdate = updateSystemPresence({
-      text,
-      deviceId: params.deviceId,
-      instanceId: params.instanceId,
-      host: params.host,
-      ip: params.ip,
-      mode: params.mode,
-      version: params.version,
-      platform: params.platform,
-      deviceFamily: params.deviceFamily,
-      modelIdentifier: params.modelIdentifier,
-      lastInputSeconds,
-      reason,
-      roles: params.roles,
-      scopes: params.scopes,
-      tags: params.tags,
-    });
+    const presenceUpdate = updateSystemPresence({ ...params, text, lastInputSeconds, reason });
     if (isNodePresenceLine) {
       // Node presence heartbeats are noisy; only enqueue user-visible system
       // events when routing context or meaningful node metadata changes.
