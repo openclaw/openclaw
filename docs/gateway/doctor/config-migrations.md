@@ -567,8 +567,11 @@ decoder's last-value semantics for duplicate properties. Ambiguous ownership and
 payloads remain intact with a warning naming the affected session.
 
 Runtime reads and writes use canonical metadata only. Startup refuses unmigrated
-ACP state with offline repair instructions before handing session stores to
-runtime. Run `openclaw doctor --fix` after restoring older state; the update-time
+ACP state with a current session binding before handing session stores to
+runtime, with offline repair instructions. Historical shared rows whose binding
+is absent or stale remain intact and do not block startup; runtime does not serve
+their metadata. Unreadable candidate stores and unresolved recorded owners still
+block admission. Run `openclaw doctor --fix` after restoring older state; the update-time
 Doctor pass runs the same repair.
 Embedded metadata imports record durable receipts before removing the source
 field, so retrying interrupted cleanup cannot reopen a session after its canonical

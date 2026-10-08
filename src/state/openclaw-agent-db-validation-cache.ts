@@ -282,6 +282,7 @@ function captureValidationTransfer(
         };
   validatedPaths.set(pathname, captured);
   const capturedValidation = captured.validation;
+  const capturedSchemaCell = capturedValidation?.schema?.valid;
   const wasValid = capturedValidation
     ? Atomics.load(new Int32Array(capturedValidation.valid), 0)
     : undefined;
@@ -309,24 +310,52 @@ function captureValidationTransfer(
     ) {
       return "invalid";
     }
+    const currentSchemaCell = captured.validation?.schema?.valid;
+    // A checked opener can promote proof while admission is pending. Revocation
+    // of that newer proof must not be undone by the older independent handoff.
     if (
+      schemaValid === 1 &&
+      currentSchemaCell !== undefined &&
+      currentSchemaCell !== capturedSchemaCell &&
+      Atomics.load(new Int32Array(currentSchemaCell), 0) !== 1
+    ) {
+      return "stale";
+    }
+    if (
+      (schemaRequired && schemaValid !== 1) ||
       validatedPaths.get(pathname) !== captured ||
       (capturedValidation &&
         wasValid === 1 &&
         Atomics.load(new Int32Array(capturedValidation.valid), 0) !== 1) ||
       (captured.validation !== capturedValidation &&
         captured.validation &&
-        Atomics.load(new Int32Array(captured.validation.valid), 0) !== 1) ||
+        (captured.validation.identity !== identity ||
+          Atomics.load(new Int32Array(captured.validation.valid), 0) !== 1)) ||
       Atomics.load(new Int32Array(received.valid), 0) !== 1
     ) {
       return "stale";
     }
     if (
-      wasValid === 1 &&
       captured.integrityVerified &&
       captured.validation?.agentId === database.agentId &&
-      captured.validation?.identity === identity
+      captured.validation.identity === identity &&
+      Atomics.load(new Int32Array(captured.validation.valid), 0) === 1
     ) {
+      const currentSchema = captured.validation.schema;
+      if (
+        currentSchema &&
+        schema &&
+        schemaValid === 1 &&
+        Atomics.load(new Int32Array(currentSchema.valid), 0) === 1 &&
+        currentSchema.facts.schemaVersion === schema.facts.schemaVersion &&
+        currentSchema.facts.userVersion === schema.facts.userVersion
+      ) {
+        // Retain the cell already shared with borrowers, including structured-clone aliases.
+        return "accepted";
+      }
+      if (currentSchema) {
+        Atomics.store(new Int32Array(currentSchema.valid), 0, 0);
+      }
       captured.validation.schema = schema;
       return "accepted";
     }
@@ -555,15 +584,35 @@ export function setOpenClawAgentDatabaseValidation(
   database: ValidationDatabase,
 ): OpenClawAgentDatabaseValidation {
   const revoked = hasRevokedOpenClawAgentDatabaseValidation(database.path);
-  const validation = createValidationReceipt(
+  let validation = createValidationReceipt(
     database,
     isOpenClawAgentCanonicalStoreEmpty(database) ||
       (!revoked &&
         !database.db.isTransaction &&
         hasPersistedOpenClawAgentCanonicalValidation(database)),
   );
-  invalidateOpenClawAgentDatabaseValidation(database.path);
-  validatedPaths.set(path.resolve(database.path), { validation, integrityVerified: true });
+  const entry = validatedPaths.get(path.resolve(database.path));
+  if (
+    !revoked &&
+    entry &&
+    (entry.agentId === undefined || entry.agentId === database.agentId) &&
+    (!entry.validation || matchesValidation(database, entry.validation))
+  ) {
+    // Successful admission promotes this owner; only revocation retires pending handoffs.
+    if (entry.validation) {
+      Atomics.store(
+        new Int32Array(entry.validation.canonicalReady),
+        0,
+        Atomics.load(new Int32Array(validation.canonicalReady), 0),
+      );
+      validation = entry.validation;
+    }
+    entry.validation = validation;
+    entry.integrityVerified = true;
+  } else {
+    invalidateOpenClawAgentDatabaseValidation(database.path);
+    validatedPaths.set(path.resolve(database.path), { validation, integrityVerified: true });
+  }
   bindValidationLifetime(database, validation);
   publishOpenClawAgentDatabaseSchema(database);
   return validation;
