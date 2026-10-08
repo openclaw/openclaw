@@ -367,6 +367,14 @@ owners and do not create storage. Reply settlement and database close join accep
 phases, including those still waiting for foreground admission. Schemas, stored
 bytes, retention, SDK signatures, and update behavior are unchanged.
 
+Embedded run preparation reads its admission entry and retained transcript-window
+mapping in the same cohort. The window mapping remains authoritative even when
+it differs from the current entry's key. Cold restoration runs after that read,
+and the original caller and database owner are checked again before returning.
+Tool-authority caller preparation retains its original source-selection plan;
+the consuming phase rereads current policy through that plan instead of repeating
+discovery. These changes preserve foreign-commit freshness and final effect checks.
+
 ## Keep one store owner
 
 Manual `sessions.compact` trimming with `maxLines` runs on the existing agent
@@ -2273,8 +2281,10 @@ idle gaps, and foreground history retains its separate reader. Branch identity a
 reads use metadata without loading saved prompts or diff snapshots. After a complete scan
 verifies unique indexed identities and backward ancestry, linear canonical
 appends, including metadata, extend the active summary from the new sequence
-range. Rewrites, navigation changes, and legacy or irregular graphs use the
-complete scanner. First reads still scale with transcript length; cached append
+range. After validating the appended navigation, headline selection reads message
+bodies newest-first and stops at the first visible, nonempty headline, retaining
+the previous headline when none is found. Rewrites, navigation changes, and legacy
+or irregular graphs use the complete scanner. First reads still scale with transcript length; cached append
 refreshes scale with new entries and branch count. Startup and memory-pressure
 retirement can still require worker creation. No schema, stored transcript, data
 retention, or configuration changes are required.
@@ -3006,6 +3016,13 @@ preserving the original failure. Process-held incognito reads retain their exist
 native lifetime owner. Metadata-change tolerance, missing-session results, stored
 bytes, and update behavior are unchanged.
 
+Personal account labels for chat startup and asynchronous account selection read
+committed summaries in the shared-state read worker, independently of the writer
+queue. The reader checks account ownership and returns no credentials. Requester,
+identity, and source-generation checks still gate publication; synchronous SDK
+compatibility uses the same summary query. Schema, stored bytes, and update
+behavior are unchanged.
+
 Saved-session provider discovery retains its previous synchronous canonical-row
 check only at the final credential-send boundary. Guarded fetch requires that
 check after transport preparation and before each request or redirect; a worker
@@ -3512,6 +3529,16 @@ The manager adopts that receipt before publishing pending-tool changes. Each
 event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
+
+Append receipts read active identity, projection readiness, and the latest sequence
+in one transaction-local query. A clean latest message shares that result with
+the visible-tail consumer; native reentry or pending-input mutations require a
+fresh tail read. Dirty and unclassified projections still use canonical navigation.
+No-op maintenance plans return their next deadline with the existing read and
+consume it synchronously under the selected writer queue and native mutation
+witness. New kicks and activity invalidate that scheduling decision; explicit
+later metadata reads still refresh foreign commits. Schemas, stored bytes,
+durability, retention, permissions, and update behavior are unchanged.
 
 Runtime custom messages, prompt cache markers, bootstrap completion and prompt-error
 markers, and nested tool activity use the same awaited writer. The manager captures

@@ -625,7 +625,10 @@ export async function createFullModelCatalogAccess(
         published.inventory?.providers.get(provider)?.credentials !==
           preparedProviderCatalogCredentials(params.agentFacts, provider, normalizeProvider),
     );
-    const fullRefresh = !options.changedOnly && !options.providerIds;
+    // A changed-only pass without provider inventory is a cold start: acquire what a refresh
+    // would, including hosted rows for providers without credentials.
+    const fullRefresh =
+      !options.providerIds && (!options.changedOnly || !published.inventory?.providers.size);
     const includeNative =
       acquireNative &&
       hasNativeCatalog &&

@@ -469,6 +469,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "onboardingRecommendations.read") {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
   }
+  if (command.type === "userModelAccounts.summary") {
+    return bytes + stringBytes([command.profileId, command.authProfileId]);
+  }
   if (command.type === "userModelAccounts.catalog") {
     return (
       bytes +

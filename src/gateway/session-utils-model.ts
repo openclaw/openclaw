@@ -62,7 +62,12 @@ type ThinkingProviderPolicySource = NonNullable<
 function resolveGatewaySessionThinkingLevel(
   params: Pick<
     GatewayModelThinkingParams,
-    "provider" | "model" | "modelCatalog" | "catalogResolver" | "providerPolicySource" | "rowContext"
+    | "provider"
+    | "model"
+    | "modelCatalog"
+    | "catalogResolver"
+    | "providerPolicySource"
+    | "rowContext"
   >,
   thinkingProfile: ReturnType<typeof resolveThinkingProfile>,
   level: NonNullable<ReturnType<typeof normalizeThinkLevel>>,

@@ -134,7 +134,7 @@ sidebarTitle: "Troubleshooting"
     corrupted text into the session.
 
     If it recurs, capture the model name, the current session file, and
-    whether the run used `Cloud + Local` or `Cloud only`, then try a fresh
+    whether the run used `Cloud + Local` or Ollama Cloud, then try a fresh
     session and a fallback model:
 
     ```bash

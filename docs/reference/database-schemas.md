@@ -117,6 +117,11 @@ rollback, schema change, or observed foreign commit invalidates them. A new
 transaction probes freshness before reusing unchanged facts; nested savepoints
 share the transaction's probe. Unexpected transaction loss expires both facts
 and freshness.
+Session revision guards and maintenance snapshots share that admitted transaction's
+freshness probe while continuing to check the local mutation generation. Unpinned
+uses and transactions without an admitted probe still check foreign commits;
+transaction entry, rollback, and settlement retain their existing invalidation.
+No schema, stored bytes, permissions, or update behavior change.
 Returned entries and participant identities remain caller-owned. Transcript
 watermark reads select the hot generation and the retained cold or hot sequence
 in one statement; hot-only readers keep their existing meaning. These query

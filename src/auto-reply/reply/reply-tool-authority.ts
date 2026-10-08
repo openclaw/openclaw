@@ -627,7 +627,10 @@ export function prepareReplyToolAuthority(
         // Published lineage is SQL-free; mutable native policy still uses compatibility.
         return undefined;
       }
-      await prepare(snapshot, route);
+      // The consuming phase rereads this plan's original sources before checking policy.
+      if (!captured) {
+        await prepare(snapshot, route);
+      }
       assertActive();
       const original = captured;
       const projected = projectInput(caller);
