@@ -149,6 +149,8 @@ export function createGatewayHttpServer(opts: {
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   getReadiness?: ReadinessChecker;
   getStartup?: StartupChecker;
+  /** Refuses new user work once this Gateway generation begins closing. */
+  isTransportAdmissionClosed?: () => boolean;
   getRuntimeConfig?: () => OpenClawConfig;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   isStartupPluginRuntimeReady?: () => boolean;
@@ -400,7 +402,11 @@ export function createGatewayHttpServer(opts: {
         admitted = false,
       ) => {
         if (enabled) {
-          requestStages.push(admitted ? () => runWithGatewayHttpWorkAdmission(res, stage) : stage);
+          requestStages.push(
+            admitted
+              ? () => runWithGatewayHttpWorkAdmission(res, stage, opts.isTransportAdmissionClosed)
+              : stage,
+          );
         }
       };
       const addAdmittedStage = (enabled: boolean, stage: GatewayHttpRequestStage) =>

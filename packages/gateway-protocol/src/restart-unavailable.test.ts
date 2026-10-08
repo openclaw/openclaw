@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isGatewayClosingUnavailableError,
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
 } from "./restart-unavailable.js";
@@ -8,6 +9,7 @@ describe("gateway drain rejection detection", () => {
   it.each([
     ["gateway-restarting", isGatewayRestartUnavailableError],
     ["gateway-suspending", isGatewaySuspendUnavailableError],
+    ["gateway-closing", isGatewayClosingUnavailableError],
   ] as const)("recognizes %s only from structured details", (reason, detect) => {
     expect(
       detect({

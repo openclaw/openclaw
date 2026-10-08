@@ -147,7 +147,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     id: string,
     admissionOpen: boolean,
   ) => {
-    if (!admissionOpen || params.isStartupPending?.()) {
+    // A closing generation refuses its own listeners; process-global admission
+    // stays open for same-process successors.
+    if (!admissionOpen || params.isStartupPending?.() || params.connectionWork.isClosing) {
       rejectAdmission({
         id,
         reason: "gateway-unavailable",

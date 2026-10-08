@@ -2,6 +2,8 @@
 export const GATEWAY_RESTART_UNAVAILABLE_REASON = "gateway-restarting";
 /** Structured error reason used while the gateway drains for a suspension. */
 export const GATEWAY_SUSPEND_UNAVAILABLE_REASON = "gateway-suspending";
+/** Structured error reason used while one directly closed Gateway generation drains. */
+export const GATEWAY_CLOSING_UNAVAILABLE_REASON = "gateway-closing";
 /** Identity reads wait for resume, with a bounded probe if that event is missed. */
 export const GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS = 60_000;
 
@@ -13,6 +15,11 @@ export function isGatewayRestartUnavailableError(error: unknown): boolean {
 /** Detects the structured retryable error emitted while suspension refuses work. */
 export function isGatewaySuspendUnavailableError(error: unknown): boolean {
   return hasUnavailableReason(error, GATEWAY_SUSPEND_UNAVAILABLE_REASON);
+}
+
+/** Detects the structured retryable error emitted by a directly closed Gateway generation. */
+export function isGatewayClosingUnavailableError(error: unknown): boolean {
+  return hasUnavailableReason(error, GATEWAY_CLOSING_UNAVAILABLE_REASON);
 }
 
 function hasUnavailableReason(error: unknown, reason: string): boolean {

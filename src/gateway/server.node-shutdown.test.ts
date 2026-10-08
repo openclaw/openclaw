@@ -317,18 +317,16 @@ test.for(["direct", "restart"] as const)(
             });
           }
           const reconnect = connectNode({ timeoutMs: 5_000 });
-          if (mode === "restart") {
-            await expect(reconnect).rejects.toMatchObject({
-              name: "GatewayClientRequestError",
-              message:
-                "gateway rejected websocket upgrade (HTTP 503): Gateway websocket admission closed",
-              gatewayCode: "UNAVAILABLE",
-              retryable: true,
-              details: { reason: "websocket-upgrade-rejected", httpStatus: 503 },
-            });
-          } else {
-            await expect(reconnect).rejects.toThrow("gateway closed during connect (1006)");
-          }
+          // Direct close and restart drain both refuse new ingress on the retiring
+          // generation before its listeners stop.
+          await expect(reconnect).rejects.toMatchObject({
+            name: "GatewayClientRequestError",
+            message:
+              "gateway rejected websocket upgrade (HTTP 503): Gateway websocket admission closed",
+            gatewayCode: "UNAVAILABLE",
+            retryable: true,
+            details: { reason: "websocket-upgrade-rejected", httpStatus: 503 },
+          });
           expect(closeSettled).not.toHaveBeenCalled();
           releaseStopReply.resolve();
           await expect(withTimeout(stopped.promise, 5_000, "node shutdown reply")).resolves.toEqual(
