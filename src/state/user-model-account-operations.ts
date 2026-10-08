@@ -150,6 +150,7 @@ async function read<
   Key extends
     | "userProfiles.modelAccount.list"
     | "userProfiles.modelAccount.summary"
+    | "userProfiles.modelAccount.selection"
     | "userProfiles.modelAccount.selected",
 >(type: Key, input: OpenClawStateWorkerOperations[Key]["input"], options: AccountOptions) {
   const context = options.context ?? captureOpenClawStateWorkerContext(options);
@@ -175,6 +176,13 @@ export function readUserModelAccountSummaryAsync(
   options: AccountOptions = {},
 ) {
   return read("userProfiles.modelAccount.summary", params, options);
+}
+
+export function readUserModelAccountSelectionAsync(
+  params: { profileId?: string; authProfileId: string },
+  options: AccountOptions = {},
+) {
+  return read("userProfiles.modelAccount.selection", params, options);
 }
 
 /** Account pins retain the identity writer's authority, independently of default links. */

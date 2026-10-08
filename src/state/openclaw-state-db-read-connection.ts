@@ -63,7 +63,14 @@ type RetainedReader = {
   idleTimer?: ReturnType<typeof setTimeout>;
 };
 const retainedReaders = new Map<string, RetainedReader>();
+const corruptedReaders = new WeakSet<DatabaseSync>();
 let unregisterExitClose: (() => void) | undefined;
+
+/** Ordered partial results may carry corruption as data; the same reader owner still retires it. */
+export function retireOpenClawStateReadConnectionAfterCorruption(database: DatabaseSync): void {
+  invalidateOpenClawStateRuntimeIntegrity(database);
+  corruptedReaders.add(database);
+}
 
 function retireReader(reader: RetainedReader): void {
   clearTimeout(reader.idleTimer);
@@ -275,7 +282,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
       };
     } catch (error) {
       if (isSqliteCorruptionError(error)) {
-        invalidateOpenClawStateRuntimeIntegrity(opened.database.db);
+        retireOpenClawStateReadConnectionAfterCorruption(opened.database.db);
       }
       result = { status: "unavailable", error };
     }
@@ -294,7 +301,13 @@ export function readOpenClawStateReadOnlyLocation<T>(
     errors.push(error);
   }
   try {
-    if (!opened.close(errors.length === 0 && result?.status === "available")) {
+    if (
+      !opened.close(
+        errors.length === 0 &&
+          result?.status === "available" &&
+          !corruptedReaders.has(opened.database.db),
+      )
+    ) {
       throw new SnapshotCleanupIncompleteError("Shared-state snapshot cleanup is incomplete.");
     }
   } catch (error) {

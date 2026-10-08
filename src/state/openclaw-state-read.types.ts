@@ -241,6 +241,10 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
+  | {
+      type: "userProfiles.catalogIdentity";
+      input: import("./user-profile-catalog-identity.read.js").UserProfileCatalogIdentityInput;
+    }
   | { type: "userModelAccounts.links"; profileId: string }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
   | {
@@ -472,6 +476,10 @@ export type OpenClawStateReadResult =
       type: "userProfiles.catalog";
       profiles: Array<[string, ProfileDisplayRow]>;
       emailBindings: UserProfileEmailBinding[];
+    }
+  | {
+      type: "userProfiles.catalogIdentity";
+      result: import("./user-profile-catalog-identity.read.js").UserProfileCatalogIdentityRead;
     }
   | {
       type: "userPreferences.values";

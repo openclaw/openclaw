@@ -7536,7 +7536,6 @@
 ["src/gateway/server-methods/channels.status.test.ts","../../channels/plugins/status.js","619da42d6fb141ef426f29243abc3dbdeb127c557dbf0946f3a919cc6ab71623",1]
 ["src/gateway/server-methods/channels.status.test.ts","../../config/config.js","7e25d4847b71efccc1748521de6ccb9cd32659aafb3ee0f432830455e39a23d2",1]
 ["src/gateway/server-methods/channels.status.test.ts","../../infra/channel-activity.js","e0a1693be3dc422ccedc4539dafe919f0f1e8392e50ac96877a01e405f48fa6d",1]
-["src/gateway/server-methods/chat-account-selection.test.ts","../../state/user-profiles.js","6f2472f7a9f4035111a9c6675058cf505ebe4dfef86e0e6f35fa6be91a446bc9",1]
 ["src/gateway/server-methods/chat-reply-media.large-video.test.ts","../../config/config.js","2ef8c9e858778b651d1a937ad8c62022bbb5e723c628fe5070c29d712d163b5c",1]
 ["src/gateway/server-methods/chat-reply-media.large-video.test.ts","../../media/ffmpeg-exec.js","ab8e8009d0b67ccbe2204705be7094374ef37df8def8dc9ee3f2f76e40fa9ad3",1]
 ["src/gateway/server-methods/chat-reply-media.large-video.test.ts","../http-utils.js","55c246e0791826e8729303c57a703e2e14d242805735cd2f5b34e1771e4fa60b",1]

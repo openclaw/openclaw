@@ -123,6 +123,7 @@ import {
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
 import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
+import { readUserProfileCatalogIdentity } from "./user-profile-catalog-identity.read.js";
 import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
   readUserProfileAuthorityCommand,
@@ -514,6 +515,12 @@ serveOwnedWorkerTasks(
             }
             if (command.type === "userProfiles.authority.resolve") {
               return readUserProfileAuthorityCommand(db, command);
+            }
+            if (command.type === "userProfiles.catalogIdentity") {
+              return {
+                type: command.type,
+                result: readUserProfileCatalogIdentity(db, command.input),
+              };
             }
             if (command.type === "userProfiles.aliases.resolve") {
               return {

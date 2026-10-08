@@ -29,7 +29,11 @@ import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-c
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
 import { publishUserProfileModelAccountLinksChange } from "./user-profile-events.js";
-import { selectResolvedUserProfile, userProfilesDb } from "./user-profiles-internal.js";
+import {
+  selectResolvedUserProfile,
+  selectResolvedUserProfileMetadataById,
+  userProfilesDb,
+} from "./user-profiles-internal.js";
 
 const credentialSchema = inlineAuthProfileCredentialSchema.refine(
   (credential) => credential.copyToAgents !== true,
@@ -285,6 +289,38 @@ export function readUserModelAccountSummary(
     return value === undefined
       ? undefined
       : accountSummary(params.authProfileId, value, readLinks(db, owner));
+  }, options);
+}
+
+/** Prepare the private summary and the optional public owner label in one read operation. */
+export function readUserModelAccountSelection(
+  params: { profileId?: string; authProfileId: string },
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+    const locator = parseUserModelAuthProfileId(params.authProfileId);
+    const requester =
+      params.profileId && params.profileId !== locator?.ownerProfileId
+        ? resolveOwner(db, params.profileId)
+        : undefined;
+    const owner =
+      locator && tableExists(db, "user_profiles")
+        ? selectResolvedUserProfileMetadataById(db, locator.ownerProfileId)
+        : undefined;
+    const ownsAccount =
+      owner &&
+      !owner.merged_into &&
+      (params.profileId === locator?.ownerProfileId || requester === owner.id);
+    const value = ownsAccount
+      ? readRecord(db, owner.id, `model-account:${params.authProfileId}`)
+      : undefined;
+    return {
+      personal:
+        value !== undefined && owner
+          ? accountSummary(params.authProfileId, value, readLinks(db, owner.id))
+          : undefined,
+      owner: owner ? { profileId: owner.id, displayName: owner.display_name } : undefined,
+    };
   }, options);
 }
 

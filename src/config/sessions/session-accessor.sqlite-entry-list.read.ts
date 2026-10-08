@@ -7,6 +7,7 @@ import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -17,6 +18,7 @@ import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js"
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
 import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
+import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-exact-read.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
@@ -32,6 +34,29 @@ import {
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
+
+function captureListingSource(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  scope: SessionEntryListScope,
+) {
+  if (!scope.captureSource) {
+    return;
+  }
+  const physical = readOpenClawAgentDatabaseIdentity(database);
+  const source = {
+    agentId: database.agentId,
+    path: database.path,
+    databaseIdentity: physical.identity,
+    databaseBirthtime: physical.birthtime,
+  };
+  assertCapturedSessionEntryReadSource(source, database);
+  scope.captureSource(() =>
+    assertCapturedSessionEntryReadSource(
+      source,
+      typeof source.databaseIdentity === "symbol" ? database : undefined,
+    ),
+  );
+}
 
 /** Select listing facts without hydrating the store; creation retains only its target payloads. */
 export function readSelectedSessionEntriesInDatabase(
@@ -111,6 +136,13 @@ export function listSessionEntriesReadOnly(
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    if (scope.sessionKeys && !scope.cronRetention && !scope.expiredCronRuns) {
+      captureListingSource(database, scope);
+      return readSelectedSessionEntriesInDatabase(database, scope.sessionKeys, {
+        continuation: options.continuation,
+        ...(scope.projection === "list" ? {} : { fullEntryKeys: scope.sessionKeys }),
+      });
+    }
     const read = () => listSqliteSessionEntriesFromDatabase(database, resolved, scope, options);
     return options.continuation
       ? readWithCanonicalSessionReaderContinuation(database, options.continuation, read)
@@ -125,6 +157,7 @@ export function listSqliteSessionEntriesFromDatabase(
   scope: SessionEntryListScope,
   options: { deferParticipants?: true } = {},
 ): SessionEntrySummary[] {
+  captureListingSource(database, scope);
   if (scope.cronRetention || scope.expiredCronRuns) {
     const expired = scope.expiredCronRuns;
     const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;

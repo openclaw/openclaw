@@ -82,6 +82,8 @@ export type SessionEntryListScope = Partial<
   Omit<SessionEntryReadScope, "sessionKey" | "projection">
 > & {
   projection?: "full" | "list";
+  /** Retain the physical source assertion independently of this synchronous read. */
+  captureSource?: (assertCurrent: () => void) => void;
   /** Select exact persisted keys after validating the complete listing snapshot. */
   sessionKeys?: readonly string[];
   /** Retain full cron-run entries for deletion guards, and only metadata for ordinary sessions. */
