@@ -9,6 +9,10 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { splitMediaOutput } from "../media/parse-output.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../sessions/input-provenance.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
+import {
+  CONTROL_UI_TOKEN_SESSION_KEY_PREFIX,
+  DEVICE_AUTH_STORAGE_KEY_PREFIX,
+} from "../shared/control-ui-storage.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
 import { stripSuppressedControlReplyToken } from "./control-reply-text.js";
@@ -16,7 +20,22 @@ import { stripSuppressedControlReplyToken } from "./control-reply-text.js";
 /** Public-reader lifecycle only; never starts the operator app, socket, or roster. */
 export const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
   const link=document.getElementById("session-login");
-  if(link)fetch(link.href+"&probe=1",{credentials:"same-origin",redirect:"error",cache:"no-store",signal:AbortSignal.timeout(5000)}).then(response=>{if(response.status===204)location.replace(link.href+location.hash)}).catch(()=>{});
+  function hasClientCredential(){
+    if(link?.dataset.gatewayPath===undefined)return false;
+    const scope=(location.protocol==="https:"?"wss:":"ws:")+"//"+location.host+link.dataset.gatewayPath;
+    let credential=new URLSearchParams(location.hash.slice(1)).get("token")?.trim();
+    try{credential ||= sessionStorage.getItem(${JSON.stringify(CONTROL_UI_TOKEN_SESSION_KEY_PREFIX)}+scope)?.trim()}catch{}
+    // Device scopes retain Gateway query strings; either form is only a navigation hint.
+    try{
+      const prefix=${JSON.stringify(DEVICE_AUTH_STORAGE_KEY_PREFIX)}+scope;
+      for(let i=0;!credential&&i<localStorage.length;i++){
+        const key=localStorage.key(i);
+        if(key===prefix||key?.startsWith(prefix+"?"))try{credential=JSON.parse(localStorage.getItem(key)||"null")?.tokens?.operator?.token?.trim()}catch{}
+      }
+    }catch{}
+    return Boolean(credential)
+  }
+  if(link)fetch(link.href+"&probe=1",{credentials:"same-origin",redirect:"error",cache:"no-store",signal:AbortSignal.timeout(5000)}).then(response=>{if(response.status===204||(response.status===401&&hasClientCredential()))location.replace(link.href+location.hash)}).catch(()=>{});
   document.addEventListener("click",event=>{const login=event.target.closest?.("#session-login");if(login)login.hash=location.hash});
   let timer,etag="",running=false,retryAt=0;
   const enabled=()=>document.querySelector("main[data-public-refresh='true']")!==null;
@@ -143,11 +162,12 @@ export function renderPublicSessionDocument(params: {
   olderUrl?: string;
   isLatest?: boolean;
   entryUrl?: string;
+  clientAuthBasePath?: string;
   unavailable?: boolean;
 }): string {
   const isLatest = params.isLatest !== false && !params.unavailable;
   const entryLink = params.entryUrl
-    ? `<a class="login" id="session-login" href="${escapeHtml(params.entryUrl)}">Log in <span aria-hidden="true">→</span></a>`
+    ? `<a class="login" id="session-login"${params.clientAuthBasePath !== undefined ? ` data-gateway-path="${escapeHtml(params.clientAuthBasePath)}"` : ""} href="${escapeHtml(params.entryUrl)}">Log in <span aria-hidden="true">→</span></a>`
     : "";
   const title = escapeHtml(
     truncateUtf16Safe(

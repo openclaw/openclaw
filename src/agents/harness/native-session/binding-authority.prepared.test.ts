@@ -50,6 +50,13 @@ it.each([
       { agentId: "policy", sessionKey: policyKey },
       { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
     );
+    // Seed writes schedule maintenance; drain it before racing the foreign policy writer.
+    for (const agentId of ["main", "policy"]) {
+      await closeOpenClawAgentDatabaseByPathAsync(
+        resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
+        agentId,
+      );
+    }
     const run = createQueueTestRun({ prompt: "authority" });
     Object.assign(run.run, {
       sessionKey: "agent:main:authority-execution",

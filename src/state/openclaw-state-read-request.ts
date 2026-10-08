@@ -24,6 +24,7 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
     command.type === "operatorApprovals.validateCronGrant" ||
     command.type === "acpSessions.metadata" ||
     command.type === "sessionRows.sharedFacts" ||
+    command.type === "agentDeletion.sessionStoreBlocker" ||
     command.type === "githubPublication.knownPullRequestUrls" ||
     command.type === "githubRepository.knownPullRequestUrls" ||
     command.type === "workers.placementProjection"
@@ -224,6 +225,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     command.type === "sessionState.events" ||
     command.type === "workers.placementProjection" ||
     command.type === "workers.placementPendingResults" ||
+    command.type === "agentDeletion.sessionStoreBlocker" ||
     isWorkspaceJournalReadCommand(command)
   ) {
     return Buffer.byteLength(JSON.stringify(command), "utf8");
@@ -468,9 +470,6 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       (total, pin) => total + stringBytes([pin.skillId, pin.revision]),
       bytes,
     );
-  }
-  if (command.type === "fleet.get") {
-    return bytes + Buffer.byteLength(command.tenantId, "utf8");
   }
   if (command.type === "onboardingRecommendations.read") {
     return bytes + Buffer.byteLength(command.configKey, "utf8");

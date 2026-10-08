@@ -52,17 +52,17 @@ function deleteWorkspace(
   if (storedAlias && storedAlias.alias_path !== lexicalAlias.workspacePath) {
     throw new Error("workspace path alias key collision");
   }
-  const storedIdentity = storedAlias
+  let storedIdentity = storedAlias
     ? createWorkspaceStateIdentity(storedAlias.workspace_path)
     : undefined;
   if (storedIdentity && storedIdentity.workspaceKey !== storedAlias?.workspace_key) {
     throw new Error("workspace path alias target is invalid");
   }
-  const repointed =
+  if (
     storedIdentity &&
     plan.pathEntryExisted &&
-    storedIdentity.workspaceKey !== currentCanonicalIdentity.workspaceKey;
-  if (repointed) {
+    storedIdentity.workspaceKey !== currentCanonicalIdentity.workspaceKey
+  ) {
     // A repointed alias no longer owns its former workspace; retire only its association.
     executeSqliteQuerySync(
       database.db,
@@ -70,16 +70,16 @@ function deleteWorkspace(
         .deleteFrom("workspace_path_aliases")
         .where("alias_key", "=", lexicalAlias.workspaceKey),
     );
+    storedIdentity = undefined;
   }
   const identity =
-    storedIdentity && !repointed
-      ? storedIdentity
-      : !storedAlias && lexicalAlias.workspaceKey === currentCanonicalIdentity.workspaceKey
-        ? currentCanonicalIdentity
-        : resolveWorkspaceIdentityFromDatabase({
-            workspaceDir: currentCanonicalIdentity.workspacePath,
-            database,
-          }).identity;
+    storedIdentity ??
+    (!storedAlias && lexicalAlias.workspaceKey === currentCanonicalIdentity.workspaceKey
+      ? currentCanonicalIdentity
+      : resolveWorkspaceIdentityFromDatabase({
+          workspaceDir: currentCanonicalIdentity.workspacePath,
+          database,
+        }).identity);
   deleteWorkspaceStateRowsInDatabase(database, identity);
   return { kind: "workspace-deleted", workspacePath: identity.workspacePath };
 }

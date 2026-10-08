@@ -63,9 +63,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const reply: OpenClawStateReadReply = {
   ok: true,
-  type: "fleet.list",
+  type: "backup.runs",
   sourceAdmitted: true,
-  cells: [],
+  runs: [],
 };
 beforeEach(() => {
   mock.run.mockReset().mockResolvedValue(reply);
@@ -97,7 +97,7 @@ it("rotates mapped readers when explicit SQLite close cannot release native reso
   });
   try {
     const options = source();
-    await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+    await executeExistingOpenClawStateRead(options, { type: "backup.runs" });
     await closeOpenClawStateDatabaseByPathAsync(options.path);
     expect(mock.rotate).toHaveBeenCalledOnce();
     expect(mock.closeResources).not.toHaveBeenCalled();
@@ -126,7 +126,7 @@ it.each(["retired", "different-source", "schema"] as const)(
     const read = () =>
       executeExistingOpenClawStateRead(
         kind === "different-source" ? source() : options,
-        { type: "fleet.list" },
+        { type: "backup.runs" },
         { context, mapError },
       );
     if (kind === "schema") {
@@ -178,7 +178,7 @@ it.each(["before-read", "read", "unobserved"] as const)(
     }
     const { mapped, mapError } = mapper();
     await expect(
-      executeExistingOpenClawStateRead(source(), { type: "fleet.list" }, { mapError }),
+      executeExistingOpenClawStateRead(source(), { type: "backup.runs" }, { mapError }),
     ).rejects.toBe(mapped);
     expect(mapError).toHaveBeenCalledOnce();
     expect(mock.close).toHaveBeenCalledOnce();
@@ -219,7 +219,7 @@ it("retains a successful receipt through failed task cleanup and canonical retry
   });
   const { mapped, mapError } = mapper();
   const publish = vi.fn();
-  const pending = executeExistingOpenClawStateRead(options, { type: "fleet.list" }, { mapError });
+  const pending = executeExistingOpenClawStateRead(options, { type: "backup.runs" }, { mapError });
   const assertion = expect(pending.then(publish)).rejects.toBe(mapped);
   const cleanup = new Error("successful read cleanup failed");
   try {

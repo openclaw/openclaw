@@ -4375,7 +4375,7 @@ describe("main-session-restart-recovery", () => {
         createAssistantToolCallMessage([
           { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
         ]),
-        makeToolResultMessage("native tool call had no matching result", {
+        makeToolResultMessage("aborted", {
           toolName: "bash",
           toolCallId: "call-bash-1",
           details: { reason: "missing_tool_result" },
@@ -4383,7 +4383,13 @@ describe("main-session-restart-recovery", () => {
         }),
       ],
       safeTools: "required",
-      promptIncludes: ["unknown outcome", "never claim completion or success"],
+      promptIncludes: [
+        "interrupted by a gateway restart",
+        "marked interrupted, missing, or aborted",
+        "unknown outcome",
+        "not proof of tool failure",
+        "never claim completion or success",
+      ],
     },
     {
       name: "keeps a dangling side-effecting call in an aborted tail restricted",

@@ -1,6 +1,10 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
 import {
+  createPlacementMoveOps,
+  readWorkerPlacementMovesReadOnly,
+} from "./placement-move-intent.js";
+import {
   nextGeneration,
   normalizeEpoch,
   placementTurnOwner,
@@ -65,6 +69,23 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
             environmentActivation = { environmentId, lastActivatedAtMs };
           },
         );
+        if (current.state === "reconciling" && input.to === "reclaimed") {
+          const move = readWorkerPlacementMovesReadOnly(db, [sessionId]).get(sessionId);
+          if (
+            move &&
+            move.source.generation + 2 === current.generation &&
+            move.source.environmentId === current.environmentId &&
+            move.source.ownerEpoch === current.activeOwnerEpoch
+          ) {
+            // Stop supersedes this source's Move only after safe teardown commits.
+            // The reclaimed tuple and exact intent retirement share this transaction.
+            createPlacementMoveOps({
+              ...runtime,
+              read: () => db,
+              write: (run) => run(db),
+            }).cancelPlacementMove(move);
+          }
+        }
         return { placement, environmentActivation };
       });
     },

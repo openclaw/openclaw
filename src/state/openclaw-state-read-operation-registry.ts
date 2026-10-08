@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { AgentDeletionSessionStoreReadOperations } from "../agents/agent-delete-session-store-safety.worker-contract.js";
 import type { configHealthReadOperations } from "../config/io.health-state.kernel.js";
 import type { legacySessionMigrationReadOperations } from "../config/sessions/legacy-main-session-ledger.read.worker.js";
 import type { MentionReadOperations } from "../gateway/mention-inbox.worker-contract.js";
@@ -21,6 +22,7 @@ import {
 } from "./worker-operation-registry.js";
 
 type Operations = WorkerOperations<typeof localWorkspaceReadOperations> &
+  AgentDeletionSessionStoreReadOperations &
   WorkerOperations<typeof legacySessionMigrationReadOperations> &
   AgentRecoveryReadOperations &
   WorkerOperations<typeof agentLifecycleReadOperations> &
@@ -39,6 +41,10 @@ export type RegisteredStateReadCommand = SqliteWorkerCommand<Operations>;
 export type RegisteredStateReadResult = Operations[keyof Operations]["output"];
 
 export const stateReadRegistry = createWorkerOperationRegistry<Operations, DatabaseSync>({
+  agentDeletion: () =>
+    import("../agents/agent-delete-session-store-safety.kernel.js").then(
+      (m) => m.agentDeletionSessionStoreReadOperations,
+    ),
   agentLifecycle: () =>
     import("./agent-lifecycle-read.kernel.js").then((m) => m.agentLifecycleReadOperations),
   agentRecovery: () =>

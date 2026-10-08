@@ -193,11 +193,9 @@ internal class ChatShareDraftQueue(
     block: suspend () -> Unit,
   ): Boolean =
     headLease.withLock {
-      val claimed =
-        synchronized(lock) {
-          firstForOwnerLocked(owner)?.id == id
-        }
-      if (!claimed) return@withLock false
+      synchronized(lock) {
+        if (firstForOwnerLocked(owner)?.id != id) return@withLock false
+      }
       block()
       true
     }
@@ -1119,11 +1117,8 @@ class MainViewModel internal constructor(
     val operation =
       synchronized(assistantAutoSendLock) {
         if (!_assistantAutoSendInFlight.compareAndSet(false, true)) return
-        if (pendingAssistantAutoSendMutable.value != pending) {
-          _assistantAutoSendInFlight.value = false
-          return
-        }
-        val composerSendId = chatComposerState.tryBeginTrackedSend(pending.owner)
+        val composerSendId =
+          if (pendingAssistantAutoSendMutable.value == pending) chatComposerState.tryBeginTrackedSend(pending.owner) else null
         if (composerSendId == null) {
           _assistantAutoSendInFlight.value = false
           return
@@ -1890,17 +1885,15 @@ class MainViewModel internal constructor(
       var accepted: Boolean? = null
       try {
         accepted =
-          ensureRuntime().sendChatForOwnerAwaitAcceptance(
-            owner = request.owner,
-            message = request.message,
-            thinking = thinking,
-            attachments = outgoing,
-            idempotencyKey = request.commandId,
-          )
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
-        accepted = false
+          runCatchingCancellable {
+            ensureRuntime().sendChatForOwnerAwaitAcceptance(
+              owner = request.owner,
+              message = request.message,
+              thinking = thinking,
+              attachments = outgoing,
+              idempotencyKey = request.commandId,
+            )
+          }.getOrDefault(false)
       } finally {
         chatComposerState.completeSend(request, accepted)
       }

@@ -67,7 +67,7 @@ describe("security audit attack surface summary", () => {
         "hooks.webhooks: enabled",
         "hooks.internal: disabled",
         "browser control: enabled",
-        "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting",
+        "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For mutually untrusted users or organizations, run separate Gateways with separate credentials, ideally under separate OS users or hosts: https://docs.openclaw.ai/gateway/security/trust-model",
       ].join("\n"),
     );
   });

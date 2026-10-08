@@ -5622,7 +5622,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history advances past a replay boundary that cannot fit all projected siblings", async () => {
+  test("chat.history advances past an oversized projected source row", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       const projectedSiblingCount = 70;
@@ -5665,9 +5665,8 @@ describe("gateway server chat", () => {
           }),
         );
         expect(firstPage.ok).toBe(true);
-        const firstPageSequences = firstPage.payload?.messages?.map(readOpenClawSeq) ?? [];
-        expect(firstPageSequences.length).toBeGreaterThan(0);
-        expect(firstPageSequences.every((seq) => seq === 2)).toBe(true);
+        const firstMessages = firstPage.payload?.messages;
+        expect(firstMessages).toHaveLength(1);
         expect(firstPage.payload?.messages).toMatchObject([
           {
             __openclaw: {

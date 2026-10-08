@@ -56,6 +56,7 @@ import {
 import {
   commitSessionLifecycleProjectionInWorker,
   projectSessionEntryLifecycleMutationInWorker,
+  readSessionEntryLifecycleCountInWorker,
 } from "./session-lifecycle-projection.js";
 import { assertMaintenancePreservationCompatible } from "./store-maintenance-preserve-snapshot.js";
 import {
@@ -399,24 +400,10 @@ export async function applySessionEntryLifecycleMutation(
       captureArtifactCleanupError(error);
     }
     const archivedTranscripts = [...publishedRemovalTranscripts, ...maintenanceArchivedTranscripts];
-    let afterCount: number;
-    if (reclamationOptions) {
-      const result = await runSqliteSessionReclamation({
-        forceInProcess: false,
-        assertCommitAllowed: () => execution?.assertCurrent(),
-        plan: {
-          kind: "lifecycle-projection-count",
-          databaseOptions: reclamationOptions,
-          materializedPlans: [],
-        },
-      });
-      if (result.kind !== "lifecycle-projection-count") {
-        throw new Error("SQLite lifecycle projection returned an unexpected count result");
-      }
-      afterCount = result.value;
-    } else {
-      afterCount = readSessionEntryCount(openOpenClawAgentDatabase(databaseOptions));
-    }
+    const afterCount =
+      reclamationOptions && execution
+        ? await readSessionEntryLifecycleCountInWorker({ database: reclamationOptions, execution })
+        : readSessionEntryCount(openOpenClawAgentDatabase(databaseOptions));
     emitArchivedTranscriptUpdates(archivedTranscripts);
     const archivedTranscriptDirectories = uniqueStrings(
       archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),

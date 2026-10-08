@@ -1,7 +1,4 @@
 import path from "node:path";
-import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -9,7 +6,6 @@ import {
   runSqliteReadOnlyOperation,
   withSqliteReadOnlyWorkerScope,
 } from "../infra/sqlite-readonly-worker.js";
-import { inspectDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertNoAgentDatabaseLeasesAsync } from "../state/agent-deletion-journal.js";
 import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db-contract.js";
@@ -23,7 +19,14 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { findOverlappingWorkspaceAgentIds } from "./agent-delete-safety.js";
+import { assertAgentSessionStoreDeletionBlocker } from "./agent-delete-session-store-safety.js";
+import {
+  assertAgentSessionStoreDeletionTargetsCurrent,
+  prepareAgentSessionStoreDeletionSafety,
+} from "./agent-delete-session-store-safety.targets.js";
 import {
   isPathOwnedByAnotherRegisteredAgent,
   normalizeAgentDirRegistryPath,
@@ -34,6 +37,8 @@ import {
 import type { AgentDeletionOperation } from "./agent-lifecycle-registry.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope.js";
 import { closeAuthProfileReadPool } from "./auth-profiles/sqlite-read-pool.js";
+
+export { AgentSharedStoreOwnerError } from "./agent-delete-session-store-safety.js";
 
 export type AgentDeleteDatabasePlan = {
   agentDirs: string[];
@@ -89,8 +94,6 @@ export async function readAgentDeleteDatabaseRegistry(options: OpenClawStateData
   return read.result.entries;
 }
 
-export class AgentSharedStoreOwnerError extends Error {}
-
 export function prepareJournaledAgentDirOwnership(
   cfg: OpenClawConfig,
   agentId: string,
@@ -116,48 +119,47 @@ export async function assertAgentSessionStoreDeletionSafe(
   if (!cfg.session?.store?.trim()) {
     return;
   }
-  const id = normalizeAgentId(agentId);
-  const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
-  const registeredDatabases = await readAgentDeleteDatabaseRegistry(options);
-  await withSqliteReadOnlyWorkerScope(async () => {
-    for (const survivorId of listAgentIds(cfg)) {
-      if (normalizeAgentId(survivorId) === id) {
-        continue;
-      }
-      const storePath = resolveSessionStorePathCore(cfg.session?.store, {
-        agentId: survivorId,
-        env: options.env,
-      });
-      const target = resolveSqliteTargetFromSessionStorePath(storePath, {
-        agentId: survivorId,
-        defaultAgentId,
-        env: options.env,
-        registeredDatabases,
-      });
-      const identity = inspectDatabasePathIdentitySync(target.path);
-      if (!identity?.key.startsWith("file:")) {
-        continue;
-      }
-      const owner = await runSqliteReadOnlyOperation(
-        identity.canonicalPath,
-        { type: "agentRetirement.inspectOwner", input: { identity } },
-        { source: "canonical", expectedIdentity: identity.key, env: options.env ?? process.env },
-      );
-      const currentIdentity = inspectDatabasePathIdentitySync(target.path);
-      if (
-        currentIdentity?.key !== identity.key ||
-        currentIdentity.birthtime !== identity.birthtime ||
-        currentIdentity.canonicalPath !== identity.canonicalPath
-      ) {
-        throw new Error("Agent session database changed during deletion planning.");
-      }
-      if (owner.status === "owned" && owner.agentId === id) {
-        throw new AgentSharedStoreOwnerError(
-          `Agent "${id}" owns the session database still used by agent "${survivorId}" and cannot be deleted. Keep this owner configured until shared history can be moved with a supported migration; no such migration is currently available.`,
-        );
-      }
-    }
+  const input = prepareAgentSessionStoreDeletionSafety(cfg, agentId, options.env ?? process.env);
+  const context = captureOpenClawStateReadWorkerContext({
+    path: options.database?.path ?? options.path,
+    env: input.env,
   });
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    {
+      type: "agentDeletion.sessionStoreBlocker",
+      input: {
+        ...input,
+        databasePath: context.admission.databasePath,
+        env: context.environment,
+      },
+    },
+    { context, current: true },
+  );
+  context.admission.assertCurrent();
+  assertAgentSessionStoreDeletionTargetsCurrent(input.targets);
+  if (reply && (!reply.ok || reply.type !== "agentDeletion.sessionStoreBlocker")) {
+    throw new Error("Unexpected agent session-store deletion safety result");
+  }
+  let blocker = reply?.blocker;
+  if (!reply) {
+    const anchor = input.targets.candidates.find(({ identity }) =>
+      identity.key.startsWith("file:"),
+    );
+    if (anchor) {
+      const result = await withSqliteReadOnlyWorkerScope(() =>
+        runSqliteReadOnlyOperation(
+          anchor.identity.canonicalPath,
+          { type: "agentRetirement.sessionStoreBlocker", input },
+          { source: "canonical", expectedIdentity: anchor.identity.key, env: input.env },
+        ),
+      );
+      context.admission.assertCurrent();
+      assertAgentSessionStoreDeletionTargetsCurrent(input.targets);
+      blocker = result.blocker;
+    }
+  }
+  assertAgentSessionStoreDeletionBlocker(input.agentId, blocker);
 }
 
 export function resolveSurvivingDatabaseFilePaths(

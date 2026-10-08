@@ -229,14 +229,14 @@ export async function runMemoryStatus(
         await withProgress(
           { label: "Checking memory…", total: hasVectorStoreProbe ? 3 : 2 },
           async (progress) => {
-            progress.setLabel(hasVectorStoreProbe ? "Probing vector store…" : "Probing vectors…");
+            progress.setLabel(hasVectorStoreProbe ? "Checking vector store…" : "Checking vectors…");
             if (hasVectorStoreProbe) {
               await manager.probeVectorStoreAvailability?.();
             } else {
               await manager.probeVectorAvailability();
             }
             progress.tick();
-            progress.setLabel("Probing embeddings…");
+            progress.setLabel("Checking embeddings…");
             embeddingProbe = await manager.probeEmbeddingAvailability();
             progress.tick();
             if (hasVectorStoreProbe) {

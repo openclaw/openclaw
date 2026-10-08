@@ -198,15 +198,6 @@ const bundledPluginInstallUninstallLanes = Array.from(
     }),
 );
 
-export const fleetCacheLane = lane("fleet-cache", {
-  command: "pnpm test:docker:fleet-cache",
-  e2eImageKind: false,
-  needsPackage: true,
-  resources: ["docker", "service", "npm"],
-  timeoutMs: 30 * 60 * 1000,
-  weight: 4,
-});
-
 export const mainLanes: DockerE2eLane[] = [
   lane("container-image-upgrade", {
     command: "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:container-image-upgrade",

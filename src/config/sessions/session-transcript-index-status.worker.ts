@@ -11,6 +11,7 @@ import {
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
+  installSqliteTempTrackingSchema,
   readSqliteCacheDataVersion,
 } from "../../infra/sqlite-schema-facts.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -84,55 +85,13 @@ function installStatusTracking(db: DatabaseSync, schemaVersion: number): void {
   if (installation.schemaVersion === schemaVersion) {
     return;
   }
-  // sqlite-allow-raw -- TEMP triggers observe raw and cascading local mutations at their
-  // connection owner. The queue and admission cursor roll back with their source writes.
-  // UPDATE then conflict-free INSERT also works under an outer INSERT OR REPLACE policy.
-  db.exec(`
-    CREATE TEMP TABLE IF NOT EXISTS openclaw_transcript_index_status (
-      id INTEGER PRIMARY KEY CHECK (id = 1), data_version INTEGER NOT NULL,
-      schema_version INTEGER NOT NULL, complete INTEGER NOT NULL, after_session TEXT,
-      completed_traversals INTEGER NOT NULL
-    ) STRICT;
-    INSERT OR IGNORE INTO openclaw_transcript_index_status VALUES (1, -1, -1, 0, NULL, 0);
-    UPDATE openclaw_transcript_index_status SET data_version = -1;
-    CREATE TEMP TABLE IF NOT EXISTS openclaw_transcript_index_pending (
-      session_id TEXT PRIMARY KEY, state INTEGER NOT NULL
-    ) STRICT;
-    CREATE INDEX IF NOT EXISTS temp.openclaw_transcript_index_pending_state
-      ON openclaw_transcript_index_pending(state, session_id);
-    ${observedTables
-      .flatMap((table) =>
-        ["INSERT", "UPDATE", "DELETE"].map((operation) => {
-          const name = `openclaw_${table}_projection_${operation.toLowerCase()}`;
-          const sources =
-            operation === "UPDATE" ? ["OLD", "NEW"] : [operation === "DELETE" ? "OLD" : "NEW"];
-          return `DROP TRIGGER IF EXISTS temp.${name};
-          CREATE TEMP TRIGGER ${name} AFTER ${operation} ON main.${table}
-          WHEN ${sources
-            .map(
-              (source) => `NOT EXISTS (
-            SELECT 1 FROM openclaw_transcript_index_pending
-            WHERE session_id = ${source}.session_id AND state = 0
-          )`,
-            )
-            .join(" OR ")} BEGIN
-            ${sources
-              .map(
-                (source) => `
-              UPDATE openclaw_transcript_index_pending SET state = 0
-                WHERE session_id = ${source}.session_id;
-              INSERT INTO openclaw_transcript_index_pending
-                SELECT ${source}.session_id, 0 WHERE NOT EXISTS (
-                  SELECT 1 FROM openclaw_transcript_index_pending
-                  WHERE session_id = ${source}.session_id
-                );`,
-              )
-              .join("\n")}
-          END;`;
-        }),
-      )
-      .join("\n")}
-  `);
+  installSqliteTempTrackingSchema(db, {
+    kind: "transcript-index",
+    statusTable: "openclaw_transcript_index_status",
+    pendingTable: "openclaw_transcript_index_pending",
+    pendingIndex: "openclaw_transcript_index_pending_state",
+    observedTables,
+  });
   // Only installation is cached in JS; unmanaged transactions install again on the next call.
   stageSqliteTransactionState(db, {
     stage: () => {

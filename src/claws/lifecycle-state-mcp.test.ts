@@ -281,6 +281,7 @@ describe("Claw MCP removal", () => {
       expectedServer: sourceServer,
       recordIndependentOwner: false,
       assertCurrent: expect.any(Function),
+      assertCurrentAsync: expect.any(Function),
     });
     expect(result).toMatchObject({
       status: "complete",
@@ -388,6 +389,7 @@ describe("Claw MCP removal", () => {
         expectedServer: sourceServer,
         recordIndependentOwner: false,
         assertCurrent: expect.any(Function),
+        assertCurrentAsync: expect.any(Function),
       });
       expect(result).toMatchObject({
         status: "complete",

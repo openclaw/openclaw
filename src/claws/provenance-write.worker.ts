@@ -3,7 +3,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { AgentDeletionWorkerGuard } from "../state/agent-deletion-worker-contract.js";
 import { assertAgentDeletionWorkerPredicate } from "../state/agent-deletion.worker.js";
 import {
   CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE,
@@ -15,28 +14,23 @@ import {
   assertOpenClawStateLeaseWorkerOwnedInTransaction,
   assertOpenClawStateLeasesWorkerOwnedInTransaction,
 } from "../state/openclaw-state-lease-worker.js";
-import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import { rowToRef, selectMcpRefs } from "./mcp-records.js";
-import type {
-  ClawPackageRefStatus,
-  PersistedClawPackageRef,
-} from "./package-extension-provenance.js";
 import { updateClawPackageRefStatusInDatabase } from "./package-status.kernel.js";
 import {
   readClawInstallRecordFromDatabase,
   readClawOrphanWorkspaceInDatabase,
 } from "./provenance-read.kernel.js";
+import type { ClawProvenanceWriteOperations } from "./provenance-write.worker-contract.js";
+import { mutateClawRemovalJournalInWorker } from "./removal-journal.worker.js";
 
 export const clawProvenanceOperations = {
+  "clawProvenance.removalJournal": (
+    input: ClawProvenanceWriteOperations["clawProvenance.removalJournal"]["input"],
+    { open, stateOptions },
+  ) => mutateClawRemovalJournalInWorker(open(), input, stateOptions()),
   "clawProvenance.packageStatus": (
-    input: {
-      ref: PersistedClawPackageRef;
-      status: ClawPackageRefStatus;
-      nowMs?: number;
-      lease: OpenClawStateLeaseIdentity;
-      deletion?: AgentDeletionWorkerGuard;
-    },
+    input: ClawProvenanceWriteOperations["clawProvenance.packageStatus"]["input"],
     { open, stateOptions },
   ) =>
     runOpenClawStateWriteTransaction(
@@ -116,7 +110,7 @@ export const clawProvenanceOperations = {
       { database: open(), ...stateOptions() },
     ),
   "clawProvenance.reconcileMcp": (
-    input: { agentId: string; digests: Record<string, string>; nowMs?: number },
+    input: ClawProvenanceWriteOperations["clawProvenance.reconcileMcp"]["input"],
     { open, stateOptions },
   ) =>
     runOpenClawStateWriteTransaction(

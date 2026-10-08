@@ -265,6 +265,7 @@ export function createSessionHistoryWorkerReaders(
     readTranscript: async (input, signal) => {
       const events: TranscriptEvent[] = [];
       const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
+      const eventSeqs: number[] | undefined = input.includeEventJson ? [] : undefined;
       let parts: string[] = [];
       let text: { encoding: string; decoder: TextDecoder } | undefined;
       const receiveChunk = (value: unknown) => {
@@ -297,6 +298,12 @@ export function createSessionHistoryWorkerReaders(
             const json = parts.join("");
             events.push(JSON.parse(json));
             eventJson?.push(json);
+            if (eventSeqs) {
+              if (typeof frame.seq !== "number" || !Number.isSafeInteger(frame.seq)) {
+                throw new Error("Transcript snapshot omitted its row sequence");
+              }
+              eventSeqs.push(frame.seq);
+            }
             parts = [];
           }
         }
@@ -322,7 +329,11 @@ export function createSessionHistoryWorkerReaders(
           }
           return {
             kind: "full",
-            snapshot: { events, version: value.version, ...(eventJson ? { eventJson } : {}) },
+            snapshot: {
+              events,
+              version: value.version,
+              ...(eventJson ? { eventJson, eventSeqs } : {}),
+            },
           };
         },
         signal,

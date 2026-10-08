@@ -36,6 +36,7 @@ import {
   observePlacementAuthority,
   preparePlacementAuthorityRead,
   preparePlacementTurnClaimAuthority,
+  prepareSessionPlacementRead,
   type PlacementTurnClaimAuthority,
 } from "./placement-turn-authority.js";
 import { attachWorkerTurnExecutionIdentityStore } from "./placement-turn-claim-events.js";
@@ -156,6 +157,11 @@ export function createWorkerSessionPlacementStore(
         pendingResult: projection.pendingResults.get(sessionId),
         ...observation,
       };
+    },
+
+    prepareSessionPlacement(sessionIdInput: string) {
+      const sessionId = required(sessionIdInput, "session id");
+      return prepareSessionPlacementRead(path, sessionId, () => store.getAsync(sessionId));
     },
 
     async prepareMaintenancePlacements() {

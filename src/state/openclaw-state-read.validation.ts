@@ -273,6 +273,28 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
         )) ||
       (input.command.type === "agentLifecycle.read" && typeof input.command.input === "string") ||
+      (input.command.type === "agentDeletion.sessionStoreBlocker" &&
+        isRecord(input.command.input) &&
+        isRecord(input.command.input.config) &&
+        typeof input.command.input.agentId === "string" &&
+        input.command.input.databasePath === input.databasePath &&
+        isRecord(input.command.input.targets) &&
+        isStringArray(input.command.input.targets.stores) &&
+        Array.isArray(input.command.input.targets.candidates) &&
+        input.command.input.targets.candidates.every(
+          (candidate) =>
+            isRecord(candidate) &&
+            typeof candidate.path === "string" &&
+            isRecord(candidate.identity) &&
+            typeof candidate.identity.key === "string" &&
+            typeof candidate.identity.canonicalPath === "string" &&
+            (candidate.identity.birthtime === undefined ||
+              typeof candidate.identity.birthtime === "string"),
+        ) &&
+        isRecord(input.command.input.env) &&
+        Object.values(input.command.input.env).every(
+          (value) => value === undefined || typeof value === "string",
+        )) ||
       input.command.type === "agentDatabaseRegistry.read" ||
       (input.command.type === "agentDatabaseDeletion.snapshot" &&
         (input.command.purpose === "runtime" || input.command.purpose === "maintenance")) ||
@@ -390,7 +412,6 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.input.reason === "string") &&
         (input.command.input.includeRunId === undefined ||
           typeof input.command.input.includeRunId === "string")) ||
-      input.command.type === "fleet.list" ||
       ((input.command.type === "operatorApprovals.placementGrant" ||
         input.command.type === "operatorApprovals.history" ||
         input.command.type === "operatorApprovals.listCronGrants" ||
@@ -410,7 +431,6 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.type === "sandboxRegistry.runtimeIds" &&
         typeof input.command.backendId === "string" &&
         typeof input.command.scopeKey === "string") ||
-      (input.command.type === "fleet.get" && typeof input.command.tenantId === "string") ||
       input.command.type === "worktrees.cleanupState" ||
       input.command.type === "worktrees.list" ||
       (input.command.type === "workerPlacements.changeSnapshot" &&

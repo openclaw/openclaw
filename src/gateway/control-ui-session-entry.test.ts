@@ -61,6 +61,12 @@ describe("protected canonical session handoff", () => {
     expect(parseControlUiSessionReturnPath(`${path}&dashboard=expanded`, "/control")).toBeNull();
     expect(parseControlUiSessionReturnPath(`${canonical}?dashboard=other`, "/control")).toBeNull();
   });
+  it("preserves composer drafts through the app handoff", async () => {
+    const path = `${canonical}?draft=Follow+up&dashboard=expanded`;
+    const opened = await request(buildControlUiSessionEntryUrl(path, "/control"));
+    expect(opened.serveApp).toHaveBeenCalledWith(path, expect.any(Function));
+    expect(parseControlUiSessionReturnPath(`${path}&draft=second`, "/control")).toBeNull();
+  });
 
   it("uses the authenticated profile and grants only exact accessible sessions", async () => {
     const probe = await request(`${entry}&probe=1`);

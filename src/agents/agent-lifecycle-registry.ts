@@ -18,11 +18,15 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
-  captureAgentDatabasePreparationDeletion,
+  captureAgentDatabasePreparationDeletionForIdentity,
   readAgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
 import { createAgentDeletionDatabaseCleanup } from "../state/agent-deletion-cleanup.js";
 import { assertAgentDeletionFinalInDatabase } from "../state/agent-deletion-final-guard.js";
+import type {
+  AgentDeletionInput,
+  AgentDeletionJournalTransport,
+} from "../state/agent-deletion-journal-transport.js";
 import {
   readAgentDeletionJournal,
   readAgentDeletionJournalInDatabase,
@@ -67,38 +71,24 @@ import {
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import {
+  beginRemoteAgentDeletionJournal,
+  rollbackRemoteAgentDeletionJournal,
+} from "./agent-deletion-journal-remote.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
+export {
+  AgentDeletionAuthorityRollbackError,
+  AgentDeletionCommitUncertainError,
+} from "./agent-deletion-errors.js";
 
 export { claimCompletedAgentDeletion } from "./agent-deletion-claim.js";
 
 const log = createSubsystemLogger("agents/lifecycle");
 
-export class AgentDeletionAuthorityRollbackError extends AggregateError {}
-
-export class AgentDeletionCommitUncertainError extends Error {
-  constructor(cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
-  }
-}
-
 export type AgentLifecycleBinding = Readonly<{
   agentId: string;
   provenance: AgentProvenance | null;
 }>;
-
-type AgentDeletionInput = Omit<
-  AgentDeletionJournalEntry,
-  | "createdAt"
-  | "operationId"
-  | "cleanupCompleted"
-  | "databasePaths"
-  | "cleanupPaths"
-  | "deleteFiles"
-> & {
-  databasePaths?: string[];
-  cleanupPaths?: AgentDeletionJournalCleanupPath[];
-  deleteFiles?: boolean;
-};
 
 type AgentDeletionBeginOptions = {
   expectedClawInstall?: PersistedClawInstall | null;
@@ -131,9 +121,10 @@ export function withAgentDeletion<T>(
       options?: AgentDeletionBeginOptions,
     ) => Promise<AgentDeletionOperation>,
   ) => Promise<T>,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { journalTransport?: AgentDeletionJournalTransport } = {},
 ): Promise<T> {
   const id = normalizeAgentId(agentId);
+  const journalTransport = options.journalTransport;
   if (isReservedSystemAgentId(id)) {
     throw new Error(
       `System agent ${id} cannot be deleted; run openclaw doctor --fix to quarantine invalid deletion history.`,
@@ -287,39 +278,51 @@ export function withAgentDeletion<T>(
               id,
               context.admission.identity.key,
             );
-            const invalidatePreparation = captureAgentDatabasePreparationDeletion(id, {
-              path: statePath,
+            const invalidatePreparation = captureAgentDatabasePreparationDeletionForIdentity(id, {
+              databasePath: statePath,
               identityKey: context.admission.identity.key,
             });
-            const { entry: journal, previousEntry } = await withCronReceiptAuthorityMutation(
-              context,
-              async (mutation) =>
-                execute(
-                  (scope, identity) =>
-                    scope.execute({
-                      type: "agentDeletion.begin",
-                      input: {
-                        entry: {
-                          ...capturedEntry,
-                          agentId: id,
-                          operationId,
-                          deleteFiles: capturedEntry.deleteFiles !== false,
+            const remoteOwner = journalTransport
+              ? { lease, context, transport: journalTransport, assertCurrent: assertCurrentHost }
+              : undefined;
+            const { entry: journal, previousEntry } = remoteOwner
+              ? await beginRemoteAgentDeletionJournal(
+                  remoteOwner,
+                  { ...capturedEntry, agentId: id },
+                  operationId,
+                )
+              : await withCronReceiptAuthorityMutation(context, async (mutation) =>
+                  execute(
+                    (scope, identity) =>
+                      scope.execute({
+                        type: "agentDeletion.begin",
+                        input: {
+                          entry: {
+                            ...capturedEntry,
+                            agentId: id,
+                            operationId,
+                            deleteFiles: capturedEntry.deleteFiles !== false,
+                          },
+                          lease: identity,
+                          expectedClawInstall: predicate.expectedClawInstall,
+                          preserveDeleteFiles,
+                          nonce: mutation.attachment.nonce,
                         },
-                        lease: identity,
-                        expectedClawInstall: predicate.expectedClawInstall,
-                        preserveDeleteFiles,
-                        nonce: mutation.attachment.nonce,
+                      }),
+                    {
+                      mutation,
+                      onCommitted: () => {
+                        invalidatePreparation();
+                        cancelCronRuns();
                       },
-                    }),
-                  {
-                    mutation,
-                    onCommitted: () => {
-                      invalidatePreparation();
-                      cancelCronRuns();
                     },
-                  },
-                ),
-            );
+                  ),
+                );
+            if (remoteOwner) {
+              invalidatePreparation();
+              cancelCronRuns();
+              sessionChanges.emit({ all: true, scope: "stores" });
+            }
             assertCurrentHost();
             const authority: AgentDeletionWorkerAuthority = {
               assertCurrentHost,
@@ -537,6 +540,12 @@ export function withAgentDeletion<T>(
                 }
               },
               rollback: async () => {
+                if (remoteOwner) {
+                  await rollbackRemoteAgentDeletionJournal(remoteOwner, id, operationId);
+                  closed = true;
+                  sessionChanges.emit({ all: true, scope: "stores" });
+                  return;
+                }
                 await withCronReceiptAuthorityMutation(
                   context,
                   (mutation) =>
