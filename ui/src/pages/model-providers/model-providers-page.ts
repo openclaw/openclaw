@@ -45,7 +45,6 @@ import { InstalledAgentsController } from "./installed-agents.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import { ModelProviderLoginController } from "./login-controller.ts";
 import { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
-import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.ts";
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
@@ -172,7 +171,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getData: () => this.data,
     getOrders: () => this.profileOrders,
     setData: (data) => (this.data = data),
-    setError: showProfileActionError,
     setOrders: (orders) => (this.profileOrders = orders),
     clearMessage: (cardId) => this.setMessage(cardId, null),
     canMutate: () => this.canMutate(),
@@ -184,7 +182,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     setProbeResult: (cardId, result) =>
       (this.probeResults = updateRecordEntry(this.probeResults, cardId, result)),
     setProbeError: (cardId, error) => this.setMessage(cardId, { kind: "error", text: error }),
-    setLogoutSuccess: showProfileLogoutSuccess,
     getConfig: () => this.context.runtimeConfig,
   });
   private readonly discovery = new ModelProviderDiscoveryController(this, {
@@ -285,7 +282,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       }
       this.core.invalidate();
       this.routeDataObserved = true;
-      this.setSelectedAgent(this.resolveSelectedAgentId());
+      this.setSelectedAgent(this.context.settingsAgentSelection.state.selectedId ?? "");
       if (
         (data.agentId ?? "") === this.selectedAgentId &&
         data.selectionIntentRevision === this.context.settingsAgentSelection.intentRevision &&
@@ -384,11 +381,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.addProviderKey = "";
   }
 
-  private resolveSelectedAgentId(): string {
-    const selected = this.context.settingsAgentSelection.state.selectedId;
-    return selected ? normalizeAgentId(selected) : "";
-  }
-
   private setSelectedAgent(agentId: string): boolean {
     if (agentId === this.selectedAgentId) {
       return false;
@@ -400,7 +392,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private syncSelectedAgent() {
-    if (!this.setSelectedAgent(this.resolveSelectedAgentId())) {
+    if (!this.setSelectedAgent(this.context.settingsAgentSelection.state.selectedId ?? "")) {
       return;
     }
     this.invalidateRequests();

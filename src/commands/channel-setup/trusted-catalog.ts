@@ -7,34 +7,31 @@ import {
 } from "../../channels/plugins/catalog.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../../plugins/config-state.js";
-import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import {
   hasExplicitManifestOwnerTrust,
   resolveManifestOwnerBasePolicyBlock,
 } from "../../plugins/manifest-owner-policy.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
 
-type TrustedChannelCatalogOptions = {
+type TrustedChannelCatalogOptions = Pick<
+  NonNullable<Parameters<typeof getChannelPluginCatalogEntry>[1]>,
+  "workspaceDir" | "env" | "discovery" | "installRecords"
+> & {
   cfg: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  discovery?: PluginDiscoveryResult;
-  installRecords?: Record<string, PluginInstallRecord>;
 };
 
 const LOCAL_CHANNEL_PLUGIN_ORIGINS = ["workspace", "config", "global"] as const;
 
 type LocalChannelPluginOrigin = (typeof LOCAL_CHANNEL_PLUGIN_ORIGINS)[number];
 
-type TrustedCatalogLookupExclusions = {
-  excludeOrigins?: PluginOrigin[];
-  excludePluginRefs?: Array<{ pluginId: string; origin?: PluginOrigin }>;
-};
+type TrustedCatalogLookupExclusions = Pick<
+  NonNullable<Parameters<typeof getChannelPluginCatalogEntry>[1]>,
+  "excludeOrigins" | "excludePluginRefs"
+>;
 
 const LOCAL_CHANNEL_PLUGIN_ORIGIN_SET = new Set<PluginOrigin>(LOCAL_CHANNEL_PLUGIN_ORIGINS);
 const MAX_TRUSTED_CATALOG_FALLBACKS = 16;

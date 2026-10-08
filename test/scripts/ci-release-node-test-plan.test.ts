@@ -1,11 +1,82 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { listWholeConfigSplitFiles } from "../../scripts/lib/ci-node-test-inventory.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import * as testFileInventory from "../../scripts/lib/list-test-files.mts";
 import * as shardMetadata from "../../scripts/lib/vitest-shard-metadata.mts";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("retains complete Gateway methods walls across inventory changes until refitted", async () => {
+  const original = fullSuiteVitestShards.slice();
+  const owner = "agentic-gateway-methods";
+  const configs = [
+    "test/vitest/vitest.gateway-methods.config.ts",
+    "test/vitest/vitest.gateway-methods-isolated.config.ts",
+  ];
+  const files = expectDefined(listWholeConfigSplitFiles(owner), "Gateway methods inventory");
+  const historicalFiles = [
+    ...files.slice(0, -2),
+    "src/gateway/server-methods/retired-timing-fixture.test.ts",
+  ];
+  const parentShardName = `release-full-${owner}`;
+  const historical = shardMetadata.createCompactSplitTimingGeneration({
+    configs,
+    parentShardName,
+    stripes: [historicalFiles.slice(0, 2), historicalFiles.slice(2)],
+  });
+  const measurements: Record<string, number> = { [historical.timingKeys[0]!]: 3000 };
+  vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(measurements);
+  fullSuiteVitestShards.splice(
+    0,
+    fullSuiteVitestShards.length,
+    ...original
+      .map((shard) => ({
+        ...shard,
+        projects: shard.projects.filter((config) => configs.includes(config)),
+      }))
+      .filter((shard) => shard.projects.length > 0),
+  );
+  try {
+    const { createNodeTestShardBundles } = await import("../../scripts/lib/ci-node-test-plan.mts");
+    const full = () => createNodeTestShardBundles({ runnerBackend: "github" });
+    // An incomplete generation cannot price the complete owner.
+    expect(full()).toHaveLength(1);
+    expect(full()[0]?.predictedSeconds).toBeUndefined();
+    const pullRequest = { compactMode: "pull-request", runnerBackend: "github" } as const;
+    const beforePr = createNodeTestShardBundles(pullRequest);
+    const beforeBlacksmith = createNodeTestShardBundles({ runnerBackend: "blacksmith" });
+
+    measurements[historical.timingKeys[1]!] = 355;
+    const rows = full();
+    expect(rows.length).toBeGreaterThan(1);
+    expect(rows.flatMap((row) => row.includePatterns ?? []).toSorted()).toEqual(files.toSorted());
+    expect(rows.reduce((sum, row) => sum + row.predictedSeconds!, 0)).toBeGreaterThanOrEqual(3355);
+    for (const row of rows) {
+      expect(row.shardName).toMatch(/^agentic-gateway-methods-hosted-\d+$/u);
+      expect(row.predictedSeconds).toBeLessThanOrEqual(720);
+      expect(row.configs).toEqual(configs);
+      expect(row.env).toBeUndefined();
+      expect(row.requiresDist).toBe(false);
+      expect(row.runner).toBe(beforeBlacksmith[0]!.runner);
+      measurements[expectDefined(row.timing_key, "Gateway split timing identity")] = 50;
+    }
+    expect(createNodeTestShardBundles(pullRequest)).toEqual(beforePr);
+    expect(createNodeTestShardBundles({ runnerBackend: "blacksmith" })).toEqual(beforeBlacksmith);
+
+    // A complete observation of the current inventory retires the historical floor.
+    const refitted = full();
+    expect(refitted).toHaveLength(1);
+    expect(refitted[0]?.predictedSeconds).toBe(rows.length * 50);
+    for (const row of rows) {
+      measurements[row.timing_key!] = 0;
+    }
+    expect(full()).toHaveLength(1);
+  } finally {
+    fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
+  }
+});
 
 it("splits measured full-release hosted rows without losing their execution contract", async () => {
   const original = fullSuiteVitestShards.slice();
@@ -135,5 +206,18 @@ it("splits measured full-release hosted rows without losing their execution cont
     expect(releaseRows).toThrow("indivisible test above the hosted budget");
   } finally {
     fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
+  }
+});
+
+it("gives measured long unfitted release rows room above the hosted job cap", async () => {
+  const { createNodeTestShardBundles } = await import("../../scripts/lib/ci-node-test-plan.mts");
+  const rows = createNodeTestShardBundles({ runnerBackend: "github" });
+  for (const owner of [
+    "agentic-cli-process",
+    "agentic-control-plane-agent-chat",
+    "core-runtime-config",
+  ]) {
+    const row = rows.find((candidate) => candidate.shardName === owner);
+    expect(row?.timeoutMinutes, owner).toBe(90);
   }
 });

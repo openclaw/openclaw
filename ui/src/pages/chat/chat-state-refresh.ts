@@ -91,7 +91,7 @@ function scheduleChatMetadataRefresh(callback: () => void) {
 }
 
 export async function refreshChatCommands(host: ChatPageHost) {
-  await refreshSlashCommands({
+  return refreshSlashCommands({
     client: host.client,
     agentId: resolveChatAgentId(host),
     sessionKey: host.sessionKey,
@@ -193,6 +193,10 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
             applyCachedChatModelCatalog(host, binding);
           }
           binding.sessionFactsInvalidated ||= update.refreshSessionFacts;
+          if (update.scope === "session" && binding.catalogRequest) {
+            // The foreground picker already owns replacement of its retired catalog read.
+            return;
+          }
           void refreshChatMetadata(host, { automatic: true });
           return;
         }
@@ -603,10 +607,9 @@ async function refreshChat(
       return;
     }
     const sessionInfo = selectedChatSessionRow(host);
-    const rosterRow = sessionInfo ?? history.sessionInfo;
     if (sessionInfo) {
-      host.selectedChatSessionArchived = rosterRow.archived === true;
-      host.selectedChatSessionIncognito = rosterRow.incognito === true;
+      host.selectedChatSessionArchived = sessionInfo.archived === true;
+      host.selectedChatSessionIncognito = sessionInfo.incognito === true;
     }
     const snapshotRunId = history.inFlightRun?.runId?.trim();
     const activeRunIds = history.sessionInfo.activeRunIds;
@@ -654,11 +657,7 @@ async function refreshChat(
     previousSessionsResult,
     () => void flushChatQueueForEvent(host),
   );
-  const secondaryRefresh = Promise.allSettled([sessionsRefresh, startupMetadataRefresh]).finally(
-    requestUpdate,
-  );
-  void historyRefresh;
-  void secondaryRefresh;
+  void Promise.allSettled([sessionsRefresh, startupMetadataRefresh]).finally(requestUpdate);
   if (opts?.awaitHistory === true) {
     await historyRefresh;
     return;

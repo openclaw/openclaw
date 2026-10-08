@@ -12,14 +12,14 @@ import {
 } from "./lib/upgrade-survivor-policy.mjs";
 
 const BASELINE_SHARDED_LANES = new Set(["published-upgrade-survivor", "update-migration"]);
-const SURVIVOR_SCENARIOS_PER_GROUP = 1;
+// The 62-minute update-restart-auth lane needs room for runner setup and artifact upload.
+const LONG_LANE_JOB_TIMEOUT_MINUTES = new Map([["update-restart-auth", 75]]);
 
 function splitTokens(raw) {
   return [
     ...new Set(
       String(raw ?? "")
         .split(/[,\s]+/u)
-        .map((token) => token.trim())
         .filter(Boolean),
     ),
   ];
@@ -35,8 +35,6 @@ function sanitizeLabel(value) {
 }
 
 /**
- * Groups selected Docker lanes and expands sharded upgrade-survivor baselines.
- *
  * @param {{
  *   groupSize?: number | string;
  *   lanes?: string;
@@ -122,6 +120,12 @@ export function planTargetedDockerLaneGroups({
     ) {
       group.timeout_minutes = 90;
     }
+    for (const lane of groupLanes) {
+      const minutes = LONG_LANE_JOB_TIMEOUT_MINUTES.get(lane);
+      if (minutes !== undefined && (group.timeout_minutes ?? 60) < minutes) {
+        group.timeout_minutes = minutes;
+      }
+    }
     groups.push(group);
   };
 
@@ -141,26 +145,18 @@ export function planTargetedDockerLaneGroups({
       flushPending();
       for (const [baseline, scenarios] of pairedScenarios) {
         const label = `${sanitizeLabel(lane)}-${sanitizeLabel(baseline)}`;
-        for (let offset = 0; offset < scenarios.length; offset += SURVIVOR_SCENARIOS_PER_GROUP) {
+        for (const [index, scenario] of scenarios.entries()) {
           addGroup({
             docker_lanes: lane,
-            label:
-              scenarios.length > SURVIVOR_SCENARIOS_PER_GROUP
-                ? `${label}-scenarios-${offset / SURVIVOR_SCENARIOS_PER_GROUP + 1}`
-                : label,
+            label: scenarios.length > 1 ? `${label}-scenarios-${index + 1}` : label,
             published_upgrade_survivor_baselines: baseline,
-            published_upgrade_survivor_scenarios: scenarios
-              .slice(offset, offset + SURVIVOR_SCENARIOS_PER_GROUP)
-              .join(" "),
+            published_upgrade_survivor_scenarios: scenario,
           });
         }
       }
       continue;
     }
-    if (
-      BASELINE_SHARDED_LANES.has(lane) &&
-      survivorScenarios.length > SURVIVOR_SCENARIOS_PER_GROUP
-    ) {
+    if (BASELINE_SHARDED_LANES.has(lane) && survivorScenarios.length > 1) {
       flushPending();
       for (const baselineSpec of baselineSpecs.length > 0 ? baselineSpecs : [undefined]) {
         // Filter at the policy owner before partitioning so old baselines cannot
@@ -169,14 +165,12 @@ export function planTargetedDockerLaneGroups({
           supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec),
         );
         const label = [lane, baselineSpec].filter(Boolean).map(sanitizeLabel).join("-");
-        for (let offset = 0; offset < scenarios.length; offset += SURVIVOR_SCENARIOS_PER_GROUP) {
+        for (const [index, scenario] of scenarios.entries()) {
           addGroup({
             docker_lanes: lane,
-            label: `${label}-scenarios-${offset / SURVIVOR_SCENARIOS_PER_GROUP + 1}`,
+            label: `${label}-scenarios-${index + 1}`,
             ...(baselineSpec ? { published_upgrade_survivor_baselines: baselineSpec } : {}),
-            published_upgrade_survivor_scenarios: scenarios
-              .slice(offset, offset + SURVIVOR_SCENARIOS_PER_GROUP)
-              .join(" "),
+            published_upgrade_survivor_scenarios: scenario,
           });
         }
       }

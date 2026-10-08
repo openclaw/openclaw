@@ -1,4 +1,3 @@
-// Coordinates parsed reply directives before get-reply executes commands or agents.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -340,10 +339,7 @@ export async function resolveReplyDirectives(params: {
     | null
     | undefined;
   const sessionReasoningLevel = canUseReasoningState ? rawSessionReasoningLevel : undefined;
-  const blockedSessionReasoningLevel =
-    rawSessionReasoningLevel !== undefined &&
-    rawSessionReasoningLevel !== null &&
-    !canUseReasoningState;
+  const blockedSessionReasoningLevel = rawSessionReasoningLevel != null && !canUseReasoningState;
   const reasoningUsesConfiguredDefault =
     directives.reasoningLevel === undefined &&
     sessionReasoningLevel == null &&
@@ -484,13 +480,12 @@ export async function resolveReplyDirectives(params: {
   // (e.g. OpenRouter with reasoning: true). Skip model default when thinking is active
   // or when thinking was explicitly disabled.
   const hasAgentReasoningDefault =
-    (agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null) ||
-    (agentCfg?.reasoningDefault !== undefined && agentCfg?.reasoningDefault !== null);
+    agentEntry?.reasoningDefault != null || agentCfg?.reasoningDefault != null;
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
     unauthorizedReasoningDirectiveAttempt ||
     blockedSessionReasoningLevel ||
-    (sessionReasoningLevel !== undefined && sessionReasoningLevel !== null) ||
+    sessionReasoningLevel != null ||
     hasAgentReasoningDefault;
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
   const resolvedFastModeState = resolveFastModeState({

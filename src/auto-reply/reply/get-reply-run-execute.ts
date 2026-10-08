@@ -20,6 +20,7 @@ import {
   readToolAllowlistIntersection,
 } from "../../agents/tool-policy.js";
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
+import { copyChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -73,13 +74,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     thinkLevelOverride,
     thinkingCatalog,
     skillsSnapshot,
-    prefixedCommandBody,
-    queuedBody,
-    transcriptBody,
-    transcriptCommandBody,
-    promptMedia,
-    inboundMediaIndexes,
-    currentInboundContext,
     isRoomEvent,
     providedReplyOperation,
     preparedSessionState,
@@ -96,6 +90,15 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     authProfileId,
     authProfileIdSource,
   } = state;
+  const {
+    prefixedCommandBody,
+    queuedBody,
+    transcriptBody,
+    transcriptCommandBody,
+    media: promptMedia,
+    inboundMediaIndexes,
+    currentInboundContext,
+  } = state.promptBodies;
   const {
     params,
     runtimePolicySessionKey,
@@ -138,8 +141,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     sessionStore,
     sessionKey,
     storePath,
-  } = params;
-  const {
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
@@ -168,13 +169,12 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   // Abort-signal attachment for queued followups:
   // - room_event: always inherit (source admission fence / ambient cancel).
   // - Gateway-owned lifecycle (chat.send / turnAdoptionLifecycle): always inherit
-  //   so Esc can cancel a turn after chat.send terminalizes while still queued.
+  //   so Esc can cancel an input while it waits for its followup execution.
   // - plain user_request without lifecycle: deliberately detach from the
   //   source/active-lane signal so a superseded parent abort does not cancel a
   //   still-valid queued user turn.
-  const hasQueuedOwnershipLifecycle = Boolean(opts?.turnAdoptionLifecycle);
   const queuedFollowupAbortSignal =
-    hasQueuedOwnershipLifecycle || inboundEventKind === "room_event"
+    opts?.turnAdoptionLifecycle || inboundEventKind === "room_event"
       ? (opts?.queuedFollowupAbortSignal ??
         opts?.turnAdoptionLifecycle?.abortSignal ??
         opts?.abortSignal)
@@ -375,7 +375,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   if (queuedToolsAllow && queuedToolIntersections) {
     attachToolAllowlistIntersection(queuedToolsAllow, queuedToolIntersections);
   }
-  const admittedSessionSettings = opts?.admittedSessionSettings;
+  const admittedSessionSettings =
+    opts?.admittedSessionSettings ?? preparedSessionState.sessionEntry;
   const groupTurn = getGroupThreadTurn();
   const personalBootstrapEligible = isSessionPersonalBootstrapTurn({
     ...ctx,
@@ -491,14 +492,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       cwd:
         normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ??
         resolveAgentRunCwd(cfg, agentId),
-      permissionMode: admittedSessionSettings
-        ? admittedSessionSettings.permissionMode
-        : preparedSessionState.sessionEntry?.permissionMode,
+      permissionMode: admittedSessionSettings?.permissionMode,
       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       config: cfg,
-      toolOverrides: admittedSessionSettings
-        ? admittedSessionSettings.toolOverrides
-        : preparedSessionState.sessionEntry?.toolOverrides,
+      toolOverrides: admittedSessionSettings?.toolOverrides,
       skillsSnapshot,
       provider,
       model,
@@ -574,11 +571,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       skipProviderRuntimeHints: useFastReplyRuntime,
       terminalReplyExpectation,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
-      ...(opts?.skillWorkshopProposalRevision
-        ? {
-            skillWorkshopProposalRevision: { ...opts.skillWorkshopProposalRevision },
-          }
-        : {}),
       ...(opts?.skillLibraryAuthoring ? { skillLibraryAuthoring: opts.skillLibraryAuthoring } : {}),
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, { config: cfg, workspaceDir, modelId: model })
@@ -587,6 +579,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     },
   };
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
+  copyChildSessionPublication(sessionCtx, followupRun.run);
   const channelOwnerAuthority = getCommandOwnerAuthority(sessionCtx);
   if (command.senderIsOwner && channelOwnerAuthority) {
     bindCommandOwnerAuthority(followupRun.run, channelOwnerAuthority);

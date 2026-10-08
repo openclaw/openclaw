@@ -1,6 +1,5 @@
 import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexSessionInitializationFixtureForTest } from "../extensions/codex/test-api.js";
@@ -103,7 +102,6 @@ describe("Codex initialization through the registered session deletion owner", (
         let linkFailureInjected = false;
         let linkGrantCount = 0;
         let linkGrantReads = 0;
-        let rollbackCommitArmed = false;
         let rollbackCommitRefused = false;
         const reads = observeMainThreadReads();
         const upsertAsync = upstreamLinks.upsertSessionUpstreamLinkWithCurrentSource;
@@ -158,16 +156,6 @@ describe("Codex initialization through the registered session deletion owner", (
               ) {
                 replaceSource();
                 linkFailureInjected = true;
-              }
-              const publication = isRecord(request.facts) ? request.facts.publication : undefined;
-              if (
-                rollbackCommitArmed &&
-                request.stage === "commit" &&
-                isRecord(publication) &&
-                publication.kind === "session-native-binding"
-              ) {
-                rollbackCommitRefused = true;
-                throw new Error("injected rollback failure");
               }
               const offsets = reads.calls.map((call) => call.mock.contexts.length);
               try {
@@ -332,7 +320,14 @@ describe("Codex initialization through the registered session deletion owner", (
             successorLink = readSessionUpstreamLink(params.targetKey, "main");
           }
           if (failure === "rollback commit") {
-            rollbackCommitArmed = true;
+            const database = openOpenClawAgentDatabase({ agentId: "main" });
+            database.db.function("observe_rollback_refusal", () => {
+              rollbackCommitRefused = true;
+              return 0;
+            });
+            database.db.exec(
+              "CREATE TEMP TRIGGER reject_rollback BEFORE DELETE ON session_nodes WHEN json_extract(OLD.entry_json, '$.initializationPending') = 1 BEGIN SELECT observe_rollback_refusal(); SELECT RAISE(ABORT, 'injected rollback failure'); END",
+            );
           }
           if (
             [

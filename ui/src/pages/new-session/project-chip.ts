@@ -35,10 +35,6 @@ export type DraftRemoteProject = Readonly<{
   projectId?: string;
 }>;
 
-function inputValue(event: Event): string {
-  return event.target instanceof HTMLInputElement ? event.target.value : "";
-}
-
 type ProjectChipState = Readonly<{
   label: string;
   localProjects: readonly ProjectRecord[];
@@ -246,7 +242,10 @@ export function renderProjectChip(params: {
                     placeholder=${t("newSession.projectSearchPlaceholder")}
                     .value=${params.projectQuery}
                     ?disabled=${params.submitting || params.pendingPlacement}
-                    @input=${(event: Event) => params.onProjectQueryInput(inputValue(event))}
+                    @input=${(event: Event) =>
+                      params.onProjectQueryInput(
+                        event.target instanceof HTMLInputElement ? event.target.value : "",
+                      )}
                     @keydown=${(event: KeyboardEvent) => {
                       if (event.key === "Enter" && cloneInput && params.projectAddAvailable) {
                         event.preventDefault();

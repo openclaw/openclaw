@@ -22,7 +22,9 @@ import {
 export function createManagedHandoffOriginalAcquisition(deps: {
   options: ManagedHandoffLeaseStoreOptions;
   acquirePinnedOriginal: (
-    pinnedOptions: ManagedHandoffLeaseStoreOptions,
+    pinnedOptions: ManagedHandoffLeaseStoreOptions & {
+      existingIdentity: ReturnType<typeof captureManagedUpdateLeaseDatabaseIdentity>;
+    },
     root: string,
     owner: string,
     action: ManagedHandoffLeaseAction,

@@ -2,12 +2,12 @@ import path from "node:path";
 import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { writeSubagentRunValuesInDatabase } from "../../agents/subagents/registry/subagent-registry.store.kernel.js";
 import {
   addSubagentRunForTests,
-  getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
@@ -41,8 +41,8 @@ export function nativeSubagentClient(): AgentHandlerArgs["client"] {
 export function observeAgentSubagentCleanup(params: { runId: string; childSessionKey: string }) {
   const cleanupCompleted = createDeferred();
   const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
-    const entry = getSubagentRunByChildSessionKey(params.childSessionKey);
-    if (entry?.runId === params.runId && entry.cleanupCompletedAt) {
+    const entry = subagentRuns.get(params.runId);
+    if (entry?.childSessionKey === params.childSessionKey && entry.cleanupCompletedAt) {
       cleanupCompleted.resolve();
     }
   });

@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createSessionPlacementSettlementClosedAbortError } from "../../agents/run-termination.js";
-import type {
-  SessionPlacementTurnParams,
-  LocalTurnPlacementClaim,
-} from "../../agents/session-placement-admission.js";
+import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.types.js";
 import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
@@ -22,6 +21,7 @@ import type {
 import { matchesWorkerPlacementTarget } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import type { WorkerRuntimeRefreshInFlight } from "./provider-runtime-refresh.js";
+import { captureWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 import {
   projectWorkspaceResultConflict,
   type WorkerWorkspaceResultConflict,
@@ -67,11 +67,11 @@ export async function waitForPendingWorkerResult(params: {
   );
   // Restart clears local claims without discarding durable results. A claimless result cannot
   // make progress through this wait; keep its fence and let recovery retain control of the files.
-  const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(params.sessionId);
+  const facts = await params.placements.readProjection([params.sessionId], { current: true });
   params.signal?.throwIfAborted();
   if (
-    !params.placements.get(params.sessionId)?.turnClaim &&
-    pendingResults.some((pending) => pending.sessionId === params.sessionId)
+    !facts.placements.get(params.sessionId)?.turnClaim &&
+    facts.pendingResults.has(params.sessionId)
   ) {
     throw new Error(
       "Workspace recovery is still pending after its turn ended. " +
@@ -96,27 +96,35 @@ export async function waitForInitialWorkerPlacement(params: {
     storePath: params.turn.sessionTarget?.storePath ?? resolveSessionStorePathForScope(identity),
   };
   const original = loadSessionEntryReadOnly(target);
-  const assertSessionCurrent = () => {
-    params.turn.abortSignal?.throwIfAborted();
-    params.assertRunCurrent?.();
-    const current = loadSessionEntryReadOnly(target);
-    if (
-      !original ||
-      !current ||
-      current.sessionId !== identity.sessionId ||
-      current.archivedAt !== undefined ||
-      current.lifecycleRevision !== original.lifecycleRevision ||
-      current.activeWriterRunId !== original.activeWriterRunId
-    ) {
-      throw createAbortError("Session changed while waiting for worker setup");
-    }
+  const refuseSession = (): never => {
+    throw createAbortError("Session changed while waiting for worker setup");
   };
+  const source = original
+    ? captureWorkerTurnTranscriptSource(target, {
+        fields: ["sessionId", "archivedAt", "lifecycleRevision", "activeWriterRunId"],
+        expected: {
+          sessionId: identity.sessionId,
+          archivedAt: undefined,
+          lifecycleRevision: original.lifecycleRevision,
+          activeWriterRunId: original.activeWriterRunId,
+        },
+        refuse: refuseSession,
+      })
+    : refuseSession;
+  const assertSessionCurrent = composeSessionSourceAssertion(
+    [params.assertRunCurrent, source],
+    (assertSources) => {
+      params.turn.abortSignal?.throwIfAborted();
+      assertSources();
+    },
+  );
   assertSessionCurrent();
   const completed = await params.wait(params.placement, params.turn.abortSignal);
   // Setup completion is a notification, not authority: read the durable owner again.
   assertSessionCurrent();
-  const assertCurrent = () => {
-    assertSessionCurrent();
+  let placement = completed;
+  const assertCurrent = composeSessionSourceAssertion([assertSessionCurrent], (assertSession) => {
+    assertSession();
     const current = params.placements.get(identity.sessionId);
     if (
       !current ||
@@ -127,10 +135,11 @@ export async function waitForInitialWorkerPlacement(params: {
     ) {
       throw createAbortError("Worker placement changed while waiting for setup");
     }
-  };
+    placement = current;
+  });
   assertCurrent();
   return {
-    placement: requireActivePlacement(params.placements.get(identity.sessionId)!),
+    placement: requireActivePlacement(placement),
     assertCurrent,
   };
 }
@@ -361,17 +370,17 @@ export async function claimWorkerTurn(params: {
     ) {
       throw error;
     }
-    const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(
-      params.identity.sessionId,
-    );
+    const facts = await params.placements.readProjection([params.identity.sessionId], {
+      current: true,
+    });
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
-    const activePlacement = params.placements.get(params.identity.sessionId);
+    const activePlacement = facts.placements.get(params.identity.sessionId);
     const activeClaim = activePlacement?.turnClaim;
     if (activeClaim?.runId === params.runId) {
       throw error;
     }
-    const resultIsReconciling = pendingResults.some(
+    const resultIsReconciling = [...facts.pendingResults.values()].some(
       (pending) =>
         activeClaim?.owner === "worker" &&
         pending.sessionId === params.identity.sessionId &&
@@ -388,7 +397,9 @@ export async function claimWorkerTurn(params: {
       return null;
     }
     if (!(cancelledClaim && params.isCancellationRequested(cancelledClaim))) {
-      const refreshed = params.placements.get(params.identity.sessionId);
+      const refreshed = await params.placements.getAsync(params.identity.sessionId);
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
       if (
         refreshed?.state !== "active" ||
         !matchesWorkerPlacementTarget(refreshed, params.placement) ||
@@ -403,7 +414,9 @@ export async function claimWorkerTurn(params: {
     timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
     ...(params.signal ? { signal: params.signal } : {}),
   });
-  const refreshed = params.placements.get(params.identity.sessionId);
+  const refreshed = await params.placements.getAsync(params.identity.sessionId);
+  params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   if (refreshed?.state !== "active" || !matchesWorkerPlacementTarget(refreshed, params.placement)) {
     throw new Error("Cloud worker placement changed while waiting for the previous turn");
   }

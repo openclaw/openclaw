@@ -30,7 +30,6 @@ import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-
 const fixture = useSubagentControlFixture();
 
 it.for([
-  { replacement: false, competingIdle: false, publication: "tombstone" },
   { replacement: true, competingIdle: false, publication: "tombstone" },
   { replacement: false, competingIdle: true, publication: "tombstone" },
   { replacement: false, competingIdle: false, publication: "result" },

@@ -138,9 +138,6 @@ const normalizeQueryValues = (items: Array<string | undefined>): string[] =>
     .filter((item): item is string => Boolean(item))
     .map((item) => normalizeLowercaseStringOrEmpty(item));
 
-const getSessionText = (session: UsageSessionQueryTarget): string[] =>
-  normalizeQueryValues([session.label, session.key, session.sessionId]);
-
 const getSessionProviders = (session: UsageSessionQueryTarget): string[] =>
   normalizeQueryValues([
     session.modelProvider,
@@ -235,7 +232,10 @@ const prepareUsageQuery = (
     return matchesEverySession;
   }
   if (!term.key) {
-    return (session) => getSessionText(session).some((text) => text.includes(value));
+    return (session) =>
+      normalizeQueryValues([session.label, session.key, session.sessionId]).some((text) =>
+        text.includes(value),
+      );
   }
 
   switch (key) {
@@ -310,10 +310,9 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
 };
 
 export function parseToolSummary(content: string) {
-  const lines = content.split("\n");
   const toolCounts = new Map<string, number>();
   const nonToolLines: string[] = [];
-  for (const line of lines) {
+  for (const line of content.split("\n")) {
     const match = /^\[Tool:\s*([^\]]+)\]/.exec(line.trim());
     const name = match?.[1];
     if (name) {
@@ -325,7 +324,7 @@ export function parseToolSummary(content: string) {
     }
     nonToolLines.push(line);
   }
-  const sortedTools = Array.from(toolCounts.entries()).toSorted((a, b) => b[1] - a[1]);
+  const sortedTools = Array.from(toolCounts).toSorted((a, b) => b[1] - a[1]);
   const totalCalls = sortedTools.reduce((sum, [, count]) => sum + count, 0);
   const summary =
     sortedTools.length > 0

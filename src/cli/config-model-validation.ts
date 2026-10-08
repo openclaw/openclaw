@@ -1,10 +1,13 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { hasAgentRosterProperty } from "../agents/agent-scope-config.js";
+import {
+  hasAgentRosterProperty,
+  resolveAgentModelConfigForRuntime,
+  resolveAgentNativeModelPrimary,
+} from "../agents/agent-scope-config.js";
 import {
   listAgentEntries,
   listAgentEntriesWithSource,
   resolveAgentDir,
-  resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -45,12 +48,6 @@ type ConfigModelRefResolver = (params: {
   config: OpenClawConfig;
   ref: TouchedModelRef;
 }) => Promise<string | undefined>;
-
-type ConfigModelRefCheckResult = {
-  refsChecked: number;
-  refsTotal: number;
-  errors: string[];
-};
 
 function isPathPrefix(prefix: readonly string[], path: readonly string[]): boolean {
   return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
@@ -117,7 +114,7 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
       source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
     refs.push(
       ...collectTextModelConfigRefs({
-        model: agent.model,
+        model: resolveAgentModelConfigForRuntime(agent),
         path: `${agentPath}.model`,
         agentId,
       }),
@@ -142,7 +139,7 @@ function inheritsDefaultModelRef(
 ): boolean {
   const resolveOverride = ref.fallback
     ? resolveAgentModelFallbacksOverride
-    : resolveAgentExplicitModelPrimary;
+    : resolveAgentNativeModelPrimary;
   return resolveOverride(config, agentId) === undefined;
 }
 
@@ -489,7 +486,7 @@ export async function checkTouchedTextModelRefs(params: {
   resolveModelRef?: ConfigModelRefResolver;
   createModelRefResolver?: () => Promise<ConfigModelRefResolver>;
   redactDependencyValues?: boolean;
-}): Promise<ConfigModelRefCheckResult> {
+}) {
   const touchedPaths = params.touchedPaths;
   const modelDependenciesTouched = touchedPaths.some(
     (path) =>
@@ -503,6 +500,7 @@ export async function checkTouchedTextModelRefs(params: {
           ((path[1] === "entries" || path[1] === "list") &&
             (path.length <= 3 ||
               path[3] === "models" ||
+              path[3] === "runtime" ||
               (path[3] === "model" && (path.length === 4 || path[4] === "primary")))))),
   );
   if (!modelDependenciesTouched && !touchedPaths.some(pathMayAffectTextModelRefs)) {

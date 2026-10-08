@@ -14,7 +14,6 @@ extensions/browser/src/browser/chrome.internal.test.ts
 extensions/browser/src/browser/chrome.ts
 extensions/browser/src/browser/extension-relay/relay-bridge.ts
 extensions/browser/src/browser/routes/agent.snapshot.ts
-extensions/codex/doctor-contract-api.test.ts
 extensions/codex/src/app-server/approval-bridge.ts
 extensions/codex/src/app-server/auth-bridge.test.ts
 extensions/codex/src/app-server/auth-bridge.ts
@@ -24,7 +23,6 @@ extensions/codex/src/app-server/computer-use.test.ts
 extensions/codex/src/app-server/computer-use.ts
 extensions/codex/src/app-server/config.test.ts
 extensions/codex/src/app-server/dynamic-tool-build.test.ts
-extensions/codex/src/app-server/dynamic-tool-build.ts
 extensions/codex/src/app-server/dynamic-tools.test.ts
 extensions/codex/src/app-server/dynamic-tools.ts
 extensions/codex/src/app-server/elicitation-bridge.test.ts
@@ -59,7 +57,6 @@ extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
 extensions/discord/src/monitor/message-handler.preflight.ts
 extensions/discord/src/monitor/model-picker.test.ts
-extensions/discord/src/monitor/model-picker.view.ts
 extensions/discord/src/monitor/native-command.model-picker.test.ts
 extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts
 extensions/discord/src/outbound-adapter.test.ts
@@ -139,7 +136,6 @@ extensions/qa-lab/src/cli.runtime.test.ts
 extensions/qa-lab/src/cli.runtime.ts
 extensions/qa-lab/src/evidence-gallery.ts
 extensions/qa-lab/src/gateway-child.test.ts
-extensions/qa-lab/src/gateway-process-boundary.ts
 extensions/qa-lab/src/lab-server.test.ts
 extensions/qa-lab/src/lab-server.ts
 extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts
@@ -158,7 +154,6 @@ extensions/signal/src/core.test.ts
 extensions/signal/src/monitor/event-handler.inbound-context.test.ts
 extensions/signal/src/monitor/event-handler.ts
 extensions/slack/src/action-runtime.ts
-extensions/slack/src/channel.test.ts
 extensions/slack/src/channel.ts
 extensions/slack/src/message-action-dispatch.test.ts
 extensions/slack/src/monitor/events/interactions.block-actions.ts
@@ -209,7 +204,6 @@ packages/ai/src/providers/openai-completions.test.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
 packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/gateway-client/src/client.ts
-packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/tool-call-repair/src/stream-normalizer.ts
@@ -283,7 +277,6 @@ src/agents/subagents/registry/subagent-control.test.ts
 src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts
 src/agents/subagents/spawn/acp-spawn.test.ts
-src/agents/subagents/spawn/subagent-spawn.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-search.test.ts
 src/agents/tools/cron-tool.test.ts
@@ -291,8 +284,6 @@ src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-tool.test.ts
 src/agents/tools/message-tool.test.ts
 src/agents/tools/music-generate-tool.test.ts
-src/agents/tools/session-status-tool.ts
-src/agents/tools/sessions-send-tool.ts
 src/agents/tools/sessions-spawn-tool.test.ts
 src/agents/tools/sessions.test.ts
 src/agents/tools/video-generate-tool.test.ts
@@ -350,7 +341,6 @@ src/cli/gateway-cli/run.ts
 src/cli/mcp-cli.ts
 src/cli/plugins-authoring-command.ts
 src/cli/plugins-cli-test-helpers.ts
-src/cli/plugins-cli.install.test.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
 src/cli/run-main.ts
@@ -403,8 +393,6 @@ src/cron/isolated-agent/run.test-harness.ts
 src/daemon/launchd.test.ts
 src/daemon/schtasks.startup-fallback.test.ts
 src/daemon/systemd.test.ts
-src/fleet/backup.runtime.ts
-src/fleet/service.runtime.ts
 src/flows/channel-setup.test.ts
 src/flows/channel-setup.ts
 src/flows/doctor-core-checks.ts
@@ -412,7 +400,6 @@ src/flows/doctor-health-contributions.test.ts
 src/flows/model-picker.ts
 src/gateway/call.test.ts
 src/gateway/call.ts
-src/gateway/cli-session-history.test.ts
 src/gateway/client.test.ts
 src/gateway/config-reload.test.ts
 src/gateway/config-reload.ts
@@ -446,7 +433,6 @@ src/gateway/server-methods/agent.sessions-and-models.test-utils.ts
 src/gateway/server-methods/agents-mutate.test.ts
 src/gateway/server-methods/agents.ts
 src/gateway/server-methods/approval-shared.test.ts
-src/gateway/server-methods/approval.test.ts
 src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
@@ -488,7 +474,6 @@ src/infra/device-pairing.test.ts
 src/infra/diagnostic-events.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-authorization-plan.ts
-src/infra/host-env-security.test.ts
 src/infra/infra-runtime.test.ts
 src/infra/npm-managed-root.test.ts
 src/infra/npm-managed-root.ts
@@ -507,7 +492,6 @@ src/infra/update-startup.test.ts
 src/interactive/payload.ts
 src/logging/diagnostic-stability-bundle.ts
 src/logging/diagnostic-stability.ts
-src/logging/diagnostic-support-export.ts
 src/logging/diagnostic.test.ts
 src/logging/diagnostic.ts
 src/logging/redact.test.ts
@@ -568,7 +552,6 @@ src/security/audit-extra.sync.ts
 src/security/audit.ts
 src/shared/json-schema-defaults.ts
 src/skills/lifecycle/clawhub.test.ts
-src/skills/workshop/service.test.ts
 src/snapshot/local-repository.test.ts
 src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
@@ -610,7 +593,6 @@ ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/cron/view.ts
 ui/src/pages/sessions/sessions-page.ts
-ui/src/pages/sessions/view.test.ts
 ui/src/pages/sessions/view.ts
 ui/src/pages/usage/view-overview.ts
 ui/src/pages/usage/view.ts

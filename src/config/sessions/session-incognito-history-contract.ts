@@ -5,12 +5,19 @@ import type {
   SessionTranscriptCorpusOptions,
   SessionTranscriptCorpusScope,
 } from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
+import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type {
   SessionTranscriptProjectionSelection,
   SessionTranscriptProjectionSelectionResults,
 } from "../../gateway/session-transcript-read.types.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
+  SessionTranscriptVisibleMessageDeltaLimits,
+  SessionTranscriptVisibleMessageDeltaResult,
+} from "./session-accessor.sqlite-contract.js";
 import type {
   SessionTranscriptBoundedMessageTailOptions,
   SessionTranscriptBoundedMessageTailPage,
@@ -29,6 +36,15 @@ import type {
   SessionTranscriptModelContext,
   SessionTranscriptWatermark,
 } from "./session-history-read.types.js";
+import type {
+  SessionConversationBinding,
+  SessionHistorySubagentFacts,
+  SessionHistorySubagentLookup,
+} from "./session-history-types.js";
+import type {
+  MemorySessionSelectors,
+  MemorySessionTarget,
+} from "./session-memory-targets.types.js";
 import type {
   PendingInputHistoryQuery,
   PendingInputHistorySnapshot,
@@ -59,6 +75,7 @@ export type IncognitoHistoryTarget = {
   sessionId: string;
   lifecycleRevision?: string;
   admission?: UserTurnTranscriptAdmissionReceipt;
+  allowMissing?: true;
 };
 
 export type IncognitoContextReadResult<Value> =
@@ -71,6 +88,25 @@ type Reads = {
     output: SessionTranscriptProjectionSelectionResults[Key];
   };
 } & {
+  "raw-delta": {
+    input: { limits: SessionTranscriptRawDeltaLimits };
+    output: SessionTranscriptRawDeltaResult;
+  };
+  "visible-delta": {
+    input: { limits: SessionTranscriptVisibleMessageDeltaLimits };
+    output: SessionTranscriptVisibleMessageDeltaResult;
+  };
+  "conversation-binding": {
+    input: { conversationRef: string };
+    output: SessionConversationBinding | null;
+  };
+  visibility: {
+    input: Pick<PreparedSessionHistoryReadTarget, "stateDatabase" | "sourceDiscovery"> & {
+      lookups: SessionHistorySubagentLookup[];
+      incognitoSources: Array<[string, boolean]>;
+    };
+    output: { facts: SessionHistorySubagentFacts; missingSources: string[] };
+  };
   anchors: { input: SessionTranscriptAnchorSelection; output: SessionTranscriptAnchorFacts };
   accounting: {
     input: { options: SessionTranscriptAccountingOptions };
@@ -98,7 +134,12 @@ type Reads = {
     output: { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };
   };
   search: {
-    input: Pick<SessionTranscriptSearchParams, "query" | "limit" | "match" | "role" | "order">;
+    input: Pick<
+      SessionTranscriptSearchParams,
+      "query" | "limit" | "match" | "role" | "order" | "sessionId"
+    > & {
+      sessions: IncognitoHistoryTarget[];
+    };
     output: { kind: "transcript-search"; result: SessionTranscriptSearchResult };
   };
   watermark: {
@@ -142,7 +183,10 @@ type Reads = {
       nextOffset?: number;
     };
   };
-  "memory-entry": { input: { includeMessages?: boolean }; output: SessionEntrySnapshot };
+  "memory-entry": {
+    input: { includeMessages?: boolean; readSessionId?: string };
+    output: SessionEntrySnapshot;
+  };
   "memory-corpus": {
     input: {
       scope: SessionTranscriptCorpusScope;
@@ -151,7 +195,7 @@ type Reads = {
     };
     output: SessionTranscriptCorpusEntry[];
   };
-  "memory-reset-recall": { input: Record<never, never>; output: SessionResetRecallCutoff };
+  "memory-reset-recall": { input: { readSessionId?: string }; output: SessionResetRecallCutoff };
   "native-context": {
     input: Record<never, never>;
     output: IncognitoContextReadResult<SessionTranscriptContextSnapshot>;
@@ -163,9 +207,15 @@ type Reads = {
 };
 
 export type IncognitoHistoryOperations = {
-  [Key in keyof Reads as `session.history.${Key}`]: {
+  [Key in Exclude<keyof Reads, "search"> as `session.history.${Key}`]: {
     input: IncognitoHistoryTarget & Reads[Key]["input"];
     output: Reads[Key]["output"];
+  };
+} & {
+  "session.history.search": Reads["search"];
+  "session.history.memory-targets": {
+    input: { selectors: MemorySessionSelectors; sessions: IncognitoHistoryTarget[] };
+    output: MemorySessionTarget[];
   };
 };
 
@@ -178,6 +228,16 @@ export function isIncognitoHistoryCommand(command: {
 export function incognitoHistoryKeys(
   command: SqliteWorkerCommand<IncognitoHistoryOperations>,
 ): string[] {
+  if (
+    command.type === "session.history.search" ||
+    command.type === "session.history.memory-targets"
+  ) {
+    const keys = command.input.sessions.map((session) => session.sessionKey);
+    if (new Set(keys).size !== keys.length) {
+      throw new Error("Incognito search must retain unique selected sessions");
+    }
+    return keys;
+  }
   if (command.type !== "session.history.memory-corpus") {
     return [command.input.sessionKey];
   }

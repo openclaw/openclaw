@@ -157,14 +157,12 @@ fn perform(
 fn store_allowed(report: &Value) -> bool {
     report.get("action").and_then(Value::as_str) == Some("install")
         && report.pointer("/target/kind").and_then(Value::as_str) == Some("local-host")
-        && report
-            .pointer("/installation/nativeHostRegistered")
-            .and_then(Value::as_bool)
-            == Some(true)
-        && report
-            .pointer("/installation/automaticBootstrapSupported")
-            .and_then(Value::as_bool)
-            == Some(true)
+        && [
+            "/installation/nativeHostRegistered",
+            "/installation/automaticBootstrapSupported",
+        ]
+        .iter()
+        .all(|pointer| report.pointer(pointer).and_then(Value::as_bool) == Some(true))
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]

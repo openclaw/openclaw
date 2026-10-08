@@ -1,15 +1,16 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
+import type {
+  ChannelDoctorAdapter,
+  ChannelDoctorEmptyAllowlistAccountContext,
+} from "../../../channels/plugins/types.adapters.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { hasAllowFromEntries } from "./allowlist.js";
 
-type CollectEmptyAllowlistPolicyWarningsParams = ChannelDoctorEmptyAllowlistAccountContext & {
-  doctorFixCommand: string;
-  shouldSkipDefaultEmptyGroupAllowlistWarning: (
-    params: ChannelDoctorEmptyAllowlistAccountContext,
-  ) => boolean;
-};
+type CollectEmptyAllowlistPolicyWarningsParams = ChannelDoctorEmptyAllowlistAccountContext &
+  Required<Pick<ChannelDoctorAdapter, "shouldSkipDefaultEmptyGroupAllowlistWarning">> & {
+    doctorFixCommand: string;
+  };
 
 export function resolveDoctorAccountDmAccess(
   account: DoctorAccountRecord,
@@ -88,15 +89,11 @@ export function collectEmptyAllowlistPolicyWarningsForAccount(
     return warnings;
   }
 
-  if (fallbackToAllowFrom) {
-    warnings.push(
-      `- ${params.prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${params.prefix}.groupAllowFrom or ${params.prefix}.allowFrom, or set groupPolicy to "open".`,
-    );
-  } else {
-    warnings.push(
-      `- ${params.prefix}.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to ${params.prefix}.groupAllowFrom, or set groupPolicy to "open".`,
-    );
-  }
+  warnings.push(
+    fallbackToAllowFrom
+      ? `- ${params.prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${params.prefix}.groupAllowFrom or ${params.prefix}.allowFrom, or set groupPolicy to "open".`
+      : `- ${params.prefix}.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to ${params.prefix}.groupAllowFrom, or set groupPolicy to "open".`,
+  );
 
   return warnings;
 }

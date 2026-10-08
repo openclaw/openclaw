@@ -80,10 +80,7 @@ function resolveSecretInputReadOnlyAvailability(
   if (ref) {
     return resolveSecretRefReadOnlyAvailability(ref, cfg, env);
   }
-  if (!hasSecret(value)) {
-    return false;
-  }
-  if (hasMalformedSecretInputSyntax(value)) {
+  if (!hasSecret(value) || hasMalformedSecretInputSyntax(value)) {
     return false;
   }
   return isKnownEnvApiKeyMarker(value)

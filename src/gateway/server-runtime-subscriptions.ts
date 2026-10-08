@@ -23,6 +23,7 @@ import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-reg
 import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -33,7 +34,10 @@ import {
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
-import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  type InternalSessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   createLazyPromise,
@@ -43,6 +47,7 @@ import {
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import {
   bindChatAbortTerminalDispatch,
+  isCurrentChatAbortTerminalDispatch,
   markChatAbortTerminalPersistenceError,
   type ChatAbortTerminalDispatch,
 } from "./chat-abort-lifecycle-internal.js";
@@ -167,6 +172,11 @@ export function startGatewayEventSubscriptions(params: {
     sessionEventSubscribers: params.sessionEventSubscribers,
     broadcastToConnIds: params.broadcastToConnIds,
   });
+  const unsubscribeObserverEvents = onAgentRuntimeEvent((evt) => {
+    void sessionObserver
+      .handleEventAsync(evt)
+      .catch((error: unknown) => params.log.warn("Session observer event failed", { error }));
+  });
   const sessionCompanion = createSessionCompanion({
     scheduler: params.scheduler,
     contextReader: defaultSessionCompanionContextReader,
@@ -177,6 +187,8 @@ export function startGatewayEventSubscriptions(params: {
   // Auxiliary model calls can inherit request work; cancel before that work drains.
   const stopSessionBackgroundWork = (): void => {
     if (!sessionBackgroundStop) {
+      // Chat and terminal persistence still consume events while the observer drains.
+      unsubscribeObserverEvents();
       sessionCompanion.dispose();
       sessionBackgroundStop = Promise.all([
         sessionObserver.disposeAsync(),
@@ -208,6 +220,7 @@ export function startGatewayEventSubscriptions(params: {
         continue;
       }
       entry.projectSessionActive = false;
+      notifyGatewayWorkMetricsChanged();
       queueMicrotask(() => {
         const current = params.chatAbortControllers.get(candidateRunId);
         if (
@@ -220,16 +233,25 @@ export function startGatewayEventSubscriptions(params: {
       });
     }
   };
+  const settleTrackedTerminalEntry = (
+    runId: string,
+    entry: ChatAbortControllerEntry,
+    persisted: boolean,
+    error?: unknown,
+  ) => {
+    entry.projectSessionTerminalPending = false;
+    entry.projectSessionTerminalPersistence = undefined;
+    entry.projectSessionTerminalPersisted = persisted;
+    markChatAbortTerminalPersistenceError(entry, error);
+    if (entry.registrationCleanupRequested === true) {
+      removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
+    }
+  };
   const settleTrackedTerminal = (run: { runId: string; clientRunId: string }) => {
     for (const candidateRunId of trackedRunIds(run.runId, run.clientRunId)) {
       const entry = params.chatAbortControllers.get(candidateRunId);
-      if (!entry || entry.projectSessionTerminalPersistence) {
-        continue;
-      }
-      entry.projectSessionTerminalPending = false;
-      entry.projectSessionTerminalPersisted = false;
-      if (entry.registrationCleanupRequested === true) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, candidateRunId, entry);
+      if (entry && !entry.projectSessionTerminalPersistence) {
+        settleTrackedTerminalEntry(candidateRunId, entry, false);
       }
     }
   };
@@ -263,34 +285,26 @@ export function startGatewayEventSubscriptions(params: {
         if (entry.projectSessionTerminalPersistence !== run.persistence) {
           return;
         }
-        // Maintenance can retire the registration before its write settles.
-        // Captured drain targets still need this exact owner's final facts.
-        entry.projectSessionTerminalPending = false;
-        entry.projectSessionTerminalPersistence = undefined;
-        entry.projectSessionTerminalPersisted = persisted;
-        markChatAbortTerminalPersistenceError(entry, error);
-        if (params.chatAbortControllers.get(candidateRunId) !== entry) {
-          return;
+        if (params.chatAbortControllers.get(candidateRunId) === entry) {
+          if (persisted) {
+            params.restartRecoveryCandidates.delete(candidateRunId);
+          } else if (
+            entry.controlUiVisible !== false &&
+            lifecycleGeneration &&
+            sessionKey &&
+            sessionId
+          ) {
+            params.restartRecoveryCandidates.set(candidateRunId, {
+              runId: candidateRunId,
+              lifecycleGeneration,
+              sessionKey,
+              sessionId,
+              observedAt,
+            });
+          }
         }
-        if (persisted) {
-          params.restartRecoveryCandidates.delete(candidateRunId);
-        } else if (
-          entry.controlUiVisible !== false &&
-          lifecycleGeneration &&
-          sessionKey &&
-          sessionId
-        ) {
-          params.restartRecoveryCandidates.set(candidateRunId, {
-            runId: candidateRunId,
-            lifecycleGeneration,
-            sessionKey,
-            sessionId,
-            observedAt,
-          });
-        }
-        if (entry.registrationCleanupRequested === true) {
-          removeChatAbortControllerEntry(params.chatAbortControllers, candidateRunId, entry);
-        }
+        // Captured drain targets still need final facts after registry retirement.
+        settleTrackedTerminalEntry(candidateRunId, entry, persisted, error);
       };
       void run.persistence.then(
         () => settle(true),
@@ -438,10 +452,7 @@ export function startGatewayEventSubscriptions(params: {
     }
     let failedDispatchCleanup: (() => void) | undefined;
     let terminalPreparation: Promise<void> | undefined;
-    let terminalEntries: ChatAbortControllerEntry[] | undefined;
-    void sessionObserver
-      .handleEventAsync(evt)
-      .catch((error: unknown) => params.log.warn("Session observer event failed", { error }));
+    let terminalEntries: Map<string, ChatAbortControllerEntry> | undefined;
     sessionActivitySummaries.handleEvent(evt);
     auditRecorder.record(evt);
     const lifecyclePhase =
@@ -472,7 +483,7 @@ export function startGatewayEventSubscriptions(params: {
           entry.projectSessionTerminalPending = terminal;
           entry.projectSessionTerminalObservedAt = observedAt;
           if (terminal) {
-            (terminalEntries ??= []).push(entry);
+            (terminalEntries ??= new Map()).set(candidateRunId, entry);
           }
         }
       }
@@ -587,11 +598,26 @@ export function startGatewayEventSubscriptions(params: {
       onFailure: (error) => {
         if (terminalDispatch) {
           terminalDispatch.failure = { error };
+          for (const [runId, entry] of terminalEntries ?? []) {
+            if (
+              isCurrentChatAbortTerminalDispatch(entry, terminalDispatch) &&
+              entry.projectSessionTerminalPending === true &&
+              !entry.projectSessionTerminalPersistence
+            ) {
+              // Failed dispatch cannot adopt a write later. Keep the failure for
+              // cancellation callers, but release its now-ownerless reservation.
+              settleTrackedTerminalEntry(runId, entry, false, error);
+            }
+          }
         }
         failedDispatchCleanup?.();
       },
     });
-    bindChatAbortTerminalDispatch(terminalEntries, dispatch, terminalDispatch);
+    bindChatAbortTerminalDispatch(
+      terminalEntries ? [...terminalEntries.values()] : undefined,
+      dispatch,
+      terminalDispatch,
+    );
     agentEventDispatches.add(dispatch);
     void dispatch.then(() => agentEventDispatches.delete(dispatch));
   });
@@ -623,8 +649,18 @@ export function startGatewayEventSubscriptions(params: {
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
     sessionActivitySummaries.handleTranscript(evt);
-    void dispatchEventHandler({
-      loadHandler: getTranscriptUpdateHandler,
+    // Share the agent queue so a later cumulative update cannot outrun retirement.
+    const agentHandler = agentEventHandlerLoader.peek();
+    void dispatchEventHandler<InternalSessionTranscriptUpdate>({
+      loadHandler: agentHandler
+        ? () =>
+            agentHandler
+              .then(
+                (handler) => handler.retireTranscript(evt),
+                () => undefined,
+              )
+              .then(getTranscriptUpdateHandler)
+        : getTranscriptUpdateHandler,
       event: evt,
       log: params.log,
       failureMessage: "Transcript update dispatch failed",

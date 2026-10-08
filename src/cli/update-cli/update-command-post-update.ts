@@ -1,10 +1,7 @@
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  buildControlPlaneUpdateRestartHealthPendingResult,
-  resolveManagedServiceUpdateFailureExitCode,
-} from "../../infra/update-control-plane-sentinel.js";
+import { buildControlPlaneUpdateRestartHealthPendingResult } from "../../infra/update-control-plane-sentinel.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -41,13 +38,12 @@ import type { UpdateServiceDefinitionRecovery } from "./update-command-service-c
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
-  admitMigratedGatewayRecovery,
+  admitInstalledGatewayRecovery,
   refuseUnsettledDoctorRecovery,
 } from "./update-command-service-recovery.js";
 import {
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
-  type PreManagedServiceStop,
 } from "./update-command-service.js";
 import {
   completeUpdateCommandResult,
@@ -98,6 +94,7 @@ async function finishSettledUpdate(
     assertCurrent,
     originalRun,
     compensate,
+    forward,
     recordPhase,
     sentinelOptions,
   } = captured;
@@ -121,9 +118,9 @@ async function finishSettledUpdate(
     gateway,
   }));
   let rollbackAttempted = false;
-  let rollbackStopState: PreManagedServiceStop | undefined;
-  // Rollback can replace the suspension owner.
-  const currentServiceStop = () => rollbackStopState ?? params.preManagedServiceStop;
+  let latestServiceStop = params.preManagedServiceStop;
+  // Doctor parking and rollback replace this run's earlier service observation.
+  const currentServiceStop = () => latestServiceStop;
   let rolledBack = false;
   let originalServiceRecoveryHandled = false;
   let completedDowntimeMs: number | undefined = params.coreAlreadyCurrent ? 0 : undefined;
@@ -193,26 +190,16 @@ async function finishSettledUpdate(
       const rollback = await compensate(() =>
         withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
           rollbackFailedUpdate({
+            ...params,
             result,
             previousRoot: params.root,
-            packageTransaction: params.packageTransaction,
             databaseBackup:
               beganSuccessfully && !gatewayStartAttempted ? params.databaseBackup : undefined,
-            rollbackBlockedReason: params.rollbackBlockedReason,
-            schemaVersions: params.schemaVersions,
-            candidateSchemaVersions: params.candidateSchemaVersions,
-            previousSchemaVersions: params.previousSchemaVersions,
-            previousVerified: params.previousVerified,
-            originalManagedServiceRuntime: params.originalManagedServiceRuntime,
             allowGatewayRestart: params.shouldRestart,
             onGatewayStartAttempted,
-            configSnapshot: params.configSnapshot,
-            activationConfig: params.activationConfig,
-            opts: params.opts,
-            preManagedServiceStop: params.preManagedServiceStop,
+            preManagedServiceStop: currentServiceStop(),
             timeoutMs: params.updateStepTimeoutMs,
             nodeRunner: params.packageUpdateNodeRunner,
-            invocationCwd: params.invocationCwd,
             definitionRecovery,
           }),
         ),
@@ -225,9 +212,9 @@ async function finishSettledUpdate(
       }
       result = rollback.result;
       originalServiceRecoveryHandled = rollback.originalServiceRecovery !== undefined;
-      rollbackStopState = rollback.stoppedForRollback;
+      latestServiceStop = rollback.stoppedForRollback ?? currentServiceStop();
       rolledBack = rollback.rolledBack;
-      pendingRestartAtMs ??= rollbackStopState?.stoppedAtMs;
+      pendingRestartAtMs ??= latestServiceStop?.stoppedAtMs;
       if (rollback.verifiedAtMs !== undefined) {
         recordVerifiedDowntime(rollback.verifiedAtMs);
       }
@@ -253,8 +240,10 @@ async function finishSettledUpdate(
         { env: params.opts.run.env },
       );
     }
+    const recoveryParams = { ...params, preManagedServiceStop: currentServiceStop() };
     recoverService ||=
-      !gatewayStartAttempted && (await admitMigratedGatewayRecovery(params, result, assertCurrent));
+      !gatewayStartAttempted &&
+      (await admitInstalledGatewayRecovery(recoveryParams, result, assertCurrent));
     if (isUpdateGatewayReadinessPending(result)) {
       triageAllowed = false;
       return { result, recoverService: false };
@@ -267,10 +256,8 @@ async function finishSettledUpdate(
     initialRestoreFailure?: { cause: unknown },
     notify = true,
   ): Promise<UpdateRunResult> => {
-    const { result, recoverService } = await recoverFailedResult(
-      initialResult,
-      initialRecoverService,
-    );
+    const input = captured.interruptedResult(initialResult);
+    const { result, recoverService } = await recoverFailedResult(input, initialRecoverService);
     assertCurrent();
     let restoreFailure = initialRestoreFailure;
     let finalResult = completeUpdateCommandResult(params, result, currentServiceStop());
@@ -342,10 +329,10 @@ async function finishSettledUpdate(
     if (recoverService && finalResult.recovery?.serviceRestartSafe === true) {
       const service = await maybeRestartServiceAfterFailedMutableUpdate({
         onGatewayStartAttempted,
-        recovery: result.recovery,
+        recovery: finalResult.recovery,
         originalManagedServiceRuntime: params.originalManagedServiceRuntime,
         updateRun: params.opts.run,
-        preManagedServiceStop: params.preManagedServiceStop,
+        preManagedServiceStop: currentServiceStop(),
         jsonMode: Boolean(params.opts.json),
         nodeRunner: params.packageUpdateNodeRunner,
         timeoutMs: params.updateStepTimeoutMs,
@@ -378,8 +365,9 @@ async function finishSettledUpdate(
     const cleanupFailure = await recordUpdatePackageCompletion(params, finalResult, assertCurrent);
     assertCurrent();
     finalResult = cleanupFailure?.result ?? finalResult;
-    // Compensation of the original service is not proof of the requested installation.
-    if ((finalResult.status === "error" || cleanupFailure) && !originalServiceRecoveryHandled) {
+    // Rollback already verified its Gateway; cleanup failure needs a fresh observation.
+    const needsObservation = cleanupFailure || (!rolledBack && finalResult.status === "error");
+    if (needsObservation && !originalServiceRecoveryHandled) {
       finalResult = await verifyUpdateFailureRecovery({
         result: finalResult,
         root,
@@ -389,7 +377,7 @@ async function finishSettledUpdate(
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
         serviceUpdateVerdict: gatewayStartAttempted
           ? undefined
-          : params.preManagedServiceStop?.serviceUpdateVerdict,
+          : currentServiceStop()?.serviceUpdateVerdict,
         waitForStartup: shouldWaitForRecovery(params, currentServiceStop(), rollbackAttempted),
         assertCurrent,
       });
@@ -397,7 +385,7 @@ async function finishSettledUpdate(
       triageAllowed &&= !isUpdateGatewayReadinessPending(finalResult);
       rolledBack &&= isVerifiedUpdateRollback(finalResult);
     }
-    pendingResult = completeUpdateCommandResult(params, finalResult);
+    pendingResult = completeUpdateCommandResult(params, captured.interruptedResult(finalResult));
     terminalRecord = deferredTerminal
       ? await captureUpdateCommandTerminalRecord(params, pendingResult, assertCurrent)
       : undefined;
@@ -419,12 +407,7 @@ async function finishSettledUpdate(
             cause: restoreFailure.cause,
           })
         : restoreFailure.cause;
-      throw createFailure(
-        reportedResult,
-        resolveManagedServiceUpdateFailureExitCode(reportedResult),
-        detail,
-        { cause },
-      );
+      throw createFailure(reportedResult, detail, { cause });
     }
     return reportedResult;
   };
@@ -448,12 +431,7 @@ async function finishSettledUpdate(
           { ...params.result, status: "error" },
           params.result.recovery?.serviceRestartSafe === true,
         );
-        throw createFailure(
-          reported,
-          resolveManagedServiceUpdateFailureExitCode(reported),
-          params.failure?.detail,
-          params.failure,
-        );
+        throw createFailure(reported, params.failure?.detail, params.failure);
       }
 
       if (params.result.status === "skipped" && !params.coreAlreadyCurrent) {
@@ -463,9 +441,9 @@ async function finishSettledUpdate(
         );
         throw createFailure(
           reported,
-          classifyUpdateOutcome(reported) === "failed"
-            ? resolveManagedServiceUpdateFailureExitCode(reported)
-            : 0,
+          undefined,
+          undefined,
+          classifyUpdateOutcome(reported) === "failed" ? undefined : 0,
         );
       }
 
@@ -478,15 +456,11 @@ async function finishSettledUpdate(
           assertCurrent,
           candidateRuntime,
         };
-        const convergence = await convergeUpdatePlugins(pluginParams);
+        const convergence = await forward(() => convergeUpdatePlugins(pluginParams));
         if (convergence.resultWithPostUpdate.status === "error") {
           triageAllowed = !convergence.cancelled;
           const reported = await reportResult(convergence.resultWithPostUpdate);
-          throw createFailure(
-            reported,
-            resolveManagedServiceUpdateFailureExitCode(reported),
-            convergence.detail,
-          );
+          throw createFailure(reported, convergence.detail);
         }
         return convergence;
       };
@@ -545,14 +519,7 @@ async function finishSettledUpdate(
           status: "error",
           reason: "service-revalidation-failed",
         });
-        throw createFailure(
-          reported,
-          resolveManagedServiceUpdateFailureExitCode(reported),
-          message,
-          {
-            cause: error,
-          },
-        );
+        throw createFailure(reported, message, { cause: error });
       }
       const notifyRestart = () =>
         writeRestartSentinel(
@@ -564,7 +531,7 @@ async function finishSettledUpdate(
       }
       let verificationFailure = "restart-unhealthy";
       const restart = async () => {
-        const restarted = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
+        const restarted = await forward(() =>
           maybeRestartService({
             onGatewayStartAttempted,
             originalManagedServiceRuntime: params.originalManagedServiceRuntime,
@@ -623,7 +590,7 @@ async function finishSettledUpdate(
             reason: recovered.result.reason ?? verificationFailure,
           });
           const reported = await reportResult(recovered.result, false, undefined, false);
-          throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
+          throw createFailure(reported);
         }
         resultWithPostUpdate = recovered.result;
         return true;
@@ -641,11 +608,11 @@ async function finishSettledUpdate(
             mode: resultWithPostUpdate.mode,
             root: postUpdateRoot,
             onStopped: (state) => {
-              rollbackStopState = state;
+              latestServiceStop = state;
               pendingRestartAtMs ??= state.stoppedAtMs;
             },
             onPrepared: (state) => {
-              rollbackStopState = state;
+              latestServiceStop = state;
             },
           });
           pendingRestartAtMs ??= stopped.stoppedAtMs;
@@ -698,7 +665,7 @@ async function finishSettledUpdate(
       );
       if (maintenanceFailure) {
         const reported = await reportResult(maintenanceFailure.result, false, undefined, false);
-        throw createFailure(reported, 1, maintenanceFailure.detail);
+        throw createFailure(reported, maintenanceFailure.detail, undefined, 1);
       }
 
       return resultWithPostUpdate;
@@ -718,9 +685,7 @@ async function finishSettledUpdate(
       const { result, message } = createPostUpdateFailureResult(params, error);
       defaultRuntime.error(`Post-update verification failed: ${message}`);
       const reported = await reportResult(result);
-      throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported), message, {
-        cause: error,
-      });
+      throw createFailure(reported, message, { cause: error });
     }
   };
   // Reporting cannot revoke verified activation or authorize another native rollback.

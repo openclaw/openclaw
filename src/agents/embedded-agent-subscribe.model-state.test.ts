@@ -215,26 +215,32 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         onContextAccountingEvent: (event) => recovery.observeContextAccounting(event),
       });
       const controller = createEmbeddedRunFailoverRetryController({
-        runParams: {
-          sessionId: "async-progress",
-          sessionFile: "unused",
-          runId: "async-progress",
-          workspaceDir: "/tmp/async-progress",
-          prompt: "Continue",
-          timeoutMs: 300_000,
+        runInput: {
+          runParams: {
+            sessionId: "async-progress",
+            sessionFile: "unused",
+            runId: "async-progress",
+            workspaceDir: "/tmp/async-progress",
+            prompt: "Continue",
+            timeoutMs: 300_000,
+          },
+          globalLane: "test",
+          agentDir: "/tmp/async-progress",
+          fallbackConfigured: false,
         },
-        provider: "test-provider",
-        modelId: "usage-model",
-        globalLane: "test",
-        agentDir: "/tmp/async-progress",
-        fallbackConfigured: false,
-        profileFailureStore: { version: 1, profiles: {} },
-        getLastProfileId: () => undefined,
+        preparedRuntime: {
+          provider: "test-provider",
+          modelId: "usage-model",
+          profileFailureStore: { version: 1, profiles: {} },
+          snapshot: () => ({
+            lastProfileId: undefined,
+            pluginHarnessOwnsTransport: false,
+            agentHarness: { id: "embedded" },
+          }),
+          getApiKeyInfo: () => null,
+          advanceAttemptAuthProfile: async () => false,
+        },
         getSessionId: () => "async-progress",
-        harnessOwnsTransport: () => false,
-        getRuntimeAuthOwnerId: () => "embedded",
-        getApiKeyInfo: () => null,
-        advanceAuthProfile: async () => false,
       });
       const messages: string[] = [];
       try {

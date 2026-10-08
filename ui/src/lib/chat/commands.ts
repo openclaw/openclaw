@@ -57,7 +57,7 @@ type CommandLike = {
   args?: Array<{
     name: string;
     required?: boolean;
-    choices?: LocalArgChoice[];
+    choices?: NonNullable<ChatCommandDefinition["args"]>[number]["choices"];
   }>;
   formatArgs?: (values: CommandArgValues) => string | undefined;
   category?: string;
@@ -194,13 +194,13 @@ function choiceToValue(command: CommandLike, argName: string, choice: LocalArgCh
 
 function getArgOptions(command: CommandLike): string[] | undefined {
   const firstArg = command.args?.[0];
-  if (!firstArg) {
+  if (!firstArg || !Array.isArray(firstArg.choices)) {
     return undefined;
   }
   const options = firstArg.choices
-    ?.map((choice) => choiceToValue(command, firstArg.name, choice))
+    .map((choice) => choiceToValue(command, firstArg.name, choice))
     .filter(Boolean);
-  return options?.length ? options : undefined;
+  return options.length ? options : undefined;
 }
 
 function mapTier(command: CommandLike): SlashCommandTier {
@@ -314,22 +314,16 @@ function normalizeClientPresentation(
 
 export function buildFallbackSlashCommands(): SlashCommandDef[] {
   const builtins = buildBuiltinChatCommands()
-    .map((command) => ({
-      key: command.key,
-      name: command.textAliases[0]?.replace(/^\//u, "") ?? command.key,
-      aliases: command.textAliases,
-      description: command.description,
-      modelIndependent: command.modelIndependent,
-      args: command.args?.map((arg) => ({
-        name: arg.name,
-        required: arg.required,
-        choices: Array.isArray(arg.choices) ? arg.choices : undefined,
-      })),
-      formatArgs: command.formatArgs,
-      category: command.category,
-      tier: command.tier,
-    }))
-    .map((command) => toSlashCommand(command, "local"))
+    .map((command) =>
+      toSlashCommand(
+        {
+          ...command,
+          name: command.textAliases[0]?.replace(/^\//u, "") ?? command.key,
+          aliases: command.textAliases,
+        },
+        "local",
+      ),
+    )
     .filter((command): command is SlashCommandDef => command !== null);
   return [...builtins, ...UI_ONLY_COMMANDS];
 }

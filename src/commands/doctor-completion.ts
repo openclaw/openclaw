@@ -92,19 +92,12 @@ async function generateCompletionCache(
   return result.status === 0;
 }
 
-export type ShellCompletionStatus = {
-  shell: CompletionShell;
-  profileInstalled: boolean;
-  cacheExists: boolean;
-  cachePath: string;
-  /** True if profile uses slow dynamic pattern like `source <(openclaw completion ...)` */
-  usesSlowPattern: boolean;
-};
+export type ShellCompletionStatus = Awaited<ReturnType<typeof checkShellCompletionStatus>>;
 
 export async function checkShellCompletionStatus(
   binName = "openclaw",
   options: ShellCompletionStatusOptions = {},
-): Promise<ShellCompletionStatus> {
+) {
   const shell = options.shell ?? resolveShellFromEnv();
   const profileInstalled = await isCompletionInstalled(shell, binName);
   const cacheExists = await completionCacheExists(shell, binName);
@@ -145,10 +138,12 @@ export function shellCompletionStatusToRepairEffects(
   status: ShellCompletionStatus,
 ): readonly HealthRepairEffect[] {
   const effects: HealthRepairEffect[] = [];
-  if (status.usesSlowPattern && !status.cacheExists) {
+  if (!status.cacheExists && (status.usesSlowPattern || status.profileInstalled)) {
     effects.push({
       kind: "state",
-      action: "would-generate-completion-cache",
+      action: status.usesSlowPattern
+        ? "would-generate-completion-cache"
+        : "would-regenerate-completion-cache",
       target: status.cachePath,
       dryRunSafe: true,
     });
@@ -159,13 +154,6 @@ export function shellCompletionStatusToRepairEffects(
       action: "would-upgrade-shell-profile-completion",
       target: status.shell,
       dryRunSafe: false,
-    });
-  } else if (status.profileInstalled && !status.cacheExists) {
-    effects.push({
-      kind: "state",
-      action: "would-regenerate-completion-cache",
-      target: status.cachePath,
-      dryRunSafe: true,
     });
   }
   return effects;
@@ -186,6 +174,7 @@ export async function doctorShellCompletion(
   options: DoctorCompletionOptions = {},
 ): Promise<void> {
   const status = await checkShellCompletionStatus(CLI_NAME);
+  const regenerate = !status.usesSlowPattern && status.profileInstalled;
 
   // Slow dynamic completion runs the CLI during shell startup; cache it to keep login shells fast.
   if (status.usesSlowPattern) {
@@ -201,16 +190,6 @@ export async function doctorShellCompletion(
       `Shell completion is configured in your ${status.shell} profile but the cache is missing.\nRegenerating cache...`,
       "Shell completion",
     );
-    const generated = await generateCompletionCache({ generationMode: "core-only" });
-    if (generated) {
-      note(`Completion cache regenerated at ${status.cachePath}`, "Shell completion");
-    } else {
-      note(
-        `Failed to regenerate completion cache. Run \`${CLI_NAME} completion --write-state\` manually.`,
-        "Shell completion",
-      );
-    }
-    return;
   } else if (
     options.nonInteractive ||
     !(await prompter.confirm({
@@ -225,11 +204,15 @@ export async function doctorShellCompletion(
     const generated = await generateCompletionCache({ generationMode: "core-only" });
     if (!generated) {
       note(
-        `Failed to generate completion cache. Run \`${CLI_NAME} completion --write-state\` manually.`,
+        `Failed to ${regenerate ? "regenerate" : "generate"} completion cache. Run \`${CLI_NAME} completion --write-state\` manually.`,
         "Shell completion",
       );
       return;
     }
+  }
+  if (regenerate) {
+    note(`Completion cache regenerated at ${status.cachePath}`, "Shell completion");
+    return;
   }
   await installCompletionForDoctor(
     status,

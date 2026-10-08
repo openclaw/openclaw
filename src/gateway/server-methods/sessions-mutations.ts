@@ -132,6 +132,7 @@ function createSessionPatchHandler(
       const executed = await executeSessionPatchMutations({
         client,
         context,
+        signal,
         diagnostics,
         operatorAuthority: preparingOperator,
         onCreatedSessionCommitted: request.many
@@ -356,6 +357,9 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
+    const respondUnknownSession = () => {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${key}`));
+    };
     const runtimeAgentId = normalizeOptionalString(client?.internal?.agentRuntimeIdentity?.agentId);
     const agentToolCallerId =
       client?.internal?.syntheticClient === true
@@ -391,11 +395,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     try {
       const target = facts.readCurrent(context.getRuntimeConfig()).target;
       if (!target) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${key}`),
-        );
+        respondUnknownSession();
         return;
       }
       const authorizeView = (
@@ -493,11 +493,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             }
           : undefined;
       if (!projected) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${key}`),
-        );
+        respondUnknownSession();
         return;
       }
       respond(true, { ok: true, key: target.canonicalKey, owner: projected }, undefined);
@@ -639,33 +635,38 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       respond(false, undefined, result.error);
       return;
     }
-    if ("incognitoDeleted" in result) {
-      respond(true, { ok: true, key: result.key, deleted: true }, undefined);
-      emitSessionsChanged(context, {
-        sessionKey: result.key,
-        agentId: result.agentId,
-        sessionId: result.deletedSessionId,
-        reason: "delete",
-      });
-      return;
-    }
-    respond(
-      true,
-      {
-        ok: true,
-        key: result.key,
-        entry: {
-          ...result.entry,
-          fastMode: prepareSessionFastModePresentation(client)(result.entry.fastMode),
+    const deleted = "incognitoDeleted" in result;
+    if (deleted) {
+      respond(
+        true,
+        {
+          ok: true,
+          key: result.key,
+          deleted: true,
+          ...(result.worktreePreserved ? { worktreePreserved: result.worktreePreserved } : {}),
         },
-        resolved: result.resolved,
-      },
-      undefined,
-    );
+        undefined,
+      );
+    } else {
+      respond(
+        true,
+        {
+          ok: true,
+          key: result.key,
+          entry: {
+            ...result.entry,
+            fastMode: prepareSessionFastModePresentation(client)(result.entry.fastMode),
+          },
+          resolved: result.resolved,
+        },
+        undefined,
+      );
+    }
     emitSessionsChanged(context, {
       sessionKey: result.key,
       agentId: result.agentId,
-      reason,
+      ...(deleted ? { sessionId: result.deletedSessionId } : {}),
+      reason: deleted ? "delete" : reason,
     });
   },
 };

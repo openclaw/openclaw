@@ -243,22 +243,23 @@ vi.mock("../../sessions-resolve.js", () => ({
   ) => consume(mocks.resolveSessionKeyFromResolveParams(params)),
 }));
 
-vi.mock("../relay/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../relay/index.js")>();
-  return {
-    ...actual,
-    acknowledgeTalkRealtimeRelayMark: mocks.acknowledgeTalkRealtimeRelayMark,
-    cancelTalkRealtimeRelayTurn: mocks.cancelTalkRealtimeRelayTurn,
-    createTalkRealtimeRelaySession: mocks.createTalkRealtimeRelaySession,
-    ensureTalkRealtimeRelayVoiceSession: mocks.ensureTalkRealtimeRelayVoiceSession,
-    flushTalkRealtimeRelayVoiceWrites: mocks.flushTalkRealtimeRelayVoiceWrites,
-    registerTalkRealtimeRelayAgentRun: mocks.registerTalkRealtimeRelayAgentRun,
-    sendTalkRealtimeRelayAudio: mocks.sendTalkRealtimeRelayAudio,
-    steerTalkRealtimeRelayAgentRun: mocks.steerTalkRealtimeRelayAgentRun,
-    stopTalkRealtimeRelaySession: mocks.stopTalkRealtimeRelaySession,
-    submitTalkRealtimeRelayToolResult: mocks.submitTalkRealtimeRelayToolResult,
-  };
-});
+vi.mock("../relay/session-create.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../relay/session-create.js")>()),
+  createTalkRealtimeRelaySession: mocks.createTalkRealtimeRelaySession,
+}));
+
+vi.mock("../relay/operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../relay/operations.js")>()),
+  acknowledgeTalkRealtimeRelayMark: mocks.acknowledgeTalkRealtimeRelayMark,
+  cancelTalkRealtimeRelayTurn: mocks.cancelTalkRealtimeRelayTurn,
+  ensureTalkRealtimeRelayVoiceSession: mocks.ensureTalkRealtimeRelayVoiceSession,
+  flushTalkRealtimeRelayVoiceWrites: mocks.flushTalkRealtimeRelayVoiceWrites,
+  registerTalkRealtimeRelayAgentRun: mocks.registerTalkRealtimeRelayAgentRun,
+  sendTalkRealtimeRelayAudio: mocks.sendTalkRealtimeRelayAudio,
+  steerTalkRealtimeRelayAgentRun: mocks.steerTalkRealtimeRelayAgentRun,
+  stopTalkRealtimeRelaySession: mocks.stopTalkRealtimeRelaySession,
+  submitTalkRealtimeRelayToolResult: mocks.submitTalkRealtimeRelayToolResult,
+}));
 
 vi.mock("../client-gateway-control.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../client-gateway-control.js")>();

@@ -7,6 +7,7 @@ import {
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -106,27 +107,16 @@ export function createAgentTurnService(
     const ownerDeviceId =
       typeof principal?.connect?.device?.id === "string" ? principal.connect.device.id : undefined;
     const dedupeLifecycle = createAgentDedupeLifecycle({
+      ...preflight,
       privateCompletion,
-      inputProvenance,
-      cfg,
-      request,
-      runId,
       lifecycleGeneration,
-      agentDedupeKeys,
-      suppressVisibleSessionEffects,
       ownerConnId,
       ownerDeviceId,
       context,
       io,
     });
     const routing = await prepareAgentRequestRouting({
-      request,
-      cfg,
-      expectedSession,
-      isRawModelRun,
-      execApprovalFollowupApprovalId,
-      runId,
-      agentDedupeKeys,
+      ...preflight,
       context,
       respond,
       reserveDedupe: dedupeLifecycle.reserve,
@@ -137,22 +127,18 @@ export function createAgentTurnService(
       return;
     }
     const {
-      normalizedAttachments,
       requestedBestEffortDeliver,
-      knownAgents,
       requestedSessionId,
-      requestedToRaw,
       sessionKeyFromTo,
       requestedSessionKeyRaw,
-      explicitRecipientSession,
       preAcceptedReservedSessionKey,
       preAttachmentSession,
     } = routing;
-    const assertRequestCurrent = () => {
-      assertAdmissionCurrent?.();
-      dedupeLifecycle.assertReservationCurrent();
-      assertInputCommitAllowed?.();
-    };
+    const assertRequestCurrent = composeSessionSourceAssertion([
+      assertAdmissionCurrent,
+      () => dedupeLifecycle.assertReservationCurrent(),
+      assertInputCommitAllowed,
+    ]);
     let agentId = routing.agentId;
     let requestedSessionKey = routing.requestedSessionKey;
     let gatewayAdmissionTransferred = false;
@@ -168,24 +154,13 @@ export function createAgentTurnService(
     try {
       assertAdmissionCurrent?.();
       const content = await prepareAgentContentPhase({
+        ...preflight,
+        ...routing,
         assertAdmissionCurrent: assertRequestCurrent,
-        request,
-        cfg,
         context,
         respond,
-        isRawModelRun,
-        inputProvenance,
-        normalizedAttachments,
-        requestedSessionKeyRaw,
         requestedSessionKey,
-        requestedSessionId,
-        requestedToRaw,
-        sessionKeyFromTo,
         agentId,
-        providerOverride,
-        modelOverride,
-        explicitRecipientSession,
-        knownAgents,
       }).catch(dedupeLifecycle.handlePreparationFailure(assertAdmissionCurrent));
       if (!content) {
         return;
@@ -301,6 +276,7 @@ export function createAgentTurnService(
           effectiveBootstrapContextRunKind,
           preAttachmentSession,
           respond,
+          assertCurrent: assertRequestCurrent,
         });
         assertRequestCurrent();
         if (!preparedSession) {
@@ -511,39 +487,47 @@ export function createAgentTurnService(
       }
       const { activeSessionAgentId } = delivery;
 
-      const preparedDispatch = await prepareAgentRunDispatch({
-        assertAdmissionCurrent: assertRequestCurrent,
-        hasCurrentClientAuthority,
-        promptedAt,
+      const runParams = {
         request,
         cfg,
         cfgForAgent,
         sessionEntry,
         resolvedSessionKey,
-        requestedSessionKeyRaw,
         requestedSessionKey,
-        preAcceptedReservedSessionKey,
         activeSessionAgentId,
         delivery,
-        restoredCronContinuationIdentity,
         restoredCronContinuation,
-        providerOverride,
-        modelOverride,
-        allowModelOverride,
         lifecycleGeneration,
-        getAdmittedSessionId: () => admittedSessionId,
-        ownerConnId,
-        ownerDeviceId,
         suppressVisibleSessionEffects,
-        pendingChatRun,
-        inputProvenance,
         isOneShotModelRun,
         isRestartRecoveryResumeRun,
         canUseInternalRuntimeHandoff,
+        images,
+        runId,
+        agentDedupeKeys,
+        context,
+        io,
+        client: principal,
+      };
+      const preparedDispatch = await prepareAgentRunDispatch({
+        ...runParams,
+        assertAdmissionCurrent: assertRequestCurrent,
+        hasCurrentClientAuthority,
+        promptedAt,
+        requestedSessionKeyRaw,
+        preAcceptedReservedSessionKey,
+        restoredCronContinuationIdentity,
+        providerOverride,
+        modelOverride,
+        allowModelOverride,
+        getAdmittedSessionId: () => admittedSessionId,
+        ownerConnId,
+        ownerDeviceId,
+        pendingChatRun,
+        inputProvenance,
         execApprovalFollowupApprovalId,
         message,
         effectiveTranscriptInputText,
-        images,
         offloadedRefs,
         onUserTurnMediaPersisted: () => {
           preparedOffloadedRefs = [];
@@ -551,11 +535,6 @@ export function createAgentTurnService(
         requestedPromptPersistenceSuppression,
         privateCompletion,
         settleWakeReplay,
-        runId,
-        agentDedupeKeys,
-        context,
-        client: principal,
-        io,
         abortForLifecycleRotation: dedupeLifecycle.abortForLifecycleRotation,
         acquireGatewayWorkAdmission: admissionController.acquire,
         assertGatewayWorkAdmissionAllowed: admissionController.assertAllowed,
@@ -580,46 +559,27 @@ export function createAgentTurnService(
       void context
         .trackExecution(() =>
           startAgentRunExecution({
+            ...runParams,
             assertContextCurrent,
             prepared: preparedDispatch,
             mainRestartRecoveryOwnerLease,
-            request,
-            cfg,
-            cfgForAgent,
-            sessionEntry,
-            resolvedSessionKey,
-            requestedSessionKey,
             resolvedSessionId,
             agentId,
-            activeSessionAgentId,
-            delivery,
             isNewSession,
             isRawModelRun,
-            isOneShotModelRun,
-            isRestartRecoveryResumeRun,
-            suppressVisibleSessionEffects,
-            images,
             imageOrder,
             media,
             inputProvenance: preparedDispatch.userTurn.inputProvenance,
-            runId,
-            agentDedupeKeys,
             swarmExecutionLane,
             spawnedBy: spawnedByValue,
             groupId: resolvedGroupId,
             groupChannel: resolvedGroupChannel,
             groupSpace: resolvedGroupSpace,
             bestEffortDeliver,
-            lifecycleGeneration,
             effectiveBootstrapContextRunKind,
             preserveUserFacingSessionModelState,
             sessionEffects,
             skipAgentInitialSessionTouch,
-            restoredCronContinuation,
-            canUseInternalRuntimeHandoff,
-            client: principal,
-            context,
-            io,
             releaseCronContinuationClaimWithRecovery: cronContinuation.releaseWithRecovery,
           }),
         )

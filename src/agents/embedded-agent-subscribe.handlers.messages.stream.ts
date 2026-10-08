@@ -1,7 +1,4 @@
 import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
-/**
- * Projects provider assistant messages into ordered visible stream state.
- */
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -40,26 +37,20 @@ export function isSubscribeTranscriptOnlyOpenClawAssistantMessage(
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 
+function readAssistantMessageApi(message: AgentMessage | undefined) {
+  return message?.role === "assistant" ? normalizeOptionalString(message.api) : undefined;
+}
+
 export function isResponsesApiAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  return OPENAI_RESPONSES_APIS.has(normalizeOptionalString(message.api) ?? "");
+  return OPENAI_RESPONSES_APIS.has(readAssistantMessageApi(message) ?? "");
 }
 
 export function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const api = normalizeOptionalString(message.api) ?? "";
-  return api === "anthropic-messages";
+  return readAssistantMessageApi(message) === "anthropic-messages";
 }
 
 export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const api = normalizeOptionalString(message.api) ?? "";
+  const api = readAssistantMessageApi(message);
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
 }
 
@@ -140,20 +131,16 @@ export function resolveAssistantStreamBlockIndex(
   if (indexedBlock && typeof indexedBlock === "object" && indexedBlock.type === "text") {
     return contentIndex;
   }
-  if (itemId) {
-    for (let index = message.content.length - 1; index >= 0; index -= 1) {
-      const candidate = message.content[index];
-      if (
-        candidate &&
-        typeof candidate === "object" &&
-        candidate.type === "text" &&
-        parseAssistantTextSignature(candidate)?.id === itemId
-      ) {
-        return index;
-      }
-    }
-  }
-  return undefined;
+  const index = itemId
+    ? message.content.findLastIndex(
+        (candidate) =>
+          candidate &&
+          typeof candidate === "object" &&
+          candidate.type === "text" &&
+          parseAssistantTextSignature(candidate)?.id === itemId,
+      )
+    : -1;
+  return index >= 0 ? index : undefined;
 }
 
 export function scopeAssistantMessageToStreamBlock(

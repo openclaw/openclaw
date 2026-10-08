@@ -7,6 +7,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { renderSessionMenuItem } from "./cloud-target.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import type { DraftBranches } from "./discovery.ts";
+import { onOwnPopoverEvent } from "./new-session-runtime.ts";
 import { renderPickerLabel } from "./picker-label.ts";
 
 registerNewSessionSetupEnglish();
@@ -354,17 +355,9 @@ export function renderCheckoutChip(params: {
       for="new-session-checkout-trigger"
       placement="bottom-start"
       without-arrow
-      @wa-show=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          params.onPopoverShow();
-        }
-      }}
+      @wa-show=${onOwnPopoverEvent(() => params.onPopoverShow())}
       @wa-hide=${(event: Event) => handlePopoverHide(event, params.onPopoverHide)}
-      @wa-after-hide=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          params.onPopoverAfterHide();
-        }
-      }}
+      @wa-after-hide=${onOwnPopoverEvent(() => params.onPopoverAfterHide())}
     >
       <div class="new-session-page__picker-root">
         <div class="new-session-page__menu-title">${t("newSession.checkout")}</div>

@@ -14,7 +14,7 @@ import { compareSemverStrings, resolveNpmChannelTag } from "../../infra/update-c
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
-import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import {
   inspectUpdateRepairDriverAdmission,
@@ -113,11 +113,9 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     !env.OPENCLAW_UPDATE_RUN_HANDOFF &&
     !env[POST_CORE_UPDATE_ENV] &&
     (opts.channel === undefined || normalizeUpdateChannel(opts.channel))
-      ? await createManagedHandoffLeaseStore().prepareRepair(
-          await resolveUpdateRoot(),
-          env,
-          timeoutMs,
-        )
+      ? await (
+          await prepareManagedHandoffLeaseStore()
+        ).prepareRepair(await resolveUpdateRoot(), env, timeoutMs)
       : null;
   // Capture Doctor-visible history before finalization admits its own newer run.
   // Terminal age limits the shortcut below, not successful repair acknowledgment.
@@ -128,13 +126,12 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (admission.kind === "continuation") {
     const continuation = admission.run;
     recordUpdateRunRepairContinuation(continuation.runId, inheritedRunId, options);
-    await updateFinalizeCommand(
+    return await updateFinalizeCommand(
       opts,
       [...activeRuns, ...historicalRuns]
         .filter((run) => run.runId !== continuation.runId)
         .map((run) => run.runId),
     );
-    return;
   }
   const lastRun = recentRuns[0];
   if (
@@ -204,14 +201,12 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     history.postCoreRuns.length > 0 ||
     history.incomplete
   ) {
-    await updateFinalizeCommand(opts, recoveryRunIds, handoff ?? undefined);
-    return;
+    return await updateFinalizeCommand(opts, recoveryRunIds, handoff ?? undefined);
   }
 
   const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
   if (!snapshot.valid) {
-    await updateFinalizeCommand(opts, recoveryRunIds);
-    return;
+    return await updateFinalizeCommand(opts, recoveryRunIds);
   }
   const context = await resolveGatewayRestartProbeContext(env);
   const port = resolveGatewayPort(context.config, env);
@@ -241,8 +236,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     http.healthz !== 200 ||
     http.readyz !== 200
   ) {
-    await updateFinalizeCommand(opts, recoveryRunIds);
-    return;
+    return await updateFinalizeCommand(opts, recoveryRunIds);
   }
 
   // Health probes await network I/O. Recheck current rows before the ledger's

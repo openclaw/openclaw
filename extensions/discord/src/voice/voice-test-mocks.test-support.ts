@@ -500,13 +500,13 @@ vi.mock("./audio.js", async () => {
   const { PassThrough } = await import("node:stream");
   return {
     ...actual,
-    createDiscordOpusEncodeStream: vi.fn(() =>
-      Object.assign(new PassThrough(), {
+    DiscordOpusEncodeStream: vi.fn(function () {
+      return Object.assign(new PassThrough(), {
         flushPartialFrame: () => false,
         flushPartialFrameWhenReady: () => {},
         takePcmBytes: (packet: Buffer) => packet.length,
-      }),
-    ),
+      });
+    }),
     createDiscordOpusPlaybackStream: vi.fn(() => new PassThrough()),
     decodeOpusStreamChunks: decodeOpusStreamChunksMock,
   };

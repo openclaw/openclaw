@@ -25,6 +25,10 @@ import { resolveRequiredHomeDir } from "./home-dir.js";
 import { resolveLegacyStateDirMigrationCandidates } from "./state-migrations.state-dir.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "./update-capture-privacy-marker.js";
+import {
+  assertUpdateRecoverySealComplete,
+  hasPendingUpdateRecoverySeal,
+} from "./update-recovery-capture-seal.js";
 import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { inspectUpdateRunDriver, sameUpdateRunDriver } from "./update-run-driver.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
@@ -179,6 +183,7 @@ async function withRecoveryMetadata<T>(
     if (pin.receipt.realPath !== location.directory) {
       throw new Error("Update recovery capture changed location.");
     }
+    await assertUpdateRecoverySealComplete(location.directory);
     const source = await safeRoot(location.directory, { symlinks: "reject", hardlinks: "reject" });
     assertOwned?.();
     const bytes = await source.readBytes("manifest.json", {
@@ -206,6 +211,7 @@ async function withRecoveryMetadata<T>(
       }
     }
     await pin.assertCurrent();
+    await assertUpdateRecoverySealComplete(location.directory);
     assertOwned?.();
     return await run({ ref, manifest, outcome, pin });
   } finally {
@@ -295,6 +301,7 @@ async function readBinding(ref: UpdateRecoveryBackupRef) {
       if (!(await statOrMissing(directory))) {
         continue;
       }
+      await assertUpdateRecoverySealComplete(directory);
       if (!(await statOrMissing(path.join(directory, "manifest.json")))) {
         // Preparation can stop before the final seal. Retain and bind all of
         // those bytes, but never label them a verified rollback generation.
@@ -516,7 +523,11 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
       ) {
         continue;
       }
-      if (entry?.isDirectory() && !manifestEntry && /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId)) {
+      if (
+        entry?.isDirectory() &&
+        /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId) &&
+        (!manifestEntry || (await hasPendingUpdateRecoverySeal(directory)))
+      ) {
         result.push({ kind: "incomplete", directory });
         continue;
       }

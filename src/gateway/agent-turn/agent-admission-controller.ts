@@ -224,27 +224,17 @@ export function createAgentAdmissionController(params: {
   };
 
   const respondToOutcome = () => {
-    if (postAdmissionAbort) {
+    if (postAdmissionAbort || postAdmissionTimeout || postAdmissionSuperseded) {
       admission?.release();
       params.dedupeLifecycle.markAccepted(true);
       params.io.emitAcceptance(
-        [postAdmissionAbort.ok, postAdmissionAbort.payload, postAdmissionAbort.error],
-        {
-          cached: true,
-          runId: params.runId,
-        },
-      );
-      return true;
-    }
-    if (postAdmissionTimeout || postAdmissionSuperseded) {
-      admission?.release();
-      params.dedupeLifecycle.markAccepted(true);
-      params.io.emitAcceptance(
-        [
-          true,
-          postAdmissionTimeout ?? { runId: params.runId, status: "in_flight" as const },
-          undefined,
-        ],
+        postAdmissionAbort
+          ? [postAdmissionAbort.ok, postAdmissionAbort.payload, postAdmissionAbort.error]
+          : [
+              true,
+              postAdmissionTimeout ?? { runId: params.runId, status: "in_flight" as const },
+              undefined,
+            ],
         { cached: true, runId: params.runId },
       );
       return true;

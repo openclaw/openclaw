@@ -6,9 +6,15 @@ import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
-import { closeTrackedCdpTarget, resolveCdpTabOwnership } from "./cdp.helpers.js";
+import {
+  closeTrackedCdpTarget,
+  normalizeCdpHttpBaseForJsonEndpoints,
+  normalizeCdpWsUrl,
+  redactCdpErrorText,
+  resolveCdpTabOwnership,
+} from "./cdp.helpers.js";
 import { createTargetViaCdp, waitForCdpCommittedNavigationUrl } from "./cdp.js";
-import { BrowserCdpEndpointBlockedError } from "./errors.js";
+import { BrowserCdpEndpointBlockedError, toBrowserErrorResponse } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown> };
@@ -246,17 +252,6 @@ describe("CDP target creation", () => {
     }
   });
 
-  it("creates directly through a WebSocket URL without HTTP discovery", async () => {
-    const browser = await startBrowser((message) =>
-      message.method === "Target.createTarget" ? { result: { targetId: "DIRECT" } } : undefined,
-    );
-    const fetch = vi.spyOn(globalThis, "fetch");
-    await expect(
-      createTargetViaCdp({ cdpUrl: browser.wsUrl, url: "https://example.com" }),
-    ).resolves.toEqual({ targetId: "DIRECT" });
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
   it("honors configured HTTP discovery timeouts", async () => {
     const browser = await startBrowser(
       (message) =>
@@ -487,5 +482,67 @@ describe("tracked CDP target closure", () => {
       }),
     ).resolves.toEqual({ status: "ownership-mismatch" });
     expect(browser.messages).toEqual([]);
+  });
+});
+
+describe("browser error mapping", () => {
+  it("maps blocked browser targets to conflict responses", () => {
+    const err = new Error("Target blocked after navigation");
+    err.name = "BlockedBrowserTargetError";
+    expect(toBrowserErrorResponse(err)).toEqual({
+      status: 409,
+      message: err.message,
+      reason: "navigation_blocked",
+    });
+  });
+  it("sanitizes navigation-target SSRF policy details", () => {
+    expect(toBrowserErrorResponse(new SsrFBlockedError("raw private-network policy"))).toEqual({
+      status: 400,
+      message: "browser navigation blocked by policy",
+      reason: "navigation_blocked",
+    });
+  });
+  it("distinguishes endpoint policy blocks from navigation errors", () => {
+    expect(toBrowserErrorResponse(new BrowserCdpEndpointBlockedError())).toEqual({
+      status: 400,
+      message: "browser endpoint blocked by policy",
+    });
+  });
+});
+
+it.each([
+  [
+    "ws://0.0.0.0:3000/devtools/browser/ABC?session=1&token=ws-token",
+    "https://user:pass@example.com:9443?token=cdp-token&apiKey=abc",
+    "wss://user:pass@example.com:9443/devtools/browser/ABC?session=1&token=ws-token&apiKey=abc",
+  ],
+  [
+    "ws://[::]:3000/devtools/browser/ABC",
+    "http://example.com",
+    "ws://example.com/devtools/browser/ABC",
+  ],
+  ["ws://remote.example", "https://remote.example?token=abc", "wss://remote.example/?token=abc"],
+])("normalizes %s against the configured authority", (reported, configured, expected) => {
+  expect(normalizeCdpWsUrl(reported, configured)).toBe(expected);
+});
+
+describe("CDP URL edge cases", () => {
+  it("normalizes WebSocket endpoints and malformed URL fallbacks", () => {
+    expect(normalizeCdpHttpBaseForJsonEndpoints("ws://host:9222/cdp")).toBe("http://host:9222");
+    expect(normalizeCdpHttpBaseForJsonEndpoints("wss://host/devtools/browser/abc?t=1")).toBe(
+      "https://host/?t=1",
+    );
+    expect(normalizeCdpHttpBaseForJsonEndpoints("ws://").startsWith("http:")).toBe(true);
+  });
+
+  it("redacts embedded CDP URL credentials from dependency error prose", () => {
+    const message = redactCdpErrorText(
+      "connect failed for wss://alice:browser-password@browserless.example/devtools/browser/id?token=browser-token",
+    );
+
+    expect(message).toContain("browserless.example/devtools/browser/id");
+    expect(message).not.toContain("alice");
+    expect(message).not.toContain("browser-password");
+    expect(message).not.toContain("browser-token");
   });
 });

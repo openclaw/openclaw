@@ -1,6 +1,3 @@
-/**
- * Normalizes embedded-agent conversation turn ordering for provider contracts.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../runtime/index.js";
@@ -11,12 +8,10 @@ import { isAnthropicApi } from "./anthropic-api.js";
 
 const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
 
-/** Return true when a provider family owns signed thinking blocks. */
 export function providerRequiresSignedThinking(provider?: string | null): boolean {
   return SIGNED_THINKING_PROVIDERS.has(normalizeProviderId(provider ?? ""));
 }
 
-/** Decide whether signed thinking can be replayed under the current provider policy. */
 export function shouldAllowProviderOwnedThinkingReplay(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -190,6 +185,7 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       ? []
       : [{ type: "text", text: "[tool calls omitted]" }];
 
+    let nextContent = originalContent;
     if (hasThinking) {
       const allToolCallsResolvable = originalContent.every((block) => {
         if (!block || !isToolCallBlock(block)) {
@@ -206,37 +202,30 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
         }
         return matchingToolNames.size === 0 || matchingToolNames.has(blockName);
       });
-      if (allToolCallsResolvable) {
-        result.push(msg);
-      } else {
-        result.push({
-          ...assistantMsg,
-          content: omittedContent,
-        } as AgentMessage);
+      if (!allToolCallsResolvable) {
+        nextContent = omittedContent;
       }
-      continue;
+    } else {
+      const filteredContent = originalContent.filter((block) => {
+        if (!block) {
+          return false;
+        }
+        if (!isToolCallBlock(block)) {
+          return true;
+        }
+        const blockId = normalizeOptionalString(block.id);
+        return blockId ? validToolUseIds.has(blockId) : false;
+      });
+
+      if (filteredContent.length !== originalContent.length) {
+        nextContent = filteredContent.length === 0 ? omittedContent : filteredContent;
+      }
     }
-
-    const filteredContent = originalContent.filter((block) => {
-      if (!block) {
-        return false;
-      }
-      if (!isToolCallBlock(block)) {
-        return true;
-      }
-      const blockId = normalizeOptionalString(block.id);
-      return blockId ? validToolUseIds.has(blockId) : false;
-    });
-
-    if (filteredContent.length === originalContent.length) {
-      result.push(msg);
-      continue;
-    }
-
-    result.push({
-      ...assistantMsg,
-      content: filteredContent.length === 0 ? omittedContent : filteredContent,
-    } as AgentMessage);
+    result.push(
+      nextContent === originalContent
+        ? msg
+        : ({ ...assistantMsg, content: nextContent } as AgentMessage),
+    );
   }
 
   return result;
@@ -307,11 +296,7 @@ function mergeConsecutiveAssistantTurns(
   };
 }
 
-/**
- * Validates and fixes conversation turn sequences for Gemini API.
- * Gemini requires strict alternating user→assistant→tool→user pattern.
- * Merges consecutive assistant messages together.
- */
+/** Merge consecutive assistant turns for Gemini's provider turn-order contract. */
 export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
   return validateTurnsWithConsecutiveMerge({
     messages,
@@ -320,7 +305,6 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
   });
 }
 
-/** Merge adjacent user turns into a single provider-compatible user message. */
 function mergeConsecutiveUserTurns(
   previous: Extract<AgentMessage, { role: "user" }>,
   current: Extract<AgentMessage, { role: "user" }>,
@@ -351,10 +335,8 @@ export const mergeConsecutiveUserMessages = (messages: AgentMessage[]): AgentMes
   validateTurnsWithConsecutiveMerge({ messages, role: "user", merge: mergeConsecutiveUserTurns });
 
 /**
- * Validates and fixes conversation turn sequences for Anthropic API.
- * Anthropic requires strict alternating user→assistant pattern.
- * Merges consecutive user messages together.
- * Also strips dangling tool_use blocks that lack corresponding tool_result blocks.
+ * Repair Anthropic tool-use/result pairing; user-turn merging stays optional
+ * because prefix-bound signed replay must preserve the original turn bytes.
  */
 export function validateAnthropicTurns(
   messages: AgentMessage[],

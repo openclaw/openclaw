@@ -18,11 +18,15 @@ import {
   type AgentDatabaseAdmissionRestriction,
 } from "../../state/openclaw-agent-execution-domain.js";
 import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
+import { readSessionIdentityEvidenceInDatabase } from "./session-accessor.sqlite-entry-availability.js";
 import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
+import { listSqliteSessionEntriesFromDatabase } from "./session-accessor.sqlite-entry-list.read.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { projectSessionEntryCapabilityFacts } from "./session-entry-capability-facts.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import {
   isIncognitoComputeCommand,
@@ -95,6 +99,19 @@ export function createIncognitoSessionWorker(
           identity,
           sessionKey,
           revision: sessionRevisions.get(sessionKey) ?? 0,
+          capability: entry ? projectSessionEntryCapabilityFacts(entry) : undefined,
+          steering: entry
+            ? {
+                sessionId: entry.sessionId,
+                updatedAt: entry.updatedAt,
+                status: entry.status,
+                restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
+                restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+                restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
+                restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
+                restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
+              }
+            : undefined,
           sharing: entry
             ? {
                 entry: projectSessionSharingEntry(entry),
@@ -239,12 +256,55 @@ export function createIncognitoSessionWorker(
         command.type !== "session.pendingInputs.mutate" &&
         command.type !== "session.pendingInputs.interruptHistory" &&
         command.type !== "session.entry.create" &&
-        command.type !== "session.entry.read"
+        command.type !== "session.entry.read" &&
+        command.type !== "session.entries.read" &&
+        command.type !== "session.identities.read"
       ) {
         await sideData.prepare(command);
       }
     },
     execute(command: SqliteWorkerCommand<IncognitoSessionOperations>) {
+      if (command.type === "session.identities.read") {
+        return readOnly(() => {
+          const evidence = readSessionIdentityEvidenceInDatabase(database, [
+            ...command.input.identities,
+          ]);
+          const keys = [
+            ...new Set(
+              evidence.flatMap((item) => (item.status === "current" ? [item.sessionKey] : [])),
+            ),
+          ];
+          keys.forEach(assertKey);
+          const facts = keys.flatMap((key) => read(key).facts);
+          requestSqliteWorkerOperationAdmission({
+            stage: "prepare",
+            facts: { identity, sessions: facts },
+          });
+          return { evidence, facts };
+        });
+      }
+      if (command.type === "session.entries.read") {
+        return readOnly(() => {
+          const scope = {
+            agentId: database.agentId,
+            storePath: database.path,
+            env,
+            sessionKey: "",
+          };
+          const entries = listSqliteSessionEntriesFromDatabase(
+            database,
+            resolveSqliteScope(scope),
+            { ...scope, ...command.input },
+          );
+          entries.forEach(({ sessionKey }) => assertKey(sessionKey));
+          const facts = entries.flatMap(({ sessionKey }) => read(sessionKey).facts);
+          requestSqliteWorkerOperationAdmission({
+            stage: "prepare",
+            facts: { identity, sessions: facts },
+          });
+          return { entries, facts };
+        });
+      }
       if (isIncognitoEntryCreationCommand(command) || isIncognitoEntryPatchCommand(command)) {
         const { sessionKey } = command.input;
         assertKey(sessionKey);

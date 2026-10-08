@@ -22,6 +22,7 @@ const MANAGED_UPDATE_SELECTOR_ENV_KEYS = [
   "OPENCLAW_HOME",
   ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 ] as const;
+const OPERATOR_SCRATCH_ENV_KEYS = ["TMPDIR", "TMP", "TEMP"] as const;
 
 /** Recovery can be printed inside an owned-env scope that the operator's shell never had. */
 export function resolveServiceRecoveryContext(
@@ -104,6 +105,27 @@ export function resolveServiceRefreshEnv(
   return resolvedEnv;
 }
 
+function applyUpdateEnv(
+  entries: Iterable<readonly [string, string | undefined]>,
+  replace = false,
+): void {
+  clearFsSafeEnvFallback(process.env);
+  if (replace) {
+    for (const key of Object.keys(process.env)) {
+      delete process.env[key];
+    }
+  }
+  for (const [key, value] of entries) {
+    // A full snapshot skips undefined; an overlay uses it to unset a selector.
+    if (value !== undefined) {
+      process.env[key] = value;
+    } else if (!replace) {
+      delete process.env[key];
+    }
+  }
+  normalizeFsSafeNativeEnv();
+}
+
 /** Run one update phase under the managed Gateway's authoritative environment. */
 export async function withOwnedManagedUpdateEnv<T>(
   env: NodeJS.ProcessEnv | undefined,
@@ -117,24 +139,11 @@ export async function withOwnedManagedUpdateEnv<T>(
   const previousEnv = { ...fsSafeEnvInput(process.env) };
   // Snapshot an aliased input before clearing the process environment.
   const phaseEnv = env === process.env ? previousEnv : { ...fsSafeEnvInput(env) };
-  const replace = (snapshot: NodeJS.ProcessEnv) => {
-    clearFsSafeEnvFallback(process.env);
-    for (const key of Object.keys(process.env)) {
-      delete process.env[key];
-    }
-    for (const [key, value] of Object.entries(snapshot)) {
-      // Node stringifies undefined on assignment; unset selectors must remain absent.
-      if (value !== undefined) {
-        process.env[key] = value;
-      }
-    }
-    normalizeFsSafeNativeEnv();
-  };
-  replace(phaseEnv);
+  applyUpdateEnv(Object.entries(phaseEnv), true);
   try {
     return await run();
   } finally {
-    replace(previousEnv);
+    applyUpdateEnv(Object.entries(previousEnv), true);
   }
 }
 
@@ -152,22 +161,11 @@ export async function withUpdateEnv<T>(
         process.platform === "win32" ? resolveEnvironmentValue(before, key) : before[key],
       ] as const,
   );
-  const apply = (entries: Iterable<readonly [string, string | undefined]>) => {
-    clearFsSafeEnvFallback(process.env);
-    for (const [key, value] of entries) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-    normalizeFsSafeNativeEnv();
-  };
-  apply(Object.entries(inputs));
+  applyUpdateEnv(Object.entries(inputs));
   try {
     return await run();
   } finally {
-    apply(previous);
+    applyUpdateEnv(previous);
   }
 }
 
@@ -215,18 +213,22 @@ export function resolveUpdatedInstallCommandEnv(params?: {
     : undefined;
   // SecretRefs may resolve from the updater's runtime env even when the
   // managed service intentionally omits resolved secrets from its definition.
-  return disableUpdatedPackageCompileCacheEnv({
-    ...processEnv,
-    ...serviceEnv,
-  });
+  const resolved = { ...processEnv, ...serviceEnv };
+  // The service owns installation selectors; the invoking operator owns scratch placement.
+  for (const key of OPERATOR_SCRATCH_ENV_KEYS) {
+    if (processEnv[key] !== undefined) {
+      resolved[key] = processEnv[key];
+    }
+  }
+  return disableUpdatedPackageCompileCacheEnv(resolved);
 }
 
-export function resolveOwnedManagedUpdateEnv(params: {
-  processEnv?: NodeJS.ProcessEnv;
-  serviceEnv: NodeJS.ProcessEnv;
-  serviceDefinitionEnv?: NodeJS.ProcessEnv;
-  invocationCwd?: string;
-}): NodeJS.ProcessEnv {
+export function resolveOwnedManagedUpdateEnv(
+  params: NonNullable<Parameters<typeof resolveUpdatedInstallCommandEnv>[0]> & {
+    serviceEnv: NodeJS.ProcessEnv;
+    serviceDefinitionEnv?: NodeJS.ProcessEnv;
+  },
+): NodeJS.ProcessEnv {
   const resolved = resolveUpdatedInstallCommandEnv(params);
   return applyManagedServiceSelectorEnv(
     resolved,

@@ -317,7 +317,7 @@ export function registerBrowserManageCommands(
   browser
     .command("doctor")
     .description("Check browser plugin readiness")
-    .option("--deep", "Run a live snapshot probe")
+    .option("--deep", "Run a live snapshot check")
     .action(async (opts: { deep?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;

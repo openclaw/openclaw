@@ -18,6 +18,7 @@ import {
   type SessionEntryPatchOptions,
 } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
@@ -150,11 +151,18 @@ export async function persistAgentSessionPhase(params: {
       channel: sessionDeliveryChannel(entry),
       chatType: entry?.chatType,
     }) === "deny";
+  const rejectDelivery = (): undefined => {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+    );
+    return undefined;
+  };
   if (params.storePath && !params.suppressVisibleSessionEffects) {
     if (abortForLifecycleRotation()) {
       return undefined;
     }
-    let deniedBySendPolicy = false;
     let deniedSessionEntry: SessionEntry | undefined;
     let persisted: SessionEntry | undefined;
     let mutationError: ReturnType<typeof errorShape> | undefined;
@@ -200,8 +208,7 @@ export async function persistAgentSessionPhase(params: {
               !params.isRestartRecoveryResumeRun &&
               internalFreshEntry &&
               (internalFreshEntry.mainRestartRecovery?.tombstone ||
-                (internalFreshEntry.status === "running" &&
-                  internalFreshEntry.abortedLastRun === true &&
+                (internalFreshEntry.abortedLastRun === true &&
                   getMainSessionRecoveryRetryCount(internalFreshEntry.mainRestartRecovery) >=
                     MAX_RECOVERY_RETRIES))
             ) {
@@ -387,7 +394,6 @@ export async function persistAgentSessionPhase(params: {
               params.setMainRestartRecoveryOwnerLease(mainRestartRecoveryOwnerLease);
             }
             if (isDeliveryDenied(merged)) {
-              deniedBySendPolicy = true;
               deniedSessionEntry = merged;
               return null;
             }
@@ -399,11 +405,16 @@ export async function persistAgentSessionPhase(params: {
             replaceEntry: true,
             takeCacheOwnership: true,
             maintenanceConfig: params.maintenanceConfig,
-            assertCommitAllowed: () => {
-              params.assertAdmissionCurrent?.();
-              if (createdNewEntry) {
-                assertPreparedSkillLibrarySelection(params.creation.skillLibrarySelections);
-              }
+            workerGuard: {
+              source: composeSessionSourceAssertion(
+                [params.assertAdmissionCurrent],
+                (assertSource) => {
+                  assertSource();
+                  if (createdNewEntry) {
+                    assertPreparedSkillLibrarySelection(params.creation.skillLibrarySelections);
+                  }
+                },
+              ),
             },
           },
         )) ?? undefined;
@@ -427,7 +438,7 @@ export async function persistAgentSessionPhase(params: {
     if (abortForLifecycleRotation()) {
       return undefined;
     }
-    if (deniedBySendPolicy && deniedSessionEntry) {
+    if (deniedSessionEntry) {
       sessionEntry = deniedSessionEntry;
       resolvedSessionId = sessionEntry.sessionId;
     } else if (persisted) {
@@ -459,13 +470,8 @@ export async function persistAgentSessionPhase(params: {
       return undefined;
     }
     skipAgentInitialSessionTouch = params.touchInteraction;
-    if (deniedBySendPolicy) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-      );
-      return undefined;
+    if (deniedSessionEntry) {
+      return rejectDelivery();
     }
   }
 
@@ -523,12 +529,7 @@ export async function persistAgentSessionPhase(params: {
     });
   }
   if (isDeliveryDenied(sessionEntry)) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-    );
-    return undefined;
+    return rejectDelivery();
   }
   const isMainSession =
     !params.suppressVisibleSessionEffects &&

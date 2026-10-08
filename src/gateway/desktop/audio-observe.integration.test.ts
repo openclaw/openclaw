@@ -137,9 +137,15 @@ describe("audio tied to the actual RFB observer", () => {
         expect(start).not.toHaveBeenCalled();
         return;
       }
+      const startFrame = once(audio, "message");
       serverStream.write(Buffer.alloc(4));
       await started.promise;
       expect(start).toHaveBeenCalledTimes(1);
+      expect((await startFrame)[0].toString()).toBe('{"state":"started"}');
+      const received = once(audio, "message");
+      const samples = Buffer.from([0, 1, 0, 2]);
+      pcm.write(samples);
+      expect(await received).toEqual([samples, true]);
       screen.close();
       await audioClosed;
       await stopped.promise;

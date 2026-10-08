@@ -3,7 +3,12 @@ import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { supportsThreadBindingSpawn } from "../../channels/conversation-resolution.js";
 import { resolveThreadBindingSpawnPolicy } from "../../channels/thread-bindings-policy.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  captureExecRequestOwners,
+  withExecRequestOwners,
+} from "../../infra/exec-request-context.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
@@ -67,10 +72,8 @@ import {
   PlacedSessionsSpawnSchema,
   PLACED_SESSIONS_SPAWN_DESCRIPTION,
 } from "./sessions-placement-tool-contract.js";
-import {
-  maybeSpawnVisibleSession,
-  type SessionsSpawnToolOptions,
-} from "./sessions-spawn-visible.js";
+import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
+import { maybeSpawnVisibleSession } from "./sessions-spawn-visible.js";
 import { SESSIONS_SPAWN_SESSION_SCHEMA } from "./sessions-spawn-visible.schema.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
@@ -88,13 +91,6 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "reply_to",
 ] as const;
 const loadAcpSpawnModule = createLazyPromise(() => import("../subagents/spawn/acp-spawn.js"));
-
-function addRoleToFailureResult<T extends { status: string }>(result: T, role: string | undefined) {
-  if (!role || (result.status !== "error" && result.status !== "forbidden")) {
-    return result;
-  }
-  return { ...result, role };
-}
 
 function recordAcceptedSessionSpawn(
   result: Record<string, unknown>,
@@ -308,6 +304,10 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: SessionsSpawnToolOptions & { workerPlacement?: boolean },
 ): AnyAgentTool {
+  const requestOwners = captureExecRequestOwners({
+    runId: opts?.requesterTurnRunId,
+    sessionId: opts?.expectedParentSessionId,
+  });
   const effectiveConfig = opts?.config ?? getRuntimeConfig();
   const acpAvailable = isAcpRuntimeSpawnAvailable({
     config: effectiveConfig,
@@ -362,10 +362,10 @@ export function createSessionsSpawnTool(
             ? AbortSignal.any([signal, opts.signal])
             : (signal ?? opts?.signal);
         const assertSourceExecution = captureAgentToolSourceExecutionGuard(executionSignal);
-        const assertSourceActive = () => {
-          assertSourceExecution();
-          operatorSelection.assertCurrent();
-        };
+        const assertSourceActive = composeSessionSourceAssertion([
+          assertSourceExecution,
+          operatorSelection.assertCurrent,
+        ]);
         const params = args as Record<PropertyKey, unknown>;
         if (opts?.swarmCollector && params.collect !== true) {
           throw new ToolInputError(
@@ -460,7 +460,12 @@ export function createSessionsSpawnTool(
           params.context === "fork" || params.context === "isolated" ? params.context : undefined;
         const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
         const lightContext = params.lightContext === true;
-        const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
+        const spawnResult = <T extends { status: string }>(result: T) =>
+          jsonResult(
+            requestedAgentId && (result.status === "error" || result.status === "forbidden")
+              ? { ...result, role: requestedAgentId }
+              : result,
+          );
         const expectedParentSessionKey = opts?.agentSessionKey?.trim();
         if (opts?.expectedParentSessionId && !expectedParentSessionKey) {
           throw new Error("Exact parent session access requires a session key");
@@ -476,12 +481,15 @@ export function createSessionsSpawnTool(
             runTimeoutSeconds,
             sandbox,
             expectsCompletionMessage,
-            options: {
-              ...opts,
-              onSpawnEffectsStart,
-              assertActive,
-              signal: executionSignal,
-            },
+            options: withExecRequestOwners(
+              {
+                ...opts,
+                onSpawnEffectsStart,
+                assertActive,
+                signal: executionSignal,
+              },
+              requestOwners,
+            ),
           });
         const visibleResult =
           params.visible === true && opts?.expectedParentSessionId
@@ -495,18 +503,15 @@ export function createSessionsSpawnTool(
             : await spawnVisible();
         if (visibleResult) {
           recordAcceptedSessionSpawn(visibleResult, context ?? "isolated");
-          return jsonResult(
-            addRoleToFailureResult(visibleResult as { status: string }, requestedAgentId),
-          );
+          return spawnResult(visibleResult as { status: string });
         }
         if (runtime === "acp" && !acpAvailable) {
-          return jsonResult({
+          return spawnResult({
             status: "error",
             error: resolveAcpUnavailableMessage({
               config: effectiveConfig,
               sandboxed: opts?.sandboxed,
             }),
-            ...roleContext,
           });
         }
         const acpUnsupportedInheritedTool =
@@ -514,10 +519,9 @@ export function createSessionsSpawnTool(
             ? findAcpUnsupportedInheritedToolDeny(opts?.inheritedToolDenylist)
             : undefined;
         if (acpUnsupportedInheritedTool) {
-          return jsonResult({
+          return spawnResult({
             status: "forbidden",
             error: formatAcpInheritedToolDenyError(acpUnsupportedInheritedTool),
-            ...roleContext,
           });
         }
         const acpUnsupportedInheritedAllow =
@@ -525,10 +529,9 @@ export function createSessionsSpawnTool(
             ? findAcpUnsupportedInheritedToolAllow(opts?.inheritedToolAllowlist)
             : undefined;
         if (acpUnsupportedInheritedAllow) {
-          return jsonResult({
+          return spawnResult({
             status: "forbidden",
             error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
-            ...roleContext,
           });
         }
         if (runtime === "acp" && lightContext) {
@@ -578,6 +581,8 @@ export function createSessionsSpawnTool(
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
           inheritedToolPolicySource: opts?.inheritedToolPolicySource,
+          workspaceDir: opts?.workspaceDir,
+          sessionPermissionPolicy: opts?.sessionPermissionPolicy,
         });
 
         if (runtime === "acp") {
@@ -587,10 +592,9 @@ export function createSessionsSpawnTool(
             attachments,
           });
           if (acpAttachments?.status === "forbidden" || acpAttachments?.status === "error") {
-            return jsonResult({
+            return spawnResult({
               status: acpAttachments.status,
               error: acpAttachments.error,
-              ...roleContext,
             });
           }
           const result = await spawnAcpDirect(
@@ -605,14 +609,12 @@ export function createSessionsSpawnTool(
                 ...inheritedSpawnContext(),
                 currentMessagingTarget: opts?.currentMessagingTarget,
                 agentGroupId: opts?.agentGroupId ?? undefined,
-                workspaceDir: opts?.workspaceDir,
-                sessionPermissionPolicy: opts?.sessionPermissionPolicy,
               },
               parentExecutionIdentityToken,
             ),
           );
           recordAcceptedSessionSpawn(result, "isolated");
-          return jsonResult(addRoleToFailureResult(result, requestedAgentId));
+          return spawnResult(result);
         }
 
         const result = await spawnSubagentDirect(
@@ -653,23 +655,24 @@ export function createSessionsSpawnTool(
                 : undefined,
           },
           withParentExecutionIdentity(
-            {
-              ...inheritedSpawnContext(),
-              requesterThinkingLevel: opts?.requesterThinkingLevel,
-              requesterModel: opts?.requesterModel,
-              currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
-              agentGroupId: opts?.agentGroupId,
-              agentGroupChannel: opts?.agentGroupChannel,
-              workspaceDir: opts?.workspaceDir,
-              sessionPermissionPolicy: opts?.sessionPermissionPolicy,
-              requesterRunId: opts?.requesterRunId,
-            },
+            withExecRequestOwners(
+              {
+                ...inheritedSpawnContext(),
+                requesterThinkingLevel: opts?.requesterThinkingLevel,
+                requesterModel: opts?.requesterModel,
+                currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
+                agentGroupId: opts?.agentGroupId,
+                agentGroupChannel: opts?.agentGroupChannel,
+                requesterRunId: opts?.requesterRunId,
+              },
+              requestOwners,
+            ),
             parentExecutionIdentityToken,
           ),
         );
 
         recordAcceptedSessionSpawn(result, result.context);
-        return jsonResult(addRoleToFailureResult(result, requestedAgentId));
+        return spawnResult(result);
       }),
     ),
   };

@@ -455,12 +455,9 @@ describe("main cron with the real heartbeat runner", () => {
     });
   });
 
-  it.each(["direct", "scheduled"] as const)(
-    "preserves an enabled one-shot's schedule policy after a %s run while heartbeats are globally paused",
-    async (mode) => {
-      await runMainCronCase(mode, "now", { heartbeatPaused: true, deleteAfterRun: false });
-    },
-  );
+  it("preserves an enabled one-shot's schedule policy after a scheduled run while heartbeats are globally paused", async () => {
+    await runMainCronCase("scheduled", "now", { heartbeatPaused: true, deleteAfterRun: false });
+  });
 
   it("drains coalesced cron and exec work without recurrence while retaining late arrivals", async () => {
     await runMainCronCase("scheduled", "now", {

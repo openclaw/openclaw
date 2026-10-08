@@ -16,6 +16,7 @@ import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
+import { hasErrnoCode } from "../errno.js";
 import { generateSecureUuid } from "../secure-random.js";
 import {
   ARTIFACT_NAME_RE,
@@ -32,6 +33,13 @@ import {
 const ARTIFACT_EXT_RE = /^\.[A-Za-z0-9]{1,10}$/;
 const PART_SUFFIX = ".part";
 const ORPHAN_GRACE_MS = 24 * 60 * 60_000;
+
+function ignoreMissingArtifact(error: unknown): null {
+  if (hasErrnoCode(error, "ENOENT")) {
+    return null;
+  }
+  throw error;
+}
 
 function openSpoolStore(stateDir: string | undefined, maxBytes?: number) {
   return fileStore({
@@ -191,23 +199,18 @@ export async function stageQueuePayloadMedia(
   };
 }
 
-async function removeArtifact(absolutePath: string, stateDir: string | undefined): Promise<void> {
-  const relative = spoolRelativePath(absolutePath, stateDir);
-  if (!relative) {
-    return;
-  }
-  try {
-    await openSpoolStore(stateDir).remove(relative);
-  } catch {}
-}
-
 /** Discards spool artifacts whose durable row is already gone. Never throws. */
 export async function releaseSpoolArtifacts(
   artifacts: readonly string[],
   stateDir?: string,
 ): Promise<void> {
   for (const artifact of artifacts) {
-    await removeArtifact(artifact, stateDir);
+    const relative = spoolRelativePath(artifact, stateDir);
+    if (relative) {
+      try {
+        await openSpoolStore(stateDir).remove(relative);
+      } catch {}
+    }
   }
 }
 
@@ -233,12 +236,7 @@ export async function pruneOrphanedDeliveryQueueMedia(
       .concat(snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, stateDir)))
       .map((entry) => path.resolve(entry)),
   );
-  const entries = await fs.readdir(spoolRoot, { withFileTypes: true }).catch((err: unknown) => {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw err;
-  });
+  const entries = await fs.readdir(spoolRoot, { withFileTypes: true }).catch(ignoreMissingArtifact);
   if (!entries) {
     return;
   }
@@ -252,16 +250,11 @@ export async function pruneOrphanedDeliveryQueueMedia(
     if (retainPaths.has(artifactPath)) {
       continue;
     }
-    const stats = await fs.stat(artifactPath).catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        return null;
-      }
-      throw err;
-    });
+    const stats = await fs.stat(artifactPath).catch(ignoreMissingArtifact);
     if (!stats || stats.mtimeMs > cutoffMs) {
       continue;
     }
-    await removeArtifact(artifactPath, stateDir);
+    await releaseSpoolArtifacts([artifactPath], stateDir);
   }
 }
 

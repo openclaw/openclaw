@@ -30,16 +30,12 @@ struct Bridge {
 }
 
 impl Bridge {
-    fn gateway(&self) -> tauri::State<'_, GatewayClient> {
-        self.app.state::<GatewayClient>()
-    }
-
     fn route_id(&self, generation: u64) -> String {
         format!("{}:{generation}", self.instance)
     }
 
     fn generation(&self, route_id: &str) -> fdo::Result<u64> {
-        let (generation, _) = self.gateway().desktop_state();
+        let (generation, _) = self.app.state::<GatewayClient>().desktop_state();
         if route_id != self.route_id(generation) {
             return Err(fdo::Error::Failed(
                 "Desktop Gateway changed; refresh before trying again.".into(),
@@ -56,15 +52,16 @@ impl Bridge {
             .last_read
             .lock()
             .expect("desktop demand mutex poisoned") = Some(Instant::now());
-        self.gateway().set_desktop_demand(true);
-        self.gateway().activate(self.app.clone());
-        let (generation, ready) = self.gateway().desktop_state();
+        let gateway = self.app.state::<GatewayClient>();
+        gateway.set_desktop_demand(true);
+        gateway.activate(self.app.clone());
+        let (generation, ready) = gateway.desktop_state();
         json!({"version": 1, "routeId": self.route_id(generation), "ready": ready}).to_string()
     }
 
     async fn snapshot(&self, route_id: &str) -> fdo::Result<String> {
         let generation = self.generation(route_id)?;
-        let gateway = self.gateway();
+        let gateway = self.app.state::<GatewayClient>();
         let agents = gateway
             .desktop_request(generation, DesktopMethod::Agents, json!({}))
             .await
@@ -105,25 +102,22 @@ impl Bridge {
                 "Choose an agent and enter a prompt (up to 32,000 bytes).".into(),
             ));
         }
-        let mut params =
-            json!({"agentId":agent_id,"message":message,"idempotencyKey":idempotency_key});
+        let mut params = json!({"message":message,"idempotencyKey":idempotency_key});
+        // Canonical agent keys carry ownership; creation and the raw global key
+        // need their separate agent owner.
+        if session_key.is_empty() || session_key == "global" {
+            params["agentId"] = json!(agent_id);
+        }
         let method = if session_key.is_empty() {
             DesktopMethod::Create
         } else {
-            // Canonical agent keys carry ownership; the raw global key needs
-            // its separate agent owner.
-            if session_key != "global" {
-                params
-                    .as_object_mut()
-                    .expect("prompt params object")
-                    .remove("agentId");
-            }
             params["sessionKey"] = json!(session_key);
             params["deliver"] = json!(false);
             DesktopMethod::Send
         };
         let result = self
-            .gateway()
+            .app
+            .state::<GatewayClient>()
             .desktop_request(generation, method, params)
             .await
             .map_err(fdo::Error::Failed)?;
@@ -196,17 +190,13 @@ impl Bridge {
                     "quit" => {
                         let claimed =
                             gateway.with_desktop_route(generation, |_| Ok(state.claim_quit()));
-                        match claimed {
-                            Ok(won) => {
-                                // Claim under live route authority; teardown takes NAV and
-                                // waits for SSH only after releasing Gateway config.
-                                if won {
-                                    state.finish_quit(&app, 0);
-                                }
-                                Ok(())
+                        claimed.map(|won| {
+                            // Claim under live route authority; teardown takes NAV and
+                            // waits for SSH only after releasing Gateway config.
+                            if won {
+                                state.finish_quit(&app, 0);
                             }
-                            Err(error) => Err(error),
-                        }
+                        })
                     }
                     _ => gateway.with_desktop_route(generation, |_| {
                         match action.as_str() {

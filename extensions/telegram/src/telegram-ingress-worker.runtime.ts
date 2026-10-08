@@ -112,13 +112,6 @@ function createTelegramGetUpdatesError(params: {
   );
 }
 
-function rejectPendingSpoolRequests(pendingSpoolRequests: PendingSpoolRequests, err: Error): void {
-  for (const pending of pendingSpoolRequests.values()) {
-    pending.reject(err);
-  }
-  pendingSpoolRequests.clear();
-}
-
 async function fetchJson(params: {
   fetch: typeof fetch;
   url: string;
@@ -182,7 +175,6 @@ export async function runTelegramIngressWorkerRuntime(params: {
   const { options, port } = params;
   const apiRoot = normalizeTelegramApiRoot(options.apiRoot ?? "https://api.telegram.org");
   const stopController = new AbortController();
-  let stopped = false;
   let activeController: AbortController | undefined;
   let nextSpoolRequestId = 0;
   const pendingSpoolRequests: PendingSpoolRequests = new Map();
@@ -203,11 +195,13 @@ export async function runTelegramIngressWorkerRuntime(params: {
 
   port.onMessage((message) => {
     if (message?.type === "stop") {
-      stopped = true;
       const err = new Error("telegram ingress worker stopped");
       stopController.abort(err);
       activeController?.abort(err);
-      rejectPendingSpoolRequests(pendingSpoolRequests, err);
+      for (const pending of pendingSpoolRequests.values()) {
+        pending.reject(err);
+      }
+      pendingSpoolRequests.clear();
       return;
     }
     if (message?.type !== "spool-ack") {
@@ -243,7 +237,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
 
   try {
     for (;;) {
-      if (stopped) {
+      if (stopController.signal.aborted) {
         break;
       }
       const offset = lastUpdateId === null ? null : lastUpdateId + 1;
@@ -269,7 +263,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
           throw new Error("Telegram getUpdates returned a non-array result.");
         }
         for (const update of result) {
-          if (stopped) {
+          if (stopController.signal.aborted) {
             break;
           }
           const updateId = await requestSpoolUpdate({ update, queued: result.length });
@@ -306,7 +300,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
           }
         }
       } catch (err) {
-        if (stopped) {
+        if (stopController.signal.aborted) {
           break;
         }
         consecutiveEmptyPolls = 0;
@@ -326,7 +320,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
             { ref: false },
           );
         } catch (sleepErr) {
-          if (!stopped) {
+          if (!stopController.signal.aborted) {
             throw sleepErr;
           }
         }

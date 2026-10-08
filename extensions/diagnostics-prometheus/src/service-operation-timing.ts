@@ -19,6 +19,8 @@ const CATALOG_LIST_PHASES = new Set([
   "projection_final",
   "delivery",
 ]);
+const CHAT_SEND_PHASE =
+  /^chat\.send\.(authority|admission|preparation|attachments|replyContext|authoring|persist|runAdmission|replyInitialization|snapshot|worktree|effects|response|dispatch)$/;
 
 export function recordOperationTimingEvent(
   store: PrometheusMetricStore,
@@ -32,6 +34,19 @@ export function recordOperationTimingEvent(
       }
       if (evt.name === "worktree.preparation") {
         recordWorktreePreparation(store, evt);
+        return;
+      }
+      const sendPhase = CHAT_SEND_PHASE.exec(evt.name)?.[1];
+      if (sendPhase) {
+        const stage = evt.details?.stage;
+        if (stage === "request" || stage === "startup") {
+          store.histogram(
+            "openclaw_chat_send_phase_seconds",
+            "Elapsed chat.send owner phases before acknowledgement and during run startup.",
+            { phase: sendPhase, stage },
+            seconds(evt.durationMs),
+          );
+        }
         return;
       }
       if (!evt.name.startsWith(CATALOG_LIST_PHASE_PREFIX)) {

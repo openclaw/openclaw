@@ -142,6 +142,11 @@ hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
 generation. Account health and authentication state are not part of the
 immutable package inventory.
 
+Native SDK alias resolution retains each importing file's canonical path, root
+membership, and alias targets in that same generation. Alias registration or
+replacement clears those results, as does metadata invalidation; repeated
+imports do not repeat filesystem canonicalization or containment checks.
+
 The same cache generation prepares installed-index scope lookups, compiled model
 matching patterns, parsed install-record projections, and manifest fingerprints
 once per immutable index. Mutable management indexes remain uncached. Lookup

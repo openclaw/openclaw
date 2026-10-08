@@ -16,6 +16,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
+import { prepareGatewayStartupSessions } from "../../../gateway/server-startup-session-migration.js";
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -26,6 +27,10 @@ import {
   getGatewayContextResolver,
   getSharedGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../../../state/openclaw-agent-db.js";
 import { createRecoveryRuntimeFixture } from "../../main-session-recovery/main-session-recovery-runtime.test-support.js";
 import { transitionMainSessionRecovery } from "../../main-session-recovery/main-session-recovery-state.js";
 import {
@@ -39,9 +44,11 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
 import { createRequesterInitialTransferFixture } from "./subagent-registry-requester-yield.test-support.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   activateSubagentRegistry,
@@ -80,7 +87,13 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       const target = { agentId: "main", storePath, sessionKey };
       await persistGatewaySessionLifecycleEvent({
         sessionKey,
-        event: { runId: parentRunId, sessionId, ts: 1, data: { phase: "start", startedAt: 1 } },
+        event: {
+          runId: parentRunId,
+          sessionId,
+          lifecycleGeneration,
+          ts: 1,
+          data: { phase: "start", startedAt: 1 },
+        },
       });
       const child = makeRunRecord({
         runId: "child",
@@ -107,6 +120,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         event: {
           runId: parentRunId,
           sessionId,
+          lifecycleGeneration,
           ts: 2,
           data: {
             phase: "end",
@@ -144,9 +158,9 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         },
       );
       expect(loadSessionEntryReadOnly(target)).toMatchObject({
-        status: "running",
         lifecycleRunId: runId,
       });
+      expect(loadSessionEntryReadOnly(target)?.status).toBeUndefined();
       expect(
         await markRestartAbortedMainSessions({
           stateDir: fixture.stateDir,
@@ -174,6 +188,10 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       });
       rotateAgentEventLifecycleGeneration();
       await markStartupOrphanedMainSessionsForRecovery({ stateDir: fixture.stateDir });
+      expect(loadSessionEntryReadOnly(target)).toMatchObject({
+        abortedLastRun: true,
+        mainRestartRecovery: expect.objectContaining({ cycleId: expect.any(String) }),
+      });
       const settlement = createDeferred();
       const dispatch = vi
         .spyOn(gatewayCall, "callGateway")
@@ -244,7 +262,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     } as GatewayRequestContext;
     bindGatewayContextResolver(predecessor, previousContext.resolveGatewayContext);
     await addSubagentRunForTests(predecessor);
-    const registeredPredecessor = getSubagentRunByChildSessionKey(childSessionKey)!;
+    const registeredPredecessor = (await getSubagentRunByChildSessionKey(childSessionKey))!;
     bindGatewayContextResolver(registeredPredecessor, previousContext.resolveGatewayContext);
     await activateSubagentRegistry(() => previousContext);
     previousOpen = false;
@@ -262,7 +280,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     await testing.sweepOnceForTests();
 
     expect(dispatchAgent).not.toHaveBeenCalled();
-    const successor = getSubagentRunByChildSessionKey(childSessionKey);
+    const successor = await getSubagentRunByChildSessionKey(childSessionKey);
     expect(successor).toBeDefined();
     expect(successor).toMatchObject({
       runId: predecessor.runId,
@@ -280,6 +298,8 @@ describe("subagent parent recovery — durable yielded continuation", () => {
 
   it.each([
     "waiting",
+    "legacy waiting",
+    "legacy new foreground",
     "new foreground",
     "already marked",
     "pending final",
@@ -291,7 +311,8 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     "provider timeout",
     "global in second agent store",
   ])("defers a yielded parent only while its continuation remains owned: %s", async (scenario) => {
-    const newForeground = scenario === "new foreground";
+    const legacy = scenario.startsWith("legacy ");
+    const newForeground = scenario === "new foreground" || scenario === "legacy new foreground";
     const globalParent = scenario === "global in second agent store";
     const parentAgentId = globalParent ? "other" : "main";
     const requesterAgentId = scenario === "unrelated agent" ? "other" : parentAgentId;
@@ -302,6 +323,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       });
     }
     const now = Date.now();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const parentKey = globalParent ? "global" : "agent:main:yielded-parent-recovery";
     const parentRunId = "yielded-parent-original-run";
     const childKey = "agent:main:subagent:yielded-parent-child";
@@ -325,6 +347,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       event: {
         runId: parentRunId,
         sessionId: "yielded-parent-session",
+        lifecycleGeneration,
         ts: now - 2_000,
         data: { phase: "start", startedAt: now - 2_000 },
       },
@@ -357,6 +380,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       event: {
         runId: parentRunId,
         sessionId: "yielded-parent-session",
+        lifecycleGeneration,
         ts: now - 1_000,
         data: {
           phase: "end",
@@ -373,6 +397,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         event: {
           runId: "new-foreground-run",
           sessionId: "yielded-parent-session",
+          lifecycleGeneration,
           ts: now,
           data: { phase: "start", startedAt: now },
         },
@@ -380,6 +405,10 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     }
     const before = loadSessionEntryReadOnly({ storePath: parentStorePath, sessionKey: parentKey })!;
     expect(before.endedAt).toBe(newForeground ? undefined : now - 1_000);
+    expect(before.restartRecoveryRuns).toContainEqual({
+      runId: newForeground ? "new-foreground-run" : parentRunId,
+      lifecycleGeneration,
+    });
     if (scenario === "waiting") {
       // The parent may still be registered while its completed turn tears down.
       // Shutdown must not replace the durable batch's continuation with main recovery.
@@ -509,6 +538,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         event: {
           runId: parentRunId,
           sessionId: before.sessionId,
+          lifecycleGeneration,
           ts: now,
           data: {
             phase: "error",
@@ -520,6 +550,38 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         },
       });
     }
+    if (legacy) {
+      const nativeChild = loadSubagentRegistryFromSqlite().get(child.runId);
+      expect(nativeChild?.requesterSettleWake).toMatchObject({
+        requesterYieldBatch: true,
+        batchRunIds: [child.runId],
+      });
+      for (const message of [
+        { role: "user", content: "Finish the original task after the child returns." },
+        { role: "toolResult", content: "The child is working." },
+      ]) {
+        await appendTranscriptMessage(
+          {
+            agentId: parentAgentId,
+            sessionKey: parentKey,
+            sessionId: before.sessionId,
+            storePath: parentStorePath,
+          },
+          { cwd: fixture.stateDir, message },
+        );
+      }
+      const { db } = openOpenClawAgentDatabase({ agentId: parentAgentId });
+      // The old writer persisted running for both turns; only a new start cleared yielded timing.
+      db.prepare(
+        "UPDATE session_nodes SET entry_json = json_set(json_remove(entry_json, '$.restartRecoveryRuns'), '$.status', 'running') WHERE session_key = ?",
+      ).run(parentKey);
+      db.prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?").run(parentKey);
+      await closeOpenClawAgentDatabasesAsync(fixture.stateDir);
+      await prepareGatewayStartupSessions({
+        cfg: getRuntimeConfig(),
+        log: { info: vi.fn(), warn: vi.fn() },
+      });
+    }
     rotateAgentEventLifecycleGeneration();
     const result = await markStartupOrphanedMainSessionsForRecovery({
       cfg: getRuntimeConfig(),
@@ -527,6 +589,30 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       activeSessionIds: [],
       activeSessionKeys: [],
     });
+    if (legacy) {
+      const settlement = createDeferred();
+      const dispatch = vi
+        .spyOn(gatewayCall, "callGateway")
+        .mockResolvedValue({ runId: "recovered-parent" });
+      const runtime = createRecoveryRuntimeFixture({
+        callGateway: gatewayCall.callGateway,
+        getDispatchSettlement: () => settlement.promise,
+        sendRecoveryNotice: vi.fn(async () => ({ suppressed: false })),
+      });
+      try {
+        expect(
+          await recoverRestartAbortedMainSessions({
+            cfg: getRuntimeConfig(),
+            stateDir: fixture.stateDir,
+            gatewayRuntime: runtime,
+          }),
+        ).toMatchObject({ started: newForeground ? 1 : 0, failed: 0 });
+        expect(dispatch).toHaveBeenCalledTimes(newForeground ? 1 : 0);
+      } finally {
+        settlement.resolve();
+      }
+      return;
+    }
     const shouldMark =
       newForeground ||
       scenario === "pending final" ||
@@ -537,11 +623,13 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     expect(after?.abortedLastRun === true).toBe(
       shouldMark || scenario === "marked pending final" || scenario === "reserved waiting cycle",
     );
-    expect(after?.status).toBe(scenario === "provider timeout" ? "timeout" : "running");
+    expect(after?.status).toBe(
+      scenario === "provider timeout" ? "timeout" : newForeground ? "interrupted" : undefined,
+    );
     if (scenario === "already marked") {
       expect(after?.mainRestartRecovery).toBeUndefined();
       expect(after?.restartRecoveryRuns).toBeUndefined();
-      expect(after?.endedAt).toBe(now - 1_000);
+      expect(after?.endedAt).toBe(before.endedAt);
     }
     if (scenario === "pending final" || scenario === "marked pending final") {
       expect(after?.pendingFinalDelivery).toEqual(before.pendingFinalDelivery);
@@ -642,13 +730,18 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           },
           requesterSettleWake: { requesterYieldBatch: true },
         });
-        expect(getSubagentRunByChildSessionKey(child.childSessionKey)?.runId).toBe(child.runId);
+        expect((await getSubagentRunByChildSessionKey(child.childSessionKey))?.runId).toBe(
+          child.runId,
+        );
         const recoveredSession = loadSessionEntryReadOnly({
           agentId: "main",
           sessionKey: child.childSessionKey,
         });
-        expect(recoveredSession).toMatchObject({ status: "interrupted" });
-        expect(recoveredSession?.lastRunError).toBeUndefined();
+        expect(recoveredSession).toMatchObject({
+          status: "interrupted",
+          abortedLastRun: true,
+          lastRunError: "Run interrupted by a Gateway restart.",
+        });
         expect(
           await loadTranscriptEvents({
             agentId: "main",
@@ -735,7 +828,6 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           { storePath, sessionKey: entry.childSessionKey },
           {
             ...loadSessionEntryReadOnly({ storePath, sessionKey: entry.childSessionKey })!,
-            status: "running",
             activeWriterRunId: entry.runId,
             lifecycleRunId: entry.runId,
           },
@@ -784,10 +876,11 @@ describe("subagent parent recovery — durable yielded continuation", () => {
             batchRunIds: [child.runId, sibling.runId],
           });
         } else {
-          expect(activated.get(entry.runId)?.requesterSettleWake).toBeUndefined();
+          expect(activated.get(entry.runId)?.requesterSettleWake?.requesterYieldBatch).not.toBe(
+            true,
+          );
         }
       }
-      await testing.sweepOnceForTests();
       await fixture.settle();
 
       const persisted = loadSubagentRegistryFromSqlite();

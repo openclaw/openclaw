@@ -7,7 +7,6 @@ import {
   getSessionEntry,
   readAmbientTranscriptWatermark,
   resolveAmbientTranscriptWatermarkKey,
-  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
@@ -53,15 +52,6 @@ import {
 import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
 
 export type TelegramPromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
-
-export type TelegramSessionState = {
-  agentId: string;
-  bindingMode: Awaited<ReturnType<typeof resolveTelegramConversationRoute>>["bindingMode"];
-  sessionEntry: SessionEntry | undefined;
-  sessionKey: string;
-  storePath: string;
-  model: string | undefined;
-};
 
 export type ResolveTelegramSessionStateParams = {
   chatId: number | string;
@@ -169,9 +159,7 @@ export function createTelegramMessageSessionRuntime({
   "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
 >) {
   const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
-  const resolveTelegramSessionState = async (
-    params: ResolveTelegramSessionStateParams,
-  ): Promise<TelegramSessionState> => {
+  const resolveTelegramSessionState = async (params: ResolveTelegramSessionStateParams) => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
     const topicThreadId = params.threadSpec.id;
     const { topicConfig } = resolveTelegramGroupConfig(
@@ -327,21 +315,16 @@ export function createTelegramMessageContextRuntime({
     media: TelegramResolvedMedia;
     botUserId?: number;
   }) => {
-    const cachedNode = await messageCache.get({
-      accountId,
-      chatId: params.chatId,
-      messageId: params.messageId,
-    });
-    if (!cachedNode) {
-      return;
-    }
-    await messageCache.recordResolvedMedia({
+    const mediaParams = {
       accountId,
       chatId: params.chatId,
       messageId: params.messageId,
       media: params.media,
       ...(params.botUserId !== undefined ? { botUserId: params.botUserId } : {}),
-    });
+    };
+    if (await messageCache.get(mediaParams)) {
+      await messageCache.recordResolvedMedia(mediaParams);
+    }
   };
 
   // `MessageReactionUpdated` carries no `message_thread_id`, so the reaction handler
@@ -453,11 +436,8 @@ export function createTelegramMessageContextRuntime({
       botUserId: ctx.me?.id ?? opts.botInfo?.id,
     };
     const conversationContext = await buildTelegramConversationContext({
-      cache: messageCache,
+      ...historyScope,
       messageId,
-      accountId,
-      chatId: msg.chat.id,
-      ...(Number.isFinite(threadId) ? { threadId } : {}),
       replyChainNodes,
       recentLimit: isGroup ? 0 : dmHistoryLimit,
       replyTargetWindowSize: isGroup ? 0 : dmHistoryLimit > 0 ? 2 : 0,

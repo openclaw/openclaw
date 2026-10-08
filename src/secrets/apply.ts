@@ -114,16 +114,12 @@ function scrubEnvRaw(
   raw: string,
   migratedValues: Set<string>,
   allowedEnvKeys: Set<string>,
-): {
-  nextRaw: string;
-  removed: number;
-} {
+): string {
   if (migratedValues.size === 0 || allowedEnvKeys.size === 0) {
-    return { nextRaw: raw, removed: 0 };
+    return raw;
   }
   const lines = raw.split(/\r?\n/);
   const nextLines: string[] = [];
-  let removed = 0;
   for (const line of lines) {
     const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
     if (!match) {
@@ -137,20 +133,18 @@ function scrubEnvRaw(
     }
     const parsedValue = parseEnvAssignmentValue(match[2] ?? "");
     if (migratedValues.has(parsedValue)) {
-      removed += 1;
       continue;
     }
     nextLines.push(line);
   }
+  if (nextLines.length === lines.length) {
+    return raw;
+  }
   const hadTrailingNewline = raw.endsWith("\n");
   const joined = nextLines.join("\n");
-  return {
-    nextRaw:
-      hadTrailingNewline || joined.length === 0
-        ? `${joined}${joined.endsWith("\n") ? "" : "\n"}`
-        : joined,
-    removed,
-  };
+  return hadTrailingNewline || joined.length === 0
+    ? `${joined}${joined.endsWith("\n") ? "" : "\n"}`
+    : joined;
 }
 
 function applyProviderPlanMutations(params: {
@@ -274,15 +268,13 @@ async function projectPlanState(params: {
     nextConfig,
     stateDir,
     env: params.env,
-    authStoreByPath: new Map<string, Record<string, unknown>>(),
-    authStoreTargetByPath: new Map<string, AuthProfileStoreTarget>(),
     changedFiles,
   });
   if (targetMutations.configChanged) {
     changedFiles.add(configPath);
   }
 
-  const authStoreByPath = scrubAuthStoresForProviderTargets({
+  scrubAuthStoresForProviderTargets({
     nextConfig,
     stateDir,
     env: params.env,
@@ -308,7 +300,7 @@ async function projectPlanState(params: {
     env: params.env,
     nextConfig,
     resolvedTargets: targetMutations.resolvedTargets,
-    authStoreByPath,
+    authStoreByPath: targetMutations.authStoreByPath,
     write: params.write,
     allowExecInDryRun: params.allowExecInDryRun,
     checkFullRuntime,
@@ -320,7 +312,7 @@ async function projectPlanState(params: {
     configSnapshot: snapshot,
     configPath,
     configWriteOptions: writeOptions,
-    authStoreByPath,
+    authStoreByPath: targetMutations.authStoreByPath,
     authStoreTargetByPath: targetMutations.authStoreTargetByPath,
     envRawByPath,
     changedFiles,
@@ -336,10 +328,10 @@ function applyConfigTargetMutations(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   env: NodeJS.ProcessEnv;
-  authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreTargetByPath: Map<string, AuthProfileStoreTarget>;
   changedFiles: Set<string>;
 }) {
+  const authStoreByPath = new Map<string, Record<string, unknown>>();
+  const authStoreTargetByPath = new Map<string, AuthProfileStoreTarget>();
   const resolvedTargets = params.planTargets.map((target) => ({
     target,
     resolved: resolveTarget(target),
@@ -355,8 +347,8 @@ function applyConfigTargetMutations(params: {
         nextConfig: params.nextConfig,
         stateDir: params.stateDir,
         env: params.env,
-        authStoreByPath: params.authStoreByPath,
-        authStoreTargetByPath: params.authStoreTargetByPath,
+        authStoreByPath,
+        authStoreTargetByPath,
       });
       const containerChanged = ensureAuthProfileContainer({ target, resolved, store });
       const refChanged = applySecretRefTargetMutation(store, target, resolved, scrubbedValues);
@@ -383,8 +375,8 @@ function applyConfigTargetMutations(params: {
     scrubbedValues,
     providerTargets,
     configChanged,
-    authStoreByPath: params.authStoreByPath,
-    authStoreTargetByPath: params.authStoreTargetByPath,
+    authStoreByPath,
+    authStoreTargetByPath,
   };
 }
 
@@ -399,9 +391,9 @@ function scrubAuthStoresForProviderTargets(params: {
   changedFiles: Set<string>;
   warnings: string[];
   enabled: boolean;
-}): Map<string, Record<string, unknown>> {
+}): void {
   if (!params.enabled || params.providerTargets.size === 0) {
-    return params.authStoreByPath;
+    return;
   }
 
   for (const target of listAuthProfileStoreTargets(
@@ -457,8 +449,6 @@ function scrubAuthStoresForProviderTargets(params: {
       params.changedFiles.add(authStorePath);
     }
   }
-
-  return params.authStoreByPath;
 }
 
 function resolveAuthStoreForTarget(params: {
@@ -592,8 +582,8 @@ function scrubEnvFiles(params: {
     }
     const current = fs.readFileSync(envPath, "utf8");
     const scrubbed = scrubEnvRaw(current, params.scrubbedValues, knownSecretEnvVars);
-    if (scrubbed.removed > 0 && scrubbed.nextRaw !== current) {
-      envRawByPath.set(envPath, scrubbed.nextRaw);
+    if (scrubbed !== current) {
+      envRawByPath.set(envPath, scrubbed);
       params.changedFiles.add(envPath);
     }
   }

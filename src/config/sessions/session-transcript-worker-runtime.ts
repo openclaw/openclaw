@@ -16,6 +16,7 @@ import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
+import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import { loadSessionEntryReadOnlyInScope } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
@@ -37,10 +38,12 @@ import {
   costRefreshLane,
   historyClearTimeout,
   historyLane,
+  maintenanceLane,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   releaseRetiredDatabaseCustody,
   rotateDatabaseWorkers,
+  settleSessionHistoryWorkerEviction,
   type HistoryDatabaseResource,
   type SessionCostWorkerLane,
   type SessionDatabaseCleanup,
@@ -64,6 +67,18 @@ const historyPrewarms = new WeakMap<
     { promise: Promise<void>; pending: boolean; retiredSequence: number }
   >
 >();
+
+export function runSessionBranchSummaryWorkerRequest(
+  request: SessionBranchSummaryReadRequest,
+  signal: AbortSignal,
+) {
+  const { database, ...read } = request;
+  return withSessionHistoryWorkerDatabase(
+    database,
+    (owner) => owner.readBranchSummaries({ request: read }, signal),
+    maintenanceLane,
+  );
+}
 
 export function isSessionHistoryWorkerCold(lane: SessionHistoryWorkerLane = historyLane): boolean {
   return lane.pending === 0 && lane.nativeSequence <= lane.retiredSequence;
@@ -230,7 +245,7 @@ export function retainSessionHistoryWorkerDatabase(
       assertCurrent();
       const deadline = performance.now() + 60_000;
       let sequence = 0;
-      let executionRetired = false;
+      let retirement: Promise<void> | undefined;
       try {
         const reply = await lane.pool.run(
           () => {
@@ -260,12 +275,12 @@ export function retainSessionHistoryWorkerDatabase(
               : undefined,
             onExecutionSettled: ({ retired }) => {
               if (retired) {
-                executionRetired = true;
-                releaseRetiredDatabaseCustody(lane, sequence);
+                retirement = rotateDatabaseWorkers(lane);
               }
             },
           },
         );
+        await retirement;
         const received =
           unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
         if (
@@ -294,15 +309,14 @@ export function retainSessionHistoryWorkerDatabase(
         }
         const value = receive(received);
         if (reply.ok && reply.closedHistoryDatabase) {
-          // A later dispatched request may already hold this target's next native custody.
-          clearClosedDatabaseCustody(lane, sequence, [reply.closedHistoryDatabase]);
+          await settleSessionHistoryWorkerEviction(lane, reply.closedHistoryDatabase);
         }
         assertCurrent();
         return value;
       } catch (error) {
-        if (sequence > 0 && !executionRetired) {
+        if (sequence > 0) {
           try {
-            await rotateDatabaseWorkers(lane);
+            await (retirement ?? rotateDatabaseWorkers(lane));
           } catch (cleanupError) {
             throw sessionHistoryCleanupError(error, cleanupError, "worker retirement");
           }
@@ -635,7 +649,7 @@ export async function runProcessHeldHistoryTask(
   historyLane.idleTimer = undefined;
   refreshDatabaseWorkerPressureSubscription();
   let sequence = 0;
-  let executionRetired = false;
+  let retirement: Promise<void> | undefined;
   try {
     await historyLane.rotation;
     const value = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(
@@ -651,13 +665,13 @@ export async function runProcessHeldHistoryTask(
           signal,
           onExecutionSettled: ({ retired }) => {
             if (retired) {
-              executionRetired = true;
-              releaseRetiredDatabaseCustody(historyLane, sequence);
+              retirement = rotateDatabaseWorkers(historyLane);
             }
           },
         },
       ),
     );
+    await retirement;
     if (
       typeof value === "boolean" ||
       Array.isArray(value) ||
@@ -667,9 +681,9 @@ export async function runProcessHeldHistoryTask(
     }
     return value;
   } catch (error) {
-    if (sequence > 0 && !executionRetired) {
+    if (sequence > 0) {
       try {
-        await rotateDatabaseWorkers(historyLane);
+        await (retirement ?? rotateDatabaseWorkers(historyLane));
       } catch (cleanupError) {
         throw sessionHistoryCleanupError(error, cleanupError, "worker retirement");
       }

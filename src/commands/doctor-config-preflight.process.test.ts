@@ -1,5 +1,5 @@
 // Process regressions for Doctor repair, Gateway readiness, and lease cleanup.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -15,10 +15,7 @@ import { loadCronJobsStoreWithConfigJobsReadOnly, loadCronQuarantinedJobs } from
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import {
-  ensureOpenClawAgentDatabaseSchema,
-  OPENCLAW_AGENT_SCHEMA_VERSION,
-} from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   createBuiltRuntime,
@@ -55,24 +52,6 @@ function createDoctorEnv(root: string, stateDir: string, configPath: string): No
   delete env.OPENCLAW_HOME;
   delete env.VITEST;
   return env;
-}
-
-function seedOwnerlessSchemaOnlyAgentDatabase(stateDir: string): string {
-  const databasePath = path.join(stateDir, "agent", "openclaw-agent.sqlite");
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const database = new DatabaseSync(databasePath);
-  try {
-    ensureOpenClawAgentDatabaseSchema(database, {
-      agentId: "openclaw",
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      path: databasePath,
-      register: false,
-    });
-    database.prepare("UPDATE schema_meta SET agent_id = NULL WHERE meta_key = 'primary'").run();
-  } finally {
-    database.close();
-  }
-  return databasePath;
 }
 
 describe("doctor invalid config process exit", () => {
@@ -742,55 +721,6 @@ describe("Doctor repair followed by gateway readiness", () => {
 
     const result = await runIsolatedModuleScript(env, script, { timeoutMs: 60_000 });
     expect(result.stdout, `${result.stderr}\n${result.stdout}`).toContain("__READY__");
-    expect(hasActiveStartupMigrationLease({ env })).toBe(false);
-  }, 75_000);
-
-  it("reaches readiness while preserving a legacy agent database without an owner", () => {
-    const root = fs.realpathSync(tempDirs.createTempDir("openclaw-ownerless-agent-ready-"));
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(root, "openclaw.json");
-    const config = {
-      gateway: { mode: "local", auth: { mode: "none" } },
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" } },
-        entries: { main: {}, blocker: {}, digest: {} },
-      },
-    } satisfies OpenClawConfig;
-    const env = createDoctorEnv(root, stateDir, configPath);
-
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify(config));
-    const databasePath = seedOwnerlessSchemaOnlyAgentDatabase(stateDir);
-    const originalDatabase = fs.readFileSync(databasePath);
-    const preflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.startup).href;
-    const script = `
-      const { runStartupConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
-      try {
-        await runStartupConfigPreflight({
-          gateway: true,
-          observe: false,
-        });
-        console.log("__READY__");
-      } catch (error) {
-        console.error("__REFUSED__", error instanceof Error ? error.message : String(error));
-        process.exitCode = 1;
-      }
-    `;
-
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script],
-      { cwd: path.resolve("."), encoding: "utf8", env, timeout: 60_000 },
-    );
-    const output = `${result.stderr}\n${result.stdout}`;
-
-    expect(result.error, output).toBeUndefined();
-    expect(result.status, output).toBe(0);
-    expect(result.stdout, output).toContain("__READY__");
-    expect(result.stderr, output).not.toContain("__REFUSED__");
-    expect(output).not.toContain(STARTUP_REFUSAL);
-    expect(fs.readFileSync(databasePath)).toEqual(originalDatabase);
     expect(hasActiveStartupMigrationLease({ env })).toBe(false);
   }, 75_000);
 

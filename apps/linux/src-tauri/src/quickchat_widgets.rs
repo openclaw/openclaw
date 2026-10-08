@@ -223,37 +223,17 @@ async fn set_widget_bounds(
 ) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     return with_gtk_widget(webview, move |widget| {
-        let parent = widget
-            .parent()
-            .ok_or_else(|| "Quick Chat widget has no layout container.".to_string())?;
-        let fixed = match parent.downcast::<gtk::Fixed>() {
-            Ok(fixed) => fixed,
-            Err(parent) => {
-                let vbox = parent.downcast::<gtk::Box>().map_err(|_| {
-                    "Quick Chat widget layout container is unavailable.".to_string()
-                })?;
-                let overlay = vbox
-                    .children()
-                    .into_iter()
-                    .find_map(|child| child.downcast::<gtk::Overlay>().ok())
-                    .ok_or_else(|| "Quick Chat widget surface is unavailable.".to_string())?;
-                let fixed = overlay
-                    .children()
-                    .into_iter()
-                    .find_map(|child| child.downcast::<gtk::Fixed>().ok())
-                    .ok_or_else(|| "Quick Chat widget layout is unavailable.".to_string())?;
-                vbox.remove(&widget);
-                fixed.put(&widget, 0, 0);
-                fixed
-            }
-        };
-        // Wry's GtkBox-created views ignore bounds even after reparenting; GTK owns this layout.
-        let (x, y) = (position.x.round() as i32, position.y.round() as i32);
-        let (width, height) = (size.width.round() as i32, size.height.round() as i32);
-        widget.set_size_request(width, height);
-        fixed.move_(&widget, x, y);
-        widget.size_allocate(&gtk::Allocation::new(x, y, width, height));
-        Ok(())
+        crate::native_browser_platform::set_gtk_child_bounds(
+            &widget,
+            position,
+            size,
+            [
+                "Quick Chat widget has no layout container.",
+                "Quick Chat widget layout container is unavailable.",
+                "Quick Chat widget surface is unavailable.",
+                "Quick Chat widget layout is unavailable.",
+            ],
+        )
     })
     .await;
     #[cfg(not(target_os = "linux"))]
@@ -657,35 +637,27 @@ fn percent_decode_repeatedly(raw: &str) -> Option<String> {
 }
 
 fn has_url_userinfo(url: &Url) -> bool {
-    url.as_str()
-        .split_once("://")
-        .map(|(_, suffix)| {
-            suffix
-                .split(['/', '?', '#'])
-                .next()
-                .is_some_and(|authority| authority.contains('@'))
-        })
-        .unwrap_or(false)
+    url.as_str().split_once("://").is_some_and(|(_, suffix)| {
+        suffix
+            .split(['/', '?', '#'])
+            .next()
+            .is_some_and(|authority| authority.contains('@'))
+    })
 }
 
 fn has_secure_widget_transport(url: &Url) -> bool {
-    if url.scheme() == "https" {
-        return true;
+    match url.scheme() {
+        "https" => true,
+        "http" => url.host_str().is_some_and(|host| {
+            let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+            host == "localhost"
+                || host.ends_with(".localhost")
+                || host
+                    .parse::<IpAddr>()
+                    .is_ok_and(|address| address.is_loopback())
+        }),
+        _ => false,
     }
-    if url.scheme() != "http" {
-        return false;
-    }
-    let Some(host) = url
-        .host_str()
-        .map(|host| host.trim_matches(['[', ']']).to_ascii_lowercase())
-    else {
-        return false;
-    };
-    host == "localhost"
-        || host.ends_with(".localhost")
-        || host
-            .parse::<IpAddr>()
-            .is_ok_and(|address| address.is_loopback())
 }
 
 fn validate_widget_url(raw: &str) -> Result<Url, String> {
@@ -697,17 +669,11 @@ fn validate_widget_url(raw: &str) -> Result<Url, String> {
     if !has_secure_widget_transport(&url) || has_url_userinfo(&url) || url.host_str().is_none() {
         return Err("Quick Chat widget URL is not a secure HTTP capability URL.".to_string());
     }
-    let encoded_segments = url
-        .path()
-        .split('/')
-        .skip(1)
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    if encoded_segments.iter().any(|segment| segment.is_empty()) {
+    let encoded_segments = url.path().split('/').skip(1);
+    if encoded_segments.clone().any(str::is_empty) {
         return Err("Quick Chat widget URL has an invalid path.".to_string());
     }
     let segments = encoded_segments
-        .iter()
         .map(|segment| {
             let decoded = percent_decode_repeatedly(segment)
                 .ok_or_else(|| "Quick Chat widget URL has invalid encoding.".to_string())?;
@@ -764,12 +730,10 @@ fn validate_widget_layout(widget: &QuickChatWidgetLayout) -> Result<Url, String>
 fn widget_view_label(widget: &QuickChatWidgetLayout, generation: GatewayGeneration) -> String {
     let mut hasher = Sha256::new();
     hasher.update(serde_json::to_vec(&generation).expect("Gateway generation serializes"));
-    hasher.update([0]);
-    hasher.update(widget.key.as_bytes());
-    hasher.update([0]);
-    hasher.update(widget.url.as_bytes());
-    hasher.update([0]);
-    hasher.update(widget.sandbox.as_bytes());
+    for value in [&widget.key, &widget.url, &widget.sandbox] {
+        hasher.update([0]);
+        hasher.update(value.as_bytes());
+    }
     let digest = hasher.finalize();
     let suffix = digest[..8]
         .iter()

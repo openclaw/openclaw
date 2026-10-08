@@ -21,6 +21,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
+import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
 import {
   readIncognitoSessionHistory,
   type IncognitoSessionHistoryBinding,
@@ -38,8 +39,9 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 /** Load durable raw events through the existing full-transcript hydration owner. */
 export async function loadTranscriptEvents(
   scope: SessionTranscriptReadScope,
-  incognito?: IncognitoSessionHistoryBinding,
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<TranscriptEvent[]> {
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({
       type: "session.history.hydrate",

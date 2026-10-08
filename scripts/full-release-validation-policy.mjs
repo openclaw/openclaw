@@ -122,17 +122,19 @@ export function isSplitChangelogEvidenceDelta(paths, version) {
   try {
     const targetVersion = version.replace(/^v/u, "");
     const parsedVersion = parseReleaseVersion(targetVersion);
-    // Beta release notes and contribution records use the stable base section.
-    const sectionVersion =
-      parsedVersion?.channel === "beta" && parsedVersion.version === targetVersion
-        ? parsedVersion.baseVersion
-        : version;
-    return (
-      Array.isArray(paths) &&
-      paths.length > 0 &&
-      new Set(paths).size === paths.length &&
-      paths.includes(changelogEntryPath(sectionVersion)) &&
-      paths.every((name) => isReleaseChangelogPath(name, { version: sectionVersion }))
+    // Historical beta receipts selected the base section; new beta receipts
+    // may select their exact delta. A receipt still binds only one section.
+    const versions = [targetVersion];
+    if (parsedVersion?.channel === "beta") {
+      versions.push(parsedVersion.baseVersion);
+    }
+    return versions.some(
+      (sectionVersion) =>
+        Array.isArray(paths) &&
+        paths.length > 0 &&
+        new Set(paths).size === paths.length &&
+        paths.includes(changelogEntryPath(sectionVersion)) &&
+        paths.every((name) => isReleaseChangelogPath(name, { version: sectionVersion })),
     );
   } catch {
     return false;
@@ -675,16 +677,15 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
     }
     const names = new Set();
     const completedNames = new Set(
-      expectedAttempt < effectiveRunAttempt
-        ? attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name)
-        : [],
+      attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name),
     );
     for (const rawJob of attempt.jobs) {
       const job = normalizedAttemptJob(rawJob, expectedAttempt);
-      // Skipped jobs and GitHub's runnerless, stepless queued rerun copies (beside a
-      // completed sibling in a superseded attempt) never executed, so they carry no
-      // evidence. Drop them before identity checks because such copies may collide.
-      const ghost = job.status === "queued" && !rawJob.runner_name && rawJob.steps?.length === 0;
+      // Skipped jobs and GitHub's runnerless queued rerun copies (beside a completed
+      // sibling in the same attempt) carry no independent evidence. GitHub may
+      // mirror the completed sibling's steps onto these copies, so runner identity is
+      // the stable discriminator. Drop them before identity checks because they collide.
+      const ghost = job.status === "queued" && !rawJob.runner_id && !rawJob.runner_name;
       const skipped = job.status === "completed" && job.conclusion === "skipped";
       if (skipped || (ghost && completedNames.has(job.name))) {
         continue;
@@ -809,8 +810,6 @@ function releaseExecutionChildRequired(spec, input, npmTelegramForAll) {
   switch (spec.key) {
     case "npmTelegram":
       return input.rerunGroup === "npm-telegram" || npmTelegramForAll;
-    case "pluginPrereleaseCandidate":
-      return spec.rerunGroups.includes(input.rerunGroup);
     case "releaseChecksCandidate":
       return (
         ["all", "cross-os", "package"].includes(input.rerunGroup) ||
@@ -1477,7 +1476,6 @@ export function terminalPolicyPass(child) {
   return child.status === "completed" && child.conclusion === "success" && failures.length === 0;
 }
 
-/** Choose the single GitHub rerun request that can repair a terminal child's blocking jobs. */
 export function planReleaseChildRerun({ childKey, jobs }) {
   const failed = jobs
     .filter(isFailedJob)

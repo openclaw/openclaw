@@ -408,7 +408,7 @@ describe("AgentSession quoted steering context", () => {
         );
       });
       const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
-      const queued = vi.spyOn(session.agent, "steer");
+      const queued = vi.spyOn(session.agent, "admitSteeringMessage");
       const registry = createUserTranscriptContextRegistry();
       guardSessionManager(sessionManager, {
         onUserMessagePersisted: (persisted, runtime) => {

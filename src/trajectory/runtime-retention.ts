@@ -1,4 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
+import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
+import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import {
   createSqliteReadOnlyWorkerScope,
   runSqliteReadOnlyOperation,
@@ -6,6 +8,7 @@ import {
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { captureCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -29,6 +32,58 @@ import {
 } from "./runtime-retention.sqlite.js";
 
 const log = createSubsystemLogger("trajectory");
+
+/** Preserve the native sweep policy without holding the actor's append transaction. */
+export async function settleIncognitoTrajectoryRuntimeRetention(params: {
+  actor: IncognitoSessionActor;
+  authority: IncognitoSessionAuthority;
+  input: TrajectoryRuntimeRetentionInput & { sessionKey: string };
+}): Promise<void> {
+  const buffer = new SharedArrayBuffer(4);
+  const lease = new Int32Array(buffer);
+  Atomics.store(lease, 0, 1);
+  const now = Date.now();
+  try {
+    await params.actor.sessions.withSharedState(async () => {
+      const prepare = () =>
+        params.actor.sessions.sideData(
+          params.authority,
+          {
+            type: "session.trajectory.retention.prepare",
+            input: { ...params.input, now },
+          },
+          undefined,
+          undefined,
+          undefined,
+          { trajectoryRetentionLease: buffer },
+        );
+      let prepared: { sweepId: string; snapshot?: TrajectoryRuntimeRetentionPlan } | undefined =
+        await prepare();
+      let refreshes = 0;
+      while (prepared) {
+        const result = await params.actor.sessions.sideData(params.authority, {
+          type: "session.trajectory.retention.delete",
+          input: { ...prepared, sessionKey: params.input.sessionKey, now },
+        });
+        if (result.complete) {
+          break;
+        }
+        if (result.refresh) {
+          if (++refreshes > 1) {
+            break;
+          }
+          prepared = await prepare();
+        } else {
+          prepared = { ...prepared, snapshot: undefined };
+        }
+      }
+    });
+  } catch (error) {
+    log.warn(`Trajectory retention deferred until the next append: ${String(error)}`);
+  } finally {
+    Atomics.store(lease, 0, 0);
+  }
+}
 
 /** One lifecycle-owned sweep; reads never hold the canonical writer reservation. */
 export function scheduleSqliteTrajectoryRuntimeRetention(params: {
@@ -175,7 +230,12 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
               database.path,
               {
                 type: "trajectoryRetention.read",
-                input: { ...input, agentId: database.agentId, now },
+                input: {
+                  ...input,
+                  agentId: database.agentId,
+                  now,
+                  schemaContract: captureCanonicalSessionValidationSchema(),
+                },
               },
               {
                 source: "canonical",

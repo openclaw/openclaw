@@ -4,8 +4,7 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { mutateRequesterSettleWakeBatch } from "../completion/subagent-completion-admission.store.js";
-import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
+import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
@@ -13,8 +12,9 @@ import {
   getPendingWakeCommit,
   retryPendingWakeCommit,
 } from "./subagent-registry-requester-wake-commit.js";
+import { createRequesterWakeContextFixture } from "./subagent-registry-requester-yield.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 
 vi.mock("./subagent-registry-lifecycle-log.js", () => ({
   maskLifecycleIdentifier: () => "synthetic",
@@ -75,7 +75,7 @@ it("publishes a selected requester wake before an overlapping row mutation plans
           options,
         ),
       );
-    const wake = mutateRequesterSettleWakeBatch({
+    const wake = mutateRequesterCompletionBatch({
       entries: [selected],
       operation: {
         kind: "transition",
@@ -145,44 +145,7 @@ it("keeps a known requester wake commit across an immutable row publication", as
       value: undefined,
       postimages: new Map([[entry.runId, entry]]),
     }));
-    const unexpected = (): never => {
-      throw new Error("Unexpected lifecycle side effect");
-    };
-    const context: SubagentLifecycleWakeContext = {
-      options: {
-        runs: subagentRuns,
-        resumedRuns: new Set(),
-        subagentAnnounceTimeoutMs: 1_000,
-        getRuntimeConfig: () => ({}),
-        clearPendingLifecycleError: unexpected,
-        countPendingDescendantRuns: async () => 0,
-        getLatestRunForChildSession: () => null,
-        suppressAnnounceForSteerRestart: () => false,
-        shouldEmitEndedHookForRun: () => false,
-        emitSubagentEndedHookForRun: unexpected,
-        emitSubagentProgressEndedForRun: unexpected,
-        notifyContextEngineSubagentEnded: unexpected,
-        retireSupersededRun: unexpected,
-        resumeSubagentRun: unexpected,
-        callGateway: unexpected,
-        captureSubagentCompletionReply: unexpected,
-        runSubagentAnnounceFlow: unexpected,
-        maybeWakeRequesterAfterAllChildrenSettled: unexpected,
-        warn: vi.fn(),
-      },
-      scheduledRequesterSettleWakeTimers: new Map(),
-      scheduledRequesterSettleWakeRuns: new Set(),
-      pendingRequesterSettleWakeRearms: new Set(),
-      cancelledRequesterSettleWakeRuns: new Set(),
-      pendingRequesterSettleWakeCommits: new Map(),
-      newerGenerationOwnsSession: () => false,
-      shouldSuppressSessionEffects: async () => false,
-      sessionEffectsHostCurrent: () => true,
-      getSessionEffects: () => undefined,
-      resumeAncestorCleanup: unexpected,
-      runRequesterSettleWake: unexpected,
-      unmarkRequesterSettleWakeRunScheduled: unexpected,
-    };
+    const context = createRequesterWakeContextFixture(subagentRuns);
     const releaseWake = createDeferredCore();
     const wakeStarted = createDeferredCore();
     const commit = vi.fn<() => Promise<boolean>>(async () => {

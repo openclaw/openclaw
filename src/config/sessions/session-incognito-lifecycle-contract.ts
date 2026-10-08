@@ -53,6 +53,7 @@ export type IncognitoLifecycleOperations = {
     input: {
       target: IncognitoLifecycleEntry;
       reason: "reset" | "deleted";
+      expectedPluginOwnerId?: string;
       admissionIdentities: string[];
     };
     output: DeleteSessionEntryLifecycleResult;

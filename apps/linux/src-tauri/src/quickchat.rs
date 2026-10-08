@@ -130,19 +130,19 @@ impl QuickChatState {
                 return Ok(current.clone());
             }
         }
-        let idempotency_key = Uuid::new_v4().to_string();
-        *retry = Some(QuickChatRetryIdentity {
+        let identity = QuickChatRetryIdentity {
             message: message.to_string(),
             agent_id: agent_id.to_string(),
             scope: scope.to_string(),
             main_key: main_key.to_string(),
-            idempotency_key: idempotency_key.clone(),
+            idempotency_key: Uuid::new_v4().to_string(),
             gateway_generation,
             attempt: Uuid::new_v4(),
             terminal: None,
             session_id: None,
-        });
-        Ok(retry.as_ref().expect("retry initialized").clone())
+        };
+        *retry = Some(identity.clone());
+        Ok(identity)
     }
 
     fn clear_send_retry(&self, identity: &QuickChatRetryIdentity) {
@@ -662,7 +662,6 @@ fn recovered_reply_messages(messages: &[Value], key: &str) -> Result<Option<Vec<
     }
     let mut recovered = Vec::new();
     let mut identities = HashMap::new();
-    let mut completed = false;
     for (position, message) in &ordered {
         if message.get("role").and_then(Value::as_str) != Some("assistant") {
             continue;
@@ -687,19 +686,16 @@ fn recovered_reply_messages(messages: &[Value], key: &str) -> Result<Option<Vec<
         if message.get("stopReason").and_then(Value::as_str) == Some("error") {
             return Err("Gateway history contains a failed reply.".to_string());
         }
-        {
-            // A projected commentary item and the final row can share the transcript ID.
-            let item = message
-                .get("openclawStreamFallback")
-                .and_then(|fallback| fallback.get("itemId"))
-                .and_then(Value::as_str);
-            let identity = (position.id.to_string(), item.map(str::to_string));
-            if let Some(previous) = identities.insert(identity, message) {
-                if previous != message {
-                    return Err("Gateway history returned conflicting reply records.".to_string());
-                }
-                continue;
+        // A projected commentary item and the final row can share the transcript ID.
+        let identity = (
+            position.id,
+            message["openclawStreamFallback"]["itemId"].as_str(),
+        );
+        if let Some(previous) = identities.insert(identity, message) {
+            if previous != message {
+                return Err("Gateway history returned conflicting reply records.".to_string());
             }
+            continue;
         }
         let content = message.get("content");
         let presentable = content
@@ -718,11 +714,11 @@ fn recovered_reply_messages(messages: &[Value], key: &str) -> Result<Option<Vec<
                 })
             });
         if presentable {
-            completed = is_completed_history_reply(message);
             recovered.push((*message).clone());
         }
     }
-    Ok((completed && !recovered.is_empty()).then_some(recovered))
+    let completed = recovered.last().is_some_and(is_completed_history_reply);
+    Ok(completed.then_some(recovered))
 }
 
 fn resolve_selected_agent(

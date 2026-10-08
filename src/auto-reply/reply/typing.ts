@@ -1,4 +1,3 @@
-/** Typing indicator lifecycle controller for reply runs. */
 import {
   finiteSecondsToTimerSafeMilliseconds,
   MAX_TIMER_TIMEOUT_MS,
@@ -21,7 +20,6 @@ export function resolveTypingIntervalMs(seconds: number | undefined): number {
   return Math.min(intervalMs, MAX_TYPING_INTERVAL_MS);
 }
 
-/** Controller for channel typing indicator lifecycle during a reply run. */
 export type TypingController = {
   onReplyStart: () => Promise<void>;
   startTypingLoop: () => Promise<void>;
@@ -139,10 +137,7 @@ export function createTypingController(params: {
 
   const ensureStart = async () => {
     // Late callbacks after a run completed should never restart typing.
-    if (sealed || runComplete) {
-      return;
-    }
-    if (active) {
+    if (sealed || runComplete || active) {
       return;
     }
     active = true;

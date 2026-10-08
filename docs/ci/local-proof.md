@@ -8,6 +8,17 @@ read_when:
 
 ## Local equivalents
 
+Strict managed commands join their process group and captured output before
+releasing temporary resources. A leader can exit before an unreferenced helper
+finishes responding to stdin EOF, so normal POSIX exit reserves half the existing
+cleanup budget for natural group drainage and half for forced cleanup. Requiring
+forced cleanup still fails the command; live or uninspectable groups and output
+that remains open never count as successful completion. Zombie-only groups are
+already terminated, even when their new parent has not reaped them yet.
+Cancellation during natural drainage forwards its signal immediately; its grace
+ends no later than the original halfway point, preserving the recovery allowance
+and total cleanup deadline.
+
 The complete channels test lane prepares its native worker artifacts before
 starting the test process. Cold compilation therefore does not consume the
 test-output watchdog's deadline. Focused channel selections retain lazy
@@ -142,7 +153,7 @@ For evidence from the compiler invocation you are already running, set
 `OPENCLAW_TSGO_METRICS_DIR=.artifacts/tsgo-metrics`. Each `run-tsgo` invocation
 writes a separate JSON artifact on ordinary local developer machines; neither
 metrics nor `OPENCLAW_TSGO_PPROF_DIR` requires `OPENCLAW_LOCAL_CHECK_MODE=throttled`,
-CI, or a server-specific setup. Unset or blank metrics means no metrics imports, probes,
+CI, or a server-specific setup. Unset or blank metrics means no metrics imports, checks,
 files, or additional output on the normal path. This also works for test shards
 and compiler stages reached through the timed check wrappers. It does not add a
 compiler invocation or change the compiler arguments, limits, deadline, signals,
@@ -375,7 +386,7 @@ hydration. The explicit `ci-check-high-memory-testbox.yml` workflow requests
 `blacksmith-32vcpu-ubuntu-2404` and retains 240 minutes for memory-heavy full-suite
 gates. Select it only for a justified memory need, not merely for more time; see
 [Testbox runner sizing](/reference/test/remote-proof#testbox-runner-sizing).
-A native capacity probe measured eight CPUs and 30.95 GiB of memory on the
+A native capacity check measured eight CPUs and 30.95 GiB of memory on the
 32-class, compared with 15.42 GiB on the 16-class. This supplies headroom for
 isolated runtime validation without increasing the number of jobs or workers.
 Workloads still admit work from observed resources; the runner label is not a

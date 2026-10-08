@@ -78,35 +78,30 @@ function isPendingCompletionTask(task: MediaGenerationOperation): boolean {
   );
 }
 
-function collectAsyncTaskRunIds(
+function* iterateAsyncTaskRunIds(
   toolMetas: readonly AsyncStartedToolMeta[],
   sessionKey: string | undefined,
-  alreadyWaited: ReadonlySet<string>,
-): string[] {
-  const runIds = new Set<string>();
-  const addRunId = (runIdRaw: string | undefined) => {
-    const runId = runIdRaw?.trim();
-    if (!runId || alreadyWaited.has(runId)) {
-      return;
-    }
-    runIds.add(runId);
-  };
+): Generator<string> {
   for (const meta of toolMetas) {
-    addRunId(meta.asyncStarted === true ? meta.asyncTaskRunId : undefined);
+    const runId = meta.asyncStarted === true ? meta.asyncTaskRunId?.trim() : undefined;
+    if (runId) {
+      yield runId;
+    }
   }
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
-    return [...runIds];
+    return;
   }
   // Registry lookup catches completion-required tasks started before their
   // tool metadata reached the current attempt result.
   for (const task of listMediaGenerationOperations(normalizedSessionKey)) {
-    if (!isPendingCompletionTask(task)) {
-      continue;
+    if (isPendingCompletionTask(task)) {
+      const runId = task.runId?.trim();
+      if (runId) {
+        yield runId;
+      }
     }
-    addRunId(task.runId);
   }
-  return [...runIds];
 }
 
 export function requiresCompletionRequiredAsyncTaskWait(params: {
@@ -119,16 +114,7 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   if (!sessionKey || !isCronRunSessionKey(sessionKey)) {
     return false;
   }
-  if (
-    params.toolMetas.some(
-      (meta) => meta.asyncStarted === true && Boolean(meta.asyncTaskRunId?.trim()),
-    )
-  ) {
-    return true;
-  }
-  return listMediaGenerationOperations(sessionKey).some(
-    (task) => isPendingCompletionTask(task) && Boolean(task.runId?.trim()),
-  );
+  return iterateAsyncTaskRunIds(params.toolMetas, sessionKey).next().done === false;
 }
 
 export function shouldWaitForCompletionRequiredAsyncTasks(params: {
@@ -166,7 +152,9 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
     throwIfAborted(params.abortSignal);
     // Re-read metadata every outer loop; tool calls may record async run ids
     // after an earlier task wait finished.
-    const runIds = collectAsyncTaskRunIds(params.getToolMetas(), params.sessionKey, waitedRunIds);
+    const runIds = [
+      ...new Set(iterateAsyncTaskRunIds(params.getToolMetas(), params.sessionKey)),
+    ].filter((runId) => !waitedRunIds.has(runId));
     if (runIds.length === 0) {
       break;
     }

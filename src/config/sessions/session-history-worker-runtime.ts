@@ -269,9 +269,11 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       canonicalKey: params.canonicalKey,
       max: params.max,
       maxHistoryBytes: params.maxHistoryBytes,
+      responseHistoryBytes: params.responseHistoryBytes,
       effectiveMaxChars: params.effectiveMaxChars,
       offset: params.offset,
       messageId: params.messageId,
+      ...(params.pageCursor ? { pageCursor: { ...params.pageCursor } } : {}),
       ignoreCliSessionImports: params.ignoreCliSessionImports,
       cliHistoryHomeDir: params.cliHistoryHomeDir,
       ...(params.cliHistoryRedaction

@@ -1,4 +1,3 @@
-// Control UI component renders the login gate.
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";

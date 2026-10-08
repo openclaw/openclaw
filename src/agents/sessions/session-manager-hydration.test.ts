@@ -16,10 +16,10 @@ import { historyLane } from "../../config/sessions/session-transcript-worker-res
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { SessionManager, type SessionEntry } from "../../plugin-sdk/agent-sessions.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabases,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   listOpenIncognitoAgentDatabases,
@@ -292,7 +292,7 @@ it("does not publish a stale retarget over a manager changed while its worker re
 });
 
 it.each(["hydration", "current-turn"] as const)(
-  "releases queued %s admission on abort before its predecessor finishes",
+  "releases queued %s admission on abort before its predecessors finish",
   async (kind) => {
     await withOpenClawTestState({ label: "session-hydration-queued-abort" }, async (state) => {
       const target = canonicalTarget(state, "queued-abort");
@@ -305,11 +305,15 @@ it.each(["hydration", "current-turn"] as const)(
       const queued = createDeferredCore();
       const release = createDeferredCore();
       const run = historyLane.pool.run.bind(historyLane.pool);
+      const capacity = historyLane.pool.getSnapshot().maxWorkers;
       let submissions = 0;
+      let enteredCount = 0;
       const spy = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
-        if (submissions++ === 0) {
+        if (submissions++ < capacity) {
           return run(async () => {
-            entered.resolve();
+            if (++enteredCount === capacity) {
+              entered.resolve();
+            }
             await release.promise;
             return typeof input === "function" ? await input() : input;
           }, options);
@@ -318,11 +322,22 @@ it.each(["hydration", "current-turn"] as const)(
         queued.resolve();
         return result;
       });
-      const predecessor = SessionManager.openAsync(target);
-      const reads: Promise<unknown>[] = [predecessor];
+      const predecessorReads = Array.from({ length: capacity }, () =>
+        SessionManager.openAsync(target),
+      );
+      const predecessors = Promise.all(predecessorReads);
+      const reads: Promise<unknown>[] = [...predecessorReads, predecessors];
       try {
-        await entered.promise;
-        expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 1 });
+        await Promise.race([
+          entered.promise,
+          predecessors.then(() => {
+            throw new Error("Hydration predecessors settled before filling the worker pool");
+          }),
+        ]);
+        expect(historyLane.pool.getSnapshot()).toMatchObject({
+          activeTasks: capacity,
+          pendingTasks: capacity,
+        });
         const controller = new AbortController();
         const reason = new Error("queued hydration cancelled");
         const canceled =
@@ -340,14 +355,22 @@ it.each(["hydration", "current-turn"] as const)(
         const refused = expect(canceled).rejects.toBe(reason);
         reads.push(canceled, refused);
         await queued.promise;
-        expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 2 });
+        expect(historyLane.pool.getSnapshot()).toMatchObject({
+          activeTasks: capacity,
+          pendingTasks: capacity + 1,
+        });
         controller.abort(reason);
-        expect(historyLane.pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 1 });
+        expect(historyLane.pool.getSnapshot()).toMatchObject({
+          activeTasks: capacity,
+          pendingTasks: capacity,
+        });
         await refused;
         release.resolve();
-        expect((await predecessor).buildSessionContext().messages).toEqual([
-          makeUserMessage("preserved predecessor", 1),
-        ]);
+        for (const predecessor of await predecessors) {
+          expect(predecessor.buildSessionContext().messages).toEqual([
+            makeUserMessage("preserved predecessor", 1),
+          ]);
+        }
       } finally {
         release.resolve();
         spy.mockRestore();

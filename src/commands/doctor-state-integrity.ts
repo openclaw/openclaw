@@ -272,11 +272,6 @@ function readGroupOrWorldAccessibleMode(targetPath: string): number | null {
   return !resolvedPath.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0 ? stat.mode : null;
 }
 
-function addUserRwx(mode: number): number {
-  const perms = mode & 0o777;
-  return perms | 0o700;
-}
-
 function countJsonlLines(filePath: string): number {
   let fd: number;
   try {
@@ -287,14 +282,12 @@ function countJsonlLines(filePath: string): number {
   try {
     const chunk = Buffer.alloc(64 * 1024);
     let count = 0;
-    let hasBytes = false;
-    let endsWithNewline = false;
+    let endsWithNewline = true;
     for (;;) {
       const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
       if (bytesRead <= 0) {
         break;
       }
-      hasBytes = true;
       endsWithNewline = chunk[bytesRead - 1] === 0x0a;
       for (let index = 0; index < bytesRead; index += 1) {
         if (chunk[index] === 0x0a) {
@@ -302,7 +295,7 @@ function countJsonlLines(filePath: string): number {
         }
       }
     }
-    if (hasBytes && !endsWithNewline) {
+    if (!endsWithNewline) {
       count += 1;
     }
     return count;
@@ -966,6 +959,59 @@ export async function noteStateIntegrity(
   const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
   const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
+  const repairWritableDirectory = async (
+    dir: string,
+    displayDir: string,
+    label?: RuntimeDirLabel,
+  ) => {
+    if (canWriteDir(dir)) {
+      return;
+    }
+    warnings.push(`- ${label ?? "State directory"} not writable (${displayDir}).`);
+    const hint = dirPermissionHint(dir);
+    if (hint) {
+      warnings.push(`  ${hint}`);
+    }
+    if (
+      await prompter.confirmRuntimeRepair({
+        message: `Repair permissions on ${label ?? displayDir}?`,
+        initialValue: true,
+      })
+    ) {
+      try {
+        fs.chmodSync(dir, (fs.statSync(dir).mode & 0o777) | 0o700);
+        changes.push(`- Repaired permissions on ${label ? `${label}: ` : ""}${displayDir}`);
+      } catch (err) {
+        warnings.push(`- Failed to repair ${displayDir}: ${String(err)}`);
+      }
+    }
+  };
+  const tightenPermissions = async (
+    targetPath: string,
+    displayPath: string,
+    mode: number,
+    warning: string,
+    failureLabel: string,
+  ) => {
+    const octalMode = mode.toString(8);
+    try {
+      if (readGroupOrWorldAccessibleMode(targetPath) === null) {
+        return;
+      }
+      warnings.push(warning);
+      if (
+        await prompter.confirmRuntimeRepair({
+          message: `Tighten permissions on ${displayPath} to ${octalMode}?`,
+          initialValue: true,
+        })
+      ) {
+        fs.chmodSync(targetPath, mode);
+        changes.push(`- Tightened permissions on ${displayPath} to ${octalMode}`);
+      }
+    } catch (err) {
+      warnings.push(`- Failed to read ${failureLabel}: ${String(err)}`);
+    }
+  };
 
   if (cloudSyncedStateDir) {
     warnings.push(
@@ -1019,67 +1065,27 @@ export async function noteStateIntegrity(
     }
   }
 
-  if (stateDirExists && !canWriteDir(stateDir)) {
-    warnings.push(`- State directory not writable (${displayStateDir}).`);
-    const hint = dirPermissionHint(stateDir);
-    if (hint) {
-      warnings.push(`  ${hint}`);
-    }
-    const repair = await prompter.confirmRuntimeRepair({
-      message: `Repair permissions on ${displayStateDir}?`,
-      initialValue: true,
-    });
-    if (repair) {
-      try {
-        const stat = fs.statSync(stateDir);
-        const target = addUserRwx(stat.mode);
-        fs.chmodSync(stateDir, target);
-        changes.push(`- Repaired permissions on ${displayStateDir}`);
-      } catch (err) {
-        warnings.push(`- Failed to repair ${displayStateDir}: ${String(err)}`);
-      }
-    }
+  if (stateDirExists) {
+    await repairWritableDirectory(stateDir, displayStateDir);
   }
   if (stateDirExists && process.platform !== "win32") {
-    try {
-      if (readGroupOrWorldAccessibleMode(stateDir) !== null) {
-        warnings.push(
-          `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
-        );
-        const tighten = await prompter.confirmRuntimeRepair({
-          message: `Tighten permissions on ${displayStateDir} to 700?`,
-          initialValue: true,
-        });
-        if (tighten) {
-          fs.chmodSync(stateDir, 0o700);
-          changes.push(`- Tightened permissions on ${displayStateDir} to 700`);
-        }
-      }
-    } catch (err) {
-      warnings.push(`- Failed to read ${displayStateDir} permissions: ${String(err)}`);
-    }
+    await tightenPermissions(
+      stateDir,
+      displayStateDir,
+      0o700,
+      `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
+      `${displayStateDir} permissions`,
+    );
   }
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
-    try {
-      if (readGroupOrWorldAccessibleMode(configPath) !== null) {
-        warnings.push(
-          `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
-        );
-        const tighten = await prompter.confirmRuntimeRepair({
-          message: `Tighten permissions on ${displayConfigPath ?? configPath} to 600?`,
-          initialValue: true,
-        });
-        if (tighten) {
-          fs.chmodSync(configPath, 0o600);
-          changes.push(`- Tightened permissions on ${displayConfigPath ?? configPath} to 600`);
-        }
-      }
-    } catch (err) {
-      warnings.push(
-        `- Failed to read config permissions (${displayConfigPath ?? configPath}): ${String(err)}`,
-      );
-    }
+    await tightenPermissions(
+      configPath,
+      displayConfigPath ?? configPath,
+      0o600,
+      `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
+      `config permissions (${displayConfigPath ?? configPath})`,
+    );
   }
 
   if (stateDirExists) {
@@ -1118,27 +1124,7 @@ export async function noteStateIntegrity(
         }
         continue;
       }
-      if (!canWriteDir(dir)) {
-        warnings.push(`- ${label} not writable (${displayDir}).`);
-        const hint = dirPermissionHint(dir);
-        if (hint) {
-          warnings.push(`  ${hint}`);
-        }
-        const repair = await prompter.confirmRuntimeRepair({
-          message: `Repair permissions on ${label}?`,
-          initialValue: true,
-        });
-        if (repair) {
-          try {
-            const stat = fs.statSync(dir);
-            const target = addUserRwx(stat.mode);
-            fs.chmodSync(dir, target);
-            changes.push(`- Repaired permissions on ${label}: ${displayDir}`);
-          } catch (err) {
-            warnings.push(`- Failed to repair ${displayDir}: ${String(err)}`);
-          }
-        }
-      }
+      await repairWritableDirectory(dir, displayDir, label);
     }
   }
 

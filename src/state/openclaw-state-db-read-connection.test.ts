@@ -19,7 +19,10 @@ const mocks = vi.hoisted(() => {
 vi.mock("../infra/sqlite-snapshot-staging.js", () => ({
   acquireSqliteSnapshotReadToken: mocks.acquireToken,
 }));
-vi.mock("../infra/sqlite-worker-identity.js", () => ({
+vi.mock("../infra/sqlite-worker-identity.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
+    "../infra/sqlite-worker-identity.js",
+  )),
   assertExistingDatabaseIdentity: mocks.identity,
 }));
 vi.mock("../infra/node-sqlite.js", () => ({

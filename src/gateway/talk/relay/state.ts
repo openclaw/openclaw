@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { TalkClientCreateResult } from "../../../../packages/gateway-protocol/src/schema/channels.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import type { BoundedSerialQueue } from "../../../shared/bounded-serial-queue.js";
@@ -6,9 +7,9 @@ import type { RealtimeVoiceAgentControlResult } from "../../../talk/agent-run-co
 import type { createClientVoiceConfirmationReadiness } from "../../../talk/client-voice-confirmation-readiness.js";
 import type { InternalRealtimeVoiceProviderCapabilities } from "../../../talk/provider-internal.js";
 import type {
-  RealtimeVoiceBrowserAudioContract,
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceAgentConsultRunner,
+  RealtimeVoiceBrowserAudioContract,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
@@ -151,13 +152,7 @@ export class TalkRealtimeRelayOutputOwnership {
       return undefined;
     }
     const activeTurnId = this.activeTurnId();
-    if (
-      this.phase !== "cancelling" &&
-      activeTurnId &&
-      this.mode === "turn-bound" &&
-      claim &&
-      this.phase === "unowned"
-    ) {
+    if (activeTurnId && this.mode === "turn-bound" && claim && this.phase === "unowned") {
       this.cancelledTerminal = undefined;
       Object.assign(this, { phase: "owned" as const, turnId: activeTurnId });
     }
@@ -311,13 +306,11 @@ export type CreateTalkRealtimeRelaySessionParams = {
   forceAgentConsultOnFinalTranscript?: boolean;
 };
 
-export type TalkRealtimeRelaySessionResult = {
-  provider: string;
-  transport: "gateway-relay";
-  relaySessionId: string;
+export type TalkRealtimeRelaySessionResult = Omit<
+  Extract<TalkClientCreateResult, { transport: "gateway-relay" }>,
+  "voiceSessionId" | "audio"
+> & {
   audio: RealtimeVoiceBrowserAudioContract;
-  model?: string;
-  voice?: string;
   expiresAt: number;
 };
 

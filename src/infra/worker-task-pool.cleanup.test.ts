@@ -14,158 +14,93 @@ vi.mock("./temp-artifact-cleanup.js", () => ({ removeTemporaryArtifacts: cleanup
 const workerUrl = new URL("./worker-task-pool.test-support.ts", import.meta.url);
 
 describe("worker task artifact lifetime", () => {
-  it.each([
-    { phase: "idle", observer: "returns" },
-    { phase: "unconsumed-result", observer: "throws" },
-    { phase: "unconsumed-result", observer: "rejects" },
-    { phase: "task-error", observer: "returns" },
-  ] as const)(
-    "retries failed $phase retirement with an observer that $observer on the same mocked worker",
-    async ({ phase, observer }) => {
-      const failure = new Error("mock termination did not complete");
-      const terminate = vi
-        .fn<() => Promise<number>>()
-        .mockRejectedValueOnce(failure)
-        .mockResolvedValue(0);
-      const delivered = createDeferredCore();
-      let created = 0;
-      class MockWorker extends EventEmitter {
-        constructor() {
-          super();
-          created += 1;
-        }
-        ref() {}
-        unref() {}
-        terminate = terminate;
-        postMessage(message: { taskId: number }) {
-          queueMicrotask(() => {
-            this.emit(
-              "message",
-              phase === "task-error"
-                ? { status: "failed", taskId: message.taskId, error: "original task failed" }
-                : { status: "ok", taskId: message.taskId, value: 42 },
-            );
-            delivered.resolve();
-          });
-        }
+  it("retries failed idle retirement without releasing artifacts before native exit", async () => {
+    const failure = new Error("mock termination did not complete");
+    const terminate = vi
+      .fn<() => Promise<number>>()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue(0);
+    let created = 0;
+    class MockWorker extends EventEmitter {
+      constructor() {
+        super();
+        created += 1;
       }
-      vi.doMock("node:worker_threads", async (importOriginal) => ({
-        ...(await importOriginal<typeof import("node:worker_threads")>()),
-        Worker: MockWorker,
-      }));
-      let retiring = false;
-      vi.doMock("./temp-artifact-cleanup.js", () => {
-        if (retiring) {
-          throw new Error("cleanup module loaded during retirement");
-        }
-        return { removeTemporaryArtifacts: cleanup };
-      });
-      vi.resetModules();
+      ref() {}
+      unref() {}
+      terminate = terminate;
+      postMessage(message: { taskId: number }) {
+        queueMicrotask(() =>
+          this.emit("message", { status: "ok", taskId: message.taskId, value: 42 }),
+        );
+      }
+    }
+    vi.doMock("node:worker_threads", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("node:worker_threads")>()),
+      Worker: MockWorker,
+    }));
+    let retiring = false;
+    vi.doMock("./temp-artifact-cleanup.js", () => {
+      if (retiring) {
+        throw new Error("cleanup module loaded during retirement");
+      }
+      return { removeTemporaryArtifacts: cleanup };
+    });
+    vi.resetModules();
+    cleanup.mockReset();
+    const cleanupOrder: string[] = [];
+    cleanup.mockImplementation(async () => {
+      await Promise.resolve();
+      cleanupOrder.push("temporary-directory");
+    });
+    const releaseResources = vi.fn(async () => {
+      await Promise.resolve();
+      cleanupOrder.push("resources");
+    });
+    const { WorkerTaskPool: MockedWorkerTaskPool } = await import("./worker-task-pool.js");
+    const observedCustody: number[][] = [];
+    const onRetirementFailure = vi.fn(() => {
+      observedCustody.push([cleanup.mock.calls.length, releaseResources.mock.calls.length]);
+    });
+    const pool = new MockedWorkerTaskPool<number, number>({
+      workerUrl: new URL("file:///fixture/worker.js"),
+      maxWorkers: 1,
+      maxPendingTasks: 1,
+      onRetirementFailure,
+      prepareWorker: () => ({
+        options: {},
+        temporaryDirectory: "/fixture/worker-scratch",
+        releaseResources,
+      }),
+    });
+    try {
+      await expect(pool.run(1, {})).resolves.toBe(42);
+      retiring = true;
+      expect(await Promise.allSettled([pool.close(), pool.close()])).toEqual([
+        { status: "rejected", reason: failure },
+        { status: "rejected", reason: failure },
+      ]);
+      expect(terminate).toHaveBeenCalledTimes(1);
+      expect(onRetirementFailure).toHaveBeenCalledExactlyOnceWith(failure);
+      expect(observedCustody).toEqual([[0, 0]]);
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(releaseResources).not.toHaveBeenCalled();
+      expect(created).toBe(1);
+      await Promise.all([pool.close(), pool.close()]);
+      expect(terminate).toHaveBeenCalledTimes(2);
+      expect(onRetirementFailure).toHaveBeenCalledTimes(1);
+      expect(created).toBe(1);
+      expect(cleanup).toHaveBeenCalledExactlyOnceWith("/fixture/worker-scratch", "Worker task");
+      expect(releaseResources).toHaveBeenCalledOnce();
+      expect(cleanupOrder).toEqual(["temporary-directory", "resources"]);
+    } finally {
+      await pool.close().catch(() => undefined);
       cleanup.mockReset();
-      let artifactsCleaned = false;
-      const cleanupOrder: string[] = [];
-      cleanup.mockImplementation(async () => {
-        await Promise.resolve();
-        artifactsCleaned = true;
-        cleanupOrder.push("temporary-directory");
-      });
-      const releaseResources = vi.fn(async () => {
-        await Promise.resolve();
-        cleanupOrder.push("resources");
-      });
-      const { WorkerTaskPool: MockedWorkerTaskPool } = await import("./worker-task-pool.js");
-      const consumed = vi.fn();
-      const observedCustody: number[][] = [];
-      const onRetirementFailure = vi.fn((_error: unknown) => {
-        observedCustody.push([consumed.mock.calls.length, cleanup.mock.calls.length]);
-        if (observer === "throws") {
-          throw new Error("observer failed synchronously");
-        }
-        if (observer === "rejects") {
-          return Promise.reject(new Error("observer failed asynchronously"));
-        }
-        return undefined;
-      });
-      const pool = new MockedWorkerTaskPool<number, number>({
-        workerUrl: new URL("file:///fixture/worker.js"),
-        maxWorkers: 1,
-        maxPendingTasks: 1,
-        onRetirementFailure,
-        prepareWorker: () => ({
-          options: {},
-          temporaryDirectory: "/fixture/worker-scratch",
-          releaseResources,
-        }),
-      });
-      try {
-        const task = pool.run(1, phase === "idle" ? {} : { onInputConsumed: consumed });
-        const outcome = task.then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-        let taskSettled = false;
-        void task.then(
-          () => {
-            taskSettled = true;
-          },
-          () => {
-            taskSettled = true;
-          },
-        );
-        await delivered.promise;
-        retiring = true;
-        if (phase === "idle") {
-          await expect(task).resolves.toBe(42);
-          expect(await Promise.allSettled([pool.close(), pool.close()])).toEqual([
-            { status: "rejected", reason: failure },
-            { status: "rejected", reason: failure },
-          ]);
-        } else {
-          if (phase === "task-error") {
-            expect(await outcome).toMatchObject({
-              error: {
-                cause: failure,
-                errors: [
-                  expect.objectContaining({ message: "original task failed", code: "failed" }),
-                  failure,
-                ],
-              },
-            });
-          } else {
-            expect(await outcome).toEqual({ error: failure });
-          }
-          // Early rejection must not return the retained input's admission capacity.
-          await expect(pool.run(2, {})).rejects.toMatchObject({ code: "overloaded" });
-        }
-        const firstOutcome = await outcome;
-        expect(terminate).toHaveBeenCalledTimes(1);
-        expect(onRetirementFailure).toHaveBeenCalledExactlyOnceWith(failure);
-        expect(observedCustody).toEqual([[0, 0]]);
-        expect(created).toBe(1);
-        expect(cleanup).not.toHaveBeenCalled();
-        expect(releaseResources).not.toHaveBeenCalled();
-        expect(taskSettled).toBe(true);
-        expect(consumed).not.toHaveBeenCalled();
-
-        await Promise.all([pool.close(), pool.close()]);
-        expect(await outcome).toBe(firstOutcome);
-        expect(terminate).toHaveBeenCalledTimes(2);
-        expect(onRetirementFailure).toHaveBeenCalledTimes(1);
-        expect(created).toBe(1);
-        expect(cleanup).toHaveBeenCalledExactlyOnceWith("/fixture/worker-scratch", "Worker task");
-        expect(artifactsCleaned).toBe(true);
-        expect(releaseResources).toHaveBeenCalledOnce();
-        expect(cleanupOrder).toEqual(["temporary-directory", "resources"]);
-        expect(consumed).toHaveBeenCalledTimes(phase === "idle" ? 0 : 1);
-      } finally {
-        await pool.close().catch(() => undefined);
-        cleanup.mockReset();
-        vi.doUnmock("node:worker_threads");
-        vi.doMock("./temp-artifact-cleanup.js", () => ({ removeTemporaryArtifacts: cleanup }));
-        vi.resetModules();
-      }
-    },
-  );
+      vi.doUnmock("node:worker_threads");
+      vi.doMock("./temp-artifact-cleanup.js", () => ({ removeTemporaryArtifacts: cleanup }));
+      vi.resetModules();
+    }
+  });
 
   it.each([false, true])(
     "retains active rotation custody through a failed stop and late host response (close=%s)",

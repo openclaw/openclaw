@@ -140,18 +140,8 @@ function createDnsResultOrderLookup(order: TelegramDnsResultOrder): LookupFuncti
     callback: LookupCallback,
   ) => void;
   return (hostname, options, callback) => {
-    const baseOptions: LookupOptions =
-      typeof options === "number"
-        ? { family: options }
-        : options
-          ? { ...(options as LookupOptions) }
-          : {};
-    const lookupOptions: LookupOptions = {
-      ...baseOptions,
-      order,
-      verbatim: order === "verbatim",
-    };
-    lookup(hostname, lookupOptions, callback);
+    const baseOptions = typeof options === "number" ? { family: options } : { ...options };
+    lookup(hostname, { ...baseOptions, order, verbatim: order === "verbatim" }, callback);
   };
 }
 
@@ -182,11 +172,7 @@ function resolveTelegramDispatcherPolicy(params: {
   forceIpv4: boolean;
   proxyUrl?: string;
 }): PinnedDispatcherPolicy {
-  const connect = buildTelegramConnectOptions({
-    autoSelectFamily: params.autoSelectFamily,
-    dnsResultOrder: params.dnsResultOrder,
-    forceIpv4: params.forceIpv4,
-  });
+  const connect = buildTelegramConnectOptions(params);
   const explicitProxyUrl = params.proxyUrl?.trim();
   if (explicitProxyUrl) {
     return {
@@ -196,14 +182,8 @@ function resolveTelegramDispatcherPolicy(params: {
       proxyTls: { ...connect },
     };
   }
-  if (params.useEnvProxy) {
-    return {
-      mode: "env-proxy",
-      connect: { ...connect },
-    };
-  }
   return {
-    mode: "direct",
+    mode: params.useEnvProxy ? "env-proxy" : "direct",
     connect: { ...connect },
   };
 }
@@ -220,7 +200,7 @@ function withPinnedLookup(
     addresses: [...pinnedHostname.addresses],
     fallback: dns.lookup,
   });
-  return options ? { ...options, lookup } : { lookup };
+  return { ...options, lookup };
 }
 
 function createTelegramDispatcher(
@@ -235,6 +215,7 @@ function createTelegramDispatcher(
   // by default, which can stall Telegram long-polling on Windows/IPv6 networks.
   // Force HTTP/1.1 for every dispatcher while keeping bounded pool defaults.
   const poolOptions = telegramAgentPoolOptions(pipelining);
+  let dispatcher: TelegramDispatcher;
 
   if (policy.mode === "explicit-proxy") {
     const requestTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
@@ -244,18 +225,12 @@ function createTelegramDispatcher(
       ...(requestTlsOptions ? { requestTls: requestTlsOptions } : {}),
     } satisfies Parameters<typeof createHttp1ProxyAgent>[0];
     try {
-      return {
-        dispatcher: createHttp1ProxyAgent(proxyOptions),
-        mode: "explicit-proxy",
-        effectivePolicy: policy,
-      };
+      dispatcher = createHttp1ProxyAgent(proxyOptions);
     } catch (err) {
       const reason = formatErrorMessage(err);
       throw new Error(`explicit proxy dispatcher init failed: ${reason}`, { cause: err });
     }
-  }
-
-  if (policy.mode === "env-proxy") {
+  } else if (policy.mode === "env-proxy") {
     const connectOptions = withPinnedLookup(policy.connect, policy.pinnedHostname);
     const proxyTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
     const proxyOptions = {
@@ -265,11 +240,7 @@ function createTelegramDispatcher(
       ...(proxyTlsOptions ? { proxyTls: proxyTlsOptions } : {}),
     } satisfies Parameters<typeof createHttp1EnvHttpProxyAgent>[0];
     try {
-      return {
-        dispatcher: createHttp1EnvHttpProxyAgent(proxyOptions),
-        mode: "env-proxy",
-        effectivePolicy: policy,
-      };
+      dispatcher = createHttp1EnvHttpProxyAgent(proxyOptions);
     } catch (err) {
       log.warn(
         `env proxy dispatcher init failed; falling back to direct dispatcher: ${formatErrorMessage(err)}`,
@@ -280,17 +251,14 @@ function createTelegramDispatcher(
       };
       return createTelegramDispatcher(directPolicy, pipelining);
     }
-  }
-
-  const connectOptions = withPinnedLookup(policy.connect, policy.pinnedHostname);
-  return {
-    dispatcher: new Agent({
+  } else {
+    const connectOptions = withPinnedLookup(policy.connect, policy.pinnedHostname);
+    dispatcher = new Agent({
       ...poolOptions,
       ...(connectOptions ? { connect: connectOptions } : {}),
-    } satisfies ConstructorParameters<typeof Agent>[0]),
-    mode: "direct",
-    effectivePolicy: policy,
-  };
+    } satisfies ConstructorParameters<typeof Agent>[0]);
+  }
+  return { dispatcher, mode: policy.mode, effectivePolicy: policy };
 }
 
 function resolveWrappedFetch(fetchImpl: typeof fetch): typeof fetch {
@@ -633,7 +601,7 @@ export function resolveTelegramTransport(
     if (stickySuccessCount >= TELEGRAM_STICKY_FALLBACK_PRIMARY_PROBE_SUCCESS_THRESHOLD) {
       stickySuccessCount = 0;
       primaryProbeDue = true;
-      log.debug("fetch fallback: scheduling primary dispatcher recovery probe");
+      log.debug("fetch fallback: scheduling primary dispatcher recovery check");
     }
   };
 
@@ -668,8 +636,8 @@ export function resolveTelegramTransport(
       primaryProbeDue = false;
       log.debug(
         stickyCooldownError
-          ? "fetch fallback: re-probing primary dispatcher while sticky fallback is cooling down"
-          : "fetch fallback: re-probing primary dispatcher after sticky fallback successes",
+          ? "fetch fallback: rechecking primary dispatcher while sticky fallback is cooling down"
+          : "fetch fallback: rechecking primary dispatcher after sticky fallback successes",
       );
     }
     let err: unknown;

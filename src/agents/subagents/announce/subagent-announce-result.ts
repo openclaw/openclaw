@@ -140,15 +140,6 @@ function describeSubagentOutcome(child: ChildCompletionRow): string {
   return "unknown";
 }
 
-function formatChildResultData(resultText?: string | null): string {
-  return (
-    wrapPromptDataBlock({
-      label: "Child result",
-      text: resultText?.trim() || "(no output)",
-    }) || "Child result: (no output)"
-  );
-}
-
 export type ChildCompletionRow = Pick<
   SubagentRunRecord,
   "childSessionKey" | "task" | "taskName" | "label" | "createdAt" | "endedReason"
@@ -220,7 +211,10 @@ export function buildChildCompletionFindings(
           truncationMarker: "…",
         }),
         `status: ${truncateUtf16WithEllipsis(outcome, MAX_CHILD_COMPLETION_FIELD_CHARS)}`,
-        formatChildResultData(resultText),
+        wrapPromptDataBlock({
+          label: "Child result",
+          text: resultText?.trim() || "(no output)",
+        }) || "Child result: (no output)",
       ].join("\n"),
     );
   }

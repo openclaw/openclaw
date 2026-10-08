@@ -163,10 +163,16 @@ class PendingMessageQueue {
   }
 
   enqueue(message: AgentMessage): void {
+    this.admit(message)();
+  }
+
+  admit(message: AgentMessage): () => void {
     this.messages.push(message);
-    for (const listener of this.listeners) {
-      listener();
-    }
+    return () => {
+      for (const listener of this.listeners) {
+        listener();
+      }
+    };
   }
 
   peek(): readonly AgentMessage[] {
@@ -401,7 +407,12 @@ export class Agent {
    * message's unstarted sequential tail can be skipped. Parallel batches always run.
    */
   steer(message: AgentMessage): void {
-    this.steeringQueue.enqueue(message);
+    this.admitSteeringMessage(message)();
+  }
+
+  /** Install admitted input synchronously; notify listeners after admission custody ends. */
+  admitSteeringMessage(message: AgentMessage): () => void {
+    return this.steeringQueue.admit(message);
   }
 
   /** Cancel queued input unless a live provider response may already have admitted it. */

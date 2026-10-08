@@ -20,10 +20,7 @@ import {
   buildTelegramInvalidApprovalTerminalText,
   buildTelegramLegacyApprovalTerminalText,
 } from "./approval-terminal.js";
-import type {
-  TelegramCallbackButton,
-  TelegramCallbackMessageActions,
-} from "./bot-handlers.callback-actions.js";
+import type { TelegramCallbackMessageActions } from "./bot-handlers.callback-actions.js";
 import {
   buildSyntheticContext,
   buildSyntheticTextMessage,
@@ -38,6 +35,7 @@ import {
 } from "./bot-processing-outcome.js";
 import { withResolvedTelegramForumFlag } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import type { TelegramCallbackButton } from "./button-types.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalAuthorizedSender,
@@ -55,11 +53,8 @@ export type TelegramCallbackMessageRuntime = Pick<
 >;
 
 export class TelegramRetryableCallbackError extends Error {
-  public override readonly cause: unknown;
-
-  constructor(cause: unknown) {
+  constructor(public override readonly cause: unknown) {
     super(String(cause));
-    this.cause = cause;
     this.name = "TelegramRetryableCallbackError";
   }
 }
@@ -96,17 +91,11 @@ export function createTelegramCallbackApprovalRuntime(params: {
   const { clearCallbackButtons, editCallbackMessage, replyToCallbackChat } = actions;
 
   const resolveApprovalAuthorizations = () => {
-    const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
-      cfg: runtimeCfg,
-      accountId,
-      senderId,
-    });
-    const execApprovalAuthorizedSender = isTelegramExecApprovalAuthorizedSender({
-      cfg: runtimeCfg,
-      accountId,
-      senderId,
-    });
-    return { execApprovalAuthorizedSender, pluginApprovalAuthorizedSender };
+    const context = { cfg: runtimeCfg, accountId, senderId };
+    return {
+      pluginApprovalAuthorizedSender: isTelegramExecApprovalApprover(context),
+      execApprovalAuthorizedSender: isTelegramExecApprovalAuthorizedSender(context),
+    };
   };
 
   const clearTerminalApprovalButtons = async () => {
@@ -369,14 +358,10 @@ const isSelectedMultiButton = (button: TelegramCallbackButton): boolean =>
 const isMultiToggleButton = (button: TelegramCallbackButton): boolean =>
   button.callback_data.startsWith(MULTI_SELECT_TOGGLE_PREFIX);
 const resolveMultiSelectedValues = (buttons: TelegramCallbackButton[][]): string[] =>
-  buttons.flatMap((row) =>
-    row.flatMap((button) => {
-      if (!isMultiToggleButton(button) || !isSelectedMultiButton(button)) {
-        return [];
-      }
-      return [button.callback_data.slice(MULTI_SELECT_TOGGLE_PREFIX.length)];
-    }),
-  );
+  buttons
+    .flat()
+    .filter((button) => isMultiToggleButton(button) && isSelectedMultiButton(button))
+    .map((button) => button.callback_data.slice(MULTI_SELECT_TOGGLE_PREFIX.length));
 const updateMultiSelectKeyboard = (
   message: Message,
   action: "toggle" | "clear",

@@ -1,8 +1,3 @@
-/**
- * Handles embedded-agent compaction lifecycle events. The handlers pause
- * liveness, emit agent events, run hooks, reconcile persisted counts, and
- * clear stale usage after compaction rewrites history.
- */
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { recordSessionCompacted } from "../sessions/session-state-events.js";
@@ -19,13 +14,7 @@ type SessionCompactionStartEvent = Extract<AgentSessionEvent, { type: "compactio
 type SessionCompactionEndEvent = Extract<AgentSessionEvent, { type: "compaction_end" }>;
 type CompactionReason = SessionCompactionStartEvent["reason"];
 
-type CompactionStartEvent =
-  | SessionCompactionStartEvent
-  | {
-      type: "compaction_start";
-      reason?: unknown;
-      itemId?: string;
-    };
+type CompactionStartEvent = Omit<SessionCompactionStartEvent, "reason"> & { reason?: unknown };
 
 // Unknown reasons come from external runtimes or older sessions. Treat them as
 // threshold compaction so logs and event payloads stay on the closed reason set.
@@ -90,7 +79,6 @@ function runBestEffortCompactionHook(
   });
 }
 
-/** Handles compaction start events from an embedded agent session. */
 export function handleCompactionStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: CompactionStartEvent,
@@ -113,7 +101,6 @@ export function handleCompactionStart(
   runBestEffortCompactionHook(ctx, "before");
 }
 
-/** Handles compaction completion, retry, and incomplete events. */
 export function handleCompactionEnd(
   ctx: EmbeddedAgentSubscribeContext,
   evt: SessionCompactionEndEvent,
@@ -213,11 +200,7 @@ export function handleCompactionEnd(
         (reasonClass === "no_compactable_entries" ||
           reasonClass === "below_threshold" ||
           reasonClass === "already_compacted"));
-    if (benign) {
-      ctx.log.info(`embedded run ${kind} ${outcome.status}`, metadata);
-    } else {
-      ctx.log.warn(`embedded run ${kind} ${outcome.status}`, metadata);
-    }
+    ctx.log[benign ? "info" : "warn"](`embedded run ${kind} ${outcome.status}`, metadata);
   }
   emitCompactionAgentEvent(ctx, {
     phase: "end",

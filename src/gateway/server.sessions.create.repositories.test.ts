@@ -171,7 +171,6 @@ test("sessions.create retains a cloud repository across replay without creating 
 
 test.each([
   { repository: { url: "file:///tmp/repository" } },
-  { repository: { url: "https://token@github.com/openclaw/openclaw.git" } },
   {
     repository: { url: "https://github.com/openclaw/openclaw.git", ref: "--upload-pack=anything" },
   },

@@ -110,11 +110,6 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",
   "scripts/e2e/lib/fixtures/workspace.mjs!",
-  "scripts/e2e/lib/fleet-cache/assert-cell.mjs!",
-  "scripts/e2e/lib/fleet-cache/assert-podman-cell.mjs!",
-  "scripts/e2e/lib/fleet-cache/prepare-podman-storage.mjs!",
-  "scripts/e2e/lib/fleet-cache/probe-podman-cell.mjs!",
-  "scripts/e2e/lib/fleet-cache/runtime-preflight.mjs!",
   // test:e2e:node-auto-update runs the installed-package proof against a frozen tarball.
   "scripts/e2e/lib/node-auto-update/scenario.mjs!",
   // Installed-package authority proof runs by path and injects its worker preload via NODE_OPTIONS.
@@ -438,6 +433,8 @@ const rootEntries = [
   // packages/worker-runtime/README.md invokes the benchmark; its worker is loaded by URL.
   "scripts/bench-worker-runtime.ts!",
   "scripts/bench-worker-runtime.worker.ts!",
+  // docs/help/testing/control-ui-load.md invokes this opt-in Linux process/protocol proof.
+  "scripts/bench-gateway-control-ui-proof.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",

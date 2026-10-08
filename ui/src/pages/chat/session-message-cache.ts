@@ -273,18 +273,16 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
       return null;
     }
     const boundarySeq = readSessionMessageSequence(snapshot.messages[start]);
-    retainedMessageWeight -= messageWeights[start] ?? 0;
-    start += 1;
-    if (boundarySeq === null) {
-      continue;
-    }
-    while (start < snapshot.messages.length) {
-      if (readSessionMessageSequence(snapshot.messages[start]) !== boundarySeq) {
-        break;
-      }
+    do {
       retainedMessageWeight -= messageWeights[start] ?? 0;
       start += 1;
-    }
+      if (boundarySeq === null) {
+        break;
+      }
+    } while (
+      start < snapshot.messages.length &&
+      readSessionMessageSequence(snapshot.messages[start]) === boundarySeq
+    );
   }
 }
 

@@ -76,11 +76,8 @@ async function readPersistedSentMessages(scopeKey: string): Promise<SentMessageS
       if (entry.value.scopeKey !== scopeKey || now - entry.value.timestamp > TTL_MS) {
         continue;
       }
-      let messages = store.get(entry.value.chatId);
-      if (!messages) {
-        messages = new Map<string, number>();
-        store.set(entry.value.chatId, messages);
-      }
+      const messages = store.get(entry.value.chatId) ?? new Map<string, number>();
+      store.set(entry.value.chatId, messages);
       messages.set(entry.value.messageId, entry.value.timestamp);
     }
   } catch (error) {
@@ -157,11 +154,8 @@ export async function recordSentMessage(
   const persistence = persistSentMessage(cacheScopeKey, scopeKey, idKey, now);
   const bucket = await bucketTask;
   const { store } = bucket;
-  let entry = store.get(scopeKey);
-  if (!entry) {
-    entry = new Map<string, number>();
-    store.set(scopeKey, entry);
-  }
+  const entry = store.get(scopeKey) ?? new Map<string, number>();
+  store.set(scopeKey, entry);
   entry.set(idKey, now);
   if (now >= bucket.nextCleanupAt) {
     cleanupExpiredSentMessages(store, now);

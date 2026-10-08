@@ -90,6 +90,16 @@ describe("candidate-owned frozen qualification coverage", () => {
     expect(() => resolveQualificationCoverage(policy, { ...inputs, ...narrowed })).toThrow();
   });
 
+  it("retains complete qualification coverage with an owner-approved Telegram waiver", () => {
+    const baseline = resolveQualificationCoverage(policy, inputs);
+    expect(
+      resolveQualificationCoverage(policy, {
+        ...inputs,
+        telegram_waiver: "2026.9.9-owner-approved",
+      }),
+    ).toEqual(baseline);
+  });
+
   it("rejects changed or removed admitted children even after an attacker rehashes the plan", () => {
     const coverage = resolveQualificationCoverage(policy, inputs);
     const qualificationBaselines = JSON.parse(qualificationBaselinesJson);

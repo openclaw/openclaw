@@ -1,5 +1,3 @@
-// Channel detail overlay: full status + advanced schema config form for one
-// channel, reusing the per-channel settings-language renderers.
 import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ChannelStatus, NostrProfile, NostrStatus, WhatsAppStatus } from "../../api/types.ts";
@@ -26,7 +24,7 @@ import {
   resolveChannelAccountCount,
   resolveChannelDisplayState,
 } from "./view.shared.ts";
-import type { ChannelKey, ChannelsProps } from "./view.types.ts";
+import type { ChannelsProps } from "./view.types.ts";
 import { renderWhatsAppCard } from "./view.whatsapp.ts";
 
 const STANDARD_CHANNEL_LOCALE_KEYS = {
@@ -40,12 +38,12 @@ const STANDARD_CHANNEL_LOCALE_KEYS = {
 
 type StandardChannelKey = keyof typeof STANDARD_CHANNEL_LOCALE_KEYS;
 
-function isStandardChannel(key: ChannelKey): key is StandardChannelKey {
+function isStandardChannel(key: string): key is StandardChannelKey {
   return Object.hasOwn(STANDARD_CHANNEL_LOCALE_KEYS, key);
 }
 
 function renderChannelStatusBody(
-  key: ChannelKey,
+  key: string,
   props: ChannelsProps,
   accountCount: number | undefined,
 ) {
@@ -185,7 +183,7 @@ function renderChannelStatusBody(
   );
 }
 
-function renderChannelBody(key: ChannelKey, props: ChannelsProps) {
+function renderChannelBody(key: string, props: ChannelsProps) {
   const snapshot = props.channels.channelsSnapshot;
   const accountCount = resolveChannelAccountCount(key, snapshot?.channelAccounts);
   switch (key) {

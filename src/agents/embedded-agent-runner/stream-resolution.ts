@@ -1,6 +1,3 @@
-/**
- * Resolves provider stream functions and API keys for embedded agents.
- */
 import type { LlmRuntime } from "@openclaw/ai";
 import { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
@@ -41,14 +38,6 @@ type EmbeddedStreamRuntimeOwner =
       llmRuntime?: never;
       currentStreamFn: StreamFn;
     };
-
-function resolveEmbeddedStreamRuntime(owner: EmbeddedStreamRuntimeOwner): LlmRuntime {
-  const runtime = owner.llmRuntime ?? getStreamLlmRuntime(owner.currentStreamFn);
-  if (!runtime) {
-    throw new Error("Embedded stream has no lifecycle runtime owner.");
-  }
-  return runtime;
-}
 
 function isDefaultOpenClawStreamFnForModel(
   model: EmbeddedRunAttemptParams["model"],
@@ -110,7 +99,10 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   /** Attaches the run credential when the selected transport sends it. */
   wrapApiKey: (streamFn: StreamFn) => StreamFn;
 } {
-  const llmRuntime = resolveEmbeddedStreamRuntime(params);
+  const llmRuntime = params.llmRuntime ?? getStreamLlmRuntime(params.currentStreamFn);
+  if (!llmRuntime) {
+    throw new Error("Embedded stream has no lifecycle runtime owner.");
+  }
   const wrapOptions = {
     runSignal: params.signal,
     authProfileId: params.authProfileId,
@@ -220,9 +212,9 @@ function composeRunSignal(callerSignal: AbortSignal, runSignal: AbortSignal): Ab
   const composedSignal = AbortSignal.any([callerSignal, runSignal]);
   // The activity registry owns this bridge weakly; an abort listener on either
   // reusable source would retain its composite after a successful request.
-  onLlmRequestActivity(composedSignal, () => {
+  onLlmRequestActivity(composedSignal, (progress) => {
     if (!composedSignal.aborted) {
-      notifyLlmRequestActivity(callerSignal);
+      notifyLlmRequestActivity(callerSignal, progress);
     }
   });
   return composedSignal;

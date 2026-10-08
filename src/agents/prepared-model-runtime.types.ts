@@ -9,7 +9,10 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import type { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
-import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
+import type {
+  AgentHarnessPluginSelection,
+  RuntimePluginLoadPurpose,
+} from "./harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "./prepared-model-catalog.types.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
@@ -34,6 +37,8 @@ export type PreparedModelCatalogRefreshOptions = {
   refresh?: boolean;
   providerIds?: readonly string[];
   changedOnly?: boolean;
+  /** Await acquisition instead of returning published rows after the foreground deadline. */
+  wait?: boolean;
 };
 
 export type PreparedNativeModelSelection = {
@@ -90,6 +95,8 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
     /** Inventory demand may renew expired providers without waiting or replacing saved rows. */
     refreshExpiredModelCatalog?: () => void;
+    /** Rechecks native CLI login availability without refreshing provider inventory. */
+    recheckNativeLogin?: () => void;
     /** Reads validated executable rows from this owner's accepted provider publication. */
     readPublishedModels?: () => ReadonlyMap<string, readonly Model[]> | undefined;
     /** Builds this generation's full control-plane catalog without replacing turn facts. */
@@ -146,6 +153,8 @@ export type PreparedModelRuntimeInput = {
   readOnly?: boolean;
   /** Load the exact runtime plugin generation for an isolated executable probe. */
   loadRuntimePlugins?: boolean;
+  /** Prompt-only inference selects providers/harnesses without agent capabilities. */
+  runtimePluginPurpose?: RuntimePluginLoadPurpose;
   skipCredentials?: boolean;
   env?: NodeJS.ProcessEnv;
   allowGatewaySubagentBinding?: boolean;

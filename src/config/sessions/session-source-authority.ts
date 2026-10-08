@@ -22,6 +22,8 @@ export type PreparedSessionSourceAuthority = {
   /** Process-held sources require native atomicity when writing a durable target. */
   nativeSource?: boolean;
   assertCurrent: () => void;
+  /** Prepared components only; opaque callbacks still require the full native fence. */
+  assertPreparedCurrent?: () => void;
   checks: {
     predicate: SessionSourcePredicate;
     refuse: (facts: SessionSourcePredicateFacts) => never;
@@ -64,10 +66,31 @@ export async function prepareSessionSourceAuthority(
     : { assertCurrent: () => assertion?.(), checks: [], nativeSource: assertion?.nativeSource };
 }
 
+/** A live selector may advance between operations, never during one prepared write. */
+export function createDynamicSessionSourceAssertion(
+  select: () => SessionSourceAssertion | undefined,
+  refuse: () => never,
+): SessionSourceAssertion {
+  return Object.assign(() => select()?.(), {
+    prepareSessionSource() {
+      const selected = select();
+      return prepareSessionSourceAuthority(
+        composeSessionSourceAssertion([selected], (assertSource) => {
+          if (select() !== selected) {
+            refuse();
+          }
+          assertSource();
+        }),
+      );
+    },
+  });
+}
+
 /** Preserve each owner's error/lifetime wrapper while preparing its storage-dependent sources. */
 export function composeSessionSourceAssertion(
   sources: readonly (SessionSourceAssertion | undefined)[],
   check: (assertSources: () => void) => void = (assertSources) => assertSources(),
+  options?: { preparedCheck: (assertSources: () => void) => void },
 ): SessionSourceAssertion {
   return Object.assign(() => check(() => sources.forEach((source) => source?.())), {
     async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
@@ -80,6 +103,16 @@ export function composeSessionSourceAssertion(
         return {
           nativeSource: prepared.some((source) => source.nativeSource),
           assertCurrent: () => check(() => prepared.forEach((source) => source.assertCurrent())),
+          assertPreparedCurrent: () =>
+            (options?.preparedCheck ?? check)(() => {
+              for (const source of prepared) {
+                if (source.assertPreparedCurrent) {
+                  source.assertPreparedCurrent();
+                } else if (!source.nativeSource) {
+                  source.assertCurrent();
+                }
+              }
+            }),
           checks: prepared.flatMap((source, index) =>
             source.checks.map(({ predicate, refuse }) => ({
               predicate,

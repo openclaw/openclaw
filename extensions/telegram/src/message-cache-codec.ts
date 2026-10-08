@@ -2,7 +2,7 @@ import type { Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessageBody,
@@ -91,12 +91,10 @@ function resolveMessageBody(msg: Message, preserveWhitespace: boolean): string |
 }
 
 function resolveMessageTimestamp(msg: MessageWithPromptContextTimestamp): number | undefined {
-  const promptContextTimestamp = msg.openclaw_prompt_context_timestamp_ms;
-  return typeof promptContextTimestamp === "number" && Number.isFinite(promptContextTimestamp)
-    ? promptContextTimestamp
-    : msg.date
-      ? msg.date * 1000
-      : undefined;
+  return (
+    asFiniteNumber(msg.openclaw_prompt_context_timestamp_ms) ??
+    (msg.date ? msg.date * 1000 : undefined)
+  );
 }
 
 export function normalizeMessageNode(

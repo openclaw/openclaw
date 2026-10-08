@@ -115,6 +115,7 @@ Top-level keys under `plugins.entries.voice-call.config` not shown above:
 | `enabled`                       | `false`      | Master on/off switch.                                                                                                           |
 | `inboundPolicy`                 | `"disabled"` | `disabled` \| `allowlist` \| `pairing` \| `open`. See [Inbound calls](/plugins/voice-call/tts-and-inbound-calls#inbound-calls). |
 | `allowFrom`                     | `[]`         | E.164 allowlist for `inboundPolicy: "allowlist"`.                                                                               |
+| `callbacks`                     | disabled     | Accepts recent outbound recipients only for realtime calls; classic STT/TTS still applies the inbound policy.                   |
 | `maxDurationSeconds`            | `300`        | Hard per-call duration cap, enforced regardless of answered state.                                                              |
 | `staleCallReaperSeconds`        | `120`        | See [Stale call reaper](/plugins/voice-call/tts-and-inbound-calls#stale-call-reaper). `0` disables it.                          |
 | `silenceTimeoutMs`              | `800`        | End-of-speech silence detection for the classic (non-realtime) flow.                                                            |
@@ -133,6 +134,31 @@ Twilio defaults to its US1 REST endpoint. To process calls in a supported
 non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials from
 that Region. See
 [Twilio's non-US REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
+
+### Twilio voicemail detection tuning
+
+Set `voicemail.detection: "twilio"` to enable answering-machine detection.
+These optional `voicemail` keys tune Twilio's detection on outbound calls:
+
+| Key                                    | Default | Allowed range                             |
+| -------------------------------------- | ------- | ----------------------------------------- |
+| `machineDetectionSpeechThresholdMs`    | `6000`  | `1000`–`6000` ms                          |
+| `machineDetectionSpeechEndThresholdMs` | `1200`  | `500`–`5000` ms                           |
+| `machineDetectionSilenceTimeoutMs`     | `5000`  | `2000`–`10000` ms                         |
+| `machineDetectionTimeoutMs`            | `30000` | `3000`–`59000` ms, in multiples of `1000` |
+
+The speech threshold defaults to Twilio's maximum of six seconds to reduce
+false machine results for talkative humans and longer business greetings.
+Twilio's own default is `2400` ms. A higher threshold also delays machine
+detection; it cannot reliably classify a human who speaks without pausing for
+thirty seconds. Tune it across representative greetings and carriers.
+
+The other defaults match Twilio. All values are integers in milliseconds;
+the plugin converts `machineDetectionTimeoutMs` to whole seconds for the
+Calls API's `MachineDetectionTimeout`. The three other values pass through
+in milliseconds. The allowed ranges follow
+[Twilio's AMD tuning reference](https://www.twilio.com/docs/voice/answering-machine-detection#optional-api-tuning-parameters)
+and its [invalid detection configuration error](https://www.twilio.com/docs/api/errors/21234).
 
 <AccordionGroup>
   <Accordion title="Provider exposure and security notes">

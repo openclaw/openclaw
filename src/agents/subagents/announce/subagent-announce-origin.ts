@@ -228,10 +228,7 @@ export async function resolveSubagentCompletionOrigin(params: {
 
 function stripNonDeliverableChannel(context?: DeliveryContext): DeliveryContext | undefined {
   const normalized = normalizeDeliveryContext(context);
-  if (!normalized?.channel) {
-    return normalized;
-  }
-  if (isDeliverableMessageChannel(normalized.channel)) {
+  if (!normalized?.channel || isDeliverableMessageChannel(normalized.channel)) {
     return normalized;
   }
   const { channel: _channel, ...rest } = normalized;

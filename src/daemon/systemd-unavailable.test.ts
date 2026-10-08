@@ -104,7 +104,7 @@ printf 's "252.39"\\n'
       await expect(isSystemdUserServiceAvailable(env)).resolves.toBe(false);
       await expect(assertSystemdAvailable(env)).rejects.toThrow(
         errorCode === "EACCES"
-          ? "service-manager probe could not start"
+          ? "service-manager check could not start"
           : "systemctl not available",
       );
 

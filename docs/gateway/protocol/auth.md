@@ -37,7 +37,7 @@ Owner page: [Gateway authentication](/gateway/authentication) — auth modes, to
   rotated token uses `hello-ok.auth.scopes`; its approved grant matches that
   connection when it is issued.
 - Reconnecting with that stored device token should also reuse the stored
-  approved scope set for that token. This preserves read/probe/status access
+  approved scope set for that token. This preserves read/check/status access
   already granted and avoids silently collapsing reconnects to a narrower
   implicit admin-only scope.
 - Client-side connect auth assembly (`selectConnectAuth` in

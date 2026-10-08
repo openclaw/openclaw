@@ -36,7 +36,6 @@ import type {
 
 export type ImageContent = Pick<LlmImageContent, "type" | "data" | "mimeType">;
 
-/** Channel/account/thread context carried into an agent run. */
 export type AgentRunContext = {
   messageChannel?: string;
   accountId?: string;
@@ -62,7 +61,6 @@ export type AgentCommandOpts = {
   transcriptMessage?: string;
   /** Durable media metadata for the user-visible transcript turn. */
   transcriptMedia?: UserTurnInput["media"];
-  /** Optional image attachments for multimodal messages. */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
@@ -72,9 +70,7 @@ export type AgentCommandOpts = {
   clientTools?: ClientToolDefinition[];
   /** Agent id override (must exist in config). */
   agentId?: string;
-  /** Per-run provider override. */
   provider?: string;
-  /** Per-run model override. */
   model?: string;
   /** Explicit ordered fallback chain for this run. Undefined uses normal selection policy. */
   modelFallbacksOverride?: string[];
@@ -95,15 +91,12 @@ export type AgentCommandOpts = {
   replyAccountId?: string;
   /** Override delivery thread/topic id (separate from session routing). */
   threadId?: string | number;
-  /** Message channel context. */
   messageChannel?: string;
   /** Tool-policy/output surface context. Defaults to messageChannel. */
   messageProvider?: string;
-  /** Delivery channel. */
   channel?: string;
   /** Account ID for multi-account channel routing. */
   accountId?: string;
-  /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;
   /** Client capabilities captured by trusted Gateway ingress. */
   clientCaps?: string[];
@@ -160,9 +153,7 @@ export type AgentCommandOpts = {
   /** Startup awaits returned work; incidental synchronous return values are ignored. */
   onExecutionStarted?: () => unknown;
   extraSystemPrompt?: string;
-  /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";
-  /** Run kind hint for bootstrap context behavior. */
   bootstrapContextRunKind?: BootstrapContextRunKind;
   internalEvents?: AgentInternalEvent[];
   runtimeContextFragments?: RuntimeContextFragment[];
@@ -240,7 +231,6 @@ export type AgentCommandOpts = {
   prepareAssistantTranscriptMessage?: AgentRunTranscriptContext["prepareAssistantTranscriptMessage"];
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
-  /** Called when every candidate in the run's model fallback chain failed. */
   onModelFallbackExhausted?: () => void;
   /** Called before delivery projection when the raw run contains an error payload. */
   onResultErrorPayload?: (message?: string) => void;
@@ -258,28 +248,36 @@ export type AgentCommandOpts = {
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 };
 
-type AgentCommandGatewayOnlyKey =
-  | "clientCaps"
-  | "gatewayUiCommandTarget"
-  | "toolBindings"
-  | "taskSuggestionDeliveryMode"
-  | "runtimeContextFragments"
-  | "mainRestartRecoveryOwnerLease"
-  | "mainRestartRecoveryAdmitted"
-  | "mainRestartRecoveryAttempt"
-  | "pinnedWidgetAuthoring"
-  | "executionIdentityAdmission"
-  | "operationalRunInstance"
-  | "operatorAuthority"
-  | "privateCompletion"
-  | "assertSourceCurrent"
-  | "skillLibraryAuthoring"
-  | "cronCreatorAuthorityCapability"
-  | "onAdmittedRunContext"
-  | "onPostAdmittedRunContext"
-  | "beforeTerminalDelivery"
-  | "prepareAssistantTranscriptMessage"
-  | "internalDeliverySuppressErrors";
+/** Public ingress clears the same host-owned fields its option type excludes. */
+export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
+  clientCaps: undefined,
+  gatewayUiCommandTarget: undefined,
+  toolBindings: undefined,
+  taskSuggestionDeliveryMode: undefined,
+  runtimeContextFragments: undefined,
+  senderIsOwner: false,
+  mainRestartRecoveryOwnerLease: undefined,
+  mainRestartRecoveryAdmitted: undefined,
+  mainRestartRecoveryAttempt: undefined,
+  pinnedWidgetAuthoring: undefined,
+  executionIdentityAdmission: undefined,
+  operationalRunInstance: undefined,
+  assertSourceCurrent: undefined,
+  operatorAuthority: undefined,
+  privateCompletion: undefined,
+  skillLibraryAuthoring: undefined,
+  cronCreatorAuthorityCapability: undefined,
+  onAdmittedRunContext: undefined,
+  onPostAdmittedRunContext: undefined,
+  beforeTerminalDelivery: undefined,
+  prepareAssistantTranscriptMessage: undefined,
+  internalDeliverySuppressErrors: undefined,
+} satisfies Partial<AgentCommandOpts>);
+
+type AgentCommandGatewayOnlyKey = Exclude<
+  keyof typeof AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS,
+  "senderIsOwner"
+>;
 
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<

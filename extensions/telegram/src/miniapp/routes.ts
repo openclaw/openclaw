@@ -120,12 +120,18 @@ async function handleAuth(
   if (!body.ok) {
     return;
   }
-  const authBody = parseAuthBody(body.value);
-  if (!authBody) {
+  const authBody = body.value;
+  if (
+    !isRecord(authBody) ||
+    typeof authBody.initData !== "string" ||
+    typeof authBody.launchTicket !== "string"
+  ) {
     sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
     return;
   }
-  const accountId = normalizeAccountId(authBody.accountId ?? DEFAULT_ACCOUNT_ID);
+  const accountId = normalizeAccountId(
+    typeof authBody.accountId === "string" ? authBody.accountId : DEFAULT_ACCOUNT_ID,
+  );
   const cfg = currentConfig();
   const account = resolveTelegramAccount({ cfg, accountId });
   const validated = validateTelegramMiniAppInitData({
@@ -194,22 +200,6 @@ async function handleAuth(
     }
     sendText(res, 403, "Restricted to the bot owner.");
   }
-}
-
-function parseAuthBody(
-  value: unknown,
-): { initData: string; launchTicket: string; accountId?: string } | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  if (typeof value.initData !== "string" || typeof value.launchTicket !== "string") {
-    return null;
-  }
-  return {
-    initData: value.initData,
-    launchTicket: value.launchTicket,
-    ...(typeof value.accountId === "string" ? { accountId: value.accountId } : {}),
-  };
 }
 
 function rememberReplay(hash: string, expiresAtMs: number): boolean {

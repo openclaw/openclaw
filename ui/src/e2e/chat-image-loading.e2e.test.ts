@@ -167,8 +167,10 @@ suite.define(() => {
             await skeleton.waitFor({ state: "visible" });
             await waitForChatScrollIdle(page);
             const before = await frame.boundingBox();
-            expect(before?.width).toBe(400);
-            expect(before?.height).toBeCloseTo(400 / 1.5, 1);
+            const surface = frame.locator(".chat-image-surface");
+            const imageBefore = await surface.boundingBox();
+            expect(imageBefore?.width).toBe(400);
+            expect(imageBefore?.height).toBeCloseTo(400 / 1.5, 1);
             expect((await frame.textContent())?.trim()).toBe("");
             expect(await frame.locator("svg").count()).toBe(0);
             const motion = await skeleton.evaluate((element) => {
@@ -202,6 +204,7 @@ suite.define(() => {
             await image.evaluate((element) => (element as HTMLImageElement).decode());
             await waitForChatScrollIdle(page);
             expect(await frame.boundingBox()).toEqual(before);
+            expect(await surface.boundingBox()).toEqual(imageBefore);
             expect(await skeleton.count()).toBe(0);
             const loadedSource = await image.getAttribute("src");
             const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");

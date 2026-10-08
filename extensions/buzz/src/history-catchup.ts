@@ -10,10 +10,7 @@ const HISTORY_PAGE_COMPLETE_REASON = "buzz room history page loaded";
 
 type BuzzRoomHistoryCatchUp = "complete" | "aborted" | "timestamp-over-limit";
 
-type BuzzRoomHistoryPage = {
-  events: Event[];
-  overLimit: boolean;
-};
+type BuzzRoomHistoryPage = Awaited<ReturnType<typeof queryBuzzRoomHistoryPage>>;
 
 async function queryBuzzRoomHistoryPage(params: {
   relay: Relay;
@@ -24,7 +21,7 @@ async function queryBuzzRoomHistoryPage(params: {
   maxEvents: number;
   skipEventIds?: ReadonlySet<string>;
   signal?: AbortSignal;
-}): Promise<BuzzRoomHistoryPage> {
+}) {
   const events: Event[] = [];
   let overLimit = false;
   return await queryBuzzRelaySnapshot({

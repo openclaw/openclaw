@@ -306,6 +306,7 @@ async function loadChatSendSessionContext(params: {
 
 /** Load and validate the session/model facts shared by later admission and dispatch phases. */
 export async function prepareChatSendSession(params: {
+  isDirectExternalUser?: boolean;
   request: NormalizedChatSendRequest;
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
@@ -368,7 +369,7 @@ export async function prepareChatSendSession(params: {
     goalRequestFingerprint: request.goalOperation?.requestFingerprint,
     cfg,
     eligible:
-      isBrowserOperatorUiClient(request.clientInfo) &&
+      (isBrowserOperatorUiClient(request.clientInfo) || params.isDirectExternalUser === true) &&
       turnKind === "main" &&
       normalizedAttachments.length === 0 &&
       !request.reconnectResumeRequested &&
@@ -548,6 +549,24 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
   if (!harness || harness.executionEnvironment !== "host-only") {
     return undefined;
   }
+  const restrictionFor = (
+    config: OpenClawConfig,
+    selectedEntry: Parameters<typeof resolveSessionNativeRuntimeRestriction>[0]["entry"],
+    model: typeof resolvedSessionModel,
+    persistedEntry?: SessionEntry,
+  ) =>
+    resolveSessionNativeRuntimeRestriction({
+      operation: "send",
+      cfg: config,
+      agentId,
+      sessionKey,
+      entry: selectedEntry,
+      persistedEntry,
+      harness,
+      provider: model.provider,
+      modelId: model.model,
+      callerCanConsent: hasGatewayAdminScope(client),
+    });
   const creation = resolveOperatorSessionCreation(client);
   const prospectiveEntry =
     entry ??
@@ -556,18 +575,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
       sandbox: resolveCreatorSandbox(cfg, creation),
       now: session.now,
     });
-  const restriction = resolveSessionNativeRuntimeRestriction({
-    operation: "send",
-    cfg,
-    agentId,
-    sessionKey,
-    entry: prospectiveEntry,
-    persistedEntry: entry,
-    harness,
-    provider: resolvedSessionModel.provider,
-    modelId: resolvedSessionModel.model,
-    callerCanConsent: hasGatewayAdminScope(client),
-  });
+  const restriction = restrictionFor(cfg, prospectiveEntry, resolvedSessionModel, entry);
   const details = readAgentRuntimeRestrictionErrorDetails(restriction?.details);
   if (
     entry ||
@@ -593,11 +601,10 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
   const scope = { agentId, sessionKey, storePath: session.storePath };
   const snapshot = await loadReplySessionInitializationSnapshot(scope);
   await (params.assertCurrentAsync ? params.assertCurrentAsync() : params.assertCurrent?.());
+  const sessionChanged = () =>
+    errorShape(ErrorCodes.INVALID_REQUEST, "Session changed before native confirmation. Retry.");
   if (snapshot.currentEntry) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "Session changed before native confirmation. Retry.",
-    );
+    return sessionChanged();
   }
   const prepared = await prepareChatSendSessionEntry({
     cfg,
@@ -624,18 +631,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
         agentId,
       });
       const currentRestriction = readAgentRuntimeRestrictionErrorDetails(
-        resolveSessionNativeRuntimeRestriction({
-          operation: "send",
-          cfg: currentConfig,
-          agentId,
-          sessionKey,
-          entry: prepared.entry,
-          persistedEntry: undefined,
-          harness,
-          provider: currentModel.provider,
-          modelId: currentModel.model,
-          callerCanConsent: hasGatewayAdminScope(client),
-        })?.details,
+        restrictionFor(currentConfig, prepared.entry, currentModel)?.details,
       );
       if (
         creationError ||
@@ -662,23 +658,14 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
     },
   });
   if (!committed.ok) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "Session changed before native confirmation. Retry.",
-    );
+    return sessionChanged();
   }
   await recordSessionCreated(cfg, { agentId, sessionKey, entry: committed.sessionEntry });
   emitSessionsChanged(context, { agentId, sessionKey, reason: "create" });
-  return resolveSessionNativeRuntimeRestriction({
-    operation: "send",
-    cfg: context.getRuntimeConfig(),
-    agentId,
-    sessionKey,
-    entry: committed.sessionEntry,
-    persistedEntry: committed.sessionEntry,
-    harness,
-    provider: resolvedSessionModel.provider,
-    modelId: resolvedSessionModel.model,
-    callerCanConsent: hasGatewayAdminScope(client),
-  });
+  return restrictionFor(
+    context.getRuntimeConfig(),
+    committed.sessionEntry,
+    resolvedSessionModel,
+    committed.sessionEntry,
+  );
 }

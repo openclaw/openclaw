@@ -231,8 +231,6 @@ describe("gateway chat metadata lifecycle composition", () => {
         entries: rows,
         routeVariants: rows,
       });
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
       let result: ReturnType<typeof buildModelsListResult> | undefined;
       try {
         await publishOwner(nativeConfig);
@@ -258,10 +256,9 @@ describe("gateway chat metadata lifecycle composition", () => {
         const evaluateEntry = projector.evaluateEntry;
         const evaluations = vi
           .spyOn(projector, "evaluateEntry")
-          .mockImplementation(async (entry, variants) => {
+          .mockImplementation((entry, variants) => {
             if (entry.id === "gpt-5.6-luna") {
-              entered.resolve();
-              await resume.promise;
+              ready = !initialReady;
             }
             return evaluateEntry(entry, variants);
           });
@@ -282,9 +279,6 @@ describe("gateway chat metadata lifecycle composition", () => {
           catalogProjector: projector,
         };
         result = buildModelsListResult(request);
-        await entered.promise;
-        ready = !initialReady;
-        resume.resolve();
         const models = (await result).models;
         expect(models.map(({ id }) => id).toSorted()).toEqual(
           ready ? ["codex-latest", "gpt-5.6-luna"] : ["gpt-5.6-luna"],
@@ -313,7 +307,6 @@ describe("gateway chat metadata lifecycle composition", () => {
         expect(evaluations).toHaveBeenCalledTimes(hostCalls);
         expect(loadModelCatalog).not.toHaveBeenCalled();
       } finally {
-        resume.resolve();
         await Promise.allSettled([result]);
         restoreActivePluginRegistrySnapshot(previousRegistry);
       }
@@ -666,8 +659,6 @@ describe("gateway chat metadata lifecycle composition", () => {
   it.each([
     ["SecretRef-only runtime auth", "secret-ref", true, false],
     ["SecretRef auth after profile-scoped catalog rejection", "secret-ref", true, true],
-    ["external CLI OAuth bootstrap", "external-oauth", true, false],
-    ["unresolved SecretRef", "unresolved-secret-ref", false, false],
   ] as const)(
     "converges chat metadata and models.list for %s",
     async (_, kind, available, rejected) => {

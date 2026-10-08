@@ -74,18 +74,7 @@ type NostrDmSendOptions = Pick<
   "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
 >;
 
-export interface NostrBusHandle {
-  close: () => Promise<void>;
-  publicKey: string;
-  sendDm: (toPubkey: string, text: string, options?: NostrDmSendOptions) => Promise<string>;
-  /** Publish a profile (kind:0) to all relays */
-  publishProfile: (profile: NostrProfile) => Promise<ProfilePublishResult>;
-  getProfileState: () => Promise<{
-    lastPublishedAt: number | null;
-    lastPublishedEventId: string | null;
-    lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
-  }>;
-}
+export type NostrBusHandle = Awaited<ReturnType<typeof startNostrBus>>;
 
 interface CircuitBreakerState {
   state: "closed" | "open" | "half_open";
@@ -215,7 +204,7 @@ function createRelayHealthTracker() {
 }
 
 /** Subscribe to NIP-04 encrypted DMs. */
-export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusHandle> {
+export async function startNostrBus(options: NostrBusOptions) {
   const {
     privateKey,
     relays = DEFAULT_RELAYS,

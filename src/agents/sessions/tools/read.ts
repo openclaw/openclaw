@@ -3,6 +3,7 @@ import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:f
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, TextContent } from "../../../llm/types.js";
@@ -30,6 +31,7 @@ import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeysResolution,
 } from "./file-mutation-queue.js";
+import { assertFileToolNotAborted } from "./file-tool-abort.js";
 import { normalizePositiveLimit } from "./limits.js";
 import {
   getReadPathVariants,
@@ -117,7 +119,6 @@ interface ReadOperations {
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Decode text bytes for this backend. Custom backends default to UTF-8. */
   decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string;
-  /** Read file contents as a Buffer */
   readFile: (absolutePath: string) => Promise<Buffer>;
   /** Check if file is readable (throw if not) */
   access: (absolutePath: string) => Promise<void>;
@@ -381,22 +382,11 @@ export function createReadToolDefinition(
       if (!Number.isSafeInteger(cursor) || cursor < 0) {
         throw new Error("Cursor must be an integer at least 0");
       }
-      return new Promise<{
-        content: (TextContent | ImageContent)[];
-        details: ReadToolDetails;
-      }>((resolve, reject) => {
-        if (signal?.aborted) {
-          reject(new Error("Operation aborted"));
-          return;
-        }
-        let aborted = false;
-        const onAbort = () => {
-          aborted = true;
-          reject(new Error("Operation aborted"));
-        };
-        signal?.addEventListener("abort", onAbort, { once: true });
-
-        void (async () => {
+      return await racePromiseWithAbortSignal(
+        async (): Promise<{
+          content: (TextContent | ImageContent)[];
+          details: ReadToolDetails;
+        }> => {
           try {
             let absolutePath: string;
             let note: string | undefined;
@@ -419,31 +409,23 @@ export function createReadToolDefinition(
                 async () => {
                   const absoluteInputPath = await inputPathResolution;
                   const resolved = await resolveReadToolPathFromAbsolute(ops, absoluteInputPath);
-                  if (aborted) {
-                    return undefined;
-                  }
+                  assertFileToolNotAborted(signal);
                   return {
                     ...resolved,
                     buffer: await ops.readFile(resolved.absolutePath),
                   };
                 },
               );
-              if (!snapshot) {
-                return;
-              }
               ({ absolutePath, note, buffer } = snapshot);
             } catch (error) {
-              if (aborted) {
-                return;
-              }
               if (
+                signal?.aborted ||
                 optional !== true ||
                 (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR"))
               ) {
                 throw error;
               }
-              signal?.removeEventListener("abort", onAbort);
-              resolve({
+              return {
                 content: [{ type: "text", text: `Optional file not found: ${path}.` }],
                 details: {
                   kind: "not_found",
@@ -451,8 +433,7 @@ export function createReadToolDefinition(
                   path,
                   optional: true,
                 },
-              });
-              return;
+              };
             }
             const mimeType = await (ops.detectImageMimeType
               ? ops.detectImageMimeType(absolutePath, buffer)
@@ -595,19 +576,15 @@ export function createReadToolDefinition(
               ];
             }
 
-            if (aborted) {
-              return;
-            }
-            signal?.removeEventListener("abort", onAbort);
-            resolve({ content, details: createReadToolDetails(content, textDetails) });
+            assertFileToolNotAborted(signal);
+            return { content, details: createReadToolDetails(content, textDetails) };
           } catch (error: unknown) {
-            signal?.removeEventListener("abort", onAbort);
-            if (!aborted) {
-              reject(normalizeReadError(error, path));
-            }
+            throw normalizeReadError(error, path);
           }
-        })();
-      });
+        },
+        signal,
+        () => new Error("Operation aborted"),
+      );
     },
     renderCall(args, theme, context) {
       const classification = !context.expanded

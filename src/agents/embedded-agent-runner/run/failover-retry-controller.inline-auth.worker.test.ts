@@ -1,14 +1,15 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useSqliteWorkerFault } from "../../../../test/helpers/sqlite-worker-fault.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
+import { closeOpenClawAgentDatabases } from "../../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabases,
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
@@ -43,6 +44,15 @@ type Owner = "local-agent" | "legacy-main" | "main-with-shared-base";
 const provider = "fixture-provider";
 const usageId = "inline-api-key:fixture-provider";
 const siblingId = "fixture-provider:sibling";
+
+const fault = useSqliteWorkerFault([
+  {
+    name: "reject_inline_health_update",
+    match: /^(?:insert into|update) auth_profile_state\b/u,
+    sql: `CREATE TEMP TRIGGER reject_inline_health_update BEFORE UPDATE ON main.auth_profile_state
+      BEGIN SELECT RAISE(ABORT, 'synthetic inline-health write refused'); END;`,
+  },
+]);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -205,31 +215,37 @@ async function fixture(state: OpenClawTestState, owner: Owner, empty = false) {
     derived = { agentDir: childDir, durable: child, profiles: structuredClone(runtime.profiles) };
   }
   const controller = createEmbeddedRunFailoverRetryController({
-    runParams: {
-      runId: "inline-auth-failure-run",
-      sessionId: "inline-auth-failure-session",
-      sessionFile: state.path("synthetic-session.jsonl"),
-      workspaceDir: state.workspaceDir,
-      prompt: "synthetic inline-key failure",
-      timeoutMs: 60_000,
-      config,
+    runInput: {
+      runParams: {
+        runId: "inline-auth-failure-run",
+        sessionId: "inline-auth-failure-session",
+        sessionFile: state.path("synthetic-session.jsonl"),
+        workspaceDir: state.workspaceDir,
+        prompt: "synthetic inline-key failure",
+        timeoutMs: 60_000,
+        config,
+      },
+      globalLane: "inline-auth-failure-test",
+      agentDir,
+      fallbackConfigured: false,
     },
-    provider,
-    modelId: "synthetic-model",
-    globalLane: "inline-auth-failure-test",
-    agentDir,
-    fallbackConfigured: false,
-    profileFailureStore: store,
-    getLastProfileId: () => undefined,
+    preparedRuntime: {
+      provider,
+      modelId: "synthetic-model",
+      profileFailureStore: store,
+      snapshot: () => ({
+        lastProfileId: undefined,
+        pluginHarnessOwnsTransport: false,
+        agentHarness: { id: "embedded" },
+      }),
+      getApiKeyInfo: () => ({
+        apiKey: "synthetic-inline-key",
+        mode: "api-key",
+        source: "models.json",
+      }),
+      advanceAttemptAuthProfile: async () => false,
+    },
     getSessionId: () => "inline-auth-failure-session",
-    harnessOwnsTransport: () => false,
-    getRuntimeAuthOwnerId: () => "embedded",
-    getApiKeyInfo: () => ({
-      apiKey: "synthetic-inline-key",
-      mode: "api-key",
-      source: "models.json",
-    }),
-    advanceAuthProfile: async () => false,
   });
   return { agentDir, initial, store, database, controller, sharedBefore, derived };
 }
@@ -303,21 +319,14 @@ it("rejects a real inline-health write failure without publishing caller or runt
   await withOpenClawTestState(
     { label: "inline-auth-rejection", scenario: "minimal" },
     async (state) => {
-      const { agentDir, store, database, controller } = await fixture(state, "local-agent");
-      // Open the canonical actor before injecting a DML refusal into its validated schema.
+      const { agentDir, store, controller } = await fixture(state, "local-agent");
       await controller.maybeMarkAuthProfileFailure({ reason: "auth" });
       const before = {
         persisted: loadPersistedAuthProfileStore(agentDir),
         caller: structuredClone(store),
         runtime: getRuntimeAuthProfileStoreSnapshotCore(agentDir),
       };
-      database.db.exec(`
-        CREATE TRIGGER reject_inline_health_update
-        BEFORE UPDATE ON auth_profile_state
-        BEGIN
-          SELECT RAISE(ABORT, 'synthetic inline-health write refused');
-        END;
-      `);
+      fault.enable();
       await expect(controller.maybeMarkAuthProfileFailure({ reason: "auth" })).rejects.toThrow(
         "synthetic inline-health write refused",
       );
@@ -326,7 +335,7 @@ it("rejects a real inline-health write failure without publishing caller or runt
         caller: store,
         runtime: getRuntimeAuthProfileStoreSnapshotCore(agentDir),
       }).toEqual(before);
-      database.db.exec("DROP TRIGGER reject_inline_health_update");
+      fault.disable();
       // This is a new caller request after repair, not an automatic retry of the refused write.
       await controller.maybeMarkAuthProfileFailure({ reason: "auth" });
       const persisted = loadPersistedAuthProfileStore(agentDir);
@@ -574,12 +583,13 @@ it.each(["local-agent", "legacy-main"] as const)(
         const publication = vi
           .spyOn(snapshots, "noteRuntimeAuthProfileStorePersistedMutation")
           .mockImplementation((...args) => {
-            original(...args);
+            const revision = original(...args);
             if (args[2]?.databasePath === database.path && args[1].stateChanged) {
               commits++;
               closing ??= closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
               void closing.catch(() => {});
             }
+            return revision;
           });
         try {
           await expect(

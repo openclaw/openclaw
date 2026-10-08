@@ -32,6 +32,7 @@ import {
   type PublishedSessionTranscriptArchive,
   type SessionArchivePruningOperations,
 } from "./session-history-archive-pruning.types.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { maintenanceLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
@@ -41,6 +42,12 @@ export type SqliteSessionPageReclaimer = (maxPages?: number) => Promise<SqliteWa
 export async function readSqliteSessionArchivePruning(
   input: OpenClawAgentDatabaseOptions,
 ): Promise<PublishedSessionTranscriptArchive | null> {
+  const incognitoBinding = captureIncognitoSessionBinding({ ...input, storePath: input.path });
+  if (incognitoBinding) {
+    incognitoBinding.admissionSignal?.throwIfAborted();
+    incognitoBinding.actor.assertReadable();
+    return null;
+  }
   const options = resolveSessionReclamationDatabaseOptions(input);
   if (!supportsOpenClawAgentDatabaseExecution(options)) {
     const { readSessionArchivePruningInDatabase } =
@@ -86,6 +93,12 @@ export async function withSqliteSessionPageReclamation<T>(
     archives: SessionArchivePruningOperations,
   ) => Promise<T>,
 ): Promise<T> {
+  const incognitoBinding = captureIncognitoSessionBinding({ ...input, storePath: input.path });
+  if (incognitoBinding) {
+    incognitoBinding.admissionSignal?.throwIfAborted();
+    incognitoBinding.actor.assertReadable();
+    throw new Error("Incognito sessions have no disk pages or archives to reclaim");
+  }
   const options = resolveSessionReclamationDatabaseOptions(input);
   const incognito = isIncognitoOpenClawAgentSqlitePath(options.path, options);
   const nativeOwner = !supportsOpenClawAgentDatabaseExecution(options);

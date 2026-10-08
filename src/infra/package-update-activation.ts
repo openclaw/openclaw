@@ -35,7 +35,7 @@ import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import {
   assertManagedUpdateLeaseDatabaseIdentity,
   captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
+  prepareManagedHandoffLeaseDatabaseIdentity,
   type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import { supportsPostCoreExecutor } from "./update-post-core-capability.js";
@@ -43,7 +43,7 @@ import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 export type { PackageActivationStatus } from "./package-update-activation-status.js";
 
-/** Read-only correlation; callers still need a privately registered live fence. */
+/** Reconcile completed receipts; unfinished operations still require a live fence. */
 function readPackageActivationContinuation(installKey: string) {
   const anchor = resolvePackageActivationAnchor(installKey);
   const released = readReleasedPackageActivationReceipt(installKey);
@@ -65,7 +65,7 @@ function readPackageActivationContinuation(installKey: string) {
     }
     return undefined;
   }
-  const record = openPackageActivationJournal(anchor).read();
+  const record = openPackageActivationJournal(anchor).readForAdmission(installKey);
   if (isPackageActivationComplete(anchor, record)) {
     return undefined;
   }
@@ -217,8 +217,8 @@ export async function settlePendingPackageActivation(installKey: string) {
     }
     // A reboot can remove the temporary store. Its owner provisions it; the
     // fresh executor below still fences every change to retained package custody.
-    currentDatabase = createManagedHandoffLeaseDatabase(originalAuthority.databasePath)(true, () =>
-      captureManagedUpdateLeaseDatabaseIdentity(originalAuthority.databasePath),
+    currentDatabase = await prepareManagedHandoffLeaseDatabaseIdentity(
+      originalAuthority.databasePath,
     );
     leaseWasMissing = true;
   }

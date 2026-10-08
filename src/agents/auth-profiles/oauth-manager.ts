@@ -100,6 +100,21 @@ type OAuthManagerAdapter = {
 
 const oauthRefreshRecoveryBuildFailures = new WeakSet<Error>();
 
+type OAuthRefreshParams = {
+  personalStore?: PersonalAuthProfileStore;
+  profileId: string;
+  provider: string;
+  agentDir?: string;
+  cfg?: OpenClawConfig;
+  signal?: AbortSignal;
+  forceRefresh?: boolean;
+  attemptedCredential: OAuthCredential;
+  attemptedCredentials?: OAuthCredential[];
+  bootstrapCredential?: OAuthCredential | null;
+  bootstrapBaseCredential?: OAuthCredential;
+  validateCredential?: (credential: OAuthCredential) => void;
+};
+
 /** Create an OAuth manager bound to provider-specific build/refresh adapters. */
 export function createOAuthManager(adapter: OAuthManagerAdapter) {
   async function buildValidatedAccess(
@@ -298,19 +313,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     );
   }
 
-  async function claimOAuthRefresh(params: {
-    personalStore?: PersonalAuthProfileStore;
-    profileId: string;
-    provider: string;
-    agentDir?: string;
-    cfg?: OpenClawConfig;
-    signal?: AbortSignal;
-    forceRefresh?: boolean;
-    attemptedCredential: OAuthCredential;
-    bootstrapCredential?: OAuthCredential | null;
-    bootstrapBaseCredential?: OAuthCredential;
-    validateCredential?: (credential: OAuthCredential) => void;
-  }): Promise<OAuthRefreshClaim> {
+  async function claimOAuthRefresh(params: OAuthRefreshParams): Promise<OAuthRefreshClaim> {
     const personalProfile = isUserModelAuthProfileId(params.profileId);
     const ownerAgentDir = personalProfile
       ? undefined
@@ -322,14 +325,18 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         : resolveSharedAuthStorePath());
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
     const peerConfig = params.cfg ?? {};
-    const fenceTerminalPeers = (credential: OAuthCredential) =>
-      fenceOAuthRefreshPeers({
-        cfg: peerConfig,
-        ownerDatabasePath: authPath,
-        profileId: params.profileId,
-        generation: credential,
-        fence: credential,
-      });
+    const failTerminalPeers = async (credential: OAuthCredential) => {
+      const claims = personalProfile
+        ? []
+        : await fenceOAuthRefreshPeers({
+            cfg: peerConfig,
+            ownerDatabasePath: authPath,
+            profileId: params.profileId,
+            generation: credential,
+            fence: credential,
+          });
+      failOAuthRefreshPeerClaims({ profileId: params.profileId, fence: credential, claims });
+    };
 
     let observation: ReturnType<typeof beginOAuthRefreshObservation> | undefined;
     let observationTransferred = false;
@@ -485,12 +492,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             if (isPendingOAuthRefreshFence(cred)) {
               return { kind: "observe", ownerAgentDir, generation: cred };
             }
-            const peerClaims = personalProfile ? [] : await fenceTerminalPeers(cred);
-            failOAuthRefreshPeerClaims({
-              profileId: params.profileId,
-              fence: cred,
-              claims: peerClaims,
-            });
+            await failTerminalPeers(cred);
             return { kind: "unavailable" };
           }
           if (normalizeSecretInputString(credentialToRefresh.refresh) === undefined) {
@@ -537,7 +539,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             profileId: params.profileId,
             updater: (authoritative) => {
               const existing = authoritative.profiles[params.profileId];
-              params.signal?.throwIfAborted();
               if (!isExactOAuthCredential(existing, cred)) {
                 return false;
               }
@@ -568,12 +569,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               };
             }
             if (isOAuthRefreshFence(current)) {
-              const peerClaims = personalProfile ? [] : await fenceTerminalPeers(current);
-              failOAuthRefreshPeerClaims({
-                profileId: params.profileId,
-                fence: current,
-                claims: peerClaims,
-              });
+              await failTerminalPeers(current);
               return { kind: "unavailable" };
             }
             return hasUsableOAuthCredential(current)
@@ -662,20 +658,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     }
   }
 
-  async function refreshOAuthTokenWithLock(params: {
-    personalStore?: PersonalAuthProfileStore;
-    profileId: string;
-    provider: string;
-    agentDir?: string;
-    cfg?: OpenClawConfig;
-    signal?: AbortSignal;
-    forceRefresh?: boolean;
-    attemptedCredential: OAuthCredential;
-    attemptedCredentials?: OAuthCredential[];
-    bootstrapCredential?: OAuthCredential | null;
-    bootstrapBaseCredential?: OAuthCredential;
-    validateCredential?: (credential: OAuthCredential) => void;
-  }): Promise<ResolvedOAuthAccess | null> {
+  async function refreshOAuthTokenWithLock(
+    params: OAuthRefreshParams,
+  ): Promise<ResolvedOAuthAccess | null> {
     params.signal?.throwIfAborted();
     const claim = await claimOAuthRefresh(params);
     if (claim.kind === "unavailable") {
@@ -717,6 +702,18 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     params.attemptedCredentials?.push(claim.credential);
     const peerConfig = params.cfg ?? {};
     let activePeerClaims = claim.peerClaims;
+
+    const failPeers = (onFailure: (error: unknown) => void) => {
+      try {
+        failOAuthRefreshPeerClaims({
+          profileId: params.profileId,
+          fence: claim.fence,
+          claims: activePeerClaims,
+        });
+      } catch (error) {
+        onFailure(error);
+      }
+    };
 
     const rediscoverPeerClaims = async (generation: OAuthCredential) => {
       try {
@@ -806,15 +803,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 }
               }
             }
-            try {
-              failOAuthRefreshPeerClaims({
-                profileId: params.profileId,
-                fence: claim.fence,
-                claims: activePeerClaims,
-              });
-            } catch (error) {
-              cleanupErrors.push(error);
-            }
+            failPeers((error) => cleanupErrors.push(error));
             try {
               await markOAuthRefreshClaimFailed({
                 personalStore: params.personalStore,
@@ -940,15 +929,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             } catch (peerSettlementError) {
               if (peerSettlementError instanceof OAuthSettlementCredentialValidationError) {
                 const cleanupErrors: unknown[] = [];
-                try {
-                  failOAuthRefreshPeerClaims({
-                    profileId: params.profileId,
-                    fence: claim.fence,
-                    claims: activePeerClaims,
-                  });
-                } catch (error) {
-                  cleanupErrors.push(error);
-                }
+                failPeers((error) => cleanupErrors.push(error));
                 if (claimSettlement.persisted) {
                   try {
                     await markOAuthRefreshClaimFailed({
@@ -967,18 +948,12 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                   cleanupErrors,
                 );
               }
-              try {
-                failOAuthRefreshPeerClaims({
-                  profileId: params.profileId,
-                  fence: claim.fence,
-                  claims: activePeerClaims,
-                });
-              } catch (error) {
+              failPeers((error) => {
                 authProfilesLog.warn("failed to terminally fence an OAuth refresh peer", {
                   profileId: params.profileId,
                   error: formatErrorMessage(error),
                 });
-              }
+              });
               authProfilesLog.warn("OAuth refresh peer settlement degraded", {
                 profileId: params.profileId,
                 error: formatErrorMessage(peerSettlementError),
@@ -1101,18 +1076,12 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       const queued = trackAsyncWork(() =>
         refreshQueue.enqueue(`${credential.provider}\u0000${params.profileId}`, () =>
           refreshOAuthTokenWithLock({
-            personalStore: params.personalStore,
-            profileId: params.profileId,
+            ...params,
             provider: credential.provider,
-            agentDir: params.agentDir,
-            cfg: params.cfg,
-            signal: params.signal,
-            forceRefresh: params.forceRefresh,
             attemptedCredential: effectiveCredential,
             attemptedCredentials,
             bootstrapCredential,
             bootstrapBaseCredential: adoptedCredential,
-            validateCredential: params.validateCredential,
           }),
         ),
       );

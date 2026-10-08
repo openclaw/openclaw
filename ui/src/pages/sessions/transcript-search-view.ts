@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import type { SessionsSearchHit } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -46,6 +47,12 @@ export function renderTranscriptSearch(props: TranscriptSearchProps) {
   const results = state.status === "results" ? state.results : [];
   const rows = state.status === "results" ? state.sessions : [];
   const loading = state.status === "loading";
+  const retryNotice =
+    state.status === "error"
+      ? html`${t("sessionsView.transcriptSearchError")}: ${state.message}`
+      : state.status === "results" && state.indexing
+        ? t("sessionsView.transcriptSearchIndexing")
+        : null;
   return html`
     <section
       class="sessions-transcript-search"
@@ -118,34 +125,24 @@ export function renderTranscriptSearch(props: TranscriptSearchProps) {
             : nothing
         }
         ${
-          state.status === "error"
-            ? html`
-                <div
-                  class="sessions-transcript-search__notice sessions-transcript-search__notice--danger"
-                >
-                  <span>${t("sessionsView.transcriptSearchError")}: ${state.message}</span>
-                  <button class="btn btn--sm" type="button" @click=${props.onTranscriptSearch}>
-                    ${t("sessionsView.transcriptSearchRetry")}
-                  </button>
-                </div>
-              `
-            : nothing
-        }
-        ${
-          state.status === "results" && state.indexing
-            ? html`
-                <div class="sessions-transcript-search__notice">
-                  <span>${t("sessionsView.transcriptSearchIndexing")}</span>
-                  <button
-                    class="btn btn--sm"
-                    type="button"
-                    ?disabled=${loading}
-                    @click=${props.onTranscriptSearch}
+          retryNotice !== null
+            ? keyed(
+                state.status,
+                html`
+                  <div
+                    class=${
+                      state.status === "error"
+                        ? "sessions-transcript-search__notice sessions-transcript-search__notice--danger"
+                        : "sessions-transcript-search__notice"
+                    }
                   >
-                    ${t("sessionsView.transcriptSearchRetry")}
-                  </button>
-                </div>
-              `
+                    <span>${retryNotice}</span>
+                    <button class="btn btn--sm" type="button" @click=${props.onTranscriptSearch}>
+                      ${t("sessionsView.transcriptSearchRetry")}
+                    </button>
+                  </div>
+                `,
+              )
             : nothing
         }
         ${

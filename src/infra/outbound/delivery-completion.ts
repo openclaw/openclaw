@@ -147,8 +147,7 @@ export async function settlePendingFinalDelivery(
       storePath: completion.storePath,
       env: resolveDeliveryQueueStateEnv(options.stateDir, options.stateContext),
     },
-    (entry) => {
-      const internalEntry: InternalSessionEntry = entry;
+    (internalEntry: InternalSessionEntry) => {
       if (
         internalEntry.sessionId !== completion.sessionId ||
         internalEntry.pendingFinalDelivery?.intentId !== completion.intentId
@@ -263,10 +262,7 @@ export async function settlePendingFinalDelivery(
       if (settled === current && !owedNotice && !clearsNotice && !terminalEvidence) {
         return null;
       }
-      wakeRecovery =
-        settled !== "queued" &&
-        internalEntry.status === "running" &&
-        internalEntry.abortedLastRun === true;
+      wakeRecovery = settled !== "queued" && internalEntry.abortedLastRun === true;
       return {
         ...(internalEntry.mainRestartRecovery
           ? {
@@ -365,71 +361,9 @@ export async function completeDurableDelivery(
       );
 }
 
-/** Finalizes a policy-suppressed send before its durable intent is acknowledged. */
-async function suppressDurableDelivery(
-  completion: DurableDeliveryCompletion,
-  stateDir?: string,
-  stateContext?: DeliveryQueueStateContext,
-  target?: ConversationDeliveryTarget,
-): Promise<DurableDeliveryCompletionResult> {
-  return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, {
-        stateDir,
-        stateContext,
-      })
-    : conversationResult(
-        completion,
-        (scope) => markConversationDeliverySuppressed(scope, completion.operationId),
-        stateDir,
-        stateContext,
-        target,
-      );
-}
-
-/** Finalizes a permanent provider rejection that provably preceded platform I/O. */
-export async function rejectDurableDelivery(
-  completion: DurableDeliveryCompletion,
-  error: string,
-  stateDir?: string,
-  stateContext?: DeliveryQueueStateContext,
-  target?: ConversationDeliveryTarget,
-): Promise<DurableDeliveryCompletionResult> {
-  // Proven no-send: terminal suppression, not the unknown state that owes an
-  // uncertainty notice for a send the provider asserts never began.
-  return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, {
-        stateDir,
-        stateContext,
-      })
-    : conversationResult(
-        completion,
-        (scope) => markConversationDeliveryRejected(scope, completion.operationId, error),
-        stateDir,
-        stateContext,
-        target,
-      );
-}
-
-/** Makes a dead-lettered durable send terminal without allowing a blind replay. */
-export async function failDurableDelivery(
-  completion: DurableDeliveryCompletion,
-  stateDir?: string,
-  stateContext?: DeliveryQueueStateContext,
-  target?: ConversationDeliveryTarget,
-): Promise<DurableDeliveryCompletionResult> {
-  return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "unknown", undefined, { stateDir, stateContext })
-    : conversationResult(
-        completion,
-        (scope) => markConversationDeliveryUnknown(scope, completion.operationId),
-        stateDir,
-        stateContext,
-        target,
-      );
-}
-
 type DurableDeliveryTerminalEvidence =
   | { result: OutboundDeliveryResult }
+  | { rejectionError: string }
   | { platformSendStarted: boolean };
 
 /** Settles the completion owner from the final evidence held by its lifecycle owner. */
@@ -440,9 +374,34 @@ export async function settleDurableDelivery(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
-  return "result" in evidence
-    ? completeDurableDelivery(completion, evidence.result, stateDir, stateContext, target)
-    : evidence.platformSendStarted
-      ? failDurableDelivery(completion, stateDir, stateContext, target)
-      : suppressDurableDelivery(completion, stateDir, stateContext, target);
+  if ("result" in evidence) {
+    return completeDurableDelivery(completion, evidence.result, stateDir, stateContext, target);
+  }
+  // Proven no-send rejections suppress a pending final without owing an
+  // uncertainty notice; conversation delivery retains the explicit rejection.
+  const state =
+    "platformSendStarted" in evidence && evidence.platformSendStarted ? "unknown" : "suppressed";
+  return completion.kind === "pending-final"
+    ? await settlePendingFinalDelivery(completion, state, undefined, {
+        stateDir,
+        stateContext,
+      })
+    : conversationResult(
+        completion,
+        (scope) => {
+          if ("rejectionError" in evidence) {
+            return markConversationDeliveryRejected(
+              scope,
+              completion.operationId,
+              evidence.rejectionError,
+            );
+          }
+          return evidence.platformSendStarted
+            ? markConversationDeliveryUnknown(scope, completion.operationId)
+            : markConversationDeliverySuppressed(scope, completion.operationId);
+        },
+        stateDir,
+        stateContext,
+        target,
+      );
 }

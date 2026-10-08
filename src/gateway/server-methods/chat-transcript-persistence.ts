@@ -229,6 +229,12 @@ function findAssistantTranscriptMessageByIdempotencyKeyInEvents(
   return transcriptMessageTarget(target);
 }
 
+function mediaReferenceSet(mediaUrls: readonly string[]) {
+  return new Set(
+    mediaUrls.map(normalizeMediaReferenceForComparison).filter((value) => value.length > 0),
+  );
+}
+
 function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
   events: readonly TranscriptEvent[],
   params: {
@@ -237,11 +243,7 @@ function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
     rejectedMediaCount: number;
   },
 ): { messageId: string; message: Record<string, unknown> } | null {
-  const expectedMedia = new Set(
-    params.mediaUrls
-      .map((value) => normalizeMediaReferenceForComparison(value))
-      .filter((value) => value.length > 0),
-  );
+  const expectedMedia = mediaReferenceSet(params.mediaUrls);
   if (
     (expectedMedia.size === 0 && params.rejectedMediaCount === 0) ||
     !Number.isSafeInteger(params.assistantMessageIndex) ||
@@ -258,11 +260,7 @@ function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
     return null;
   }
   const parsed = splitMediaFromOutput(text);
-  const actualMedia = new Set(
-    (parsed.mediaUrls ?? [])
-      .map((value) => normalizeMediaReferenceForComparison(value))
-      .filter((value) => value.length > 0),
-  );
+  const actualMedia = mediaReferenceSet(parsed.mediaUrls ?? []);
   // A reply whose only directives were rejected is identified by their count.
   const exactMediaMatch =
     actualMedia.size === expectedMedia.size &&
@@ -397,33 +395,20 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
 
   return await withPreparedTranscriptCorrection(params.scope, async (transcript) => {
     const events = await transcript.readEvents();
+    const findMirror = (mirror: SourceReplyTranscriptMirror) =>
+      findSourceReplyTranscriptMirrorByMetadataInEvents({ ...mirror, events });
     const allowedSourceReplyMirrorIds = new Set<string>();
     for (const candidate of params.candidates) {
-      const target = findSourceReplyTranscriptMirrorByMetadataInEvents({
-        events,
-        idempotencyKey: candidate.idempotencyKey,
-        metadata: candidate.metadata,
-      });
+      const target = findMirror(candidate);
       if (target) {
         allowedSourceReplyMirrorIds.add(target.messageId);
       }
     }
 
-    const rewriteTargets: Array<{
-      request: (typeof params.requests)[number];
-      messageId: string;
-      message: Record<string, unknown>;
-    }> = [];
-    for (const request of params.requests) {
-      const target = findSourceReplyTranscriptMirrorByMetadataInEvents({
-        events,
-        idempotencyKey: request.idempotencyKey,
-        metadata: request.metadata,
-      });
-      if (target) {
-        rewriteTargets.push({ request, ...target });
-      }
-    }
+    const rewriteTargets = params.requests.flatMap((request) => {
+      const target = findMirror(request);
+      return target ? [{ request, ...target }] : [];
+    });
     if (rewriteTargets.length === 0) {
       return [];
     }

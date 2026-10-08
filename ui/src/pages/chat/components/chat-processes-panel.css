@@ -1,43 +1,7 @@
-openclaw-chat-processes-panel,
-.chat-processes__list,
-.chat-processes__detail {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-}
 .chat-processes__list,
 .chat-processes__output {
   overflow: auto;
   overscroll-behavior: contain;
-}
-.chat-processes__running {
-  padding: 0 8px 12px;
-}
-.chat-processes__running h3,
-.chat-processes__output h3 {
-  margin: 0;
-  padding: 8px 3px 9px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 400;
-  text-transform: uppercase;
-}
-.chat-processes__item {
-  margin-bottom: 4px;
-  padding: 8px;
-  border-radius: 7px;
-  background: var(--card);
-}
-.chat-processes__item:hover {
-  background: var(--bg-hover);
-}
-.chat-processes__heading {
-  display: flex;
-  align-items: center;
-  gap: 7px;
 }
 .chat-processes__heading strong {
   flex: 1;
@@ -45,29 +9,6 @@ openclaw-chat-processes-panel,
   overflow-wrap: anywhere;
   font-size: var(--control-ui-text-sm);
   font-weight: 500;
-}
-.chat-processes__open,
-.chat-processes__stop,
-.chat-processes__back,
-.chat-processes__finished-toggle {
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: default;
-}
-.chat-processes__open {
-  flex: 1;
-  min-width: 0;
-  min-height: 24px;
-  overflow: hidden;
-  padding: 0;
-  font-size: var(--control-ui-text-sm);
-  font-weight: 500;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .chat-processes__stop {
   display: flex;
@@ -84,9 +25,6 @@ openclaw-chat-processes-panel,
 .chat-processes__stop svg {
   width: 8px;
   height: 8px;
-}
-.chat-processes__stop:disabled {
-  opacity: var(--rail-header-action-disabled-opacity);
 }
 .chat-processes__metadata {
   display: flex;
@@ -105,23 +43,6 @@ openclaw-chat-processes-panel,
 .chat-processes__failure,
 .chat-processes__error {
   color: var(--danger);
-}
-.chat-processes__finished {
-  margin-top: auto;
-  padding: 0 8px 8px;
-  border-top: 1px solid var(--border);
-}
-.chat-processes__finished-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 3px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  text-align: left;
-  text-transform: uppercase;
 }
 .chat-processes__finished-toggle svg {
   width: 12px;

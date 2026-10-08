@@ -16,6 +16,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { readConnectPairingRequiredMessage } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import type { LogsTailResult } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { createSafeStreamWriter } from "../../packages/terminal-core/src/stream-writer.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -42,8 +43,7 @@ import { formatDocsHelp } from "./help-format.js";
 import { formatLogsCliLine } from "./logs-cli.format.js";
 import { parseLogsPositiveInt } from "./logs-cli.options.js";
 
-type LogsTailPayload = {
-  file?: string;
+type LogsTailPayload = Partial<Omit<LogsTailResult, "cursor">> & {
   source?: string;
   sourceKind?: "file" | "journal";
   service?: {
@@ -51,11 +51,6 @@ type LogsTailPayload = {
     unit?: string;
   };
   cursor?: number | string;
-  size?: number;
-  lines?: string[];
-  truncated?: boolean;
-  reset?: boolean;
-  skippedBytes?: number;
   localFallback?: boolean;
 };
 
@@ -451,10 +446,7 @@ export function registerLogsCli(program: Command) {
       });
     };
 
-    const readJournalWhileProbingRecovery = async (): Promise<{
-      payload: LogsTailPayload;
-      gatewayPollStartedAt?: string;
-    }> => {
+    const readJournalWhileProbingRecovery = async () => {
       let fallbackError: Error | undefined;
       if (gatewayRecovery.kind === "settled") {
         const result = gatewayRecovery.result;

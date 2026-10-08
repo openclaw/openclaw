@@ -28,7 +28,7 @@ it.each(["mcpOAuth.statuses", "userPreferences.values", "acpSessions.metadata"] 
     const dispatch = createDeferredCore();
     const baselineTask = queueTask(dispatch.promise);
     const task = queueTask(dispatch.promise);
-    const baseline = captureOpenClawStateReadSource().createTransport({ type: "fleet.list" });
+    const baseline = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
     const key = "notification-根🦞";
     const transport = captureOpenClawStateReadSource().createTransport(
       type === "mcpOAuth.statuses"
@@ -52,7 +52,7 @@ it.each(["mcpOAuth.statuses", "userPreferences.values", "acpSessions.metadata"] 
       ]);
       const additionalBytes =
         Buffer.byteLength(type) -
-        Buffer.byteLength("fleet.list") +
+        Buffer.byteLength("backup.runs") +
         (type === "acpSessions.metadata"
           ? expectedEntries.reduce(
               (bytes, input) =>

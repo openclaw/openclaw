@@ -57,7 +57,7 @@ function resolveSessionsListWindowLimit(limit: number | undefined, offset: numbe
   return Number.isFinite(windowLimit) ? Math.min(windowLimit, Number.MAX_SAFE_INTEGER) : undefined;
 }
 
-function* selectSessionEntries(
+export function* selectSessionEntries(
   params: SessionListFilterParams & { defaultLimit?: number },
 ): SynchronousWork<SessionEntrySelection> {
   const { ownerEntries, entries: filtered, ...facets } = yield* filterSessionEntries(params);
@@ -253,22 +253,29 @@ function createSessionRowSelection(
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
       update(change.id, keyFor(change), change.row);
     },
-    read(sortBy?: SessionsListParams["sortBy"]) {
+    read(
+      sortBy?: SessionsListParams["sortBy"],
+      candidates?: Iterable<Pick<SelectionTarget, "key" | "agentId">>,
+    ) {
       for (const key of duplicates) {
         throw canonicalSessionKeyMigrationRequiredError(
           `duplicate rows resolve to canonical session key ${key}`,
         );
       }
-      let entries = sortBy && orders.get(sortBy);
+      let entries = !candidates && sortBy && orders.get(sortBy);
       if (!entries) {
-        const targets = [...winners.values()];
+        const targets = candidates
+          ? [...new Set(Array.from(candidates, keyFor))].flatMap((key) => winners.get(key) ?? [])
+          : [...winners.values()];
         if (!sortBy) {
           targets.sort((a, b) => a.position - b.position);
         }
         entries = targets.map((target) => target.pair);
         if (sortBy) {
           entries.sort((a, b) => compareSessionEntryPairs(a, b, sortBy));
-          orders.set(sortBy, entries);
+          if (!candidates) {
+            orders.set(sortBy, entries);
+          }
         }
       }
       return { entries, get: (key: string) => winners.get(key)?.row };
@@ -291,6 +298,7 @@ export function prepareSessionRowSelection(
     rowContext?: SessionListRowContext;
     metadataPrepared?: boolean;
     ordered?: boolean;
+    candidateSessionIdsOrKeys?: ReadonlySet<string>;
   },
 ) {
   const { cfg, modelCatalog, scope, rowContext: residentContext } = projection.state;
@@ -347,7 +355,18 @@ export function prepareSessionRowSelection(
       variants.set(activeOnly, selection);
     }
   }
-  const selected = selection.read(prepared?.ordered ? (opts.sortBy ?? "updatedAt") : undefined);
+  const candidates =
+    prepared?.candidateSessionIdsOrKeys &&
+    Array.from(prepared.candidateSessionIdsOrKeys).flatMap((sessionIdOrKey) =>
+      projection.selectEntries(
+        { agentId: selectedScope.agentId, sessionIdOrKey, sortBy: null },
+        prepared.metadataPrepared === true,
+      ),
+    );
+  const selected = selection.read(
+    prepared?.ordered ? (opts.sortBy ?? "updatedAt") : undefined,
+    candidates,
+  );
   const { entries } = selected;
   return {
     cfg,
@@ -422,26 +441,29 @@ export function prepareProjectedSessionList(params: {
   now: number;
   metadataPrepared?: boolean;
   searchIdentities?: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>>;
+  /** Reused only within one admitted caller/configuration/profile authority epoch. */
+  visibility?: WeakMap<object, boolean>;
 }) {
   const { projection, opts, key: exactKey, context, client, now } = params;
   if (params.searchIdentities && params.searchIdentities.cfg !== projection.state.cfg) {
     throw new Error("Session identity configuration changed while reading; retry the request");
   }
-  const presentation = prepareSessionRowPublication(projection, now)(
-    client,
-    context
-      ? createVisibleActiveSessionRunProjector(
-          context,
-          projection.state.rowContext.projectedAgentRuns,
-        )
-      : undefined,
-  );
+  const projectRun = context
+    ? createVisibleActiveSessionRunProjector(
+        context,
+        projection.state.rowContext.projectedAgentRuns,
+      )
+    : undefined;
+  const presentation = prepareSessionRowPublication(projection, now)(client, projectRun);
   const prepared = prepareSessionRowSelection(projection, opts, {
     key: exactKey,
     now,
     rowContext: presentation.rowContext,
     metadataPrepared: params.metadataPrepared,
     ordered: true,
+    candidateSessionIdsOrKeys: opts.activeOnly
+      ? projectRun?.candidateSessionIdsOrKeys()
+      : undefined,
   });
   const { getTarget } = prepared;
   const { active } = presentation;
@@ -458,10 +480,14 @@ export function prepareProjectedSessionList(params: {
       : undefined,
     entryFilter: (key, entry) => {
       const row = getTarget(key);
-      const visible = Boolean(
-        row &&
-        (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
-      );
+      let visible = params.visibility?.get(entry);
+      if (visible === undefined) {
+        visible = Boolean(
+          row &&
+          (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
+        );
+        params.visibility?.set(entry, visible);
+      }
       return (
         visible &&
         (opts.hasBoard === undefined || row?.hasBoard === opts.hasBoard) &&

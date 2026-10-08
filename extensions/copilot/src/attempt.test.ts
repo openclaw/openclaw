@@ -193,20 +193,12 @@ function createStubToolBridge(
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 
+type TranscriptAppendParams = Parameters<
+  typeof import("openclaw/plugin-sdk/session-transcript-runtime").appendSessionTranscriptMessageByIdentityStrict
+>[0];
+
 const transcriptRuntimeMock = vi.hoisted(() => ({
-  append: vi.fn(async (params: Record<string, unknown>) => {
-    const prepare = params.prepareMessageAfterIdempotencyCheck as
-      | ((message: unknown) => unknown)
-      | undefined;
-    const message = prepare ? prepare(params.message) : params.message;
-    return message
-      ? {
-          appended: true,
-          message,
-          messageId: (params.eventId as string | undefined) ?? "transcript-message",
-        }
-      : undefined;
-  }),
+  append: vi.fn(appendPreparedTranscriptMessage),
   appendBatch: vi.fn(async (params: { messages: Array<Record<string, unknown>> }) =>
     params.messages.map((message) => ({
       appended: true,
@@ -215,7 +207,7 @@ const transcriptRuntimeMock = vi.hoisted(() => ({
     })),
   ),
   publish: vi.fn(async () => undefined),
-  appendStrict: vi.fn(async (params: Record<string, unknown>) => {
+  appendStrict: vi.fn(async (params: TranscriptAppendParams) => {
     const result = await transcriptRuntimeMock.append(params);
     return result ? { kind: "result" as const, result } : { kind: "suppressed" as const };
   }),
@@ -234,16 +226,15 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   };
 });
 
-async function appendPreparedTranscriptMessage(params: Record<string, unknown>) {
-  const prepare = params.prepareMessageAfterIdempotencyCheck as
-    | ((message: unknown) => unknown)
-    | undefined;
-  const message = prepare ? prepare(params.message) : params.message;
+async function appendPreparedTranscriptMessage(params: TranscriptAppendParams) {
+  const prepare =
+    params.prepareMessageAfterIdempotencyCheckAsync ?? params.prepareMessageAfterIdempotencyCheck;
+  const message = prepare ? await prepare(params.message) : params.message;
   return message
     ? {
         appended: true,
         message,
-        messageId: (params.eventId as string | undefined) ?? "transcript-message",
+        messageId: params.eventId ?? "transcript-message",
       }
     : undefined;
 }

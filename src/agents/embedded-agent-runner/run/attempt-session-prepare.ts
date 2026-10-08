@@ -125,6 +125,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       modelId: attempt.modelId,
       baseUrl: attempt.model.baseUrl ?? undefined,
     }),
+    // The finalizer's result gate rejects any compaction, so never start one.
+    compactionForbidden: attempt.operation === "settled-tool-finalization",
   });
 
   // These factories carry compaction/pruning runtime state into the resource loader.
@@ -156,7 +158,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   });
   const { allCustomTools, sessionToolAllowlist, ...clientToolRuntime } = preparedClientTools;
 
-  const sessionOptions: CreateAgentSessionOptions = {
+  const { session: activeSession } = await createAgentSession({
     systemPrompt: input.initialSystemPrompt,
     cwd: input.effectiveCwd,
     modelRegistry: attempt.modelRegistry,
@@ -205,9 +207,6 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       : undefined,
     withSessionWriteSettlement: (operation) =>
       input.transcriptLifecycle.withTranscriptWrite(operation),
-  };
-  const { session: activeSession } = await createAgentSession({
-    ...sessionOptions,
     cleanupProviderSessionResourcesOnDispose: false,
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
@@ -410,7 +409,6 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   const boundaryTimezone = preserveExactPrompt
     ? undefined
     : resolveUserTimezone(attempt.config?.agents?.defaults?.userTimezone);
-  const includeBoundaryTimestamp = !preserveExactPrompt;
   let currentUserTimestampOverride: CurrentUserTimestampOverride | undefined;
   const buildBoundaryOptions = (): LlmBoundaryOptions => {
     if (preserveExactPrompt) {
@@ -459,7 +457,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
 
   return {
     boundaryTimezone,
-    includeBoundaryTimestamp,
+    includeBoundaryTimestamp: !preserveExactPrompt,
     orphanRepair,
     setCurrentUserTimestampOverride: (override) => {
       currentUserTimestampOverride = override;
@@ -645,15 +643,8 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       degradedReason: attempt.degradedReason,
       runMaintenance: async (contextParams) =>
         await runContextEngineMaintenance({
-          contextEngine: contextParams.contextEngine as never,
-          sessionId: contextParams.sessionId,
-          sessionKey: contextParams.sessionKey,
-          sessionTarget: contextParams.sessionTarget,
-          sessionFile: contextParams.sessionFile,
-          reason: contextParams.reason,
+          ...contextParams,
           sessionManager: contextParams.sessionManager as never,
-          runtimeContext: contextParams.runtimeContext,
-          runtimeSettings: contextParams.runtimeSettings,
           config: attempt.config,
           agentId: input.sessionAgentId,
           contextEngineAgentId: attempt.contextEngineAgentId,

@@ -583,6 +583,14 @@ extension OpenClawChatView {
             hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
             searchActive: self.isSearchPresented)
         ForEach(groups) { group in
+            let parts = ForEach(group.parts) { part in
+                self.runPart(
+                    part,
+                    metadata: transcript.metadata,
+                    contextWindowTokens: contextWindowTokens,
+                    isGrouped: group.runID != nil,
+                    answerID: group.runID == nil ? nil : group.answerID)
+            }
             if group.runID != nil {
                 ChatAssistantRunFrame(
                     assistantName: self.assistantName,
@@ -591,25 +599,11 @@ extension OpenClawChatView {
                     showsAssistantAvatar: self.showsAssistantAvatars,
                     isClean: self.composerChrome == .clean)
                 {
-                    ForEach(group.parts) { part in
-                        self.runPart(
-                            part,
-                            metadata: transcript.metadata,
-                            contextWindowTokens: contextWindowTokens,
-                            isGrouped: true,
-                            answerID: group.answerID)
-                    }
+                    parts
                     if group.includesLive { self.liveAssistantContent }
                 }
             } else {
-                ForEach(group.parts) { part in
-                    self.runPart(
-                        part,
-                        metadata: transcript.metadata,
-                        contextWindowTokens: contextWindowTokens,
-                        isGrouped: false,
-                        answerID: nil)
-                }
+                parts
                 if group.includesLive { self.liveAssistantContent }
             }
         }
@@ -694,7 +688,7 @@ extension OpenClawChatView {
                 .equatable()
         }
 
-        if let text = viewModel.streamingAssistantText {
+        if let text = viewModel.liveAssistantText {
             let preparedText = ChatStreamingAssistantText(
                 sourceText: text,
                 includesThinking: self.displayOptions.contains(.reasoning))
@@ -1033,7 +1027,7 @@ extension OpenClawChatView {
     }
 
     private var hasVisibleStreamingAssistantText: Bool {
-        guard let text = self.viewModel.streamingAssistantText else { return false }
+        guard let text = self.viewModel.liveAssistantText else { return false }
         return AssistantTextParser.hasVisibleContent(
             in: text,
             includeThinking: self.displayOptions.contains(.reasoning))

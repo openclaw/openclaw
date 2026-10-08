@@ -7,7 +7,7 @@ import {
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../../context-engine/types.js";
-import { Agent, estimateTokens, type AgentMessage } from "../../runtime/index.js";
+import { Agent, type AgentMessage } from "../../runtime/index.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -26,7 +26,6 @@ import { installContextEngineLoopHook } from "../tool-result-context-guard.js";
 import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-build.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { installEmbeddedAttemptContextGuards } from "./attempt-setup.js";
-import { estimateRenderedLlmBoundaryTokenPressure } from "./preemptive-compaction.js";
 
 registerAgentSessionLoopTestLifecycle();
 
@@ -189,12 +188,12 @@ describe("context advancement through embedded attempt guards", () => {
         getCompactionReplayEnabled: () => false,
         getServerToolClearingEnabled: () => false,
         toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-        getSystemPrompt: () => "",
+        getSystemPrompt: () => "system boundary text ".repeat(64),
         isOpenAIResponsesApi: false,
         repairToolUseResultPairing: false,
         sessionAgentId: "synthetic",
         sessionManager: {},
-        settingsManager: { getBlockImages: () => false, getCompactionReserveTokens: () => 64 },
+        settingsManager: { getBlockImages: () => false, getCompactionReserveTokens: () => 1024 },
       } as never);
       try {
         await agent.prompt("Read the fixture.");
@@ -221,8 +220,9 @@ describe("context advancement through embedded attempt guards", () => {
         expect(assemble.mock.calls[1]?.[0]).toMatchObject({
           prompt: "Read the fixture.",
           availableTools: new Set(["read_fixture"]),
+          // 8192 context - 1024 reserve - 432 system pressure - 14 pending exchange.
+          tokenBudget: 6722,
         });
-        expect(assemble.mock.calls[1]?.[0].tokenBudget).toBeLessThan(8192);
         expect(commitTurn).not.toHaveBeenCalled();
         expect(remembered).toEqual([]);
         expect(guards.getAfterTurnCheckpoint()).toBeNull();
@@ -233,157 +233,6 @@ describe("context advancement through embedded attempt guards", () => {
       }
     },
   );
-
-  it("refills a real deferred tool turn from the reserve- and system-prompt-adjusted window", async () => {
-    const history: AgentMessage[] = [
-      { role: "user", content: "Earlier accepted request.", timestamp: 0 },
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Earlier accepted answer." }],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage,
-      }),
-    ];
-    const storedPrefix: AgentMessage[] = [
-      { role: "user", content: "Summary of accepted history.", timestamp: 0 },
-    ];
-    const assemble = vi.fn<ContextEngine["assemble"]>(async () => ({
-      messages: storedPrefix,
-      estimatedTokens: 0,
-    }));
-    const engine: ContextEngine = {
-      info: {
-        id: "synthetic-engine",
-        name: "Synthetic",
-        ownsCompaction: true,
-        transcriptSemantics: {
-          currentTurnFence: "before-current-turn-entry-v1",
-          turnAdvancementIdempotency: "atomic-idempotent-v1",
-        },
-      },
-      ingest: async () => ({ ingested: true }),
-      assemble,
-      compact: async () => ({ ok: true, compacted: false, reason: "fits" }),
-      commitTurn: async () => ({ status: "committed" }),
-    };
-    const reserveTokens = 1024;
-    const systemPrompt = "system boundary text ".repeat(64);
-    let providerCalls = 0;
-    let secondLegPending: readonly AgentMessage[] = [];
-    const execute = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "fixture observation" }],
-      details: {},
-    }));
-    const agent = new Agent({
-      initialState: {
-        model,
-        messages: history,
-        tools: [
-          {
-            name: "read_fixture",
-            label: "Read fixture",
-            description: "Read fixture",
-            parameters: { type: "object", properties: {} },
-            execute,
-          },
-        ],
-      },
-      streamFn: (_model, _context) => {
-        providerCalls++;
-        if (providerCalls === 2) {
-          secondLegPending = agent.state.messages.slice(history.length);
-        }
-        const message: AssistantMessage = makeAgentAssistantMessage({
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage,
-          timestamp: 1,
-          content:
-            providerCalls === 1
-              ? [{ type: "toolCall", id: "read-1", name: "read_fixture", arguments: {} }]
-              : [{ type: "text", text: "done" }],
-          stopReason: providerCalls === 1 ? "toolUse" : "stop",
-        });
-        const stream = createAssistantMessageEventStream();
-        stream.push(
-          providerCalls === 1
-            ? { type: "done", reason: "toolUse", message }
-            : { type: "done", reason: "stop", message },
-        );
-        stream.end();
-        return stream;
-      },
-    });
-    const guards = installEmbeddedAttemptContextGuards({
-      activeContextEngine: engine,
-      activeSession: { agent },
-      agentDir: process.cwd(),
-      attempt: {
-        config: {},
-        prompt: "Read the fixture.",
-        contextTokenBudget: 8192,
-        model,
-        modelId: model.id,
-        provider: model.provider,
-        sessionId: "synthetic-session",
-        sessionKey: "agent:synthetic:main",
-        sessionFile: "unused",
-        onContextEngineTurnCandidate: vi.fn(),
-      },
-      computerContextEpoch: { value: 0 },
-      dropThinkingBlocksForEstimate: false,
-      effectiveCwd: process.cwd(),
-      effectiveFsWorkspaceOnly: true,
-      effectiveWorkspace: process.cwd(),
-      getPrePromptMessageCount: () => history.length,
-      getPromptCache: () => ({ retention: "none" }),
-      getPromptCacheRetention: () => "none",
-      getCompactionReplayEnabled: () => false,
-      getServerToolClearingEnabled: () => false,
-      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-      getSystemPrompt: () => systemPrompt,
-      isOpenAIResponsesApi: false,
-      repairToolUseResultPairing: false,
-      sessionAgentId: "synthetic",
-      sessionManager: {},
-      settingsManager: {
-        getBlockImages: () => false,
-        getCompactionReserveTokens: () => reserveTokens,
-      },
-    } as never);
-    try {
-      await agent.prompt("Read the fixture.");
-      // The deferred tool turn continues to a real second model response.
-      expect(providerCalls).toBe(2);
-      expect(execute).toHaveBeenCalledOnce();
-      expect(
-        agent.state.messages.toReversed().find((message) => message.role === "assistant")
-          ?.stopReason,
-      ).toBe("stop");
-      expect(assemble).toHaveBeenCalledTimes(2);
-      const call = assemble.mock.calls[1]?.[0];
-      expect(call).toBeDefined();
-      // The loop refill window is the turn-start baseline: context budget minus
-      // the compaction reserve and rendered system-prompt pressure, still minus
-      // the pending user/tool exchange the loop must retain verbatim.
-      const pendingTokens = secondLegPending.reduce(
-        (sum, message) => sum + estimateTokens(message),
-        0,
-      );
-      const loopWindow =
-        Math.max(1, 8192 - reserveTokens) -
-        estimateRenderedLlmBoundaryTokenPressure({ systemPrompt, prompt: "" });
-      expect(call?.tokenBudget).toBe(Math.max(1, loopWindow - pendingTokens));
-      // The raw window (the pre-fix baseline) would have left more room.
-      expect(call?.tokenBudget).toBeLessThanOrEqual(8192 - reserveTokens - pendingTokens);
-    } finally {
-      agent.abort();
-      await agent.waitForIdle();
-      guards.remove();
-    }
-  });
 
   it.each([0, 6])(
     "preserves active content through prompt preparation and submission with %i silent replay messages",

@@ -22,27 +22,6 @@ import {
   listRuntimeVisibleChannelPlugins,
 } from "./runtime-visible-channels.js";
 
-function resolveAvailableChannel(params: {
-  cfg: OpenClawConfig;
-  channel: string | undefined;
-  agentId?: string;
-}): { channel: string; plugin: ChannelPlugin } | undefined {
-  // Availability belongs to the scoped resolver, not the process-root channel list.
-  if (!params.channel) {
-    return undefined;
-  }
-  // Local agent processes may have only setup metadata for external channels;
-  // explicit activation lets their message tools use the same send path as the CLI.
-  const plugin = resolveOutboundChannelPlugin({
-    channel: params.channel,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    allowBootstrap: true,
-  });
-  return plugin ? { channel: plugin.id, plugin } : undefined;
-}
-
-/** Checks whether a channel has a non-disabled config entry. */
 export function isConfiguredChannel(cfg: OpenClawConfig, channelId: string): boolean {
   const entry = asOptionalRecord(asOptionalRecord(cfg.channels)?.[channelId]);
   return entry !== undefined && entry.enabled !== false;
@@ -135,8 +114,7 @@ async function isPluginConfigured(
       continue;
     }
     try {
-      const configured = (await plugin.config.isConfigured?.(account, cfg)) ?? true;
-      if (configured) {
+      if ((await plugin.config.isConfigured?.(account, cfg)) ?? true) {
         return true;
       }
     } catch (error) {
@@ -158,22 +136,20 @@ async function listConfiguredMessageChannelPlugins(
 ): Promise<ChannelPlugin[]> {
   const plugins: ChannelPlugin[] = [];
   for (const plugin of listRuntimeVisibleChannelPlugins()) {
-    if (!resolveOutboundChannelPlugin({ channel: plugin.id, cfg })) {
-      continue;
-    }
-    if (await isPluginConfigured(plugin, cfg, accountResolution)) {
+    if (
+      resolveOutboundChannelPlugin({ channel: plugin.id, cfg }) &&
+      (await isPluginConfigured(plugin, cfg, accountResolution))
+    ) {
       plugins.push(plugin);
     }
   }
   return plugins;
 }
 
-/** Lists deliverable channels with at least one enabled, configured account. */
 export async function listConfiguredMessageChannels(cfg: OpenClawConfig): Promise<string[]> {
   return (await listConfiguredMessageChannelPlugins(cfg)).map((plugin) => plugin.id);
 }
 
-/** Resolves the message action channel from explicit input, context fallback, or config. */
 export async function resolveMessageChannelSelection(params: {
   cfg: OpenClawConfig;
   channel?: string | null;
@@ -187,22 +163,23 @@ export async function resolveMessageChannelSelection(params: {
   plugin: ChannelPlugin;
 }> {
   const normalized = normalizeMessageChannel(params.channel);
-  const explicit = resolveAvailableChannel({
-    cfg: params.cfg,
-    channel: normalized,
-    agentId: params.agentId,
-  });
-  if (explicit) {
-    return explicit;
-  }
-
-  const fallback = resolveAvailableChannel({
-    cfg: params.cfg,
-    channel: normalizeMessageChannel(params.fallbackChannel),
-    agentId: params.agentId,
-  });
-  if (fallback) {
-    return fallback;
+  for (const field of ["channel", "fallbackChannel"] as const) {
+    const cfg = params.cfg;
+    const channel = field === "channel" ? normalized : normalizeMessageChannel(params[field]);
+    const agentId = params.agentId;
+    if (!channel) {
+      continue;
+    }
+    // Explicit activation uses the scoped resolver, including external setup shells.
+    const selectedPlugin = resolveOutboundChannelPlugin({
+      channel,
+      cfg,
+      agentId,
+      allowBootstrap: true,
+    });
+    if (selectedPlugin) {
+      return { channel: selectedPlugin.id, plugin: selectedPlugin };
+    }
   }
 
   if (normalized) {

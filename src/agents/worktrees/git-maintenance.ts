@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import { isMissingPathError } from "../../infra/errors.js";
+import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { requireGit } from "./git.js";
+import { requireGit, resolveGitMetadataPath } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -10,6 +13,43 @@ type MaintenanceParams = {
   commitGuard?: () => void;
   retryDeferred?: boolean;
 };
+
+/** Repair pack lookup even when the repository's broader maintenance is suspended. */
+export async function repairWorktreePackIndex(
+  repoRoot: string,
+  params: Pick<MaintenanceParams, "signal" | "commitGuard"> = {},
+): Promise<void> {
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.commitGuard?.();
+  };
+  await withContentGitSlot(async () => {
+    const options = {
+      signal: params.signal,
+      beforeRun: assertCurrent,
+      killProcessTree: true,
+      lowerPriority: true,
+      env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+    };
+    const packDirectory = await resolveGitMetadataPath(repoRoot, "objects/pack", options);
+    // Git rejects an empty pack directory; inspect only this shallow metadata directory.
+    const packs = await fs.readdir(packDirectory).catch((error: unknown) => {
+      if (isMissingPathError(error)) {
+        return [];
+      }
+      throw error;
+    });
+    assertCurrent();
+    const indexes = packs.filter((name) => name.endsWith(".idx"));
+    if (indexes.length > 0) {
+      // Reusing a stale MIDX fails before discovery when it names a removed pack.
+      await requireGit(repoRoot, ["multi-pack-index", "write", "--stdin-packs"], {
+        ...options,
+        input: `${indexes.join("\n")}\n`,
+      });
+    }
+  }, params.signal);
+}
 
 export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
   // A failed repository needs operator repair, not another hourly attempt.
@@ -34,23 +74,30 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
         continue;
       }
       try {
-        // Incremental tasks preserve objects and reflogs shared by active worktrees.
-        await requireGit(
-          repoRoot,
-          [
-            "maintenance",
-            "run",
-            "--auto",
-            "--task=commit-graph",
-            "--task=loose-objects",
-            "--task=incremental-repack",
-          ],
-          {
-            killProcessTree: true,
-            signal: params.signal,
-            beforeRun: assertCurrent,
-            timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
-          },
+        await repairWorktreePackIndex(repoRoot, params);
+        await withContentGitSlot(
+          () =>
+            requireGit(
+              repoRoot,
+              [
+                "maintenance",
+                "run",
+                "--auto",
+                "--task=incremental-repack",
+                "--task=commit-graph",
+                "--task=loose-objects",
+              ],
+              {
+                killProcessTree: true,
+                lowerPriority: true,
+                signal: params.signal,
+                beforeRun: assertCurrent,
+                timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
+                // Missing promisor objects belong to explicit fetches, not hourly housekeeping.
+                env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+              },
+            ),
+          params.signal,
         );
       } catch (error) {
         assertCurrent();

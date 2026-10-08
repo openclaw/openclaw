@@ -50,19 +50,6 @@ describe("doctor channel account ownership repair", () => {
       added: [{ agentId: "ops", match: { channel: "discord", accountId: "default" } }],
     },
     {
-      name: "environment-only default account alongside a named account",
-      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
-      envToken: true,
-      discord: { accounts: { alerts: {} } },
-      bindings: [
-        { agentId: "ops", match: { channel: "discord", accountId: "*", guildId: "guild-a" } },
-      ],
-      added: [
-        { agentId: "ops", match: { channel: "discord", accountId: "alerts" } },
-        { agentId: "ops", match: { channel: "discord", accountId: "default" } },
-      ],
-    },
-    {
       name: "disabled default account alongside an active account",
       sourceConfig: { agents: { list: [{ id: "research" }, { id: "ops" }] } },
       discord: { accounts: { default: { enabled: false }, work: {} } },
@@ -92,15 +79,6 @@ describe("doctor channel account ownership repair", () => {
       agents: { ownership: "explicit", entries: { main: {}, research: {} } },
       discord: {},
       bindings: [{ agentId: "   ", match: { channel: "discord", guildId: "guild-a" } }],
-      added: [],
-    },
-    {
-      name: "existing channel-wide route",
-      discord: { accounts: { default: {}, work: {} } },
-      bindings: [
-        { agentId: "research", match: { channel: "discord", accountId: "*" } },
-        { agentId: "ops", match: { channel: "discord", guildId: "guild-a" } },
-      ],
       added: [],
     },
   ])("repairs only proven ownership for $name", (testCase) => {

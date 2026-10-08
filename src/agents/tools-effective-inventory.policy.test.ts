@@ -43,23 +43,12 @@ describe("tool access diagnostics", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it.each<{ agents: NonNullable<OpenClawConfig["agents"]>; toolsPath: string }>([
-    {
-      agents: { entries: { assistant: { tools: { profile: "messaging" } } } },
-      toolsPath: "agents.entries.assistant.tools",
-    },
-    {
-      agents: {
-        ownership: "explicit",
-        entries: { other: {}, " Assistant ": { tools: { profile: "messaging" } } },
-      },
-      toolsPath: 'agents.entries[" Assistant "].tools',
-    },
-    {
-      agents: { entries: { " Assistant ": { tools: { profile: "messaging" } } } },
-      toolsPath: 'agents.entries[" Assistant "].tools',
-    },
-  ])("explains local exclusion and repair at $toolsPath", ({ agents, toolsPath }) => {
+  it("explains local exclusion and repair for a normalized explicit agent key", () => {
+    const agents: NonNullable<OpenClawConfig["agents"]> = {
+      ownership: "explicit",
+      entries: { other: {}, " Assistant ": { tools: { profile: "messaging" } } },
+    };
+    const toolsPath = 'agents.entries[" Assistant "].tools';
     const result = resolveConfiguredToolAccess({
       config: { tools: { profile: "full" }, agents },
       agentId: "assistant",

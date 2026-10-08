@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { AgentFileEntry, AgentsFilesListResult } from "../../api/types.ts";
+import type { AgentFileEntry } from "../../api/types.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -12,16 +12,10 @@ import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
-import {
-  countLines,
-  countWords,
-  estimateReadingTimeLabel,
-  resetAgentFilePreview,
-  setPreviewExpandButtonState,
-} from "./agent-file-preview-state.ts";
+import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
 import { agentFilePreview } from "./agent-file-preview.ts";
 import { renderAgentFileError } from "./file-conflict-callout.ts";
-import { hasAgentFileContent } from "./files.ts";
+import { hasAgentFileContent, type AgentFilesViewState } from "./files.ts";
 
 function getExtensionLabel(fileName: string) {
   const ext = fileName.split(".").pop()?.trim().toLowerCase();
@@ -72,25 +66,19 @@ function closeAgentFilePreview(event: Event, focusEditor = false) {
   resetAgentFilePreview(modal);
 }
 
-export function renderAgentFiles(params: {
-  agentId: string;
-  agentFilesList: AgentsFilesListResult | null;
-  agentFilesLoading: boolean;
-  agentFilesError: string | null;
-  agentFileActive: string | null;
-  agentFileContents: Record<string, string>;
-  agentFileDrafts: Record<string, string>;
-  agentFileSaving: boolean;
-  agentFileConflict: string | null;
-  canWrite: boolean;
-  onLoadFiles: (agentId: string) => void;
-  onSelectFile: (name: string) => void;
-  onFileDraftChange: (name: string, content: string) => void;
-  onFileReset: (name: string) => void;
-  onFileSave: (name: string) => void;
-  onFileReload: (name: string) => void;
-  onFileOverwrite: (name: string) => void;
-}) {
+export function renderAgentFiles(
+  params: AgentFilesViewState & {
+    agentId: string;
+    canWrite: boolean;
+    onLoadFiles: (agentId: string) => void;
+    onSelectFile: (name: string) => void;
+    onFileDraftChange: (name: string, content: string) => void;
+    onFileReset: (name: string) => void;
+    onFileSave: (name: string) => void;
+    onFileReload: (name: string) => void;
+    onFileOverwrite: (name: string) => void;
+  },
+) {
   const list = params.agentFilesList?.agentId === params.agentId ? params.agentFilesList : null;
   const files = list?.files ?? [];
   const active = params.agentFileActive ?? null;
@@ -291,8 +279,20 @@ export function renderAgentFiles(params: {
                                 const draftByteSize = formatBytes(
                                   new TextEncoder().encode(draft).length,
                                 );
-                                const draftWordCount = countWords(draft);
-                                const draftLineCount = countLines(draft);
+                                const trimmedDraft = draft.trim();
+                                const draftWordCount = trimmedDraft
+                                  ? trimmedDraft.split(/\s+/).length
+                                  : 0;
+                                const draftLineCount =
+                                  draft.length === 0 ? 0 : draft.split(/\r?\n/).length;
+                                const readingTimeLabel =
+                                  draftWordCount <= 0
+                                    ? t("agents.files.emptyDraft")
+                                    : t("agents.files.minRead", {
+                                        count: String(
+                                          Math.max(1, Math.round(draftWordCount / 220)),
+                                        ),
+                                      });
                                 const activePathLabel = formatWorkspaceRelativePath(
                                   activeEntry.path,
                                   list?.workspace,
@@ -366,26 +366,25 @@ export function renderAgentFiles(params: {
                                           >
                                         </button>
                                       </openclaw-tooltip>
-                                      <openclaw-tooltip .content=${t("agents.files.editFile")}>
-                                        <button
-                                          type="button"
-                                          class="btn btn--sm md-preview-icon-btn"
-                                          aria-label=${t("agents.files.editFile")}
-                                          @click=${(event: Event) => closeAgentFilePreview(event, true)}
-                                        >
-                                          <span aria-hidden="true">${icons.edit}</span>
-                                        </button>
-                                      </openclaw-tooltip>
-                                      <openclaw-tooltip .content=${t("agents.files.closePreview")}>
-                                        <button
-                                          type="button"
-                                          class="btn btn--sm md-preview-icon-btn"
-                                          aria-label=${t("agents.files.closePreview")}
-                                          @click=${closeAgentFilePreview}
-                                        >
-                                          <span aria-hidden="true">${icons.x}</span>
-                                        </button>
-                                      </openclaw-tooltip>
+                                      ${(
+                                        [
+                                          ["editFile", icons.edit, true],
+                                          ["closePreview", icons.x, false],
+                                        ] as const
+                                      ).map(
+                                        ([label, icon, focusEditor]) => html`
+                                          <openclaw-tooltip .content=${t(`agents.files.${label}`)}>
+                                            <button
+                                              type="button"
+                                              class="btn btn--sm md-preview-icon-btn"
+                                              aria-label=${t(`agents.files.${label}`)}
+                                              @click=${(event: Event) => closeAgentFilePreview(event, focusEditor)}
+                                            >
+                                              <span aria-hidden="true">${icon}</span>
+                                            </button>
+                                          </openclaw-tooltip>
+                                        `,
+                                      )}
                                     </div>
                                   </div>
                                   <div class="md-preview-dialog__meta">
@@ -396,7 +395,7 @@ export function renderAgentFiles(params: {
                                       <strong>${previewStatusLabel}</strong>
                                     </div>
                                     <div class="md-preview-dialog__chip" data-priority="essential">
-                                      <strong>${estimateReadingTimeLabel(draftWordCount)}</strong>
+                                      <strong>${readingTimeLabel}</strong>
                                       <span
                                         >${t("agents.files.words", {
                                           count: String(draftWordCount),

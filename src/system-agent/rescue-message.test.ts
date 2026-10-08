@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -449,6 +450,60 @@ describe("OpenClaw rescue message", () => {
     });
   });
 
+  it("revokes an invalid replacement through the worker without caller-thread SQL", async () => {
+    await withRescueStateDir("replacement-revocation-", async () => {
+      const deps = { runGatewayRestart: vi.fn(async () => {}) };
+      const sql = observeHostDataSql();
+      try {
+        await runRescue("/openclaw restart gateway", {}, commandContext(), deps);
+        await expect(
+          runRescue(`/openclaw config set example ${"x".repeat(1_100_000)}`, {}),
+        ).rejects.toThrow(/plugin state value/i);
+        await expect(runRescue("/openclaw yes", {}, commandContext(), deps)).resolves.toContain(
+          "No pending OpenClaw rescue change",
+        );
+        await runRescue("/openclaw restart gateway", {}, commandContext(), deps);
+        await expect(runRescue("/openclaw no", {})).resolves.toContain("Dropped the pending");
+        expect(sql.queries).toEqual([]);
+        expect(deps.runGatewayRestart).not.toHaveBeenCalled();
+      } finally {
+        sql.restore();
+      }
+    });
+  });
+
+  it.each(["admission", "effect"] as const)(
+    "rechecks rescue authority at %s after consuming approval becomes asynchronous",
+    async (stage) => {
+      await withRescueStateDir(`revoked-${stage}-`, async () => {
+        const deps = { runGatewayRestart: vi.fn(async () => {}) };
+        await runRescue("/openclaw restart gateway", {}, commandContext(), deps);
+        let current = true;
+        const command = commandContext({
+          assertOwnerCurrent: () => {
+            if (!current) {
+              throw new Error("rescue owner revoked");
+            }
+          },
+        });
+        if (stage === "effect") {
+          const snapshot = await mockConfig.readConfigFileSnapshot();
+          mockConfig.readConfigFileSnapshot.mockImplementationOnce(async () => {
+            current = false;
+            return snapshot;
+          });
+        }
+        const approving = runRescue("/openclaw yes", {}, command, deps);
+        if (stage === "admission") {
+          current = false;
+        }
+        await expect(approving).rejects.toThrow();
+        expect(deps.runGatewayRestart).not.toHaveBeenCalled();
+        expect(openRescuePendingTestStore().entries()).toHaveLength(stage === "admission" ? 1 : 0);
+      });
+    },
+  );
+
   it("persists a pending approval only in SQLite across store reopen", async () => {
     await withRescueStateDir("sqlite-reopen-", async (stateDir) => {
       const cfg: OpenClawConfig = {};
@@ -624,7 +679,7 @@ describe("OpenClaw rescue message", () => {
 
   it("does not queue persistent rescue approval when expiry would exceed the Date range", async () => {
     await withRescueStateDir("overflow-expiry-", async (tempDir) => {
-      vi.useFakeTimers();
+      vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(new Date(8_640_000_000_000_000));
       try {
         const cfg: OpenClawConfig = {};
@@ -644,13 +699,20 @@ describe("OpenClaw rescue message", () => {
 
   it("expires pending approvals through the SQLite row TTL", async () => {
     await withRescueStateDir("expired-", async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
       const cfg: OpenClawConfig = {};
       const deps = { runGatewayRestart: vi.fn(async () => {}) };
 
       await runRescue("/openclaw restart gateway", {}, commandContext(), deps);
-      vi.advanceTimersByTime(15 * 60_000 + 1);
+      const store = openRescuePendingTestStore();
+      const [entry] = store.entries();
+      assert(entry, "expected pending rescue row");
+      expect(entry.expiresAt! - entry.createdAt).toBe(15 * 60_000);
+      // The worker owns its clock. Seed a foreign expired row through the SDK
+      // instead of advancing only the host's clock.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      store.register(entry.key, entry.value, { ttlMs: 15 * 60_000 });
+      vi.useRealTimers();
 
       await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toBe(
         "No pending OpenClaw rescue change is waiting for approval.",
@@ -733,6 +795,7 @@ describe("OpenClaw rescue message", () => {
           ...(purpose ? { purpose } : {}),
           workspace: "/tmp/work",
           provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
+          beforePersistentApply: expect.any(Function),
         });
         const audit = readLastAuditEntry() as {
           operation?: string;

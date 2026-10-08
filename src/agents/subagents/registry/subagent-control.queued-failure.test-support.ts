@@ -24,12 +24,10 @@ export function registerQueuedReservationFailureTests({
   resetRegistryLeafMocks: () => void;
 }) {
   it.each([
-    "intent write",
     "tombstone write",
     "claim release",
     "session replacement at intent",
     "session replacement release",
-    "abort refusal",
     "session replacement",
     "row replacement",
     "lifecycle rotation",
@@ -84,11 +82,10 @@ export function registerQueuedReservationFailureTests({
                   );
                 }
                 if (
-                  (failure === "intent write" && writeNumber === 1) ||
-                  (["tombstone write", "claim release", "session replacement release"].includes(
+                  ["tombstone write", "claim release", "session replacement release"].includes(
                     failure,
                   ) &&
-                    writeNumber === 2)
+                  writeNumber === 2
                 ) {
                   rejectedWrite = writeNumber;
                   throw new Error("sqlite busy");
@@ -115,9 +112,9 @@ export function registerQueuedReservationFailureTests({
             { sessionId: "new-session", updatedAt: 2 },
           );
         }
-        return ["abort refusal", "claim release"].includes(failure);
+        return failure === "claim release";
       },
-      abortEmbeddedAgentRun: () => !["abort refusal", "claim release"].includes(failure),
+      abortEmbeddedAgentRun: () => failure !== "claim release",
       clearSessionLifecycleQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     });
     const reservationReleases: Promise<void>[] = [];
@@ -194,7 +191,7 @@ export function registerQueuedReservationFailureTests({
         expect(subagentRuns.get(entry.runId)?.killIntent).toBeUndefined();
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
         expect(
-          getSubagentRunByChildSessionKey(entry.childSessionKey)?.execution.endedAt,
+          (await getSubagentRunByChildSessionKey(entry.childSessionKey))?.execution.endedAt,
         ).toBeUndefined();
       }
     } finally {

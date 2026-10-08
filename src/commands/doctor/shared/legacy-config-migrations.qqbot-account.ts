@@ -16,12 +16,7 @@ export function shouldCreateEnvironmentOnlyQQBotConfig(raw: Record<string, unkno
   );
 }
 
-export function listQQBotConfigEntries(qqbot: Record<string, unknown>): Array<{
-  entry: Record<string, unknown>;
-  path: string;
-  aliasSuffix?: string;
-  inheritedEntry?: Record<string, unknown>;
-}> {
+export function listQQBotConfigEntries(qqbot: Record<string, unknown>) {
   // The legacy default account merged channels.qqbot with accounts.default.
   // Snapshot the root before migration so account overrides are evaluated
   // against the policy users actually had before the root entry is rewritten.
@@ -180,13 +175,12 @@ function allocateFileProviderAlias(params: {
   return undefined;
 }
 
-export function migrateClientSecretFile(params: {
-  raw: Record<string, unknown>;
-  entry: Record<string, unknown>;
-  path: string;
-  aliasSuffix?: string;
-  changes: string[];
-}): void {
+export function migrateClientSecretFile(
+  params: ReturnType<typeof listQQBotConfigEntries>[number] & {
+    raw: Record<string, unknown>;
+    changes: string[];
+  },
+): void {
   if (!Object.hasOwn(params.entry, "clientSecretFile")) {
     return;
   }

@@ -40,6 +40,10 @@ type TelegramInlineButton = {
   style?: TelegramButtonStyle;
 };
 
+export type TelegramCallbackButton = Pick<TelegramInlineButton, "text" | "style"> & {
+  callback_data: string;
+};
+
 export type TelegramInlineButtons = ReadonlyArray<ReadonlyArray<TelegramInlineButton>>;
 
 export type TelegramDroppedControl = {
@@ -80,12 +84,6 @@ export function appendTelegramDroppedControlFallback(
 
 const TELEGRAM_INTERACTIVE_ROW_SIZE = 3;
 
-function toTelegramButtonStyle(
-  style?: MessagePresentationButton["style"],
-): TelegramInlineButton["style"] {
-  return style === "danger" || style === "success" || style === "primary" ? style : undefined;
-}
-
 function recordDroppedControl(
   button: MessagePresentationButton,
   options: TelegramButtonBuildOptions | undefined,
@@ -108,7 +106,11 @@ function toTelegramInlineButton(
   button: MessagePresentationButton,
   options?: TelegramButtonBuildOptions,
 ): TelegramInlineButton | undefined {
-  const style = toTelegramButtonStyle(button.style);
+  const buttonStyle = button.style;
+  const style =
+    buttonStyle === "danger" || buttonStyle === "success" || buttonStyle === "primary"
+      ? buttonStyle
+      : undefined;
   const action = resolveMessagePresentationButtonAction(button);
   if (!action) {
     return recordDroppedControl(button, options, "invalid_action");
@@ -213,7 +215,6 @@ function chunkInteractiveButtons(
   flush();
 }
 
-/** Convert portable presentation controls to Telegram inline keyboard rows. */
 export function buildTelegramPresentationButtons(
   presentation?: MessagePresentation,
   options?: TelegramButtonBuildOptions,

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -35,6 +36,7 @@ import {
 } from "./resource-host.js";
 import {
   SPAWN_BROKER_STARTUP_TIMEOUT_MS,
+  spawnBrokerStartupNowMs,
   type BrokerBootstrap,
   type BrokerResourceRequest,
   type BrokerResourceResponse,
@@ -382,6 +384,7 @@ export class SpawnBrokerHost {
     if (serialize(bootstrap).byteLength > MAX_BOOTSTRAP_BYTES) {
       throw new SpawnBrokerError("Spawn broker bootstrap exceeds its IPC bound");
     }
+    // Native resource modules and bidirectional V8 frames require the parent's exact runtime.
     const child = spawn(process.execPath, resolveRuntimeWorkerArgv(this.workerUrl), {
       stdio: ["inherit", "ignore", "ignore", "ipc"],
       detached: true,
@@ -395,9 +398,9 @@ export class SpawnBrokerHost {
     const brokerExited = createDeferredCore();
     let ended = false;
     let ready = false;
-    this.startupDeadline = Date.now() + SPAWN_BROKER_STARTUP_TIMEOUT_MS;
+    this.startupDeadline = spawnBrokerStartupNowMs() + SPAWN_BROKER_STARTUP_TIMEOUT_MS;
     const checkStartup = () => {
-      if (!ended && !ready && Date.now() >= this.startupDeadline) {
+      if (!ended && !ready && spawnBrokerStartupNowMs() >= this.startupDeadline) {
         fail(new Error("readiness deadline exceeded after 15000ms"));
         child.kill("SIGKILL");
       }
@@ -418,9 +421,10 @@ export class SpawnBrokerHost {
       this.available = false;
       this.sendMessage = undefined;
       const error = new SpawnBrokerError(
-        this.hasBeenReady
-          ? "Spawn broker exited; command outcome is unavailable"
-          : `Spawn broker failed before readiness: ${cause?.message ?? "channel lost"}`,
+        formatChildRuntimeSpawnWarning(cause) ??
+          (this.hasBeenReady
+            ? "Spawn broker exited; command outcome is unavailable"
+            : `Spawn broker failed before readiness: ${cause?.message ?? "channel lost"}`),
         { cause },
       );
       const previousReadiness = this.readiness;

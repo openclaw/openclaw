@@ -204,13 +204,6 @@ const chatAvatarDisplayedAgents = new WeakMap<object, string>();
 const senderAvatarRequests = new WeakMap<object, object>();
 const senderAvatarInputs = new WeakMap<object, unknown[]>();
 
-type ChatAvatarSnapshot = {
-  reason: string | null;
-  status: "none" | "local" | "remote" | "data" | null;
-  url: string | null;
-  release: () => void;
-};
-
 const CHAT_AVATAR_CACHE_LIMIT = 24;
 const currentAvatarReference = Symbol("current-chat-avatar");
 const chatAvatarReferences = new WeakMap<
@@ -273,10 +266,7 @@ export function invalidateChatAvatarCache(host: ChatAvatarHost): void {
   clearChatAvatarState(host);
 }
 
-async function loadChatAvatarSnapshot(
-  host: ChatAvatarHost,
-  agentId: string,
-): Promise<ChatAvatarSnapshot | null> {
+async function loadChatAvatarSnapshot(host: ChatAvatarHost, agentId: string) {
   const client = host.client;
   const epoch = host.connectionEpoch;
   const sessionAgentId = resolveAgentIdForSession(host);

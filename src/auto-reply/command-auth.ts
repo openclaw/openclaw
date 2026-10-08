@@ -1,4 +1,3 @@
-/** Command authorization helpers for owner and allowlist checks. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -217,11 +216,14 @@ function resolveOwnerAllowFromList(
       filtered.push(trimmed);
       continue;
     }
-    // Doctor owns bundled channel:user:id migration; third-party native identities stay intact.
+    // Typed direct targets are canonical for plugins that require the user kind.
+    // Their allowlist formatter owns the conversion to a native sender identity.
     if (
       !params.providerId ||
       channel !== params.providerId ||
-      (normalizeChatChannelId(prefix) && /^[^:]+:user:[^:\s*]+$/i.test(trimmed))
+      (normalizeChatChannelId(prefix) &&
+        /^[^:]+:user:[^:\s*]+$/i.test(trimmed) &&
+        params.plugin?.messaging?.directTargetStyle !== "user-prefixed")
     ) {
       continue;
     }
@@ -243,7 +245,8 @@ function resolveCommandsAllowFromList(
 ): string[] | null {
   const commandsAllowFrom = params.cfg.commands?.allowFrom;
   if (!commandsAllowFrom || typeof commandsAllowFrom !== "object") {
-    return null; // Not configured, fall back to channel allowFrom
+    // An absent command allowlist falls back to the channel's allowFrom.
+    return null;
   }
 
   const providerKey = params.providerId ?? "";
@@ -252,7 +255,7 @@ function resolveCommandsAllowFromList(
 
   const rawList = Array.isArray(providerList) ? providerList : globalList;
   if (!Array.isArray(rawList)) {
-    return null; // No applicable list found
+    return null;
   }
 
   return formatAllowFromList({ ...params, allowFrom: rawList });
@@ -404,7 +407,6 @@ function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {
     cfg.commands?.allowFrom && typeof cfg.commands.allowFrom === "object",
   );
 
-  // Check if commands.allowFrom is configured (separate command authorization)
   const commandsAllowFromList = resolveCommandsAllowFromList({
     plugin,
     cfg,

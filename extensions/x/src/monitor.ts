@@ -7,8 +7,8 @@ import {
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveXAccount, type ResolvedXAccount } from "./accounts.js";
-import { XAllowlistChangedError } from "./allowlist.js";
-import { parseXPost, parseXPostEnvelope, type XPostEnvelope } from "./api.js";
+import { openXAllowlist, XAllowlistChangedError } from "./allowlist.js";
+import { parseXPostEnvelope, type XPostEnvelope } from "./api.js";
 import { getXApi, getXTokenState } from "./client.js";
 import { runXEvents, waitForXBudgetReset, type XCursorState, type XEventStatus } from "./events.js";
 import {
@@ -19,6 +19,7 @@ import {
 import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
 import { getXGuestStatus, resolveXGuestContainmentError } from "./guests.js";
 import { resolveXIngress, xMentionFacts } from "./ingress.js";
+import { verifyPublicXThread } from "./public-thread.js";
 import { resolveXRecipient } from "./recipient.js";
 import type { XVisibleWorkSession } from "./reply.js";
 import { getXRuntime } from "./runtime.js";
@@ -93,12 +94,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
   }
   const ingress = createChannelIngressMonitor<XPostEnvelope, string, IngressPayload>({
     queue,
-    inspect: ({ post }) => {
-      if (!parseXPost(post)) {
-        throw new InvalidXEvent("Invalid X mention envelope");
-      }
-      return { eventId: post.id, laneKey: post.conversation_id };
-    },
+    inspect: ({ post }) => ({ eventId: post.id, laneKey: post.conversation_id }),
     payload: {
       storage: "raw-event",
       version: 1,
@@ -249,12 +245,42 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         initialAuthorization.tier === "guest"
           ? `${route.sessionKey}:guest:${post.id}`
           : route.sessionKey;
-      const authorization = await resolveXIngress(account.accountId, post, cfg, {
-        agentId: route.agentId,
-        sessionKey,
-        messageId: post.id,
-        inboundEventKind: "user_request",
-      });
+      // Guests may start hidden helpers, never public visible work sessions.
+      const publicationSnapshot =
+        initialAuthorization.tier === "maintainer" &&
+        resolveXAccount(cfg, account.accountId).config.autoPublishWorkSessions === true
+          ? await openXAllowlist(core).readSnapshot(account.accountId)
+          : undefined;
+      const publicThread =
+        publicationSnapshot &&
+        (await verifyPublicXThread(api, thread.posts, lifecycle.abortSignal, post.conversation_id));
+      const publication =
+        publicationSnapshot && publicThread
+          ? {
+              audience: "public" as const,
+              assertCurrent: () => {
+                lifecycle.abortSignal.throwIfAborted();
+                assertCurrent();
+                publicationSnapshot.assertCurrent();
+                // Any config publication retires the captured routing/access decision.
+                if (readConfig() !== cfg) {
+                  throw new Error("X work-session publication policy changed; send a new mention.");
+                }
+              },
+            }
+          : undefined;
+      const authorization = await resolveXIngress(
+        account.accountId,
+        post,
+        cfg,
+        {
+          agentId: route.agentId,
+          sessionKey,
+          messageId: post.id,
+          inboundEventKind: "user_request",
+        },
+        publication,
+      );
       const assertAdmissionCurrent = () => {
         assertCurrent();
         lifecycle.abortSignal.throwIfAborted();
@@ -301,7 +327,6 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
           kind: "group",
           id: post.conversation_id,
           label: thread.label,
-          link: { url: `https://x.com/${handle}/status/${post.id}`, label: "View on X" },
         },
         route: {
           agentId: route.agentId,

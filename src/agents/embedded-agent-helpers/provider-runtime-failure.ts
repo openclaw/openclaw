@@ -127,10 +127,10 @@ export function classifyProviderRuntimeFailureKind(
   if (!message && typeof status !== "number" && !hasStructuredErrorSignal) {
     return "empty_response";
   }
-  if (normalizedSignal.code === "refresh_contention") {
-    return "refresh_contention";
-  }
-  if (message && isOAuthRefreshContentionMessage(message)) {
+  if (
+    normalizedSignal.code === "refresh_contention" ||
+    (message && isOAuthRefreshContentionMessage(message))
+  ) {
     return "refresh_contention";
   }
   if (message && OAUTH_REFRESH_TIMEOUT_RE.test(message)) {

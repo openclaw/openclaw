@@ -5,13 +5,16 @@ import type {
   SessionFileEntry,
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
+import type { BoardReadOperations } from "../../boards/sqlite-board-operations.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type {
   SessionRowTranscriptFields,
   SessionRowTranscriptReadParams,
 } from "../../gateway/session-row-transcript-backfill.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
+import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.types.js";
 import type { SessionCostUsageCacheReadResult } from "../../infra/session-cost-usage-cache-read.js";
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
@@ -38,7 +41,11 @@ import type {
   SessionBranchSummaryReadRequest,
   SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import type {
+  TranscriptEvent,
+  SessionTranscriptRawDeltaResult,
+  SessionTranscriptVisibleMessageDeltaResult,
+} from "./session-accessor.sqlite-contract.js";
 import type {
   SessionIdentityEvidenceIdentity,
   SessionIdentityEvidenceResult,
@@ -96,7 +103,7 @@ import type {
   SessionMembershipFactsWorkerInput,
   SessionSuggestionsWorkerInput,
 } from "./session-sharing-read.types.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
+import type { SessionMembersSnapshot } from "./session-sharing-store.kernel.js";
 import type { StoredSessionSuggestion } from "./session-sharing-store.types.js";
 import type { ResolvedSqliteStoreTarget } from "./session-sqlite-target.js";
 import type {
@@ -140,6 +147,8 @@ import type {
   SessionModelContextWorkerInput,
   SessionTranscriptWatermarkWorkerInput,
   SessionTranscriptMessagePresenceWorkerInput,
+  SessionTranscriptDeltaWorkerInput,
+  SessionMemoryCaptureWorkerInput,
   SessionProgressCardWorkerInput,
   VoiceSessionsWorkerInput,
   SessionUsageCacheWorkerInput,
@@ -302,9 +311,10 @@ type SessionIdentityEvidenceWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
-export type SessionBranchSummaryWorkerInput = {
+type SessionBranchSummaryWorkerInput = {
   kind: "branch-summaries";
-  request: SessionBranchSummaryReadRequest;
+  database: SessionBranchSummaryReadRequest["database"];
+  request: Omit<SessionBranchSummaryReadRequest, "database">;
 };
 
 type SessionHistoricalEvictionCandidatesWorkerInput = {
@@ -320,8 +330,23 @@ type SessionArchivedEvictionCandidatesWorkerInput = Omit<
   "admissionIdentities" | "preserveRecentMs"
 > & { archived: ArchivedSessionEvictionQuery };
 
+type BoardReadWorkerInput<Kind extends string, Operation extends keyof BoardReadOperations> = {
+  kind: Kind;
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  expectedIdentity: DatabaseFileIdentity;
+} & BoardReadOperations[Operation]["input"];
+type BoardSnapshotWorkerInput = BoardReadWorkerInput<"board-snapshot", "boards.readSnapshot">;
+type BoardWidgetDocumentWorkerInput = BoardReadWorkerInput<
+  "board-widget-document",
+  "boards.readWidgetDocument"
+>;
+
 export type SessionHistoryWorkerInput =
+  | BoardSnapshotWorkerInput
+  | BoardWidgetDocumentWorkerInput
   | SessionStoreProjectionWorkerInput
+  | SessionBranchSummaryWorkerInput
   | { kind: "cli-process-history"; request: ChatHistoryDisplayRequest }
   | LifecycleArtifactCleanupRequest
   | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
@@ -342,6 +367,8 @@ export type SessionHistoryWorkerInput =
   | SessionTitleFieldsWorkerInput
   | SessionTranscriptWatermarkWorkerInput
   | SessionTranscriptMessagePresenceWorkerInput
+  | SessionTranscriptDeltaWorkerInput
+  | SessionMemoryCaptureWorkerInput
   | SessionTranscriptAnchorsWorkerInput
   | SessionActivitySummarySourceWorkerInput
   | SessionRowBackfillWorkerInput
@@ -381,8 +408,7 @@ export type SessionTranscriptWorkerInput =
   | SessionModelContextWorkerInput
   | SessionContextMessagesWorkerInput
   | SessionEntryWorkerInput
-  | SessionResetRecallWorkerInput
-  | SessionBranchSummaryWorkerInput;
+  | SessionResetRecallWorkerInput;
 
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
 
@@ -391,6 +417,20 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
+  "transcript-raw-delta": { kind: "transcript-raw-delta"; result: SessionTranscriptRawDeltaResult };
+  "transcript-visible-delta": {
+    kind: "transcript-visible-delta";
+    result: SessionTranscriptVisibleMessageDeltaResult;
+  };
+  "session-memory-capture": { kind: "session-memory-capture"; result: SessionMemoryTranscript };
+  "board-snapshot": {
+    kind: "board-snapshot";
+    value: BoardReadOperations["boards.readSnapshot"]["output"];
+  };
+  "board-widget-document": {
+    kind: "board-widget-document";
+    value: BoardReadOperations["boards.readWidgetDocument"]["output"];
+  };
   "cli-process-history": ChatHistoryDisplayResult;
   "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
   "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
@@ -424,7 +464,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     message: SessionTranscriptMessageEvent | undefined;
   };
   "sqlite-target": { target: ResolvedSqliteStoreTarget };
-  "branch-summaries": SessionBranchSummaryReadResult;
+  "branch-summaries": { kind: "branch-summaries"; result: SessionBranchSummaryReadResult };
   "history-page": SessionHistoryWorkerResult;
   "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
   "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
@@ -438,7 +478,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
   "session-row-backfill": { kind: "session-row-backfill"; fields: SessionRowTranscriptFields };
   "session-row-presence": boolean;
   "projection-status": boolean;
-  "session-members": SessionMember[];
+  "session-members": { kind: "session-members" } & SessionMembersSnapshot;
   "session-suggestions": { kind: "session-suggestions"; suggestions: StoredSessionSuggestion[] };
   "session-membership-facts": SessionMembershipFacts;
   "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
@@ -526,6 +566,30 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
+  readRawDelta: CancellableSessionHistoryReader<
+    Extract<SessionTranscriptDeltaWorkerInput, { kind: "transcript-raw-delta" }>,
+    SessionTranscriptRawDeltaResult
+  >;
+  readVisibleDelta: CancellableSessionHistoryReader<
+    Extract<SessionTranscriptDeltaWorkerInput, { kind: "transcript-visible-delta" }>,
+    SessionTranscriptVisibleMessageDeltaResult
+  >;
+  readSessionMemoryCapture: CancellableSessionHistoryReader<
+    SessionMemoryCaptureWorkerInput,
+    SessionMemoryTranscript
+  >;
+  readBoardSnapshot: SessionHistoryReader<
+    BoardSnapshotWorkerInput,
+    BoardReadOperations["boards.readSnapshot"]["output"]
+  >;
+  readBoardWidgetDocument: SessionHistoryReader<
+    BoardWidgetDocumentWorkerInput,
+    BoardReadOperations["boards.readWidgetDocument"]["output"]
+  >;
+  readBranchSummaries: CancellableSessionHistoryReader<
+    SessionBranchSummaryWorkerInput,
+    SessionBranchSummaryReadResult
+  >;
   readMessagePresence: CancellableSessionHistoryReader<
     SessionTranscriptMessagePresenceWorkerInput,
     boolean

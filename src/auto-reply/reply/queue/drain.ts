@@ -26,6 +26,7 @@ import {
 } from "../../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
@@ -39,11 +40,12 @@ import {
 import { isRoutableChannel } from "../route-reply.js";
 import { resolveCollectedRun } from "./collected-run.js";
 import {
+  assertSingleAdmissionOwner,
   collectRuntimeMetadata,
   createOverflowSummaryRetrySource,
   hasExclusiveTurnAdmission,
   hasPreparedCurrentTurnImages,
-  resolveFollowupDeliveryContextKey,
+  prepareNextDeliveryGroup,
   resolveFollowupReplyAnchor,
   resolveOverflowSummaryInboundEventKind,
 } from "./delivery-context.js";
@@ -95,17 +97,6 @@ function bindFollowupRestartDrainSignal(): void {
     },
     { once: true },
   );
-}
-
-function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
-  const owners = new Set(
-    items.flatMap((item) =>
-      hasExclusiveTurnAdmission(item.turnAdoptionLifecycle) ? [item.turnAdoptionLifecycle] : [],
-    ),
-  );
-  if (owners.size > 1) {
-    throw new Error("followup queue cannot aggregate distinct admission lifecycles");
-  }
 }
 
 export function rememberFollowupDrainCallback(
@@ -203,9 +194,7 @@ export function prepareStaleFollowupDrainRetirement(key: string): (() => void) |
     queue.summaryElisions = [];
     queue.evictedSummaryCount = 0;
     queue.abortController.abort();
-    for (const source of activeSources) {
-      completeFollowupRunLifecycle(source);
-    }
+    completeFollowupRuns(activeSources);
     if (hasPendingWork) {
       kickFollowupDrainIfIdle(key);
     }
@@ -251,27 +240,6 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,
   };
-}
-
-function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[][] {
-  if (items.length <= 1) {
-    return items.length === 0 ? [] : [items];
-  }
-
-  const groups: FollowupRun[][] = [];
-  let currentKey: string | undefined;
-
-  for (const item of items) {
-    const itemKey = resolveFollowupDeliveryContextKey(item);
-    const currentGroup = groups.at(-1);
-    if (currentGroup && itemKey === currentKey) {
-      currentGroup.push(item);
-    } else {
-      groups.push([item]);
-    }
-    currentKey = itemKey;
-  }
-  return groups;
 }
 
 function renderCollectItem(item: FollowupRun, idx: number): string {
@@ -472,6 +440,12 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
   });
 }
 
+function completeFollowupRuns(items: Iterable<FollowupRun>): void {
+  for (const item of items) {
+    completeFollowupRunLifecycle(item);
+  }
+}
+
 function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | undefined {
   // Keep the latest cancelable source as the aggregate owner even when a
   // later transport-only source has no cancellation identity.
@@ -488,7 +462,6 @@ function requiresIndividualCollectDrain(item: FollowupRun): boolean {
     // Keep its original recorder/event; only unconsumed sources may regroup.
     item.userTurnTranscriptRecorder?.hasPersisted() === true ||
     item.disableCollectBatching === true ||
-    item.run.skillWorkshopProposalRevision !== undefined ||
     item.run.skillLibraryAuthoring !== undefined ||
     item.currentInboundEventKind === "room_event" ||
     item.currentInboundAudio === true
@@ -572,12 +545,18 @@ type QueueSummaryDelivery = {
 };
 
 function resolveQueueSummaryLines(
-  queue: Pick<FollowupQueueSummaryState, "summaryLines" | "summarySources">,
+  queue: Pick<FollowupQueueSummaryState, "summaryLines" | "summarySources" | "summaryElisions">,
   sources: FollowupRun[],
 ): string[] {
   return sources.map((source) => {
     const sourceIndex = queue.summarySources.indexOf(source);
-    return expectDefined(queue.summaryLines[sourceIndex], "summary line for retained source");
+    const entry = queue.summaryElisions.find((candidate) => candidate.sources.includes(source));
+    return expectDefined(
+      sourceIndex >= 0
+        ? queue.summaryLines[sourceIndex]
+        : entry?.summaryLines[entry.sources.indexOf(source)],
+      "summary line for queued source",
+    );
   });
 }
 
@@ -603,35 +582,34 @@ async function runQueueSummaryDelivery(
     abortSignal?: AbortSignal;
     onAdmitted?: () => void | Promise<void>;
   }) => Promise<void>,
-  protectedSources: FollowupRun[] = delivery.sources,
 ): Promise<boolean> {
-  assertSingleAdmissionOwner(protectedSources);
+  assertSingleAdmissionOwner(delivery.sources);
   const inheritedActiveSources = new Set(
-    protectedSources.filter((source) => queue.activeSummarySources.has(source)),
+    delivery.sources.filter((source) => queue.activeSummarySources.has(source)),
   );
-  for (const source of protectedSources) {
+  for (const source of delivery.sources) {
     queue.activeSummarySources.add(source);
     queue.inFlight.add(source);
   }
   let admitted = false;
   let deferredBeforeAdmission = false;
-  const cancellation = createAggregateCancellation(protectedSources);
+  const cancellation = createAggregateCancellation(delivery.sources);
   const needsAdmission =
-    protectedSources.length > 1 ||
-    protectedSources.some((source) => hasExclusiveTurnAdmission(source.turnAdoptionLifecycle));
+    delivery.sources.length > 1 ||
+    delivery.sources.some((source) => hasExclusiveTurnAdmission(source.turnAdoptionLifecycle));
   const onAdmitted = needsAdmission
     ? async () => {
         if (admitted) {
           return;
         }
-        await Promise.all(protectedSources.map((source) => admitFollowupRunLifecycle(source)));
+        await Promise.all(delivery.sources.map((source) => admitFollowupRunLifecycle(source)));
         cancellation.admit();
         admitted = true;
         // A multi-source summary is atomic once it owns the reply lane.
         // Retire sibling ids while the latest source owns aggregate cancel.
-        consumeQueueSummaryDelivery(queue, { ...delivery, sources: protectedSources }, false);
-        const aggregateOwner = resolveAggregateOwner(protectedSources);
-        for (const source of protectedSources) {
+        consumeQueueSummaryDelivery(queue, delivery, false);
+        const aggregateOwner = resolveAggregateOwner(delivery.sources);
+        for (const source of delivery.sources) {
           if (source !== aggregateOwner) {
             retireFollowupRunCancellation(source);
           }
@@ -650,14 +628,12 @@ async function runQueueSummaryDelivery(
       } else {
         // Admission consumed the aggregate sources, so a failed attempt is
         // terminal for their queue identities rather than retryable queue work.
-        for (const source of protectedSources) {
-          completeFollowupRunLifecycle(source);
-        }
+        completeFollowupRuns(delivery.sources);
       }
       throw err;
     }
     if (!admitted) {
-      const canceledSources = protectedSources.filter(isFollowupRunAborted);
+      const canceledSources = delivery.sources.filter(isFollowupRunAborted);
       if (canceledSources.length > 0) {
         consumeQueueSummaryDelivery(queue, {
           ...delivery,
@@ -674,9 +650,9 @@ async function runQueueSummaryDelivery(
     // protected sources so continued overflow cannot grow retained identities.
     const deferredCarryover =
       deferredBeforeAdmission && inheritedActiveSources.size === 0
-        ? new Set(protectedSources)
+        ? new Set(delivery.sources)
         : inheritedActiveSources;
-    for (const source of protectedSources) {
+    for (const source of delivery.sources) {
       queue.inFlight.delete(source);
       if (deferredBeforeAdmission && deferredCarryover.has(source)) {
         continue;
@@ -776,20 +752,6 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
     : { cross: true };
 }
 
-function resolveOverflowSummarySourceGroup(queue: {
-  summarySources: FollowupRun[];
-}): FollowupRun[] {
-  const source = queue.summarySources[0];
-  if (!source) {
-    return [];
-  }
-  const contextKey = resolveFollowupDeliveryContextKey(source);
-  const end = queue.summarySources.findIndex(
-    (candidate) => resolveFollowupDeliveryContextKey(candidate) !== contextKey,
-  );
-  return queue.summarySources.slice(0, end < 0 ? undefined : end);
-}
-
 async function drainProtectedPriorityFollowup(
   queue: Pick<FollowupQueueState, "inFlight" | "items">,
   runFollowup: (run: FollowupRun) => Promise<void>,
@@ -883,9 +845,7 @@ async function runSyntheticOverflowSummary(params: {
             },
             onSettled: () => {
               if (admitted) {
-                for (const source of params.sources) {
-                  completeFollowupRunLifecycle(source);
-                }
+                completeFollowupRuns(params.sources);
               }
             },
           },
@@ -896,80 +856,10 @@ async function runSyntheticOverflowSummary(params: {
   });
 }
 
-async function drainOverflowSummarySources(
-  params: {
-    queue: FollowupQueueSummaryState;
-    runFollowup: (run: FollowupRun) => Promise<void>;
-  },
-  entry?: FollowupQueueSummaryState["summaryElisions"][number],
-): Promise<boolean> {
-  const retainedSources = !entry
-    ? resolveOverflowSummarySourceGroup(params.queue)
-    : params.queue.summaryElisions.length === 1
-      ? resolveOverflowSummarySourceGroup(params.queue).filter(
-          (source) => resolveFollowupDeliveryContextKey(source) === entry.contextKey,
-        )
-      : [];
-  const source = retainedSources.at(-1) ?? entry?.sources.at(-1);
-  if (!source) {
-    return false;
-  }
-  const elidedCount = entry?.sources.length ?? 0;
-  const sources = [...(entry?.sources ?? []), ...retainedSources];
-  const retainedSummaryLines = resolveQueueSummaryLines(params.queue, retainedSources);
-  const summaryLines = entry
-    ? [...entry.summaryLines, ...retainedSummaryLines].slice(-params.queue.cap)
-    : retainedSummaryLines;
-  const prompt = previewQueueSummaryPrompt({
-    state: {
-      droppedCount: sources.length,
-      summaryLines,
-    },
-    noun: "message",
-  });
-  if (!prompt) {
-    return false;
-  }
-  const delivered = await runQueueSummaryDelivery(
-    params.queue,
-    {
-      droppedCount: retainedSources.length,
-      sources: retainedSources,
-    },
-    ({ abortSignal, onAdmitted }) =>
-      runSyntheticOverflowSummary({
-        source,
-        sources,
-        prompt,
-        abortSignal,
-        onAdmitted,
-        runFollowup: params.runFollowup,
-      }),
-    sources,
-  );
-  if (!delivered || !entry) {
-    return true;
-  }
-  const entryIndex = params.queue.summaryElisions.indexOf(entry);
-  if (entryIndex < 0) {
-    return true;
-  }
-  const consumedCount = Math.min(elidedCount, entry.sources.length);
-  const consumedSources = entry.sources.splice(0, consumedCount);
-  entry.summaryLines.splice(0, consumedCount);
-  for (const consumedSource of consumedSources) {
-    completeFollowupRunLifecycle(consumedSource);
-  }
-  params.queue.droppedCount = Math.max(0, params.queue.droppedCount - consumedCount);
-  if (entry.sources.length === 0) {
-    params.queue.summaryElisions.splice(entryIndex, 1);
-  }
-  return true;
-}
-
 async function drainOverflowSummaryGroup(params: {
   queue: FollowupQueueState;
   runFollowup: (run: FollowupRun) => Promise<void>;
+  assertCurrent: () => void;
 }): Promise<boolean> {
   if (
     (await dropAbortedFollowups(params.queue, params.runFollowup)) > 0 &&
@@ -986,11 +876,47 @@ async function drainOverflowSummaryGroup(params: {
     );
     return true;
   }
-  const entry = params.queue.summaryElisions[0];
-  return (
-    (entry !== undefined && (await drainOverflowSummarySources(params, entry))) ||
-    (await drainOverflowSummarySources(params))
+  const prepared = await prepareNextDeliveryGroup(
+    () => [
+      ...params.queue.summaryElisions.flatMap((entry) => entry.sources),
+      ...params.queue.summarySources,
+    ],
+    params.assertCurrent,
   );
+  prepared.assertCurrent();
+  const sources = prepared.items;
+  const source = sources.at(-1);
+  if (!source) {
+    return false;
+  }
+  const summaryLines = resolveQueueSummaryLines(params.queue, sources).slice(-params.queue.cap);
+  const prompt = previewQueueSummaryPrompt({
+    state: {
+      droppedCount: sources.length,
+      summaryLines,
+    },
+    noun: "message",
+  });
+  if (!prompt) {
+    return false;
+  }
+  await runQueueSummaryDelivery(
+    params.queue,
+    {
+      droppedCount: sources.length,
+      sources,
+    },
+    ({ abortSignal, onAdmitted }) =>
+      runSyntheticOverflowSummary({
+        source,
+        sources,
+        prompt,
+        abortSignal,
+        onAdmitted,
+        runFollowup: params.runFollowup,
+      }),
+  );
+  return true;
 }
 
 export function scheduleFollowupDrain(
@@ -999,17 +925,30 @@ export function scheduleFollowupDrain(
 ): void {
   const existingQueue = FOLLOWUP_QUEUES.get(key);
   if (existingQueue?.draining) {
-    // The active drain keeps its current callback, but deferred retries must
-    // use the latest session/runtime context supplied by the finishing run.
+    // Keep the active callback, but preserve explicit wakeups so a refused
+    // attempt can hand off once to the latest session/runtime context.
     rememberFollowupDrainCallback(key, runFollowup);
+    if (existingQueue.drainOwner) {
+      existingQueue.drainOwner.rescheduleRequested = true;
+    }
     return;
   }
   const queue = beginQueueDrain(FOLLOWUP_QUEUES, key);
   if (!queue) {
     return;
   }
-  const drainOwner = {};
+  const drainOwner = { rescheduleRequested: false };
   queue.drainOwner = drainOwner;
+  const assertDrainCurrent = () => {
+    if (
+      FOLLOWUP_QUEUES.get(key) !== queue ||
+      queue.drainOwner !== drainOwner ||
+      queue.abortController.signal.aborted ||
+      queue.items.some((item) => item.steerPending)
+    ) {
+      throw new FollowupRunDeferredError("Followup drain ownership changed during preparation");
+    }
+  };
   const effectiveRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
   const reserveOptions = {
     inFlight: queue.inFlight,
@@ -1022,6 +961,7 @@ export function scheduleFollowupDrain(
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
   const drainQueuedFollowups = async (): Promise<void> => {
     let waitingForSteer = false;
+    let databaseAdmissionClosed = false;
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
@@ -1050,6 +990,7 @@ export function scheduleFollowupDrain(
           (await drainOverflowSummaryGroup({
             queue,
             runFollowup: effectiveRunFollowup,
+            assertCurrent: assertDrainCurrent,
           }))
         ) {
           continue;
@@ -1078,155 +1019,127 @@ export function scheduleFollowupDrain(
             continue;
           }
 
-          const items = queue.items.slice();
-          const contextGroups = splitCollectItemsByDeliveryContext(items);
-          if (contextGroups.length === 0) {
+          const prepared = await prepareNextDeliveryGroup(() => queue.items, assertDrainCurrent);
+          prepared.assertCurrent();
+          if (prepared.items.length === 0) {
             break;
           }
 
-          for (const groupItems of contextGroups) {
-            // Earlier groups await model work. Recheck membership so overflow
-            // eviction cannot leave a stale snapshot eligible for delivery.
-            const currentGroupItems = groupItems.filter((item) => queue.items.includes(item));
-            const abortedGroupItems = currentGroupItems.filter(isFollowupRunAborted);
-            if (abortedGroupItems.length > 0) {
-              removeQueuedItemsByRef(queue.items, abortedGroupItems);
-              for (const item of abortedGroupItems) {
-                completeFollowupRunLifecycle(item);
+          const currentGroupItems = prepared.items.filter((item) => queue.items.includes(item));
+          const abortedGroupItems = currentGroupItems.filter(isFollowupRunAborted);
+          if (abortedGroupItems.length > 0) {
+            removeQueuedItemsByRef(queue.items, abortedGroupItems);
+            completeFollowupRuns(abortedGroupItems);
+          }
+          const activeGroupItems = currentGroupItems.filter((item) => !isFollowupRunAborted(item));
+          if (activeGroupItems.length === 0) {
+            continue;
+          }
+          assertSingleAdmissionOwner(activeGroupItems);
+          const groupSource = expectDefined(activeGroupItems.at(-1), "active collect source");
+          const run = resolveCollectedRun(activeGroupItems, groupSource.run);
+
+          const routing = resolveOriginRoutingMetadata(activeGroupItems);
+          const prompt = buildCollectPrompt({
+            title: "[Queued messages while agent was busy]",
+            items: activeGroupItems,
+            renderItem: renderCollectItem,
+          });
+          const transcriptPrompt = buildCollectTranscriptInput(activeGroupItems).text;
+          const userTurnTranscriptRecorder =
+            createCollectUserTurnTranscriptRecorder(activeGroupItems);
+          const aggregateOwner = resolveAggregateOwner(activeGroupItems);
+          const cancellation = createAggregateCancellation(activeGroupItems);
+          let admitted = false;
+          const restoreGroupItems = (groupItemsToRestore: FollowupRun[]) => {
+            const missingItems = groupItemsToRestore.filter((item) => !queue.items.includes(item));
+            queue.items.unshift(...missingItems);
+          };
+          const needsGroupAdmission =
+            activeGroupItems.length > 1 ||
+            activeGroupItems.some((item) => hasExclusiveTurnAdmission(item.turnAdoptionLifecycle));
+          const admitGroupSources = async () => {
+            await Promise.all(activeGroupItems.map((item) => admitFollowupRunLifecycle(item)));
+            cancellation.admit();
+            admitted = true;
+            removeQueuedItemsByRef(queue.items, activeGroupItems);
+            for (const item of activeGroupItems) {
+              if (item !== aggregateOwner) {
+                retireFollowupRunCancellation(item);
               }
             }
-            const activeGroupItems = currentGroupItems.filter(
-              (item) => !isFollowupRunAborted(item),
-            );
-            if (activeGroupItems.length === 0) {
+          };
+          const completeGroup = () => {
+            removeQueuedItemsByRef(queue.items, activeGroupItems);
+            completeFollowupRuns(activeGroupItems);
+          };
+          try {
+            // Mark active group items as in-flight so the drop policy does not
+            // select them as overflow victims while the group drain is awaited.
+            for (const item of activeGroupItems) {
+              queue.inFlight.add(item);
+            }
+            await effectiveRunFollowup({
+              prompt,
+              transcriptPrompt,
+              ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
+              run,
+              messageId: groupSource.messageId ?? resolveFollowupReplyAnchor(groupSource),
+              enqueuedAt: Date.now(),
+              ...routing,
+              ...collectRuntimeMetadata(activeGroupItems, cancellation.signal),
+              ...(needsGroupAdmission
+                ? {
+                    turnAdoptionLifecycle: {
+                      // Synthetic aggregate owner — sources keep their own admission.
+                      admission: "cancel-only" as const,
+                      ...(resolveQueuedCronCreatorAuthorityUnavailable(activeGroupItems)
+                        ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
+                        : {}),
+                      onAdopted: admitGroupSources,
+                      onSettled: () => {
+                        if (admitted) {
+                          completeGroup();
+                        }
+                      },
+                    },
+                  }
+                : {}),
+              ...collectQueuedPromptMedia(activeGroupItems),
+            });
+          } catch (err) {
+            if (admitted) {
+              completeGroup();
+            } else if (
+              FOLLOWUP_QUEUES.get(key) === queue &&
+              !queue.abortController.signal.aborted
+            ) {
+              restoreGroupItems(activeGroupItems);
+            } else {
+              completeFollowupRuns(activeGroupItems);
+            }
+            throw err;
+          } finally {
+            for (const item of activeGroupItems) {
+              queue.inFlight.delete(item);
+            }
+            cancellation.dispose();
+          }
+          if (!admitted) {
+            const canceledSources = activeGroupItems.filter(isFollowupRunAborted);
+            if (canceledSources.length > 0) {
+              removeQueuedItemsByRef(queue.items, canceledSources);
+              completeFollowupRuns(canceledSources);
+              const survivors = activeGroupItems.filter((item) => !canceledSources.includes(item));
+              if (FOLLOWUP_QUEUES.get(key) === queue && !queue.abortController.signal.aborted) {
+                restoreGroupItems(survivors);
+              } else {
+                completeFollowupRuns(survivors);
+              }
               continue;
             }
-            assertSingleAdmissionOwner(activeGroupItems);
-            const groupSource = expectDefined(activeGroupItems.at(-1), "active collect source");
-            const run = resolveCollectedRun(activeGroupItems, groupSource.run);
-
-            const routing = resolveOriginRoutingMetadata(activeGroupItems);
-            const prompt = buildCollectPrompt({
-              title: "[Queued messages while agent was busy]",
-              items: activeGroupItems,
-              renderItem: renderCollectItem,
-            });
-            const transcriptPrompt = buildCollectTranscriptInput(activeGroupItems).text;
-            const userTurnTranscriptRecorder =
-              createCollectUserTurnTranscriptRecorder(activeGroupItems);
-            const aggregateOwner = resolveAggregateOwner(activeGroupItems);
-            const cancellation = createAggregateCancellation(activeGroupItems);
-            let admitted = false;
-            const restoreGroupItems = (groupItemsToRestore: FollowupRun[]) => {
-              const missingItems = groupItemsToRestore.filter(
-                (item) => !queue.items.includes(item),
-              );
-              queue.items.unshift(...missingItems);
-            };
-            const needsGroupAdmission =
-              activeGroupItems.length > 1 ||
-              activeGroupItems.some((item) =>
-                hasExclusiveTurnAdmission(item.turnAdoptionLifecycle),
-              );
-            const admitGroupSources = async () => {
-              await Promise.all(activeGroupItems.map((item) => admitFollowupRunLifecycle(item)));
-              cancellation.admit();
-              admitted = true;
-              removeQueuedItemsByRef(queue.items, activeGroupItems);
-              for (const item of activeGroupItems) {
-                if (item !== aggregateOwner) {
-                  retireFollowupRunCancellation(item);
-                }
-              }
-            };
-            const completeGroup = () => {
-              removeQueuedItemsByRef(queue.items, activeGroupItems);
-              for (const item of activeGroupItems) {
-                completeFollowupRunLifecycle(item);
-              }
-            };
-            const drainGroup = async () => {
-              await effectiveRunFollowup({
-                prompt,
-                transcriptPrompt,
-                ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
-                run,
-                messageId: groupSource.messageId ?? resolveFollowupReplyAnchor(groupSource),
-                enqueuedAt: Date.now(),
-                ...routing,
-                ...collectRuntimeMetadata(activeGroupItems, cancellation.signal),
-                ...(needsGroupAdmission
-                  ? {
-                      turnAdoptionLifecycle: {
-                        // Synthetic aggregate owner — sources keep their own admission.
-                        admission: "cancel-only" as const,
-                        ...(resolveQueuedCronCreatorAuthorityUnavailable(activeGroupItems)
-                          ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
-                          : {}),
-                        onAdopted: admitGroupSources,
-                        onSettled: () => {
-                          if (admitted) {
-                            completeGroup();
-                          }
-                        },
-                      },
-                    }
-                  : {}),
-                ...collectQueuedPromptMedia(activeGroupItems),
-              });
-            };
-            try {
-              // Mark active group items as in-flight so the drop policy does not
-              // select them as overflow victims while the group drain is awaited.
-              for (const item of activeGroupItems) {
-                queue.inFlight.add(item);
-              }
-              await drainGroup();
-            } catch (err) {
-              if (admitted) {
-                completeGroup();
-              } else if (
-                FOLLOWUP_QUEUES.get(key) === queue &&
-                !queue.abortController.signal.aborted
-              ) {
-                restoreGroupItems(activeGroupItems);
-              } else {
-                for (const item of activeGroupItems) {
-                  completeFollowupRunLifecycle(item);
-                }
-              }
-              throw err;
-            } finally {
-              for (const item of activeGroupItems) {
-                queue.inFlight.delete(item);
-              }
-              cancellation.dispose();
-            }
-            if (!admitted) {
-              const canceledSources = activeGroupItems.filter(isFollowupRunAborted);
-              if (canceledSources.length > 0) {
-                removeQueuedItemsByRef(queue.items, canceledSources);
-                for (const item of canceledSources) {
-                  completeFollowupRunLifecycle(item);
-                }
-                const survivors = activeGroupItems.filter(
-                  (item) => !canceledSources.includes(item),
-                );
-                if (FOLLOWUP_QUEUES.get(key) === queue && !queue.abortController.signal.aborted) {
-                  restoreGroupItems(survivors);
-                  if (survivors.length > 0) {
-                    break;
-                  }
-                } else {
-                  for (const item of survivors) {
-                    completeFollowupRunLifecycle(item);
-                  }
-                }
-                continue;
-              }
-            }
-            completeGroup();
           }
+          completeGroup();
           continue;
         }
 
@@ -1236,6 +1149,9 @@ export function scheduleFollowupDrain(
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
+      // A closing or retired database cannot serve this drain. Keep the input
+      // for a fresh owner signal or restart recovery, without a retry loop.
+      databaseAdmissionClosed = err instanceof AgentDatabaseExecutionAdmissionClosedError;
       if (!(err instanceof FollowupRunDeferredError)) {
         if (isGatewayRestartDrainError(err)) {
           // A reversible signal fence may reopen. One-way abort synchronously
@@ -1260,7 +1176,7 @@ export function scheduleFollowupDrain(
         } else if (!hasPendingQueueWork) {
           FOLLOWUP_QUEUES.delete(key);
           clearFollowupDrainCallback(key);
-        } else {
+        } else if (!databaseAdmissionClosed || drainOwner.rescheduleRequested) {
           scheduleFollowupDrain(key, effectiveRunFollowup);
         }
       }

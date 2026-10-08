@@ -866,9 +866,8 @@ it("settles canceled refresh cleanup without waiting for its admitted successor"
       { agentId: agentA, sessionFile: fileA },
       { agentId: agentB, sessionFile: fileB },
     ]) {
-      await fs.writeFile(sessionFile, usageLine("cached"));
-      await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
-      await fs.appendFile(sessionFile, usageLine("pending"));
+      openOpenClawAgentDatabase({ agentId, env: state.env });
+      await fs.writeFile(sessionFile, usageLine("first") + usageLine("second"));
     }
     const workA = new AsyncWorkScope();
     const enteredA = createDeferred();

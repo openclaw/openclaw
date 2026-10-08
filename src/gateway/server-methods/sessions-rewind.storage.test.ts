@@ -201,13 +201,19 @@ function context(): GatewayRequestContext {
 it.each([
   { kind: "visible", hidden: false },
   { kind: "hidden internal-effects", hidden: true },
-])("lists $kind session branches without decoding unrelated metadata", async ({ hidden }) => {
+])("lists $kind session branches without decoding saved snapshots", async ({ hidden }) => {
   await withOpenClawTestState({ label: "branch-list-bounded-read" }, async (state) => {
     await state.writeConfig(cfg);
     const identity = hidden
       ? resolveInternalSessionEffectsIdentity({ agentId: "main", runId: "branch-list-hidden" })
       : undefined;
     const scope = await seedMessageCutSource(false, identity);
+    const selectedPrompt = "selected-session-unused-skill-prompt".repeat(128);
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      skillsSnapshot: { prompt: selectedPrompt, skills: [] },
+    });
     const unrelatedPrompt = "unrelated-session-skill-prompt".repeat(128);
     for (let index = 0; index < 3; index += 1) {
       await upsertSessionEntryCore(
@@ -248,6 +254,7 @@ it.each([
         undefined,
       );
       expect(parse.mock.calls.filter(([text]) => text.includes(unrelatedPrompt))).toHaveLength(0);
+      expect(parse.mock.calls.filter(([text]) => text.includes(selectedPrompt))).toHaveLength(0);
     } finally {
       parse.mockRestore();
     }

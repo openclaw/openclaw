@@ -50,15 +50,13 @@ final class CookieSyncManager: NSObject {
     @ObservationIgnored private var runningIntent: SyncIntent?
     @ObservationIgnored private var reconcileGeneration: UInt64 = 0
     @ObservationIgnored private var retryAttempt = 0
-    @ObservationIgnored private var isStarted = false
 
     func start(state: AppState) {
         self.appState = state
-        guard !self.isStarted else {
+        guard self.endpointTask == nil else {
             self.scheduleReconcile(resetRetry: true)
             return
         }
-        self.isStarted = true
         let center = NotificationCenter.default
         center.addObserver(
             self,
@@ -91,13 +89,9 @@ final class CookieSyncManager: NSObject {
         // This singleton's notification lifetime follows its explicit start/stop lifecycle.
         // swiftlint:disable:next notification_center_detachment
         NotificationCenter.default.removeObserver(self)
-        self.endpointTask?.cancel()
-        self.endpointTask = nil
-        self.reconcileTask?.cancel()
-        self.reconcileTask = nil
-        self.retryTask?.cancel()
-        self.retryTask = nil
-        self.isStarted = false
+        SimpleTaskSupport.stop(task: &self.endpointTask)
+        SimpleTaskSupport.stop(task: &self.reconcileTask)
+        SimpleTaskSupport.stop(task: &self.retryTask)
         self.stopChild(nextState: .stopped)
     }
 
@@ -126,8 +120,7 @@ final class CookieSyncManager: NSObject {
     private func scheduleReconcile(resetRetry: Bool, delay: TimeInterval = 0.35) {
         if resetRetry {
             self.retryAttempt = 0
-            self.retryTask?.cancel()
-            self.retryTask = nil
+            SimpleTaskSupport.stop(task: &self.retryTask)
         }
         self.reconcileGeneration &+= 1
         let generation = self.reconcileGeneration

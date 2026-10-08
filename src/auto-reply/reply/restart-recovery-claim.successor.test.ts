@@ -15,100 +15,84 @@ import { createReplyRestartRecoveryClaimController } from "./restart-recovery-cl
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("restart recovery claim successors", () => {
-  it("transfers an aborted Control UI claim to a queued successor", async () => {
-    const scope = {
-      storePath: path.join(tempDirs.make("openclaw-reply-claim-successor-"), "sessions.json"),
-      sessionKey: "agent:main:main",
-    };
-    let entry: InternalSessionEntry = {
-      abortedLastRun: true,
-      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
-      restartRecoveryDeliveryRunId: "interrupted-run",
-      restartRecoveryDeliverySourceRunId: "interrupted-run",
-      restartRecoverySourceIngress: "control-ui",
-      sessionId: "session",
-      status: "running",
-      updatedAt: 1,
-    };
-    await replaceSessionEntry(scope, entry);
-    const controller = createReplyRestartRecoveryClaimController({
-      agentId: "main",
-      admissionRunId: "queued-run",
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      getEntry: () => entry,
-      getSessionId: () => entry.sessionId,
-      isRestartAbort: () => false,
-      resolveDeliveryContext: () => undefined,
-      setEntry: (next) => {
-        entry = next;
-      },
-      ...scope,
-    });
-
-    await expect(controller.admitUserTurn()).resolves.toBe("admitted");
-
-    expect(loadSessionEntry(scope)).toMatchObject({
-      abortedLastRun: false,
-      restartRecoveryDeliveryRunId: "queued-run",
-      restartRecoveryDeliverySourceRunId: "queued-run",
-      restartRecoverySourceIngress: "control-ui",
-      restartRecoveryTerminalRunIds: ["interrupted-run"],
-      status: "running",
-    });
-  });
-
-  it("rejects a successor when its recovery transfer loses ownership", async () => {
-    const scope = {
-      storePath: path.join(
-        tempDirs.make("openclaw-reply-claim-refused-successor-"),
-        "sessions.json",
-      ),
-      sessionKey: "agent:main:main",
-    };
-    let entry: InternalSessionEntry = {
-      abortedLastRun: true,
-      restartRecoveryDeliveryRunId: "interrupted-run",
-      restartRecoveryDeliverySourceRunId: "interrupted-run",
-      restartRecoverySourceIngress: "control-ui",
-      sessionId: "session",
-      status: "running",
-      updatedAt: 1,
-    };
-    await replaceSessionEntry(scope, entry);
-    let didSetEntry = false;
-    let replacement: ReturnType<typeof updateSessionEntry> | undefined;
-    const controller = createReplyRestartRecoveryClaimController({
-      agentId: "main",
-      admissionRunId: "queued-run",
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      getEntry: () => entry,
-      getSessionId: () => entry.sessionId,
-      isRestartAbort: () => false,
-      resolveDeliveryContext: () => {
-        replacement ??= updateSessionEntry(scope, () => ({
-          abortedLastRun: false,
+  it.each([
+    { outcome: "unsettled", status: undefined, transfers: true, losesOwnership: false },
+    { outcome: "interrupted", status: "interrupted", transfers: true, losesOwnership: false },
+    { outcome: "killed", status: "killed", transfers: false, losesOwnership: false },
+    { outcome: "failed", status: "failed", transfers: false, losesOwnership: false },
+    { outcome: "interrupted", status: "interrupted", transfers: false, losesOwnership: true },
+  ] as const)(
+    "handles an aborted $outcome Control UI claim (ownership lost: $losesOwnership)",
+    async ({ status, transfers, losesOwnership }) => {
+      const scope = {
+        storePath: path.join(tempDirs.make("openclaw-reply-claim-successor-"), "sessions.json"),
+        sessionKey: "agent:main:main",
+      };
+      let entry: InternalSessionEntry = {
+        abortedLastRun: true,
+        ...(!losesOwnership
+          ? { restartRecoveryDeliveryRequestFingerprint: "request-fingerprint" }
+          : {}),
+        restartRecoveryDeliveryRunId: "interrupted-run",
+        restartRecoveryDeliverySourceRunId: "interrupted-run",
+        restartRecoverySourceIngress: "control-ui",
+        sessionId: "session",
+        status,
+        updatedAt: 1,
+      };
+      await replaceSessionEntry(scope, entry);
+      const before = loadSessionEntry(scope);
+      let didSetEntry = false;
+      let replacement: ReturnType<typeof updateSessionEntry> | undefined;
+      const controller = createReplyRestartRecoveryClaimController({
+        agentId: "main",
+        admissionRunId: "queued-run",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        getEntry: () => entry,
+        getSessionId: () => entry.sessionId,
+        isRestartAbort: () => false,
+        resolveDeliveryContext: () => {
+          if (losesOwnership) {
+            replacement ??= updateSessionEntry(scope, () => ({
+              abortedLastRun: false,
+              restartRecoveryDeliveryRunId: "replacement-run",
+              restartRecoveryDeliverySourceRunId: "replacement-run",
+              updatedAt: 2,
+            }));
+          }
+          return undefined;
+        },
+        setEntry: (next) => {
+          didSetEntry = true;
+          entry = next;
+        },
+        ...scope,
+      });
+      const outcome = await controller.admitUserTurn().catch((error: unknown) => error);
+      await replacement;
+      if (losesOwnership) {
+        expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+        expect(didSetEntry).toBe(false);
+        expect(loadSessionEntry(scope)).toMatchObject({
           restartRecoveryDeliveryRunId: "replacement-run",
           restartRecoveryDeliverySourceRunId: "replacement-run",
-          updatedAt: 2,
-        }));
-        return undefined;
-      },
-      setEntry: (next) => {
-        didSetEntry = true;
-        entry = next;
-      },
-      ...scope,
-    });
-    const outcome = await controller.admitUserTurn().catch((error: unknown) => error);
-    await replacement;
-
-    expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
-    expect(didSetEntry).toBe(false);
-    expect(loadSessionEntry(scope)).toMatchObject({
-      restartRecoveryDeliveryRunId: "replacement-run",
-      restartRecoveryDeliverySourceRunId: "replacement-run",
-    });
-  });
+        });
+      } else if (!transfers) {
+        expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+        expect(loadSessionEntry(scope)).toEqual(before);
+      } else {
+        expect(outcome).toBe("admitted");
+        expect(loadSessionEntry(scope)).toMatchObject({
+          abortedLastRun: false,
+          restartRecoveryDeliveryRunId: "queued-run",
+          restartRecoveryDeliverySourceRunId: "queued-run",
+          restartRecoverySourceIngress: "control-ui",
+          restartRecoveryTerminalRunIds: ["interrupted-run"],
+        });
+        expect(loadSessionEntry(scope)?.status).toBeUndefined();
+      }
+    },
+  );
 
   it("tracks a channel claim after retiring an aborted Control UI predecessor", async () => {
     const storePath = path.join(
@@ -125,7 +109,7 @@ describe("restart recovery claim successors", () => {
       restartRecoveryDeliverySourceRunId: "interrupted-control-ui-run",
       restartRecoverySourceIngress: "control-ui",
       sessionId,
-      status: "running",
+      status: "interrupted",
       updatedAt: 1,
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
@@ -164,6 +148,7 @@ describe("restart recovery claim successors", () => {
     await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
     const admittedRunId = loadSessionEntry({ storePath, sessionKey })?.restartRecoveryDeliveryRunId;
     expect(admittedRunId).toEqual(expect.any(String));
+    expect(loadSessionEntry({ storePath, sessionKey })?.status).toBeUndefined();
     await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
     await controller.checkpointBeforeAgentReply({
       state: "handled-reply",

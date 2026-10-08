@@ -65,14 +65,18 @@ export type WorkerTaskOptions<Input> = {
   signal?: AbortSignal;
   transferList?: (input: Input) => readonly Transferable[];
   onRequest?: (value: unknown, context: WorkerTaskRequestContext) => Promise<WorkerTaskResponse>;
+  /** Task-scoped observations; these do not settle work or renew its deadline. */
+  onNotification?: (value: unknown) => void;
   onInputConsumed?: () => void;
   /** Native task receipt before its result; async input preparation and host effects are not joined. */
   onExecutionSettled?: (settlement: WorkerTaskExecutionSettlement) => void;
 };
 
 /** Internal codecs may answer a worker while their caller cannot run Promise reactions. */
-export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> &
-  (
+export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> & {
+  /** Host diagnostics classify this operation before publishing bounded labels. */
+  diagnosticOperation?: string;
+} & (
     | { onRequest?: WorkerTaskOptions<Input>["onRequest"]; onRequestSync?: never }
     | {
         onRequest?: never;

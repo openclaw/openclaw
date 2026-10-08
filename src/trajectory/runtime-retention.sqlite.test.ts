@@ -13,7 +13,13 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { loadAgentTrajectoryOperations } from "../state/openclaw-agent-execution-operations.js";
+import type { AgentWorkerOperationContext } from "../state/openclaw-agent-operation-context.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import {
+  beginTrajectoryRuntimeRetention,
+  prepareTrajectoryRuntimeRetention,
+} from "./runtime-retention.sqlite.js";
 import {
   appendSqliteTrajectoryRuntimeEvents,
   appendSqliteTrajectoryRuntimeEventsWithWriter,
@@ -40,6 +46,60 @@ describe("SQLite trajectory runtime retention", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each(["missing", "invalidated", "empty"] as const)(
+    "admits a retention write only for a current selection (%s)",
+    async (mode) => {
+      const options = { agentId: "main", path: sqlitePath() };
+      const database = openOpenClawAgentDatabase(options);
+      const lease = new Int32Array(new SharedArrayBuffer(4));
+      Atomics.store(lease, 0, 1);
+      const sweepId =
+        mode === "missing" ? "missing" : beginTrajectoryRuntimeRetention(database.db, lease);
+      const snapshot =
+        mode === "missing"
+          ? undefined
+          : prepareTrajectoryRuntimeRetention(database.db, { sessionId: "session-1" }, Date.now());
+      if (mode === "invalidated") {
+        executeSqliteQuerySync(
+          database.db,
+          getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "session_nodes">>(database.db)
+            .updateTable("session_nodes")
+            .set({ updated_at: 11 })
+            .where("session_key", "=", "agent:main:main"),
+        );
+      }
+      const operations = await loadAgentTrajectoryOperations();
+      const context: AgentWorkerOperationContext = {
+        options,
+        open: () => database,
+        admit() {},
+        writeTransaction: (operationLabel, _owner, write) =>
+          runOpenClawAgentWriteTransaction(write, options, { operationLabel }),
+      };
+      const statements: string[] = [];
+      const exec = database.db.exec.bind(database.db);
+      const observe = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
+        statements.push(sql);
+        exec(sql);
+      });
+      try {
+        expect(
+          operations["trajectory.retention.delete"]({ sweepId, snapshot }, context),
+        ).toMatchObject({
+          complete: mode === "empty",
+          refresh: mode !== "empty",
+          deleted: 0,
+        });
+        expect(statements.filter((sql) => sql === "BEGIN IMMEDIATE")).toHaveLength(
+          mode === "empty" ? 1 : 0,
+        );
+      } finally {
+        observe.mockRestore();
+        Atomics.store(lease, 0, 0);
+      }
+    },
+  );
 
   it("drops old runs while retaining recent runs", async () => {
     const now = Date.parse("2026-07-26T00:00:00.000Z");

@@ -8,7 +8,7 @@ import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayCliOptions } from "../gateway/call.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { WizardSession } from "../wizard/session.js";
@@ -35,9 +35,9 @@ vi.mock("./onboard-guided.js", () => ({ runGuidedOnboarding: mocks.runGuidedOnbo
 // mock-isolation: Remote onboarding records its handoff without loading the local terminal runtime.
 vi.mock("../tui/tui.js", () => ({ runTui: mocks.runTui }));
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
-  loadOrCreateDeviceIdentity: vi.fn(() => ({
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateDeviceIdentityAsync: vi.fn(async () => ({
     deviceId: "remote-onboarding-device",
     publicKeyPem: "test-public-key",
     privateKeyPem: "test-private-key",
@@ -908,11 +908,11 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
-  it.each(["device", "profile"])(
-    "keeps remote chat ownership across replies and cancellation: %s",
+  it.each(["device", "unavailable"])(
+    "preserves remote chat identity selection: %s",
     async (identity) => {
-      if (identity === "profile") {
-        vi.mocked(loadOrCreateDeviceIdentity).mockImplementationOnce(() => {
+      if (identity === "unavailable") {
+        vi.mocked(loadOrCreateDeviceIdentityAsync).mockImplementationOnce(() => {
           throw new Error("read-only client state");
         });
       }
@@ -942,12 +942,8 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           return { ok: true, modelRef: "claude-cli/opus", latencyMs: 100 };
         }
         if (options.method === "openclaw.chat") {
-          // The Gateway falls back to connection ownership when there is no
-          // authenticated profile or device; one-shot calls use new connections.
-          const owner =
-            identity === "profile"
-              ? "authenticated-profile"
-              : (options.deviceIdentity?.deviceId ?? `connection:${++connections}`);
+          // One-shot requests need the same signed device across connections.
+          const owner = options.deviceIdentity?.deviceId ?? `connection:${++connections}`;
           if (chatOwner && chatOwner !== owner) {
             throw new Error("OpenClaw session belongs to another caller.");
           }
@@ -969,7 +965,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       });
       const runTui = vi.fn();
 
-      await runWithGatewayMocks(
+      const onboarding = runWithGatewayMocks(
         makeTarget(makeLocalConfig(), { token: "selected-token" }),
         makeRuntime(),
         {
@@ -979,6 +975,14 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           runTui,
         },
       );
+
+      if (identity === "unavailable") {
+        await expect(onboarding).rejects.toThrow(/Cannot load device identity.*doctor --fix/);
+        expect(methods).not.toContain("openclaw.chat");
+        expect(runTui).not.toHaveBeenCalled();
+        return;
+      }
+      await onboarding;
 
       expect(methods).toEqual([
         "openclaw.setup.detect",

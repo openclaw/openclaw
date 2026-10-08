@@ -117,12 +117,7 @@ function hasSameHost(a: string, b: string): boolean {
 
 export type CustomApiCompatibility = "openai" | "openai-responses" | "anthropic";
 
-export type CustomApiResult = {
-  config: OpenClawConfig;
-  providerId: string;
-  modelId: string;
-  providerIdRenamedFrom?: string;
-};
+export type CustomApiResult = ReturnType<typeof applyCustomApiConfig>;
 
 type ApplyCustomApiConfigParams = {
   config: OpenClawConfig;
@@ -142,15 +137,6 @@ type ParseNonInteractiveCustomApiFlagsParams = {
   baseUrl?: string;
   modelId?: string;
   compatibility?: string;
-  apiKey?: string;
-  providerId?: string;
-  supportsImageInput?: boolean;
-};
-
-type ParsedNonInteractiveCustomApiFlags = {
-  baseUrl: string;
-  modelId: string;
-  compatibility: CustomApiCompatibility;
   apiKey?: string;
   providerId?: string;
   supportsImageInput?: boolean;
@@ -410,9 +396,7 @@ export function resolveCustomProviderId(params: {
   return { providerId: `${requestedId}-${suffix}`, providerIdRenamedFrom: requestedId };
 }
 
-export function parseNonInteractiveCustomApiFlags(
-  params: ParseNonInteractiveCustomApiFlagsParams,
-): ParsedNonInteractiveCustomApiFlags {
+export function parseNonInteractiveCustomApiFlags(params: ParseNonInteractiveCustomApiFlagsParams) {
   const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
   const modelId = normalizeOptionalString(params.modelId) ?? "";
   if (!baseUrl || !modelId) {
@@ -446,7 +430,7 @@ export function parseNonInteractiveCustomApiFlags(
 }
 
 /** Applies custom provider config and optionally makes its model the primary model. */
-export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
+export function applyCustomApiConfig(params: ApplyCustomApiConfigParams) {
   const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
   if (!isHttpUrl(baseUrl)) {
     throw new CustomApiError(

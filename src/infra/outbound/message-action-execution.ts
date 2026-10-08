@@ -4,6 +4,7 @@ import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-cl
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
   readPositiveIntegerParam,
   readStringArrayParam,
@@ -58,8 +59,6 @@ import {
   cancelTerminalSourceReplyDelivery,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
-
-export { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 
 const log = createSubsystemLogger("outbound/message-action");
 
@@ -425,28 +424,21 @@ export async function executeGatewayAction(
     return result;
   }
   const partialDelivery = asResultRecord(payload)?.deliveryStatus === "partial_failed";
-  if (result.kind === "send") {
+  if (result.kind === "send" || result.kind === "poll") {
     return {
       ...result,
       handledBy: "core",
       ...(partialDelivery
         ? {}
-        : {
-            // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
-            sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
-          }),
-    };
-  }
-  if (result.kind === "poll") {
-    return {
-      ...result,
-      handledBy: "core",
-      ...(partialDelivery
-        ? {}
-        : {
-            // SAFETY: successful canonical Gateway polls return MessagePollResult payloads.
-            pollResult: payload as Extract<MessageActionResult, { kind: "poll" }>["pollResult"],
-          }),
+        : result.kind === "send"
+          ? {
+              // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
+              sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
+            }
+          : {
+              // SAFETY: successful canonical Gateway polls return MessagePollResult payloads.
+              pollResult: payload as Extract<MessageActionResult, { kind: "poll" }>["pollResult"],
+            }),
     };
   }
   return result;
@@ -646,6 +638,17 @@ export async function executeMessagePlugin(
     return await annotateSourceDelivery(gatewayPluginAction, ctx, replyToIsExplicit);
   }
 
+  const finishPluginAction = (payload: unknown, toolResult?: AgentToolResult<unknown>) =>
+    annotateSourceDelivery(
+      {
+        ...actionResult,
+        handledBy: "plugin",
+        payload,
+        ...(toolResult ? { toolResult } : {}),
+      },
+      ctx,
+      replyToIsExplicit,
+    );
   const authorization = input.messageActionAuthorization;
   let handled;
   try {
@@ -670,29 +673,12 @@ export async function executeMessagePlugin(
       ? projectMessageActionPartialDelivery(error)
       : undefined;
     if (partialDelivery) {
-      return await annotateSourceDelivery(
-        {
-          ...actionResult,
-          handledBy: "plugin",
-          payload: partialDelivery,
-        },
-        ctx,
-        replyToIsExplicit,
-      );
+      return await finishPluginAction(partialDelivery);
     }
     throw error;
   }
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
-  return await annotateSourceDelivery(
-    {
-      ...actionResult,
-      handledBy: "plugin",
-      payload: extractToolPayload(handled),
-      toolResult: handled,
-    },
-    ctx,
-    replyToIsExplicit,
-  );
+  return await finishPluginAction(extractToolPayload(handled), handled);
 }

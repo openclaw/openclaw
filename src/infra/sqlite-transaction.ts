@@ -521,12 +521,14 @@ export async function runSqliteImmediateTransaction<T>(
   if (db.isTransaction) {
     throw new Error("Asynchronous SQLite preparation cannot join an existing transaction");
   }
-  const deadline = performance.now() + readSqliteBusyTimeout(db);
   const inheritedDeadlineNs = options?.beginDeadlineNs;
-  const remainingMs =
-    inheritedDeadlineNs === undefined
-      ? () => deadline - performance.now()
-      : () => Number(inheritedDeadlineNs - process.hrtime.bigint()) / 1_000_000;
+  const remainingMs = (() => {
+    if (inheritedDeadlineNs !== undefined) {
+      return () => Number(inheritedDeadlineNs - process.hrtime.bigint()) / 1_000_000;
+    }
+    const deadline = performance.now() + readSqliteBusyTimeout(db);
+    return () => deadline - performance.now();
+  })();
   let entered = false;
   while (true) {
     const operation = await prepare();

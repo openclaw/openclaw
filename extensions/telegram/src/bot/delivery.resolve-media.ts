@@ -59,10 +59,9 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateN
 }
 
 function isFileTooBigError(err: unknown): boolean {
-  if (err instanceof GrammyError) {
-    return FILE_TOO_BIG_RE.test(err.description);
-  }
-  return FILE_TOO_BIG_RE.test(formatErrorMessage(err));
+  return FILE_TOO_BIG_RE.test(
+    err instanceof GrammyError ? err.description : formatErrorMessage(err),
+  );
 }
 
 function isRetryableGetFileError(err: unknown): boolean {

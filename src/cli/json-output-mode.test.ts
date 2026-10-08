@@ -6,6 +6,7 @@ import {
   applyResolvedCommandOutputMode,
   hasJsonOutputFlag,
   isJsonOutputModeActive,
+  withConsoleLogsRoutedToStderr,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
 
@@ -147,5 +148,45 @@ describe("json output mode", () => {
       },
       { machineOutput: true },
     );
+  });
+
+  it.each(["temporary-first", "json-first"])(
+    "retains temporary stderr routing across JSON refinement and release (%s)",
+    async (order) => {
+      const resume = Promise.withResolvers<void>();
+      let temporary: Promise<void> | undefined;
+      const startTemporary = () => {
+        temporary = withConsoleLogsRoutedToStderr(() => resume.promise);
+      };
+      try {
+        if (order === "temporary-first") {
+          startTemporary();
+        }
+        await withConsoleLogsRoutedToStderrForJson(["--json"], async () => {
+          if (order === "json-first") {
+            startTemporary();
+          }
+          applyResolvedCommandOutputMode(false);
+          expect(loggingState.forceConsoleToStderr).toBe(true);
+        });
+        expect(loggingState.forceConsoleToStderr).toBe(true);
+        resume.resolve();
+        await temporary;
+        expect(loggingState.forceConsoleToStderr).toBe(false);
+      } finally {
+        resume.resolve();
+        await temporary;
+      }
+    },
+  );
+
+  it("preserves JSON routing retained until exit when a temporary scope finishes", async () => {
+    await withConsoleLogsRoutedToStderr(async () => {
+      await withConsoleLogsRoutedToStderrForJson(["--json"], async () => {}, {
+        retainRoutingUntilProcessExit: true,
+      });
+      expect(loggingState.forceConsoleToStderr).toBe(true);
+    });
+    expect(loggingState.forceConsoleToStderr).toBe(true);
   });
 });

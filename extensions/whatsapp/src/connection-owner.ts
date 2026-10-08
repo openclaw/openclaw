@@ -33,7 +33,6 @@ const GATEWAY_LOCAL_OWNER_WAIT_MS = 150_000;
 type ProcessOwner = {
   released: Promise<void>;
   resolveReleased: () => void;
-  token: symbol;
 };
 
 const processOwners = new Map<string, ProcessOwner>();
@@ -64,7 +63,6 @@ async function reserveProcessOwner(params: {
       const owner: ProcessOwner = {
         released: released.promise,
         resolveReleased: released.resolve,
-        token: Symbol(params.ownerPath),
       };
       processOwners.set(params.ownerPath, owner);
       return owner;
@@ -88,7 +86,7 @@ async function reserveProcessOwner(params: {
 }
 
 function abandonProcessOwner(ownerPath: string, owner: ProcessOwner): void {
-  if (processOwners.get(ownerPath)?.token !== owner.token) {
+  if (processOwners.get(ownerPath) !== owner) {
     return;
   }
   processOwners.delete(ownerPath);

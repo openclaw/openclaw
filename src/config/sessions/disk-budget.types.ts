@@ -24,6 +24,7 @@ export type SessionUnreferencedArtifactSweepResult = {
 };
 
 export type ArchivedSessionEvictionQuery = {
+  liveSessionKeys: readonly string[];
   after?: { archivedAt: number; sessionKey: string };
   limit?: number;
   preserveRecentMs?: number | null;

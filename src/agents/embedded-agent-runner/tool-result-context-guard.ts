@@ -241,9 +241,7 @@ export function installContextEngineLoopHook(params: {
   sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   tokenBudget?: number;
-  /** Compaction reserve the turn-start window already subtracted from its budget. */
   reserveTokens?: () => number;
-  /** Rendered system prompt; the turn-start window subtracts its token pressure. */
   getSystemPrompt?: () => string | undefined;
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
@@ -259,6 +257,7 @@ export function installContextEngineLoopHook(params: {
   isHeartbeat?: boolean;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
+  const sessionIdentity = { sessionId, sessionKey };
   const mutableAgent = params.agent as GuardableAgentRecord;
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
@@ -311,8 +310,7 @@ export function installContextEngineLoopHook(params: {
       if (!params.deferredTurn) {
         if (typeof contextEngine.afterTurn === "function") {
           await contextEngine.afterTurn({
-            sessionId,
-            sessionKey,
+            ...sessionIdentity,
             sessionTarget: params.sessionTarget,
             sessionFile,
             messages: transcriptMessages,
@@ -329,16 +327,14 @@ export function installContextEngineLoopHook(params: {
           const newMessages = transcriptMessages.slice(prePromptMessageCount);
           if (typeof contextEngine.ingestBatch === "function") {
             await contextEngine.ingestBatch({
-              sessionId,
-              sessionKey,
+              ...sessionIdentity,
               messages: newMessages,
               isHeartbeat: params.isHeartbeat,
             });
           } else {
             for (const message of newMessages) {
               await contextEngine.ingest({
-                sessionId,
-                sessionKey,
+                ...sessionIdentity,
                 message,
                 isHeartbeat: params.isHeartbeat,
               });
@@ -361,29 +357,21 @@ export function installContextEngineLoopHook(params: {
         (sum, message) => sum + estimateTokens(message),
         0,
       );
-      // The turn-start window hands the engine contextTokens minus the
-      // compaction reserve and rendered system-prompt pressure. The loop must
-      // refill history from the same baseline (still minus the pending
-      // exchange), or an engine that fills its budget re-adds history the turn
-      // start dropped and the next model call overflows mid-turn.
+      // The pending exchange already includes the active prompt; reserve only
+      // the system prompt here, using the same pressure estimate as turn start.
+      const systemTokens = estimateRenderedLlmBoundaryTokenPressure({
+        systemPrompt: params.getSystemPrompt?.(),
+        prompt: "",
+      });
       const reserve = Math.max(0, Math.floor(params.reserveTokens?.() ?? 0));
-      const loopBudget =
-        tokenBudget === undefined
-          ? undefined
-          : Math.max(
-              1,
-              Math.max(1, tokenBudget - reserve) -
-                estimateRenderedLlmBoundaryTokenPressure({
-                  systemPrompt: params.getSystemPrompt?.(),
-                  prompt: "",
-                }),
-            );
       const assembled = await contextEngine.assemble({
-        sessionId,
-        sessionKey,
+        ...sessionIdentity,
         messages: providerMessages.slice(0, historyLength),
         ...params.deferredTurn,
-        tokenBudget: loopBudget === undefined ? undefined : Math.max(1, loopBudget - pendingTokens),
+        tokenBudget:
+          tokenBudget === undefined
+            ? undefined
+            : Math.max(1, tokenBudget - reserve - systemTokens - pendingTokens),
         model: modelId,
         runtimeSettings: params.runtimeSettings,
       });

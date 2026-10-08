@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
+import type { AssistantMessage, Model, StreamFn } from "@openclaw/llm-core";
 import OpenAI, { AzureOpenAI } from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
@@ -160,13 +160,7 @@ type ResponsesTransportExecutorOptions = {
   streamRequest?: boolean;
   httpContinuation?: boolean;
   createClient: typeof createOpenAIResponsesClient;
-  buildRequest: (
-    model: Model,
-    context: Context,
-    options: OpenAIResponsesOptions | undefined,
-    metadata?: Record<string, string>,
-    replayMode?: OpenAIResponsesReplayMode,
-  ) => ReturnType<typeof buildOpenAIResponsesParams>;
+  buildRequest: typeof buildOpenAIResponsesParams;
   pricingOptions?: (
     options: OpenAIResponsesOptions | undefined,
     model: Model,
@@ -269,8 +263,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             params.multi_agent?.enabled !== true &&
             params.tools
           ) {
+            const synchronousTools = new Set(
+              context.tools?.flatMap((tool) => (tool.async === false ? [tool.name] : [])),
+            );
             params.tools = params.tools.map((tool) =>
-              tool.type === "function" ? { ...tool, async: true } : tool,
+              tool.type === "function" && !synchronousTools.has(tool.name)
+                ? { ...tool, async: true }
+                : tool,
             );
           }
           return params;

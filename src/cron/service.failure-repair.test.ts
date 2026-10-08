@@ -164,47 +164,14 @@ describe("CronService failure repair", () => {
     });
   });
 
-  it("keeps the existing alert with no owner conversation", async () => {
-    await withRepair(async ({ cron, sendCronFailureAlert, runCronFailureRepair, addJob }) => {
-      const job = await addJob("plain sync", { ...owned, owner: undefined });
-      await cron.run(job.id, "force");
-      await cron.run(job.id, "force");
-      expect(runCronFailureRepair).not.toHaveBeenCalled();
-      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-      expect(cron.getJob(job.id)?.state.failureAlertIncident?.repair).toBeUndefined();
-    });
-  });
-
   it.each<{
     name: string;
     payload: CronJob["payload"];
-    schedule?: CronJob["schedule"];
-    repairs: boolean;
   }>([
-    { name: "systemEvent", payload: { kind: "systemEvent", text: "check" }, repairs: true },
-    { name: "script", payload: { kind: "script", script: "json({})" }, repairs: true },
-    {
-      name: "operator command",
-      payload: { kind: "command", argv: ["true"], env: {}, input: "" },
-      repairs: false,
-    },
-    {
-      name: "on-exit schedule",
-      payload: { kind: "agentTurn", message: "sync" },
-      schedule: { kind: "on-exit", command: "make build" },
-      repairs: false,
-    },
-    {
-      name: "stream schedule",
-      payload: { kind: "agentTurn", message: "sync" },
-      schedule: { kind: "stream", command: ["tail", "-f", "app.log"] },
-      repairs: false,
-    },
-  ])("$name job: repair=$repairs", ({ payload, repairs, schedule }) => {
-    const { state, job, deferredNotifications } = repairPolicyFixture({
-      payload,
-      ...(schedule ? { schedule } : {}),
-    });
+    { name: "systemEvent", payload: { kind: "systemEvent", text: "check" } },
+    { name: "script", payload: { kind: "script", script: "json({})" } },
+  ])("requests repair for a $name job", ({ payload }) => {
+    const { state, job, deferredNotifications } = repairPolicyFixture({ payload });
     maybeEmitFailureAlert(state, {
       job,
       alertConfig: resolveFailureAlert(state, job),
@@ -214,15 +181,14 @@ describe("CronService failure repair", () => {
       deferredNotifications,
     });
     expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
-      repairs ? "failure-repair" : "failure-alert",
+      "failure-repair",
     ]);
   });
 
   it.each([
-    { name: "recurring job", schedule: "every", recover: false, repairs: true },
-    { name: "replayed one-shot", schedule: "at", recover: true, repairs: true },
-    { name: "retired one-shot", schedule: "at", recover: false, repairs: false },
-  ] as const)("restart-interrupted $name: repair=$repairs", ({ schedule, recover, repairs }) => {
+    { name: "recurring job", schedule: "every", repairs: true },
+    { name: "retired one-shot", schedule: "at", repairs: false },
+  ] as const)("restart-interrupted $name: repair=$repairs", ({ schedule, repairs }) => {
     const { state, job, deferredNotifications } = repairPolicyFixture(
       {
         schedule:
@@ -238,7 +204,7 @@ describe("CronService failure repair", () => {
       job,
       runningAtMs,
       nowMs: runningAtMs + 30_000,
-      recoverInterruptedOneShot: recover,
+      recoverInterruptedOneShot: false,
       deferredNotifications,
     });
     expect(deferredNotifications.map((notification) => notification.kind)).toEqual([

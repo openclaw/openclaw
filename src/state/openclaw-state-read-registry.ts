@@ -7,7 +7,6 @@ import {
 } from "../agents/sandbox/registry.kernel.js";
 import { listRegistryWorktreesInDatabase } from "../agents/worktrees/registry-read.kernel.js";
 import { readWorktreeRunLeaseStateInDatabase } from "../agents/worktrees/run-lease-owner.js";
-import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
 import { readPreparedPoolPresenceDemandInDatabase } from "../gateway/worker-environments/prepared-pool-presence-store.worker.js";
 import {
   readWorkerEnvironmentFacts,
@@ -33,8 +32,7 @@ export function readStateRegistryCommand(
         | "agentDeletionJournal.status"
         | "agentDeletionJournal.authority"
         | "worktrees.cleanupState"
-        | "fleet.list"
-        | "fleet.get"
+        | "worktrees.list"
         | "sandboxRegistry.list"
         | "sandboxRegistry.get"
         | "sandboxRegistry.runtimeIds"
@@ -96,7 +94,5 @@ export function readStateRegistryCommand(
       leases: readWorktreeRunLeaseStateInDatabase(db),
     };
   }
-  return command.type === "fleet.list"
-    ? { type: command.type, cells: listFleetCellsInDatabase(db) }
-    : { type: command.type, cell: getFleetCellInDatabase(db, command.tenantId) };
+  return { type: command.type, records: listRegistryWorktreesInDatabase(db) };
 }

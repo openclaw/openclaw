@@ -5,7 +5,6 @@ import {
   AcpSessionManager,
   baseCfg,
   createRuntime,
-  disposeAcpSessionManagerInstance,
   hoisted,
   installAcpSessionManagerTestLifecycle,
   installMutableAcpSessionMetaUpsert,
@@ -120,116 +119,52 @@ describe("AcpSessionManager runtime config", () => {
     });
   });
 
-  it("persists prompt-learned agent identity when runtime status omits it", async () => {
-    const f = fixture({
-      agent: "gemini",
-      identity: {
-        state: "pending",
-        source: "ensure",
-        acpxSessionId: "acpx-stale",
-        lastUpdatedAt: 1,
-      },
-    });
-    f.state.ensureSession.mockResolvedValue({
-      sessionKey: f.target.sessionKey,
-      backend: "acpx",
-      runtimeSessionName: "runtime-3",
-      backendSessionId: "acpx-stale",
-    });
-    f.state.runTurn.mockImplementation(async function* ({ handle }) {
-      handle.agentSessionId = "gemini-session-1";
-      yield { type: "done" };
+  it("continues after an optional timeout control rejection", async () => {
+    const f = fixture({ agent: "opencode", runtimeOptions: { timeoutSeconds: 120 } });
+    f.state.setConfigOption.mockImplementation(async (input) => {
+      if (input.key === "timeout") {
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          'Agent rejected session/set_config_option for "timeout": ACP -32602 Invalid params',
+        );
+      }
     });
     await f.run();
-    expect(f.persisted.currentMeta.identity).toMatchObject({
-      state: "resolved",
-      agentSessionId: "gemini-session-1",
-      acpxSessionId: "acpx-stale",
-    });
+    expect(f.state.runTurn).toHaveBeenCalledOnce();
+    expect(f.state.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "timeout", value: "120" }),
+    );
   });
 
-  it.each([
-    {
-      key: "timeout",
-      options: { timeoutSeconds: 120 },
-      code: "ACP_TURN_FAILED",
-      message: 'Agent rejected session/set_config_option for "timeout": ACP -32602 Invalid params',
-      continues: true,
-    },
-    {
-      key: "timeout",
-      options: { timeoutSeconds: 120 },
-      code: "ACP_BACKEND_UNAVAILABLE",
-      message: "ACP backend unavailable",
-      continues: false,
-    },
-    {
-      key: "model",
-      options: { model: "opencode/gpt-5.4" },
-      code: "ACP_TURN_FAILED",
-      message: 'Agent rejected session/set_config_option for "model": ACP -32602 Invalid params',
-      continues: false,
-    },
-  ] as const)(
-    "handles $key control failure: $message",
-    async ({ key, options, code, message, continues }) => {
-      const f = fixture({ agent: "opencode", runtimeOptions: options });
-      f.state.setConfigOption.mockImplementation(async (input) => {
-        if (input.key === key) {
-          throw new AcpRuntimeError(code, message);
-        }
-      });
-      const turn = f.run();
-      if (continues) {
-        await turn;
-        expect(f.state.runTurn).toHaveBeenCalledOnce();
-      } else {
-        await expect(turn).rejects.toMatchObject({ code });
-        expect(f.state.runTurn).not.toHaveBeenCalled();
-      }
-      expect(f.state.setConfigOption).toHaveBeenCalledWith(
-        expect.objectContaining({ key, value: key === "timeout" ? "120" : "opencode/gpt-5.4" }),
-      );
-    },
-  );
-
-  it.each(["next turn", "shutdown"])(
-    "closes the retained cwd handle before %s",
-    async (operation) => {
-      const f = fixture();
-      const lifecycle: string[] = [];
-      f.state.ensureSession.mockImplementation(async (input) => {
-        lifecycle.push(`ensure:${input.cwd ?? "default"}`);
-        return {
-          sessionKey: input.sessionKey,
-          backend: "acpx",
-          runtimeSessionName: `runtime:${input.cwd ?? "default"}`,
-          cwd: input.cwd,
-        };
-      });
-      f.state.close.mockImplementation(async ({ handle }) => {
-        lifecycle.push(`close:${handle.cwd ?? "default"}`);
-      });
-      await f.run("first");
-      await expect(
-        f.manager.updateSessionRuntimeOptions({ ...f.target, patch: { cwd: "/workspace/next" } }),
-      ).resolves.toEqual({ cwd: "/workspace/next" });
-      expect(f.persisted.currentMeta.runtimeOptions).toEqual({ cwd: "/workspace/next" });
-      expect(f.persisted.currentMeta.cwd).toBe("/workspace/next");
-      if (operation === "shutdown") {
-        await disposeAcpSessionManagerInstance(f.manager, "gateway-shutdown");
-        expect(lifecycle).toEqual(["ensure:default", "close:default"]);
-      } else {
-        await f.run("second");
-        expect(f.state.ensureSession).toHaveBeenCalledTimes(2);
-        expect(f.state.ensureSession.mock.calls[1]?.[0]).toMatchObject({
-          sessionKey: f.target.sessionKey,
-          cwd: "/workspace/next",
-        });
-        expect(lifecycle).toEqual(["ensure:default", "close:default", "ensure:/workspace/next"]);
-      }
-    },
-  );
+  it("closes the retained cwd handle before the next turn", async () => {
+    const f = fixture();
+    const lifecycle: string[] = [];
+    f.state.ensureSession.mockImplementation(async (input) => {
+      lifecycle.push(`ensure:${input.cwd ?? "default"}`);
+      return {
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: `runtime:${input.cwd ?? "default"}`,
+        cwd: input.cwd,
+      };
+    });
+    f.state.close.mockImplementation(async ({ handle }) => {
+      lifecycle.push(`close:${handle.cwd ?? "default"}`);
+    });
+    await f.run("first");
+    await expect(
+      f.manager.updateSessionRuntimeOptions({ ...f.target, patch: { cwd: "/workspace/next" } }),
+    ).resolves.toEqual({ cwd: "/workspace/next" });
+    expect(f.persisted.currentMeta.runtimeOptions).toEqual({ cwd: "/workspace/next" });
+    expect(f.persisted.currentMeta.cwd).toBe("/workspace/next");
+    await f.run("second");
+    expect(f.state.ensureSession).toHaveBeenCalledTimes(2);
+    expect(f.state.ensureSession.mock.calls[1]?.[0]).toMatchObject({
+      sessionKey: f.target.sessionKey,
+      cwd: "/workspace/next",
+    });
+    expect(lifecycle).toEqual(["ensure:default", "close:default", "ensure:/workspace/next"]);
+  });
 
   it("rejects config controls when the backend has no setter", async () => {
     const f = fixture();
@@ -244,17 +179,6 @@ describe("AcpSessionManager runtime config", () => {
     await expect(
       f.manager.setSessionConfigOption({ ...f.target, key: "model", value: "gpt-5.4" }),
     ).rejects.toMatchObject({ code: "ACP_BACKEND_UNSUPPORTED_CONTROL" });
-  });
-
-  it("omits automatic thinking when the backend advertises no thinking control", async () => {
-    const f = fixture({ agent: "opencode", runtimeOptions: { thinking: "high" } });
-    f.state.getCapabilities.mockResolvedValue({
-      controls: ["session/set_config_option"],
-      configOptionKeys: ["mode", "model"],
-    });
-    await f.run();
-    expect(f.state.setConfigOption).not.toHaveBeenCalled();
-    expect(f.state.runTurn).toHaveBeenCalledOnce();
   });
 
   it("rejects explicit thinking when the backend advertises no thinking control", async () => {

@@ -21,7 +21,9 @@ import type {
   TelegramDispatchTurnConfig as TurnConfig,
   TelegramProgressStateSlice,
 } from "./bot-message-dispatch.types.js";
+import type { TelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState } from "./lane-delivery-text-deliverer.js";
+import { TelegramRequestNotStartedError } from "./network-errors.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { editMessageTelegram } from "./send.js";
 
@@ -32,14 +34,17 @@ type ReplyOptions = NonNullable<BufferedDispatchParams["replyOptions"]>;
 type CallbackPayload<K extends keyof ReplyOptions> =
   NonNullable<ReplyOptions[K]> extends (...args: infer Args) => unknown ? Args[0] : never;
 
-function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgressDraftLine {
-  const label = `Thinking… (~${Math.round(progressTokens)} tokens)`;
+function buildTelegramProgressLine(
+  id: string,
+  icon: string,
+  label: string,
+): ChannelProgressDraftLine {
   return {
-    id: "reasoning:token-progress",
+    id,
     kind: "item",
-    icon: "🧠",
+    icon,
     label,
-    text: `🧠 ${label}`,
+    text: `${icon} ${label}`,
     prefix: false,
   };
 }
@@ -60,26 +65,6 @@ type TelegramProgressDraftState = {
   streamReasoningInProgressDraft: boolean;
 };
 
-const TELEGRAM_COMPACTION_PROGRESS_ID = "context-compaction";
-
-function buildTelegramCompactionProgressLine(
-  phase: "start" | "complete" | "incomplete",
-): ChannelProgressDraftLine {
-  const label = {
-    start: "Compacting context...",
-    complete: "Compaction complete",
-    incomplete: "Compaction incomplete",
-  }[phase];
-  return {
-    id: TELEGRAM_COMPACTION_PROGRESS_ID,
-    kind: "item",
-    icon: "🧹",
-    label,
-    text: `🧹 ${label}`,
-    prefix: false,
-  };
-}
-
 export function createProgressState(
   config: TurnConfig,
   draftState: TelegramProgressDraftState,
@@ -87,6 +72,7 @@ export function createProgressState(
 ): TelegramProgressStateSlice {
   const progressCompositor = createChannelProgressDraftCompositor({
     preparedItems: true,
+    showWorkStatus: true,
     entry: config.telegramCfg,
     mode: config.streamMode,
     active: Boolean(draftState.answerLane.stream),
@@ -221,6 +207,65 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
   }
 }
 
+/**
+ * Keeps a confirmed progress card after its turn for the owner that adopted it.
+ * The card keeps Telegram's rendering, throttling and deletion; only the
+ * adopting owner's prepared items reach it.
+ */
+export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
+  // Retirement revokes the card synchronously: renders still queued here and
+  // edits still waiting for Telegram admission are rejected before network I/O.
+  let retired = false;
+  const assertNotRetired = () => {
+    if (retired) {
+      throw new TelegramRequestNotStartedError("Telegram retained progress retired");
+    }
+  };
+  const compositor = createChannelProgressDraftCompositor({
+    preparedItems: true,
+    showWorkStatus: true,
+    entry: turn.telegramCfg,
+    mode: "progress",
+    active: true,
+    seed: `${turn.context.route.accountId}:${turn.context.chatId}:${turn.context.threadSpec.id ?? ""}`,
+    reasoningGate: false,
+    updateOnLineChange: true,
+    initialSnapshot: turn.progressCompositor.getSnapshot(),
+    update: (_text, options) => {
+      if (retired) {
+        return;
+      }
+      stream.updatePreview(
+        renderTelegramProgressDraftPreview(options.snapshot, {
+          toolProgress: compositor.previewToolProgressEnabled,
+          richMessages: turn.richMessages,
+          maxLines: resolveChannelProgressDraftMaxLines(turn.telegramCfg),
+          maxLineChars: resolveChannelProgressDraftMaxLineChars(turn.telegramCfg),
+        }),
+        assertNotRetired,
+      );
+    },
+  });
+  // Nothing renders until adoption hands the card over and the owner pushes.
+  let queue: Promise<unknown> | undefined;
+  const enqueue = (work: () => Promise<unknown>) => {
+    queue = (queue ?? compositor.start()).then(work).catch((error: unknown) => {
+      turn.runtime.error?.(`telegram retained progress failed: ${formatErrorMessage(error)}`);
+    });
+  };
+  return {
+    push: (item: Parameters<Turn["progressCompositor"]["pushItemEvent"]>[0]) =>
+      enqueue(() => compositor.pushItemEvent(item)),
+    retire: () => {
+      retired = true;
+      enqueue(async () => {
+        compositor.cancel();
+        await stream.clear();
+      });
+    },
+  };
+}
+
 export async function canPushToolProgress(turn: Turn): Promise<boolean> {
   const verbose = await turn.verboseProgressActive();
   return Boolean(
@@ -232,9 +277,18 @@ export async function canPushToolProgress(turn: Turn): Promise<boolean> {
   );
 }
 
-function canPushCompactionProgress(turn: Turn): boolean {
-  return Boolean(
-    turn.answerLane.stream && !turn.answerLane.finalized && !turn.previewLifecycle.finalStarted,
+function pushCompactionProgress(turn: Turn, phase: "start" | "complete" | "incomplete") {
+  if (!turn.answerLane.stream || turn.answerLane.finalized || turn.previewLifecycle.finalStarted) {
+    return Promise.resolve(false);
+  }
+  const label = {
+    start: "Compacting context...",
+    complete: "Compaction complete",
+    incomplete: "Compaction incomplete",
+  }[phase];
+  return turn.progressCompositor.pushToolProgress(
+    buildTelegramProgressLine("context-compaction", "🧹", label),
+    { startImmediately: true, flush: true },
   );
 }
 
@@ -265,9 +319,15 @@ export async function pushThinkingTokenProgress(
   turn: Turn,
   progressTokens: number,
 ): Promise<boolean> {
-  return await pushToolProgress(turn, buildTelegramThinkingProgressLine(progressTokens), {
-    startImmediately: true,
-  });
+  return await pushToolProgress(
+    turn,
+    buildTelegramProgressLine(
+      "reasoning:token-progress",
+      "🧠",
+      `Thinking… (~${Math.round(progressTokens)} tokens)`,
+    ),
+    { startImmediately: true },
+  );
 }
 
 export async function handleToolStart(
@@ -285,12 +345,7 @@ export async function handleToolStart(
 }
 
 export async function handleCompactionStart(turn: Turn): Promise<boolean> {
-  const progress = canPushCompactionProgress(turn)
-    ? turn.progressCompositor.pushToolProgress(buildTelegramCompactionProgressLine("start"), {
-        startImmediately: true,
-        flush: true,
-      })
-    : Promise.resolve(false);
+  const progress = pushCompactionProgress(turn, "start");
   await turn.statusReactionController?.setCompacting();
   return await progress;
 }
@@ -299,14 +354,10 @@ export async function handleCompactionEnd(
   turn: Turn,
   payload?: CallbackPayload<"onCompactionEnd">,
 ): Promise<boolean> {
-  const progress = canPushCompactionProgress(turn)
-    ? turn.progressCompositor.pushToolProgress(
-        buildTelegramCompactionProgressLine(
-          payload?.completed === false ? "incomplete" : "complete",
-        ),
-        { startImmediately: true, flush: true },
-      )
-    : Promise.resolve(false);
+  const progress = pushCompactionProgress(
+    turn,
+    payload?.completed === false ? "incomplete" : "complete",
+  );
   turn.statusReactionController?.cancelPending();
   await turn.statusReactionController?.setThinking();
   return await progress;

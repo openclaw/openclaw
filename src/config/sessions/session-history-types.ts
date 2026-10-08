@@ -8,6 +8,8 @@ import type {
   ReadSessionMessageByIdResult,
   ReadSessionMessagesAroundIdResult,
   ReadSessionMessagesResult,
+  SessionTranscriptDisplayDeltaResult,
+  SessionTranscriptMessageByIdOptions,
   SessionTranscriptReader,
 } from "../../gateway/session-transcript-read.types.js";
 import type {
@@ -17,10 +19,6 @@ import type {
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import type { ConversationRecord } from "./conversation-registry.types.js";
 import type { LegacyCompactionMetrics } from "./legacy-compaction-history.js";
-import type {
-  SessionTranscriptDisplayDeltaResult,
-  SessionTranscriptMessageByIdOptions,
-} from "./session-accessor.sqlite-history-query.js";
 import type {
   SessionTranscriptBoundedMessageTailOptions,
   SessionTranscriptBoundedMessageTailPage,
@@ -42,10 +40,28 @@ export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = un
   activity?: AgentHistoryActivity[];
   messagesBytes: number;
   responseHistoryBytes: number;
-  omission?: { omittedCount: number; normalizedBytes: number };
+  omission?: { omittedCount: number; normalizedBytes: number; byteLimited?: true };
   nextOffset?: number;
+  olderCursor?: string;
+  newerCursor?: string;
   hasMore?: boolean;
   totalMessages?: number;
+};
+
+export type ChatHistoryPageCursor = {
+  sessionId: string;
+  source: string;
+  messageId: string;
+  direction: "older" | "newer";
+};
+
+export type ChatHistoryPageAnchor = Pick<ChatHistoryPageCursor, "sessionId" | "source"> & {
+  direction?: ChatHistoryPageCursor["direction"];
+  hasOlder: boolean;
+  hasNewer: boolean;
+  oldestMessageId?: string;
+  newestMessageId?: string;
+  messageSequences?: Record<string, number>;
 };
 
 export type ChatHistoryPage = {
@@ -56,9 +72,9 @@ export type ChatHistoryPage = {
   messages: unknown[];
   activity?: AgentHistoryActivity[];
   responseOffset?: number;
-  // Absent only for anchored (messageId) reads: the anchor may resolve a
-  // reset-archive transcript that numeric offset cursors cannot address, so
-  // anchored responses expose no paging metadata.
+  anchor?: ChatHistoryPageAnchor;
+  // Numeric offsets cannot address a retained transcript; anchored pages carry
+  // source-bound message cursors instead.
   pagination?: {
     offset: number;
     totalMessages: number;
@@ -78,9 +94,11 @@ export type ChatHistoryPageParams = {
   canonicalKey: string;
   max: number;
   maxHistoryBytes: number;
+  responseHistoryBytes?: number;
   effectiveMaxChars: number;
   offset: number | undefined;
   messageId: string | undefined;
+  pageCursor?: ChatHistoryPageCursor;
   ignoreCliSessionImports?: boolean;
   cliHistoryHomeDir?: string;
   cliHistoryRedaction?: TranscriptRedactionSnapshot;
