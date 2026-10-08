@@ -1,12 +1,19 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
+import {
+  internalRuntimeContextTextFilter,
+  stripInternalRuntimeContext,
+} from "../../../../src/agents/internal-runtime-context.js";
 import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
 import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantPhaseText } from "../../../../src/shared/chat-message-content.js";
-import { stripThinkingTags } from "../strip-thinking-tags.ts";
+import { assistantVisibleTextFilters } from "../../../../src/shared/text/assistant-visible-text.js";
+import {
+  applyTextFilters,
+  createTextProjection,
+} from "../../../../src/shared/text/text-projection.js";
 import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 
 const textCache = new WeakMap<object, string | null>();
@@ -21,11 +28,11 @@ function isTextContentBlockType(value: unknown, role: string): boolean {
 }
 
 function processMessageText(text: string, role: string): string {
+  if (role === "assistant") {
+    return applyTextFilters(text, assistantDisplayTextFilters());
+  }
   const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
   const withoutInternalContext = stripInternalRuntimeContext(text);
-  if (role === "assistant") {
-    return stripThinkingTags(withoutInternalContext);
-  }
   return shouldStripInboundMetadata
     ? stripUserEnvelopeForDisplay(withoutInternalContext)
     : stripEnvelope(withoutInternalContext);
@@ -37,15 +44,42 @@ export function extractText(message: unknown): string | null {
   if (message == null) {
     return null;
   }
+  const { raw, role } = readDisplayText(message);
+  return raw ? processMessageText(raw, role) : null;
+}
+
+function readDisplayText(message: unknown): { raw: string | null | undefined; role: string } {
   const projected = projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message));
   const m = projected as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
   const raw =
     role === "assistant" ? extractAssistantPhaseText(projected) : extractRawText(projected);
-  if (!raw) {
-    return null;
-  }
-  return processMessageText(raw, role);
+  return { raw, role };
+}
+
+function assistantDisplayTextFilters() {
+  return [internalRuntimeContextTextFilter, ...assistantVisibleTextFilters("internal-scaffolding")];
+}
+
+/** Consume complete connection-owned snapshots, reusing only proven raw extensions. */
+export function createStreamingTextExtractor() {
+  const projection = createTextProjection(assistantDisplayTextFilters());
+  return (message: unknown): string | null => {
+    if (message == null) {
+      projection.replace("");
+      return null;
+    }
+    const { raw, role } = readDisplayText(message);
+    if (role !== "assistant") {
+      projection.replace("");
+      return raw ? processMessageText(raw, role) : null;
+    }
+    const source = raw ?? "";
+    const next = source.startsWith(projection.source)
+      ? projection.append(source.slice(projection.source.length), source)
+      : projection.replace(source);
+    return raw ? next.text : null;
+  };
 }
 
 function readCachedMessageExtraction(

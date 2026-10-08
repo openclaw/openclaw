@@ -20,6 +20,7 @@ import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream
 import type { ChatEventPayload } from "./chat-history.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import { extractChatStreamText, retireChatStreamProjection } from "./chat-stream-projection.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   getChatSessionProjection,
@@ -114,6 +115,9 @@ function resolveGatewayErrorText(
 export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPayload) {
   if (!incoming) {
     return null;
+  }
+  if (incoming.state !== "delta") {
+    retireChatStreamProjection(state);
   }
   const payload =
     incoming.state === "aborted" && incoming.stopReason === "auth-revoked"
@@ -398,7 +402,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     if (payload.runId && payload.runId === state.chatRunId) {
       reconcileChatRunStartup(state, { state: "activity", runId: payload.runId });
     }
-    const next = payload.message == null ? null : (extractText(payload.message) ?? "");
+    const next = extractChatStreamText(state, payload);
     if (
       typeof next === "string" &&
       !isSilentReplyStream(next) &&

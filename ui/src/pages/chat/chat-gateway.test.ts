@@ -8,6 +8,7 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
+import { createState, createTextChatMessage as textMessage } from "./chat-gateway.test-support.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -85,31 +86,6 @@ function expectSettled(state: ChatState) {
   expect(state.chatRunId).toBeNull();
   expect(state.chatStream).toBeNull();
   expect(state.chatStreamStartedAt).toBeNull();
-}
-
-function createState(overrides: Partial<ChatState> = {}): ChatState {
-  return {
-    chatAttachments: [],
-    chatHistoryPagination: { hasMore: false },
-    chatLoading: false,
-    chatMessage: "",
-    chatMessages: [],
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
-    chatStream: null,
-    chatStreamStartedAt: null,
-    chatRunStartup: null,
-    chatThinkingLevel: null,
-    chatVerboseLevel: null,
-    client: null,
-    connected: true,
-    connectionEpoch: 0,
-    hello: null,
-    lastError: null,
-    sessionKey: "main",
-    ...overrides,
-  };
 }
 
 it.each([true, false])(
@@ -480,20 +456,6 @@ function expectTextMessage(message: unknown, role: string, text: string): void {
   const record = requireRecord(message);
   expect(record.role).toBe(role);
   expect(record.content).toEqual([{ type: "text", text }]);
-}
-
-function textMessage(
-  role: "assistant" | "user",
-  text: string,
-  metadata?: Record<string, unknown>,
-  timestamp?: number,
-) {
-  return {
-    role,
-    content: [{ type: "text" as const, text }],
-    ...(metadata ? { __openclaw: metadata } : {}),
-    ...(timestamp === undefined ? {} : { timestamp }),
-  };
 }
 
 function projectChatMessageEvent(

@@ -12,6 +12,7 @@ import {
   RUNTIME_CONTEXT_END_MARKER,
 } from "../llm/types.js";
 import { escapeRegExp } from "../shared/regexp.js";
+import type { TextFilter } from "../shared/text/text-projection.js";
 
 export {
   SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
@@ -316,6 +317,18 @@ export function stripInternalRuntimeContext(
     options,
   );
 }
+
+/** Incremental consumers retain canonical stripping after any format can activate. */
+export const internalRuntimeContextTextFilter: TextFilter = {
+  transform: stripInternalRuntimeContext,
+  // The notice tolerates arbitrarily long whitespace; activate on its first word.
+  activationTokens: [
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+    INTERNAL_RUNTIME_CONTEXT_END,
+    RUNTIME_CONTEXT_HEADER,
+    "This",
+  ],
+};
 
 /** Return true when text contains current or legacy runtime-context markers. */
 export function hasInternalRuntimeContext(text: string): boolean {
