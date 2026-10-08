@@ -238,13 +238,10 @@ function isUnavailableContextBarrier(message: AgentMessage): boolean {
   if (!usage) {
     return false;
   }
-  if (message.api === "cli" && usage.contextUsage === undefined) {
-    return true;
-  }
-  if (usage.contextUsage?.state !== "unavailable") {
-    return false;
-  }
-  return calculateContextTokens(usage) === 0;
+  return (
+    (message.api === "cli" && usage.contextUsage === undefined) ||
+    (usage.contextUsage?.state === "unavailable" && calculateContextTokens(usage) === 0)
+  );
 }
 
 export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | undefined {
@@ -384,20 +381,13 @@ function isCutPointMessage(message: AgentMessage): boolean {
 }
 
 function isTurnStartMessage(message: AgentMessage): boolean {
-  switch (message.role) {
-    case "custom":
-      return !isRuntimeContextCarrier(message);
-    case "user":
-    case "bashExecution":
-    case "branchSummary":
-    case "compactionSummary":
-      return true;
-    case "assistant":
-    case "toolResult":
-      return false;
-  }
-
-  return false;
+  const role = message.role;
+  return role === "custom"
+    ? !isRuntimeContextCarrier(message)
+    : role === "user" ||
+        role === "bashExecution" ||
+        role === "branchSummary" ||
+        role === "compactionSummary";
 }
 
 function isTurnStartEntry(entry: SessionTreeEntry): boolean {
@@ -413,10 +403,7 @@ export function findTurnStartIndex(
 ): number {
   for (let i = entryIndex; i >= startIndex; i--) {
     const entry = entries[i];
-    if (!entry) {
-      continue;
-    }
-    if (isTurnStartEntry(entry)) {
+    if (entry && isTurnStartEntry(entry)) {
       return i;
     }
   }
@@ -894,22 +881,29 @@ export async function compact(
     );
   }
 
+  const summarize = (
+    messages: AgentMessage[],
+    previous?: string,
+    summaryPrompt?: CompactionSummaryPrompt,
+  ) =>
+    generateSummary(
+      messages,
+      model,
+      settings.reserveTokens,
+      apiKey,
+      headers,
+      signal,
+      customInstructions,
+      previous,
+      thinkingLevel,
+      streamFn,
+      runtime,
+      summaryPrompt,
+    );
   const summarizeTurnPrefix = isSplitTurn && turnPrefixMessages.length > 0;
   const historyResult =
     messagesToSummarize.length > 0 || !summarizeTurnPrefix
-      ? await generateSummary(
-          messagesToSummarize,
-          model,
-          settings.reserveTokens,
-          apiKey,
-          headers,
-          signal,
-          customInstructions,
-          previousSummary,
-          thinkingLevel,
-          streamFn,
-          runtime,
-        )
+      ? await summarize(messagesToSummarize, previousSummary)
       : ok<string, CompactionError>(
           previousSummaryWithoutFileOperations(preparation) ?? "No prior history.",
         );
@@ -919,20 +913,9 @@ export async function compact(
 
   let latestContext = "";
   if (summarizeTurnPrefix) {
-    const turnPrefixResult = await generateSummary(
-      turnPrefixMessages,
-      model,
-      settings.reserveTokens,
-      apiKey,
-      headers,
-      signal,
-      customInstructions,
-      undefined,
-      thinkingLevel,
-      streamFn,
-      runtime,
-      { kind: "turn-prefix" },
-    );
+    const turnPrefixResult = await summarize(turnPrefixMessages, undefined, {
+      kind: "turn-prefix",
+    });
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
     }

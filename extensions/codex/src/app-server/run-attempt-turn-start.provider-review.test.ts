@@ -62,7 +62,6 @@ function createFixture(acknowledged: boolean) {
   // of this opaque marker; the separate transport tests exercise real issuance.
   const resources = {
     state,
-    markTrajectoryEndRecorded: vi.fn(),
     prompt: {
       turnState: { codexTurnPromptText: "reviewed continuation" },
       context: {

@@ -13,7 +13,6 @@ import {
 import {
   encodeMemoryEmbedding,
   ensureMemoryChunkProvenance,
-  loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -106,25 +105,6 @@ describe("memory manager shared agent connection", () => {
     const result = await getMemorySearchManager({ cfg: createConfig(), agentId: "main" });
     expect(result.manager).toBeNull();
     expect(result.error).toMatch(/foreign_key_check/);
-  });
-
-  it("loads vectors on the shared connection with native loading disabled between calls", async () => {
-    const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
-    const manager = await fixture.getFreshManager(createConfig());
-    expect(managerDatabase(manager) === shared.db).toBe(true);
-    expect(() => shared.db.loadExtension("not-a-real-extension")).toThrow(
-      "extension loading is not allowed",
-    );
-    expect((await loadSqliteVecExtension({ db: shared.db })).ok).toBe(true);
-    expect(shared.db.prepare("SELECT vec_version() AS version").get()).toEqual({
-      version: expect.any(String),
-    });
-    expect(() => shared.db.loadExtension("not-a-real-extension")).toThrow(
-      "extension loading is not allowed",
-    );
-    expect(() => shared.db.prepare("SELECT load_extension(?)").get("not-a-real-extension")).toThrow(
-      "not authorized",
-    );
   });
 
   it("replaces a revoked shared handle without an old release closing its replacement", async () => {

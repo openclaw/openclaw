@@ -48,18 +48,6 @@ const MAX_PROBE_TRANSPORT_CACHE_SIZE = 64;
 // 4 MiB guards against a misbehaving or hostile API endpoint streaming an oversized payload.
 const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
-function resolveProbeOptions(
-  proxyOrOptions?: string | TelegramProbeOptions,
-): TelegramProbeOptions | undefined {
-  if (!proxyOrOptions) {
-    return undefined;
-  }
-  if (typeof proxyOrOptions === "string") {
-    return { proxyUrl: proxyOrOptions };
-  }
-  return proxyOrOptions;
-}
-
 function buildProbeTransportCacheKey(token: string, options?: TelegramProbeOptions): string {
   const cacheIdentity = options?.accountId?.trim() || token;
   const cacheIdentityKind = options?.accountId?.trim() ? "account" : "token";
@@ -70,22 +58,6 @@ function buildProbeTransportCacheKey(token: string, options?: TelegramProbeOptio
   const dnsResultOrderKey = options?.network?.dnsResultOrder ?? "default";
   const apiRootKey = options?.apiRoot?.trim() ?? "";
   return `${cacheIdentityKind}:${cacheIdentity}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${apiRootKey}`;
-}
-
-function setCachedProbeTransport(
-  cacheKey: string,
-  transport: TelegramTransport,
-): TelegramTransport {
-  probeTransportCache.set(cacheKey, transport);
-  if (probeTransportCache.size > MAX_PROBE_TRANSPORT_CACHE_SIZE) {
-    const oldestKey = probeTransportCache.keys().next().value;
-    if (oldestKey !== undefined) {
-      const oldestTransport = probeTransportCache.get(oldestKey);
-      probeTransportCache.delete(oldestKey);
-      void oldestTransport?.close();
-    }
-  }
-  return transport;
 }
 
 function resolveProbeTransport(token: string, options?: TelegramProbeOptions): TelegramTransport {
@@ -101,7 +73,16 @@ function resolveProbeTransport(token: string, options?: TelegramProbeOptions): T
     network: options?.network,
   });
 
-  return setCachedProbeTransport(cacheKey, transport);
+  probeTransportCache.set(cacheKey, transport);
+  if (probeTransportCache.size > MAX_PROBE_TRANSPORT_CACHE_SIZE) {
+    const oldestKey = probeTransportCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      const oldestTransport = probeTransportCache.get(oldestKey);
+      probeTransportCache.delete(oldestKey);
+      void oldestTransport?.close();
+    }
+  }
+  return transport;
 }
 
 function normalizeBoolean(value: unknown): boolean | null {
@@ -129,7 +110,12 @@ export async function probeTelegram(
     async ({ startedAt }) => {
       const timeoutBudgetMs = Math.max(1, Math.floor(timeoutMs));
       const deadlineMs = startedAt + timeoutBudgetMs;
-      const options = resolveProbeOptions(proxyOrOptions);
+      const options =
+        typeof proxyOrOptions === "string"
+          ? proxyOrOptions
+            ? { proxyUrl: proxyOrOptions }
+            : undefined
+          : proxyOrOptions;
       const abortSignal = options?.abortSignal;
       const includeWebhookInfo = options?.includeWebhookInfo !== false;
       const apiBase = resolveTelegramApiBase(options?.apiRoot);

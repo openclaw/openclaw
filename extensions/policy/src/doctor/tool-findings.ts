@@ -9,7 +9,11 @@ import type { PolicyEvidence, PolicyToolPostureEvidence } from "../policy-state.
 import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 import { KNOWN_RISK_LEVELS, KNOWN_SENSITIVITY_LEVELS } from "./policy-constants.js";
-import { policyEvidenceFinding as toolPostureFinding } from "./policy-evidence-finding.js";
+import {
+  policyEvidenceFinding as toolPostureFinding,
+  policyEvidenceRuleFindings,
+  type PolicyEvidenceRule,
+} from "./policy-evidence-finding.js";
 import { agentScopedPolicyTargets, scopedToolAgentMatches } from "./policy-scope.js";
 import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
@@ -70,14 +74,9 @@ function toolValuePostureFindings(
   entries: readonly PolicyToolPostureEvidence[],
 ): readonly HealthFinding[] {
   // Keep rule order stable: findings participate in the policy attestation.
-  const rules: readonly {
-    path: readonly string[];
-    kind: PolicyToolPostureEvidence["kind"];
+  const rules: readonly (Omit<PolicyEvidenceRule<PolicyToolPostureEvidence>, "violates"> & {
     required?: boolean;
-    checkId: (typeof POLICY_CHECK_IDS)[number];
-    message: (entry: PolicyToolPostureEvidence) => string;
-    fixHint: string;
-  }[] = [
+  })[] = [
     {
       path: ["profiles", "allow"],
       kind: "profile",
@@ -132,21 +131,20 @@ function toolValuePostureFindings(
     ) {
       return [];
     }
-    return entries
-      .filter((entry) => entry.kind === rule.kind)
-      .filter((entry) =>
-        rule.required === undefined
-          ? typeof entry.value === "string" && !allowed.has(entry.value.toLowerCase())
-          : entry.value !== rule.required,
-      )
-      .map((entry) =>
-        toolPostureFinding(entry, {
-          checkId: rule.checkId,
-          message: rule.message(entry),
-          requirement: `oc://${policyDocName}/${requirementBase}/${rule.path.join("/")}`,
-          fixHint: rule.fixHint,
-        }),
-      );
+    return policyEvidenceRuleFindings(
+      entries,
+      [
+        {
+          ...rule,
+          violates: (entry) =>
+            rule.required === undefined
+              ? typeof entry.value === "string" && !allowed.has(entry.value.toLowerCase())
+              : entry.value !== rule.required,
+        },
+      ],
+      policyDocName,
+      requirementBase,
+    );
   });
 }
 

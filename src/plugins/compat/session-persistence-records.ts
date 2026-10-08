@@ -4,6 +4,32 @@ import type { PluginCompatRecord } from "./types.js";
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   REPLY_TOOL_AUTHORITY_COMPAT_RECORD,
   {
+    code: "codex-transcript-sync-validation",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-08",
+    deprecated: "2026-10-06",
+    warningStarts: "2026-10-06",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await readCodexSessionContextProjection for retained worker projection and final validation. Keep the released synchronous validators until the next Plugin SDK major and explicit breaking-release approval. readCodexSessionContext remains a supported synchronous worker reader with its released three-argument generic result contract.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence",
+    surfaces: [
+      "openclaw/plugin-sdk/codex-session-transcript-runtime.validateCodexSessionTranscriptReadAdmission",
+      "openclaw/plugin-sdk/codex-session-transcript-runtime.validateCodexSessionTranscriptContextVersion",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/codex-session-transcript-runtime.compat.test.ts",
+      "src/config/sessions/session-transcript-context-read.worker.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Codex history validates retained worker projections off the Gateway thread while preserving the released synchronous reader and validator signatures. Storage and update behavior are unchanged.",
+  },
+  {
     code: "transcript-lock-sync-message-preparation",
     status: "deprecated",
     owner: "sdk",

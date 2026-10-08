@@ -218,27 +218,26 @@ const hooksModelCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { collectHooksModelIssues } = await import("../commands/doctor-hooks-model.js");
     return (await collectHooksModelIssues(ctx.cfg)).map(({ kind, model }): HealthFinding => {
-      if (kind === "unresolved") {
-        return {
-          checkId: "core/doctor/hooks-model",
-          severity: "warning",
-          path: "hooks.gmail.model",
-          message: `hooks.gmail.model "${model}" could not be resolved.`,
-        };
-      }
-      return {
+      const finding: HealthFinding = {
         checkId: "core/doctor/hooks-model",
         severity: "warning",
         path: "hooks.gmail.model",
         message:
-          kind === "not-allowed"
-            ? `hooks.gmail.model "${model}" is not allowed by agents.defaults.modelPolicy.allow.`
-            : `hooks.gmail.model "${model}" is not in the model catalog.`,
-        fixHint:
-          kind === "not-allowed"
-            ? "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model."
-            : "Choose a model from the configured provider catalog.",
+          kind === "unresolved"
+            ? `hooks.gmail.model "${model}" could not be resolved.`
+            : kind === "not-allowed"
+              ? `hooks.gmail.model "${model}" is not allowed by agents.defaults.modelPolicy.allow.`
+              : `hooks.gmail.model "${model}" is not in the model catalog.`,
       };
+      if (kind !== "unresolved") {
+        Object.assign(finding, {
+          fixHint:
+            kind === "not-allowed"
+              ? "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model."
+              : "Choose a model from the configured provider catalog.",
+        });
+      }
+      return finding;
     });
   },
 };
@@ -383,26 +382,19 @@ function createNoteCollector(checkId: string): {
   readonly noteFn: (message: unknown) => void;
 } {
   const findings: HealthFinding[] = [];
-  const noteFn = (message: unknown): void => {
-    const text = noteMessageToText(message);
-    if (!text.trim()) {
-      return;
-    }
-    const severity = inferCapturedNoteSeverity(text);
-    if (severity === "info") {
-      return;
-    }
-    findings.push(
-      noteTextToFinding({
-        checkId,
-        severity,
-        text,
-      }),
-    );
-  };
   return {
     findings,
-    noteFn,
+    noteFn(message: unknown): void {
+      const text = noteMessageToText(message);
+      if (!text.trim()) {
+        return;
+      }
+      const severity = inferCapturedNoteSeverity(text);
+      if (severity === "info") {
+        return;
+      }
+      findings.push(noteTextToFinding({ checkId, severity, text }));
+    },
   };
 }
 

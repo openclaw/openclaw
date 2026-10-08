@@ -31,7 +31,12 @@ import {
 
 export type { SqliteSchemaCompatibility, SqliteSchemaIssue } from "./sqlite-schema-issues.js";
 
-type SqliteSchemaContract = Map<string, SqliteTableContract>;
+type SqliteSchemaContract = ReadonlyMap<string, SqliteTableContract>;
+
+export type PreparedSqliteSchemaContract = {
+  schemaSql: string;
+  tables: SqliteSchemaContract;
+};
 
 export type SqliteTableContractReader = (tableName: string) => SqliteTableContract | undefined;
 
@@ -44,6 +49,27 @@ export type CanonicalSqliteNamedIndexContract = {
 };
 
 const schemaContractCache = new Map<string, SqliteSchemaContract>();
+
+/** Capture only an existing canonical contract; callers must not build it on a host request. */
+export function captureSqliteSchemaContracts(
+  schemaSqls: readonly string[],
+): PreparedSqliteSchemaContract[] {
+  return schemaSqls.flatMap((schemaSql) => {
+    const tables = schemaContractCache.get(schemaSql);
+    return tables ? [{ schemaSql, tables }] : [];
+  });
+}
+
+/** Private worker IPC transfers canonical facts under their exact schema SQL cache key. */
+export function adoptSqliteSchemaContracts(
+  contracts: readonly PreparedSqliteSchemaContract[],
+): void {
+  for (const contract of contracts) {
+    if (!schemaContractCache.has(contract.schemaSql)) {
+      schemaContractCache.set(contract.schemaSql, contract.tables);
+    }
+  }
+}
 
 /** Reuse actual table facts only within one unchanged read transaction on this connection. */
 export function createSqliteTableContractReader(database: DatabaseSync): SqliteTableContractReader {

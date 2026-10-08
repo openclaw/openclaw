@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentCommandDeliveryResult } from "../../agents/command/delivery-result.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
 import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import * as transcript from "../../sessions/user-turn-transcript-admission.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
@@ -140,6 +141,59 @@ describe("Gateway dispatch run ownership", () => {
         finishSave.resolve();
         await completion;
       }
+    },
+  );
+
+  it.each([false, true])(
+    "publishes confirmed withdrawal after cleanup (late timeout: %s)",
+    async (late) => {
+      const { params, entry } = createDispatch(true);
+      const withdrawal = vi.spyOn(transcript, "readWithdrawnUserTurnInputId");
+      withdrawal.mockReturnValue(undefined);
+      onTestFinished(() => withdrawal.mockRestore());
+      const timeout = new Error("deadline elapsed");
+      timeout.name = "TimeoutError";
+      const abort = () => {
+        entry.abortStopReason = "timeout";
+        entry.controller.abort(timeout);
+      };
+      mocks.agentCommand.mockImplementation(async () => {
+        if (!late) {
+          abort();
+          throw timeout;
+        }
+        throw new Error("startup failed");
+      });
+      params.cleanupAbortController.mockImplementation(() => {
+        expect(params.io.emitFinal).not.toHaveBeenCalled();
+        expect(setGatewayDedupeEntries).not.toHaveBeenCalled();
+        withdrawal.mockReturnValue("pending-input-1");
+      });
+
+      await dispatchAgentRunFromGateway({
+        ...params,
+        onSettled: async () => {
+          if (late) {
+            abort();
+          }
+          return true;
+        },
+      });
+
+      const payload = expect.objectContaining({
+        status: late ? "error" : "timeout",
+        stopReason: "timeout",
+        reason: "input_withdrawn_before_turn",
+        pendingInputId: "pending-input-1",
+        summary: expect.stringContaining("Raise --timeout and retry"),
+      });
+      expect(params.io.emitFinal).toHaveBeenCalledWith(
+        [!late, payload, late ? expect.objectContaining({ message: "startup failed" }) : undefined],
+        expect.any(Object),
+      );
+      expect(setGatewayDedupeEntries).toHaveBeenCalledWith(
+        expect.objectContaining({ entry: expect.objectContaining({ ok: !late, payload }) }),
+      );
     },
   );
 

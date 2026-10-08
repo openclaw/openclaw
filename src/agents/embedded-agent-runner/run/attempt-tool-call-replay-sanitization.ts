@@ -254,7 +254,6 @@ function sanitizeAnthropicReplayToolResults(
         return true;
       }
       if (shouldStripEmbeddedToolResults) {
-        changed = true;
         return false;
       }
       const resultIds = normalizeUniqueTrimmedStringList([
@@ -263,10 +262,6 @@ function sanitizeAnthropicReplayToolResults(
         typedBlock.tool_use_id,
         typedBlock.tool_call_id,
       ]);
-      if (resultIds.length === 0) {
-        changed = true;
-        return false;
-      }
       return validToolUseIds.size > 0 && resultIds.some((id) => validToolUseIds.has(id));
     });
 

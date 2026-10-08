@@ -56,7 +56,6 @@ import {
 import type { OperatorApprovalStoreGuard } from "./operator-approval-store.types.js";
 
 export type {
-  ExecApprovalIdLookupResult,
   ExecApprovalRecord,
   OperatorApprovalLifecycleEvent,
   OperatorStandingGrantMintSpec,

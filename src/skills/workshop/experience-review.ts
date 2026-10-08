@@ -192,8 +192,9 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     if (resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode !== "auto") {
       throw new Error("Skill Workshop was turned off during review.");
     }
-    // fs-safe's beforeWrite is synchronous after awaited file preparation.
-    // Its final effect guard still needs native reads to observe foreign commits.
+    // fs-safe requires synchronous authority immediately before mutation.
+    // SDK sync writers bypass the FIFO; the connection-local witness misses
+    // foreign commits. Retain this fence until the next SDK major retires them.
     const current = loadSessionEntryReadOnly({
       ...source,
       hydrateSkillPromptRefs: false,

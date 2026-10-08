@@ -90,33 +90,33 @@ function pushAgentWorkspaceEvidence(
     explicit: explicitWorkspaceAccess !== undefined,
   });
 
+  const denySources = agentWorkspaceToolDenySources(params, sandboxModeCoversAgentMain);
   for (const tool of AGENT_WORKSPACE_POLICY_TOOLS) {
-    const denyEvidence = agentWorkspaceToolDenyEvidence(params, tool, sandboxModeCoversAgentMain);
+    const match = denySources.find((entry) => toolListCoversTool(entry.entries, tool));
     entries.push({
       id: `${params.id}-tool-${tool}`,
       kind: "toolDeny",
-      source: denyEvidence.source,
+      source: match?.source ?? `${params.toolsSourceBase}/deny`,
       scope: params.scope,
       ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
       tool,
-      denied: denyEvidence.denied,
-      explicit: denyEvidence.denied,
+      denied: match !== undefined,
+      explicit: match !== undefined,
     });
   }
 }
 
-function agentWorkspaceToolDenyEvidence(
+function agentWorkspaceToolDenySources(
   params: {
     readonly tools: Record<string, unknown>;
     readonly inheritedTools: Record<string, unknown>;
     readonly toolsSourceBase: string;
   },
-  tool: string,
   sandboxModeCoversAgentMain: boolean,
-): { readonly denied: boolean; readonly source: string } {
+) {
   const localSandboxToolDeny = configuredSandboxToolDenyEntries(params.tools);
   const inheritedSandboxToolDeny = configuredSandboxToolDenyEntries(params.inheritedTools);
-  const sources = [
+  return [
     {
       entries: readStringArray(params.tools.deny),
       source: `${params.toolsSourceBase}/deny`,
@@ -139,11 +139,6 @@ function agentWorkspaceToolDenyEvidence(
         ]
       : []),
   ];
-  const match = sources.find((entry) => toolListCoversTool(entry.entries, tool));
-  if (match !== undefined) {
-    return { denied: true, source: match.source };
-  }
-  return { denied: false, source: `${params.toolsSourceBase}/deny` };
 }
 
 function configuredSandboxToolDenyEntries(

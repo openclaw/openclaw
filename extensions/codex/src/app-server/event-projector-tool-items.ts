@@ -82,23 +82,13 @@ export function projectCodexToolActivity(
 }
 
 export function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {
-  switch (item.type) {
-    case "commandExecution":
-    case "fileChange":
-    case "mcpToolCall":
-      return true;
-    default:
-      return false;
-  }
+  return ["commandExecution", "fileChange", "mcpToolCall"].includes(item.type);
 }
 
 export function shouldSuppressChannelProgressForItem(item: CodexThreadItem): boolean {
-  if (isProjectedNativeToolItem(item)) {
-    return true;
-  }
   // Dynamic OpenClaw tool requests are emitted at the item/tool/call request
   // boundary. Re-emitting item notifications can duplicate start/result progress.
-  return item.type === "dynamicToolCall";
+  return isProjectedNativeToolItem(item) || item.type === "dynamicToolCall";
 }
 
 export function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | undefined {
@@ -110,7 +100,7 @@ export function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | u
   }
   if (item.type === "fileChange") {
     return sanitizeCodexAgentEventRecord({
-      changes: itemFileChangesForTranscript(item),
+      changes: itemFileChanges(item, true),
     });
   }
   if (item.type === "webSearch") {
@@ -172,12 +162,9 @@ export function itemToolResult(item: CodexThreadItem): Record<string, unknown> |
   return undefined;
 }
 
-type CodexFileChangeSummary = {
+type CodexTranscriptFileChange = {
   path: string;
   kind: unknown;
-};
-
-type CodexTranscriptFileChange = CodexFileChangeSummary & {
   diff?: string;
   diffTruncated?: true;
   stat?: { added: number; removed: number };
@@ -186,16 +173,6 @@ type CodexTranscriptFileChange = CodexFileChangeSummary & {
 function itemFileChangeRecords(item: CodexThreadItem): JsonObject[] {
   const changes = item.changes;
   return Array.isArray(changes) ? changes.filter(isJsonObject) : [];
-}
-
-function itemFileChanges(item: CodexThreadItem): CodexFileChangeSummary[] {
-  return itemFileChangeRecords(item).flatMap((change) => {
-    const path = normalizeOptionalString(change.path);
-    if (!path || change.kind === undefined) {
-      return [];
-    }
-    return [{ path, kind: change.kind }];
-  });
 }
 
 function countFileContentLines(content: string): number {
@@ -258,7 +235,7 @@ function truncateFileChangeDiffAtLineBoundary(
     : { diffTruncated: true };
 }
 
-function itemFileChangesForTranscript(item: CodexThreadItem): CodexTranscriptFileChange[] {
+function itemFileChanges(item: CodexThreadItem, includeDiff = false): CodexTranscriptFileChange[] {
   let remainingDiffChars = 10_000;
   return itemFileChangeRecords(item).flatMap((change) => {
     const path = normalizeOptionalString(change.path);
@@ -266,7 +243,7 @@ function itemFileChangesForTranscript(item: CodexThreadItem): CodexTranscriptFil
       return [];
     }
     const result: CodexTranscriptFileChange = { path, kind: change.kind };
-    if (typeof change.diff !== "string") {
+    if (!includeDiff || typeof change.diff !== "string") {
       return [result];
     }
     result.stat = fileChangeDiffStat(change.diff, change.kind);

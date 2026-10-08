@@ -43,6 +43,7 @@ import {
   readLifecycleState,
   registerSubscriptionChatRun,
   registerAuditSubscriptionTests,
+  registerAssistantTailSubscriptionTests,
 } from "./server-runtime-subscriptions.test-support.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
@@ -1026,6 +1027,14 @@ describe("startGatewayEventSubscriptions", () => {
     expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledOnce();
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  registerAssistantTailSubscriptionTests({
+    createParams,
+    installHandlerFactory: (factory) => agentEventHandlerMocks.create.mockImplementation(factory),
+    start: (params) => {
+      unsubs = startGatewayEventSubscriptions(params);
+    },
   });
 
   it("broadcasts progress-card retirement without session-list subscribers", () => {

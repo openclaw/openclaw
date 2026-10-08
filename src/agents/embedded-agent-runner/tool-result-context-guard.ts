@@ -10,6 +10,7 @@ import { formatContextLimitTruncationNotice } from "./context-truncation-notice.
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import {
+  estimateRenderedLlmBoundaryTokenPressure,
   shouldPreemptivelyCompactBeforePrompt,
   type CompactionReplayPressureContext,
 } from "./run/preemptive-compaction.js";
@@ -240,6 +241,8 @@ export function installContextEngineLoopHook(params: {
   sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   tokenBudget?: number;
+  reserveTokens?: () => number;
+  getSystemPrompt?: () => string | undefined;
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
@@ -354,12 +357,21 @@ export function installContextEngineLoopHook(params: {
         (sum, message) => sum + estimateTokens(message),
         0,
       );
+      // The pending exchange already includes the active prompt; reserve only
+      // the system prompt here, using the same pressure estimate as turn start.
+      const systemTokens = estimateRenderedLlmBoundaryTokenPressure({
+        systemPrompt: params.getSystemPrompt?.(),
+        prompt: "",
+      });
+      const reserve = Math.max(0, Math.floor(params.reserveTokens?.() ?? 0));
       const assembled = await contextEngine.assemble({
         ...sessionIdentity,
         messages: providerMessages.slice(0, historyLength),
         ...params.deferredTurn,
         tokenBudget:
-          tokenBudget === undefined ? undefined : Math.max(1, tokenBudget - pendingTokens),
+          tokenBudget === undefined
+            ? undefined
+            : Math.max(1, tokenBudget - reserve - systemTokens - pendingTokens),
         model: modelId,
         runtimeSettings: params.runtimeSettings,
       });

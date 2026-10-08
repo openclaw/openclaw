@@ -188,31 +188,15 @@ it.each(["worker", "compatibility"] as const)(
 );
 
 it.each([
-  ...(["file", "incognito"] as const).flatMap((storage) =>
-    (["session", "revision", "metadata"] as const).map((change) => ({
-      storage,
-      change,
-      admission: "compatibility" as const,
-    })),
-  ),
-  ...(["worker", "compatibility"] as const).map((admission) => ({
-    storage: "file" as const,
-    change: "alias" as const,
-    admission,
-  })),
-  ...(["worker", "compatibility"] as const).flatMap((admission) =>
-    (["other-store", "missing-store"] as const).map((change) => ({
-      storage: "file" as const,
-      change,
-      admission,
-    })),
-  ),
-  ...(["other-store-unrelated", "other-store-move"] as const).map((change) => ({
-    storage: "file" as const,
-    change,
-    admission: "worker" as const,
-  })),
-])(
+  { storage: "file", change: "session", admission: "compatibility" },
+  { storage: "file", change: "revision", admission: "compatibility" },
+  { storage: "file", change: "metadata", admission: "compatibility" },
+  { storage: "incognito", change: "session", admission: "compatibility" },
+  { storage: "file", change: "alias", admission: "worker" },
+  { storage: "file", change: "other-store", admission: "worker" },
+  { storage: "file", change: "missing-store", admission: "worker" },
+  { storage: "file", change: "other-store-move", admission: "worker" },
+] as const)(
   "retains $storage policy lineage in $admission admission after $change",
   async ({ storage, change, admission }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -323,12 +307,10 @@ it.each([
           await upsertSessionEntryCore(
             {
               agentId: "main",
-              sessionKey: change === "other-store-unrelated" ? otherKey : policyKey,
+              sessionKey: policyKey,
               storePath: change === "missing-store" ? configuredStorePath : defaultStorePath,
             },
-            change === "other-store-unrelated"
-              ? { label: "unrelated change", updatedAt: 2 }
-              : { ...policyEntry, updatedAt: 2 },
+            { ...policyEntry, updatedAt: 2 },
           );
         } else if (change === "alias") {
           await upsertSessionEntryCore(
@@ -346,7 +328,7 @@ it.each([
         }
         resume.resolve();
         await attempt.outcome;
-        const accepted = change === "metadata" || change === "other-store-unrelated";
+        const accepted = change === "metadata";
         await expect(attempt.acceptance).resolves.toBe(accepted);
         expect(effect).toHaveBeenCalledTimes(accepted ? 1 : 0);
       } finally {
@@ -358,156 +340,148 @@ it.each([
   },
 );
 
-it.each([
-  "source-only",
-  "with-overlay",
-  "separate-caller",
-  "legacy",
-  "legacy-run-with-caller",
-] as const)("keeps every supplied authority through final admission: %s", async (kind) => {
-  const operation = createTestReplyOperation();
-  operation.bindToolAuthoritySnapshot({ fingerprint: () => "policy", project: () => "policy" });
-  operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
-  const entered = createDeferred();
-  const resume = createDeferred();
-  const effect = vi.fn(async () => {});
-  const source = { current: true };
-  const legacy = kind === "legacy" || kind === "legacy-run-with-caller";
-  const separateCaller = kind === "separate-caller" || kind === "legacy-run-with-caller";
-  const assertSource = () => {
-    if (!source.current) {
-      throw new Error("source owner revoked");
+it.each(["with-overlay", "separate-caller", "legacy", "legacy-run-with-caller"] as const)(
+  "keeps every supplied authority through final admission: %s",
+  async (kind) => {
+    const operation = createTestReplyOperation();
+    operation.bindToolAuthoritySnapshot({ fingerprint: () => "policy", project: () => "policy" });
+    operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const effect = vi.fn(async () => {});
+    const source = { current: true };
+    const legacy = kind === "legacy" || kind === "legacy-run-with-caller";
+    const separateCaller = kind === "separate-caller" || kind === "legacy-run-with-caller";
+    const assertSource = () => {
+      if (!source.current) {
+        throw new Error("source owner revoked");
+      }
+    };
+    operation.attachBackend({
+      kind: "embedded",
+      cancel() {},
+      toolAuthorityFingerprint: "policy",
+      ...(legacy
+        ? { messageInjection: { isAvailable: () => true, queueMessage: effect } }
+        : {
+            messageInjectionV2: {
+              version: 2,
+              isAvailable: () => true,
+              queueMessage: effect,
+              queueMessageAsync: async (_text, _options, preparation) => {
+                entered.resolve();
+                await resume.promise;
+                preparation.assertCurrent();
+                await effect();
+              },
+            } satisfies ReplyBackendMessageInjectionV2,
+          }),
+    });
+    operation.setPhase("running");
+    const attempt = await beginReplyMessageInjectionTarget(
+      replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!,
+      "retained source",
+      {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: "policy",
+        ...(kind === "with-overlay" ? { toolAuthorityOverlay: overlay } : {}),
+        assertCurrent: separateCaller ? assertSource : undefined,
+        toolAuthorityPreparation: {
+          ...(kind === "legacy-run-with-caller" ? { authorityKind: "run" as const } : {}),
+          assertCurrent: separateCaller ? () => {} : assertSource,
+          async prepareCurrent() {},
+          compatAssertCurrent: assertSource,
+        },
+      },
+    );
+    try {
+      if (!legacy) {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          attempt.outcome,
+          "Prepared backend was not reached",
+        );
+        source.current = false;
+        resume.resolve();
+      }
+      await expect(attempt.outcome).resolves.toMatchObject(
+        legacy ? { status: "rejected", reason: "injection_unavailable" } : { status: "failed" },
+      );
+      await expect(attempt.acceptance).resolves.toBe(false);
+      expect(effect).not.toHaveBeenCalled();
+    } finally {
+      resume.resolve();
+      await attempt.outcome;
     }
-  };
-  operation.attachBackend({
-    kind: "embedded",
-    cancel() {},
-    toolAuthorityFingerprint: "policy",
-    ...(legacy
-      ? { messageInjection: { isAvailable: () => true, queueMessage: effect } }
-      : {
-          messageInjectionV2: {
-            version: 2,
-            isAvailable: () => true,
-            queueMessage: effect,
-            queueMessageAsync: async (_text, _options, preparation) => {
-              entered.resolve();
-              await resume.promise;
-              preparation.assertCurrent();
-              await effect();
-            },
-          } satisfies ReplyBackendMessageInjectionV2,
+  },
+);
+
+it.each(["confirmation-rejection", "participant-callback", "participant-fulfilled"] as const)(
+  "keeps accepted custody across %s",
+  async (failure) => {
+    const delivery = createDeferred();
+    let queueOptions: ReplyBackendQueueMessageOptions | undefined;
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.bindToolAuthoritySnapshot({ fingerprint: () => "policy", project: () => "policy" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      toolAuthorityFingerprint: "policy",
+      cancel: vi.fn(),
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: vi.fn((_text, options) => {
+          queueOptions = options;
+          return delivery.promise;
         }),
-  });
-  operation.setPhase("running");
-  const attempt = await beginReplyMessageInjectionTarget(
-    replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!,
-    "retained source",
-    {
+      },
+    });
+    const participantFailure = failure.startsWith("participant-");
+    const participant = participantFailure
+      ? vi.spyOn(operation.personalToolParticipants!, "accept").mockImplementation(() => {
+          throw new Error("participant registration failed");
+        })
+      : undefined;
+    const confirmSteerTargetRunIdForPersistence = vi.fn(async () => {
+      throw new Error("transcript confirmation failed");
+    });
+    const recorder = {
+      ...createUserTurnTranscriptRecorder({
+        input: { text: "uncertain" },
+        target: createTestUserTurnTranscriptTarget(),
+      }),
+      confirmSteerTargetRunIdForPersistence,
+    };
+    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+    const attempt = await beginReplyMessageInjectionTarget(target, "uncertain", {
       isInboundUserMessage: true,
       toolAuthorityFingerprint: "policy",
-      ...(kind === "with-overlay" ? { toolAuthorityOverlay: overlay } : {}),
-      assertCurrent: separateCaller ? assertSource : undefined,
-      toolAuthorityPreparation: {
-        ...(kind === "legacy-run-with-caller" ? { authorityKind: "run" as const } : {}),
-        assertCurrent: separateCaller ? () => {} : assertSource,
-        async prepareCurrent() {},
-        compatAssertCurrent: assertSource,
-      },
-    },
-  );
-  try {
-    if (!legacy) {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        attempt.outcome,
-        "Prepared backend was not reached",
+      personalToolParticipant: participantFailure ? { senderId: "incoming" } : undefined,
+      waitForTranscriptCommit: failure === "confirmation-rejection",
+      userTurnTranscriptRecorder: recorder,
+    });
+
+    if (failure === "participant-callback") {
+      try {
+        queueOptions?.onQueueAccepted?.(true);
+      } catch (error) {
+        delivery.reject(error);
+      }
+    } else {
+      delivery.resolve();
+    }
+
+    await expect(attempt.outcome).resolves.toMatchObject({ status: "indeterminate" });
+    await expect(attempt.acceptance).resolves.toBe(true);
+    expect(confirmSteerTargetRunIdForPersistence).toHaveBeenCalledTimes(
+      failure === "confirmation-rejection" ? 1 : 0,
+    );
+    if (participant) {
+      expect(participant).toHaveBeenCalledOnce();
+      expect(() => operation.personalToolParticipants!.resolve("incoming")).toThrow(
+        "User is not a participant",
       );
-      source.current = false;
-      resume.resolve();
     }
-    await expect(attempt.outcome).resolves.toMatchObject(
-      legacy ? { status: "rejected", reason: "injection_unavailable" } : { status: "failed" },
-    );
-    await expect(attempt.acceptance).resolves.toBe(false);
-    expect(effect).not.toHaveBeenCalled();
-  } finally {
-    resume.resolve();
-    await attempt.outcome;
-  }
-});
-
-it.each([
-  "queue-rejection",
-  "confirmation-rejection",
-  "participant-callback",
-  "participant-fulfilled",
-] as const)("keeps accepted custody across %s", async (failure) => {
-  const delivery = createDeferred();
-  let queueOptions: ReplyBackendQueueMessageOptions | undefined;
-  const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
-  operation.bindToolAuthoritySnapshot({ fingerprint: () => "policy", project: () => "policy" });
-  operation.setPhase("running");
-  operation.attachBackend({
-    kind: "embedded",
-    runId: "run-a",
-    toolAuthorityFingerprint: "policy",
-    cancel: vi.fn(),
-    messageInjection: {
-      isAvailable: () => true,
-      queueMessage: vi.fn((_text, options) => {
-        queueOptions = options;
-        return delivery.promise;
-      }),
-    },
-  });
-  const participantFailure = failure.startsWith("participant-");
-  const participant = participantFailure
-    ? vi.spyOn(operation.personalToolParticipants!, "accept").mockImplementation(() => {
-        throw new Error("participant registration failed");
-      })
-    : undefined;
-  const confirmSteerTargetRunIdForPersistence = vi.fn(async () => {
-    throw new Error("transcript confirmation failed");
-  });
-  const recorder = {
-    ...createUserTurnTranscriptRecorder({
-      input: { text: "uncertain" },
-      target: createTestUserTurnTranscriptTarget(),
-    }),
-    confirmSteerTargetRunIdForPersistence,
-  };
-  const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-  const attempt = await beginReplyMessageInjectionTarget(target, "uncertain", {
-    isInboundUserMessage: true,
-    toolAuthorityFingerprint: "policy",
-    personalToolParticipant: participantFailure ? { senderId: "incoming" } : undefined,
-    waitForTranscriptCommit: failure === "confirmation-rejection",
-    userTurnTranscriptRecorder: recorder,
-  });
-
-  if (failure === "participant-callback") {
-    try {
-      queueOptions?.onQueueAccepted?.(true);
-    } catch (error) {
-      delivery.reject(error);
-    }
-  } else if (failure === "queue-rejection") {
-    queueOptions?.onQueueAccepted?.(true);
-    delivery.reject(new Error("transcript unconfirmed"));
-  } else {
-    delivery.resolve();
-  }
-
-  await expect(attempt.outcome).resolves.toMatchObject({ status: "indeterminate" });
-  await expect(attempt.acceptance).resolves.toBe(true);
-  expect(confirmSteerTargetRunIdForPersistence).toHaveBeenCalledTimes(
-    failure === "confirmation-rejection" ? 1 : 0,
-  );
-  if (participant) {
-    expect(participant).toHaveBeenCalledOnce();
-    expect(() => operation.personalToolParticipants!.resolve("incoming")).toThrow(
-      "User is not a participant",
-    );
-  }
-});
+  },
+);

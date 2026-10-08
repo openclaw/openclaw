@@ -39,14 +39,6 @@ type EmbeddedStreamRuntimeOwner =
       currentStreamFn: StreamFn;
     };
 
-function resolveEmbeddedStreamRuntime(owner: EmbeddedStreamRuntimeOwner): LlmRuntime {
-  const runtime = owner.llmRuntime ?? getStreamLlmRuntime(owner.currentStreamFn);
-  if (!runtime) {
-    throw new Error("Embedded stream has no lifecycle runtime owner.");
-  }
-  return runtime;
-}
-
 function isDefaultOpenClawStreamFnForModel(
   model: EmbeddedRunAttemptParams["model"],
   streamFn: StreamFn | undefined,
@@ -107,7 +99,10 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   /** Attaches the run credential when the selected transport sends it. */
   wrapApiKey: (streamFn: StreamFn) => StreamFn;
 } {
-  const llmRuntime = resolveEmbeddedStreamRuntime(params);
+  const llmRuntime = params.llmRuntime ?? getStreamLlmRuntime(params.currentStreamFn);
+  if (!llmRuntime) {
+    throw new Error("Embedded stream has no lifecycle runtime owner.");
+  }
   const wrapOptions = {
     runSignal: params.signal,
     authProfileId: params.authProfileId,

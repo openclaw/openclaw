@@ -399,17 +399,15 @@ async function resolveApiKeyForProfileOwned(
       throw new SecretSurfaceUnavailableError(degraded);
     }
     const inlineValue = cred.type === "api_key" ? cred.key : cred.token;
-    const ref =
-      parseSecretRef(cred.type === "api_key" ? cred.keyRef : cred.tokenRef, refDefaults) ??
-      parseSecretRef(inlineValue, refDefaults);
+    const refKey = authProfileSecretRefKey(cred, refDefaults);
     const apiKey = normalizeOptionalSecretInput(inlineValue);
-    if (ref && (!runtimeProfile.published || !apiKey)) {
+    if (refKey && (!runtimeProfile.published || !apiKey)) {
       throw new SecretSurfaceUnavailableError({
         ownerKind: "account",
         ownerId,
         state: "unavailable",
         paths: [`auth-profiles.${profileId}.${cred.type === "api_key" ? "key" : "token"}`],
-        refKeys: [secretRefKey(ref)],
+        refKeys: [refKey],
         reason: "secret reference was not materialized by the active runtime",
       });
     }

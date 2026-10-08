@@ -159,7 +159,7 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
     memoryLimitBytes,
     tasks: new WorkerTaskPool({
       workerUrl,
-      maxWorkers: 1,
+      workerClass: "singleton",
       idleTimeoutMs: 0,
       restartOnError: false,
       sharedCompute: true,
