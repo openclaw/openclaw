@@ -33,7 +33,7 @@ export async function runDelegatedUpdateRepairTurn(
     message.wallClockMs,
   );
   const traceTimings = log.isEnabled("trace");
-  const timings = { checks: 0, turnChecks: 0, fenceMs: 0, requesterMs: 0, runMs: 0, totalMs: 0 };
+  const timings = { checks: 0, liveChecks: 0, fenceMs: 0, requesterMs: 0, runMs: 0, totalMs: 0 };
   const measure = <T>(phase: "fenceMs" | "requesterMs" | "runMs", operation: () => T): T => {
     if (!traceTimings) {
       return operation();
@@ -102,14 +102,15 @@ export async function runDelegatedUpdateRepairTurn(
           signal.throwIfAborted();
           return assertAuthority();
         };
-        // The embedded run re-checks its source at every preparation and tool
+        // The embedded run re-checks its source at every preparation and exec-guard
         // boundary; copying the shared database for each one made those checks the
-        // turn's critical path. The turn carries the run row and requester policy
-        // observed just before it starts, and settlement observes both again.
-        // Executor ownership, the parent connection, and cancellation stay live.
-        const assertTurnCurrent = () => {
+        // turn's critical path. Those checks carry the run row and requester policy
+        // observed before the turn and keep executor ownership, the parent
+        // connection, and cancellation live. Model candidates, tool admission, and
+        // settlement still observe the run row and requester policy fresh.
+        const assertTurnLive = () => {
           signal.throwIfAborted();
-          timings.turnChecks += 1;
+          timings.liveChecks += 1;
           if (!process.connected) {
             throw new Error("Repair no longer owns the update attempt.");
           }
@@ -146,7 +147,8 @@ export async function runDelegatedUpdateRepairTurn(
               timeoutMs,
               maxToolCalls: message.maxToolCalls,
               signal,
-              isCurrent: assertTurnCurrent,
+              isCurrent: assertCurrent,
+              isLive: assertTurnLive,
             }),
           );
           // Parent cancellation revokes the whole delegated request. A local

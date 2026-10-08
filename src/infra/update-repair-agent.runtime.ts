@@ -295,7 +295,10 @@ type UpdateRepairTurnParams = {
   timeoutMs: number;
   maxToolCalls: number;
   signal: AbortSignal;
+  /** Full authority before each model candidate and tool effect. */
   isCurrent?: () => boolean;
+  /** Repeated in-turn source checks; defaults to `isCurrent`. */
+  isLive?: () => boolean;
   maintenanceHandoff?: true;
 };
 
@@ -314,12 +317,14 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
   const runConfig = buildExecRunConfig({ base: config.value.runConfig, cwd: target.installRoot });
   const controller = new AbortController();
   const signal = AbortSignal.any([params.signal, controller.signal]);
-  const assertCurrent = () => {
+  const isLive = params.isLive ?? params.isCurrent;
+  const assertAuthority = (isCurrent: (() => boolean) | undefined) => {
     signal.throwIfAborted();
-    if (params.isCurrent?.() === false) {
+    if (isCurrent?.() === false) {
       throw new Error("Repair no longer owns the failed update.");
     }
   };
+  const assertCurrent = () => assertAuthority(params.isCurrent);
   const runId = `update-repair-${randomUUID()}`;
   const sessionKey = `agent:${route.agentId}:update-repair:${runId}`;
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
@@ -327,13 +332,14 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
     runId,
     route.agentId,
     "update.repair",
-    assertCurrent,
+    () => assertAuthority(isLive),
   );
   const toolBudget = createAgentToolExecutionBudget({
     maxToolCalls: params.maxToolCalls,
     signal,
     abort: (reason) => controller.abort(reason),
-    isCurrent: params.isCurrent,
+    isCurrent: isLive,
+    ...(params.isLive ? { isAdmissionCurrent: params.isCurrent } : {}),
   });
   const deadline = Date.now() + params.timeoutMs;
   let timedOut = false;

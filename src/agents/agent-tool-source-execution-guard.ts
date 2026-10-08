@@ -16,13 +16,15 @@ export function createAgentToolExecutionBudget(params: {
   signal: AbortSignal;
   abort: (reason: Error) => void;
   isCurrent?: () => boolean;
+  /** Effect authority checked once per admitted tool call, after the scope check. */
+  isAdmissionCurrent?: () => boolean;
 }) {
   let toolCalls = 0;
   let active = true;
-  const assertCurrent = () => {
+  const assertCurrent = (isCurrent = params.isCurrent) => {
     params.signal.throwIfAborted();
     try {
-      if (!active || params.isCurrent?.() === false) {
+      if (!active || isCurrent?.() === false) {
         throw new Error("Agent tool execution scope is no longer active");
       }
     } catch (error) {
@@ -34,6 +36,9 @@ export function createAgentToolExecutionBudget(params: {
   };
   const admit = () => {
     assertCurrent();
+    if (params.isAdmissionCurrent) {
+      assertCurrent(params.isAdmissionCurrent);
+    }
     if (params.maxToolCalls !== undefined && toolCalls >= params.maxToolCalls) {
       const error = new Error("Agent tool-call budget exhausted");
       params.abort(error);

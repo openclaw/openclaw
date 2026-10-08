@@ -160,7 +160,7 @@ describe("delegated repair requester binding", () => {
     },
   );
 
-  it("carries admitted authority through the turn and rechecks it at settlement", async () => {
+  it("keeps in-turn liveness cheap and refuses revoked authority before tool effects", async () => {
     await withOpenClawTestState({ layout: "home" }, async (state) => {
       await state.writeConfig({ commands: { ownerAllowFrom: ["owner"] } });
       const run = createUpdateRun({ trigger: "chat", origin: { requester } }, { env: state.env });
@@ -169,13 +169,16 @@ describe("delegated repair requester binding", () => {
       await closeOpenClawStateDatabaseAsync();
       const snapshots = vi.spyOn(sqliteSnapshotSource, "prepareSqliteReadOnlyLocationSync");
       try {
-        runtime.runUpdateRepairTurn.mockImplementationOnce(async ({ isCurrent }) => {
+        runtime.runUpdateRepairTurn.mockImplementationOnce(async ({ isCurrent, isLive }) => {
           snapshots.mockClear();
           for (let check = 0; check < 20; check += 1) {
-            expect(isCurrent()).toBe(true);
+            expect(isLive()).toBe(true);
           }
           expect(snapshots).not.toHaveBeenCalled();
+          expect(isCurrent()).toBe(true);
           await state.writeConfig({ commands: { ownerAllowFrom: ["other-owner"] } });
+          // Tool admission uses the full predicate, so a revoked owner stops the next effect.
+          expect(isCurrent).toThrow(revoked);
           return {
             toolCalls: 0,
             envelope: { model: "repair", provider: "fixture", final: "No changes", status: "ok" },
