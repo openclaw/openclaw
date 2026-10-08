@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
 import type {
@@ -268,6 +269,22 @@ export function prepareWorkerTaskInput<Input, Output>(
   } else {
     ready(prepared);
   }
+}
+
+export function armWorkerTaskTimeout<Input, Output>(
+  task: Task<Input, Output>,
+  timeoutMs: number,
+  onTimeout: () => void,
+): void {
+  clearTimeout(task.timer);
+  const now = performance.now();
+  task.deadline = Math.min(
+    task.options.hostTimeout !== "owner" && task.options.timeoutMs !== undefined
+      ? (task.deadline ?? task.enqueuedAt + resolveTimerTimeoutMs(task.options.timeoutMs, 60_000))
+      : Infinity,
+    now + resolveTimerTimeoutMs(timeoutMs, 60_000),
+  );
+  task.timer = setTimeout(onTimeout, Math.max(0, task.deadline - now));
 }
 
 export function expireWorkerTasks<Input, Output>(

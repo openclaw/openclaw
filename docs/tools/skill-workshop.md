@@ -40,7 +40,7 @@ Gateway, see [Personal library authoring](/tools/skill-workshop/personal-library
   anything worth keeping. See [Self-learning](/tools/self-learning).
 - **`/learn [request]`:** asks the agent to save a skill now, from the current
   conversation or from sources you name. See [`/learn`](#learn).
-- **Learn from past conversations:** the Control UI button opens a normal chat
+- **Learn from history:** the Control UI button opens a normal chat
   in which the agent reviews earlier conversations and saves what it finds.
 - **Unused-skill cleanup:** learned skills nobody used for 30 days are archived.
   See [Unused-skill cleanup](#unused-skill-cleanup).
@@ -63,7 +63,8 @@ Reply "undo" and the agent restores the previous version with `skill_workshop`.
 Nothing is posted when the review changed nothing. Channel-less Control UI
 sessions get the same line as a transcript entry.
 
-You can also undo from the Control UI (**Undo** next to a recent change) or the
+You can also undo from the Control UI (**Undo** on the skill's latest change or
+in its History tab) or the
 CLI:
 
 ```bash
@@ -211,10 +212,15 @@ and why) lives in the state database and keeps the newest 500 entries per agent.
 
 ## Operator surfaces
 
-- **Control UI:** open **Plugins → Skill workshop** to see learned skills with
-  their use counts, recent changes with **Undo**, a file viewer with saved
-  versions, archive and restore, the learning mode switch, and
-  **Learn from past conversations**.
+- **Control UI:** open **Plugins → Skill workshop**. Learned skills are listed
+  most used first (or by recent activity or name), each with its latest change
+  and **Undo**; skills idle for two weeks are flagged, since
+  [unused-skill cleanup](#unused-skill-cleanup) may archive them at 30 days.
+  Selecting a skill shows its instructions, support files, and history.
+  From the history you can compare an earlier version with today's, restore it,
+  or undo a change. **Archive** and **Restore** switch a skill between the
+  Active and Archived lists. The page header holds the learning mode switch and
+  **Learn from history**.
 - **CLI:** `openclaw skills workshop list | changes | show | archive | restore`.
   See [Skills CLI](/cli/skills#skill-workshop).
 - **Plugins:** the [`skill_changed`](/plugins/hooks/reference#skill-lifecycle)

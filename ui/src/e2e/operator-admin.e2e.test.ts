@@ -510,7 +510,7 @@ suite.define(() => {
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("skills.workshop.restore")).toHaveLength(0);
       expect(await gateway.getRequests("skills.workshop.archive")).toHaveLength(0);
-      const learn = page.getByRole("button", { name: "Learn from past conversations" });
+      const learn = page.getByRole("button", { name: "Learn from history" });
       await expect.poll(() => learn.isDisabled()).toBe(true);
       const creates = (await gateway.getRequests("sessions.create")).length;
       await learn.click({ force: true });

@@ -290,16 +290,24 @@ export function readUserModelAccountSummary(
   params: { profileId: string; authProfileId: string },
   options: OpenClawStateDatabaseOptions = {},
 ): UserModelAccount | undefined {
-  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-    const owner = resolveOwner(db, params.profileId);
-    if (!owner || credentialOwner(db, params.authProfileId) !== owner) {
-      return undefined;
-    }
-    const value = readRecord(db, owner, `model-account:${params.authProfileId}`);
-    return value === undefined
-      ? undefined
-      : accountSummary(params.authProfileId, value, readLinks(db, owner));
-  }, options);
+  return withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) => readUserModelAccountSummaryInDatabase(db, params),
+    options,
+  );
+}
+
+export function readUserModelAccountSummaryInDatabase(
+  db: DatabaseSync,
+  params: { profileId: string; authProfileId: string },
+): UserModelAccount | undefined {
+  const owner = resolveOwner(db, params.profileId);
+  if (!owner || credentialOwner(db, params.authProfileId) !== owner) {
+    return undefined;
+  }
+  const value = readRecord(db, owner, `model-account:${params.authProfileId}`);
+  return value === undefined
+    ? undefined
+    : accountSummary(params.authProfileId, value, readLinks(db, owner));
 }
 
 /** Only an explicitly selected credential is loaded; no personal account enumeration. */

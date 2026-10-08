@@ -5,8 +5,12 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "./openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
@@ -147,10 +151,7 @@ export function clearUserProfileAuthLinkAsync(
 }
 
 async function read<
-  Key extends
-    | "userProfiles.modelAccount.list"
-    | "userProfiles.modelAccount.summary"
-    | "userProfiles.modelAccount.selected",
+  Key extends "userProfiles.modelAccount.list" | "userProfiles.modelAccount.selected",
 >(type: Key, input: OpenClawStateWorkerOperations[Key]["input"], options: AccountOptions) {
   const context = options.context ?? captureOpenClawStateWorkerContext(options);
   const captured = structuredClone(input);
@@ -170,11 +171,21 @@ export async function listUserModelAccountsAsync(
   return (await read("userProfiles.modelAccount.list", params, options)) ?? { accounts: [] };
 }
 
-export function readUserModelAccountSummaryAsync(
+export async function readUserModelAccountSummaryAsync(
   params: { profileId: string; authProfileId: string },
   options: AccountOptions = {},
 ) {
-  return read("userProfiles.modelAccount.summary", params, options);
+  const context = options.context ?? captureOpenClawStateReadWorkerContext(options);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userModelAccounts.summary", ...params },
+    { context, current: true, preferIndependentWarmRead: true },
+  );
+  context.admission.assertCurrent();
+  if (reply && (!reply.ok || reply.type !== "userModelAccounts.summary")) {
+    throw new Error(reply.ok ? "Unexpected personal account summary reply" : reply.message);
+  }
+  return reply?.account;
 }
 
 /** Account pins retain the identity writer's authority, independently of default links. */
