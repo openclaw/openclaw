@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -648,7 +648,9 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     },
   );
 
-  it("pauses the overloaded model while serving another model, then retries at the queue tail", async () => {
+  it("pauses the overloaded model while serving another model, then retries at the queue tail", async ({
+    signal,
+  }) => {
     const first = await addSession(1);
     const next = await addSession(2);
     const blocker = await addSession(3, "healthy");
@@ -657,6 +659,11 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     const failure = createDeferred<typeof result>();
     const release = createDeferred<typeof result>();
     const started = createDeferred();
+    // Initial parallel reads can reach the model callbacks in either order.
+    const initialCalls = new Map([
+      ["utility", failure],
+      ["other", release],
+    ]);
     const healthyReady = createDeferred();
     const retried = createDeferred();
     const completed = new Set<string>();
@@ -672,43 +679,48 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         retried.resolve();
       }
     });
-    complete
-      .mockImplementationOnce(() => failure.promise)
-      .mockImplementationOnce(() => {
+    complete.mockImplementation(({ model }) => {
+      const initial = initialCalls.get(model);
+      if (!initial) {
+        return Promise.resolve(result);
+      }
+      initialCalls.delete(model);
+      if (initialCalls.size === 0) {
         started.resolve();
-        return release.promise;
-      });
+      }
+      return initial.promise;
+    });
     fakeTime();
     try {
       service.ensure(first);
       service.ensure(blocker);
-      await started.promise;
+      await withinTest(started.promise, signal);
       expect(complete).toHaveBeenCalledTimes(2);
       service.ensure(next);
       service.ensure(healthy);
       failure.reject(Object.assign(new Error("Overloaded"), { status: 529 }));
-      await healthyReady.promise;
+      await withinTest(healthyReady.promise, signal);
       expect(view(healthy)?.state).toBe("current");
       expect(complete).toHaveBeenCalledTimes(3);
       expect(view(first)?.state).toBe("updating");
       expect(view(next)?.state).toBe("updating");
       release.resolve(result);
       await vi.advanceTimersByTimeAsync(30_000);
-      await retried.promise;
+      await withinTest(retried.promise, signal);
       expect(view(first)?.state).toBe("current");
       expect(view(next)?.state).toBe("current");
-      expect(
-        complete.mock.calls.map(([request]) => JSON.parse(request.prompt).messages[0]),
-      ).toEqual([
-        "user: Request 1",
-        "user: Request 3",
-        "user: Request 4",
-        "user: Request 2",
-        "user: Request 1",
-      ]);
+      const requests = complete.mock.calls.map(
+        ([request]) => JSON.parse(request.prompt).messages[0],
+      );
+      expect(requests.slice(0, 2)).toEqual(
+        expect.arrayContaining(["user: Request 1", "user: Request 3"]),
+      );
+      expect(requests.slice(2)).toEqual(["user: Request 4", "user: Request 2", "user: Request 1"]);
     } finally {
+      const disposal = service.dispose();
       failure.resolve(result);
       release.resolve(result);
+      await disposal;
     }
   });
 
