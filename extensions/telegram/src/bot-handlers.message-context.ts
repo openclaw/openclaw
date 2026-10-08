@@ -179,6 +179,7 @@ export function createTelegramMessageSessionRuntime({
     const sessionKey = resolveTelegramTargetSession({
       cfg: params.runtimeCfg,
       route,
+      bindingMode,
       chatId: params.chatId,
       isGroup: params.isGroup,
       senderId: params.senderId,

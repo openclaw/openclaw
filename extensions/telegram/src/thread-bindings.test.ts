@@ -3,6 +3,13 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
+import { telegramPlugin } from "./channel.js";
+import {
+  inspectTelegramConversationRoute,
+  resolveTelegramConversationRoute,
+  resolveTelegramTargetSession,
+} from "./conversation-route.js";
 
 const createForumTopicMock = vi.hoisted(() =>
   vi.fn<typeof import("./send-forum-topics.js").createForumTopicTelegram>(),
@@ -39,6 +46,82 @@ describe("telegram thread bindings", () => {
 
   beforeEach(() => {
     createForumTopicMock.mockReset();
+  });
+
+  it("routes private-topic follow-ups and native commands to the exact bound ACP session", async () => {
+    await createTelegramThreadBindingManager({ accountId: "default" });
+    const cfg = {
+      agents: {
+        entries: { main: {}, claude: {} },
+      },
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "*" } }],
+    };
+    const commandConversation = telegramPlugin.bindings?.resolveCommandConversation?.({
+      accountId: "default",
+      originatingTo: "telegram:1234",
+      threadId: "42",
+    });
+    expect(commandConversation).toEqual({
+      conversationId: "1234:topic:42",
+      parentConversationId: "1234",
+    });
+    if (!commandConversation) {
+      throw new Error("Expected a private-topic command conversation");
+    }
+    const targetSessionKey = "agent:claude:acp:private-topic";
+    await getSessionBindingService().bind({
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        ...commandConversation,
+      },
+      targetSessionKey,
+      targetKind: "session",
+      placement: "current",
+    });
+    const params = {
+      cfg,
+      accountId: "default",
+      chatId: 1234,
+      senderId: 1234,
+      isGroup: false,
+      threadSpec: resolveTelegramMessageThreadSpec({
+        message_id: 1,
+        date: 1,
+        chat: { id: 1234, type: "private", first_name: "Alice" },
+        message_thread_id: 42,
+      }),
+    };
+    const inbound = await resolveTelegramConversationRoute(params);
+    const command = inspectTelegramConversationRoute(params);
+    for (const resolved of [inbound, command]) {
+      expect(resolved.bindingMode).toEqual({ kind: "runtime-bound", sessionKey: targetSessionKey });
+      expect(resolved.route.agentId).toBe("claude");
+      expect(
+        resolveTelegramTargetSession({
+          ...params,
+          ...resolved,
+          dmThreadId: 42,
+          botHasTopicsEnabled: true,
+        }),
+      ).toBe(targetSessionKey);
+    }
+    for (const threadSpec of [
+      { scope: "dm", id: 43 },
+      { scope: "dm", id: undefined },
+    ] as const) {
+      const other = await resolveTelegramConversationRoute({ ...params, threadSpec });
+      expect(other.bindingMode).toEqual({ kind: "none" });
+      expect(other.route.agentId).toBe("main");
+      expect(
+        resolveTelegramTargetSession({
+          ...params,
+          ...other,
+          dmThreadId: threadSpec.id,
+          botHasTopicsEnabled: true,
+        }),
+      ).toBe(threadSpec.id ? "agent:main:main:thread:1234:43" : "agent:main:main");
+    }
   });
 
   it("joins concurrent startup across module instances before exposing hydrated bindings", async () => {

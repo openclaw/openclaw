@@ -250,12 +250,17 @@ export function resolveTelegramConversationBaseSessionKey(
 export function resolveTelegramTargetSession(params: {
   cfg: OpenClawConfig;
   route: TelegramResolvedRoute;
+  bindingMode: TelegramConversationBindingMode;
   chatId: number | string;
   isGroup: boolean;
   senderId?: string | number | null;
   dmThreadId?: number;
   botHasTopicsEnabled?: boolean;
 }): string {
+  if (params.bindingMode.kind === "runtime-bound" || params.bindingMode.kind === "configured") {
+    // A binding owns the complete target key; topic suffixes apply only to unbound sessions.
+    return params.bindingMode.sessionKey;
+  }
   const baseSessionKey = resolveTelegramConversationBaseSessionKey(params);
   const threadKeys =
     shouldUseTelegramDmThreadSession(params) && params.dmThreadId != null

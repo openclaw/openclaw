@@ -19,7 +19,7 @@ function serializeTelegramTopicConversation(params: {
   const marker =
     params.thread.scope === "direct-messages" && id > 0
       ? "direct-topic"
-      : params.thread.scope === "forum" && id >= 0
+      : (params.thread.scope === "forum" || params.thread.scope === "dm") && id >= 0
         ? "topic"
         : null;
   return marker ? `${chatId}:${marker}:${id}` : null;

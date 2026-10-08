@@ -171,12 +171,15 @@ describe("Telegram recorded session destinations", () => {
     "keeps the Telegram-selected session through real /help initialization with DM topic=%s",
     async (isTopic) => {
       const targetSessionKey = "agent:main:telegram-bound";
-      const selectedSessionKey = isTopic
-        ? "agent:main:telegram-bound:thread:42001:42"
-        : targetSessionKey;
+      const selectedSessionKey = targetSessionKey;
       const wrongSessionKeys = [
         "agent:main:telegram:direct:42001",
-        ...(isTopic ? ["agent:main:telegram:direct:42001:thread:42001:42", targetSessionKey] : []),
+        ...(isTopic
+          ? [
+              "agent:main:telegram:direct:42001:thread:42001:42",
+              "agent:main:telegram-bound:thread:42001:42",
+            ]
+          : []),
       ];
       cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
       cfg.commands = { native: false, text: true };
@@ -195,7 +198,7 @@ describe("Telegram recorded session destinations", () => {
       try {
         const bot = await createBot(false, true, cfg, isTopic);
         await harness.state.writeConfig(cfg);
-        bind(String(chat.id), targetSessionKey);
+        bind(isTopic ? `${chat.id}:topic:42` : String(chat.id), targetSessionKey);
         for (const sessionKey of [selectedSessionKey, ...wrongSessionKeys]) {
           expect(getSessionEntry({ agentId: "main", storePath, sessionKey })).toBeUndefined();
         }
