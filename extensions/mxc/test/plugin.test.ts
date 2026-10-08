@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type {
   OpenClawPluginApi,
   PluginRuntimeLifecycleRegistration,
@@ -24,24 +28,18 @@ const {
   warnMxcHostPrepIfNeededMock,
   createMxcSandboxBackendFactoryMock,
   mxcSandboxBackendManagerMock,
-  resolveMxcBinaryPathMock,
   readinessProbeExecMock,
 } = vi.hoisted(() => {
   return {
-    assertMxcReadinessMock: vi.fn<(params: { executablePath: string }) => void>(),
+    assertMxcReadinessMock: vi.fn<(params: { nativeEnv: Record<string, string> }) => void>(),
     warnMxcHostPrepIfNeededMock: vi.fn(),
     createMxcSandboxBackendFactoryMock: vi.fn(() => async () => {
       throw new Error("MXC provider must not run in registration tests");
     }),
     mxcSandboxBackendManagerMock: { describeRuntime: vi.fn(), removeRuntime: vi.fn() },
-    resolveMxcBinaryPathMock: vi.fn(() => "mxc-test-binary"),
     readinessProbeExecMock: vi.fn(),
   };
 });
-
-vi.mock("../src/binary-resolver.js", () => ({
-  resolveMxcBinaryPath: resolveMxcBinaryPathMock,
-}));
 
 vi.mock("../src/mxc-backend-factory.js", () => ({
   createMxcSandboxBackendFactory: createMxcSandboxBackendFactoryMock,
@@ -64,6 +62,12 @@ vi.mock("node:child_process", async (importOriginal) => ({
 import { registerMxcPlugin } from "../src/plugin.js";
 
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+const arch = process.arch === "arm64" ? "arm64" : "x64";
+const sdkBinDir = path.join(
+  path.dirname(createRequire(import.meta.url).resolve("@microsoft/mxc-sdk/package.json")),
+  "bin",
+);
+const sdkNativeEnv = { MXC_BIN_DIR: sdkBinDir, MXC_FFI_DIR: path.join(sdkBinDir, arch) };
 
 function readBackend() {
   return {
@@ -123,8 +127,6 @@ describe("registerMxcPlugin", () => {
     warnMxcHostPrepIfNeededMock.mockClear();
     createMxcSandboxBackendFactoryMock.mockClear();
     readinessProbeExecMock.mockReset();
-    resolveMxcBinaryPathMock.mockReset();
-    resolveMxcBinaryPathMock.mockReturnValue("mxc-test-binary");
     setProcessPlatformForTest("win32");
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
@@ -147,7 +149,6 @@ describe("registerMxcPlugin", () => {
     expect(warnSpy).toHaveBeenCalledWith(
       "[mxc] Sandbox backend is Windows-only and not available on darwin. Plugin will be dormant.",
     );
-    expect(resolveMxcBinaryPathMock).not.toHaveBeenCalled();
     expect(assertMxcReadinessMock).not.toHaveBeenCalled();
     expect(readBackend()).toEqual(original);
     expect(lifecycles).toEqual([]);
@@ -161,7 +162,6 @@ describe("registerMxcPlugin", () => {
     registerMxcPlugin(api);
 
     expect(warnSpy).not.toHaveBeenCalled();
-    expect(resolveMxcBinaryPathMock).not.toHaveBeenCalled();
     expect(assertMxcReadinessMock).not.toHaveBeenCalled();
     expect(warnMxcHostPrepIfNeededMock).not.toHaveBeenCalled();
     expect(createMxcSandboxBackendFactoryMock).not.toHaveBeenCalled();
@@ -176,8 +176,7 @@ describe("registerMxcPlugin", () => {
 
     registerMxcPlugin(api);
 
-    expect(resolveMxcBinaryPathMock).toHaveBeenCalledWith(undefined);
-    expect(assertMxcReadinessMock).toHaveBeenCalledWith({ executablePath: "mxc-test-binary" });
+    expect(assertMxcReadinessMock).toHaveBeenCalledWith({ nativeEnv: sdkNativeEnv });
     expect(warnMxcHostPrepIfNeededMock).toHaveBeenCalledWith();
     expect(createMxcSandboxBackendFactoryMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -195,58 +194,65 @@ describe("registerMxcPlugin", () => {
     expect(readBackend()).toEqual(original);
   });
 
-  test("blocks an older override and registers after selecting a compatible executor", async () => {
+  test("blocks an SDK 0.8 override layout and registers after selecting an MXC 1.0 layout", async () => {
     const { assertMxcReadiness: runMxcReadiness } =
       await vi.importActual<typeof import("../src/readiness.js")>("../src/readiness.js");
-    const legacyOverride = "C:\\Tools\\old-wxc-exec.exe";
-    const compatibleOverride = "C:\\Tools\\wxc-exec.exe";
-    const original = readBackend();
-    const legacy = createApi({ mxcBinaryPath: legacyOverride });
-    resolveMxcBinaryPathMock.mockReturnValueOnce(legacyOverride);
-    readinessProbeExecMock.mockImplementation((command: string, args: readonly string[]) => {
-      if (command === legacyOverride && args[0] === "--probe") {
-        throw new Error("Command failed: old-wxc-exec.exe --probe");
+    const root = mkdtempSync(path.join(tmpdir(), "mxc-plugin-override-"));
+    const nodeVersion = Object.getOwnPropertyDescriptor(process.versions, "node")!;
+    Object.defineProperty(process.versions, "node", { ...nodeVersion, value: "24.21.0" });
+    try {
+      const legacyOverride = path.join(root, "tools", "wxc-exec.exe");
+      const compatibleOverride = path.join(root, "release", arch, "wxc-exec.exe");
+      for (const executor of [legacyOverride, compatibleOverride]) {
+        mkdirSync(path.dirname(executor), { recursive: true });
+        writeFileSync(executor, "");
+        writeFileSync(path.join(path.dirname(executor), "mxc_ffi.dll"), "");
       }
-      throw new Error(`unexpected probe: ${command}`);
-    });
-    assertMxcReadinessMock.mockImplementation(({ executablePath }) =>
-      runMxcReadiness({ executablePath }),
-    );
+      const original = readBackend();
+      const legacy = createApi({ mxcBinaryPath: legacyOverride });
+      assertMxcReadinessMock.mockImplementation(runMxcReadiness);
 
-    expect(() => registerMxcPlugin(legacy.api)).toThrow(
-      /selected executor must be compatible with MXC 0\.8\.0.*unset plugins\.entries\.mxc\.config\.mxcBinaryPath.*restart the Gateway/u,
-    );
-    expect(resolveMxcBinaryPathMock).toHaveBeenNthCalledWith(1, legacyOverride);
-    expect(readinessProbeExecMock).toHaveBeenCalledWith(
-      legacyOverride,
-      ["--probe"],
-      expect.objectContaining({ encoding: "utf-8" }),
-    );
-    expect(readBackend()).toEqual(original);
-    expect(createMxcSandboxBackendFactoryMock).not.toHaveBeenCalled();
-    expect(legacy.lifecycles).toEqual([]);
+      expect(() => registerMxcPlugin(legacy.api)).toThrow(
+        `[mxc] MXC sandbox backend cannot load: MXC binary override ${legacyOverride} must be in an "${arch}" directory`,
+      );
+      expect(assertMxcReadinessMock).not.toHaveBeenCalled();
+      expect(readinessProbeExecMock).not.toHaveBeenCalled();
+      expect(readBackend()).toEqual(original);
+      expect(createMxcSandboxBackendFactoryMock).not.toHaveBeenCalled();
+      expect(legacy.lifecycles).toEqual([]);
 
-    const recovered = createApi({ mxcBinaryPath: compatibleOverride });
-    resolveMxcBinaryPathMock.mockReturnValueOnce(compatibleOverride);
-    readinessProbeExecMock.mockImplementation((command: string, args: readonly string[]) => {
-      if (command === compatibleOverride && args[0] === "--probe") {
-        return JSON.stringify({ tier: "base-container", warnings: [] });
-      }
-      throw new Error(`unexpected probe: ${command}`);
-    });
+      const recovered = createApi({ mxcBinaryPath: compatibleOverride });
+      const nativeEnv = {
+        MXC_BIN_DIR: path.join(root, "release"),
+        MXC_FFI_DIR: path.join(root, "release", arch),
+      };
+      readinessProbeExecMock.mockImplementation(
+        (command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+          if (
+            command === process.execPath &&
+            args[1] === "--probe" &&
+            options.env?.MXC_BIN_DIR === nativeEnv.MXC_BIN_DIR &&
+            options.env.MXC_FFI_DIR === nativeEnv.MXC_FFI_DIR
+          ) {
+            return JSON.stringify({
+              probe: { tier: "base-container", warnings: [], probes: {} },
+            });
+          }
+          throw new Error(`unexpected probe: ${command}`);
+        },
+      );
 
-    expect(() => registerMxcPlugin(recovered.api)).not.toThrow();
-    expect(resolveMxcBinaryPathMock).toHaveBeenNthCalledWith(2, compatibleOverride);
-    expect(readinessProbeExecMock).toHaveBeenCalledWith(
-      compatibleOverride,
-      ["--probe"],
-      expect.objectContaining({ encoding: "utf-8" }),
-    );
-    expect(readBackend().factory).toEqual(expect.any(Function));
-    await recovered.stop();
-    expect(readBackend()).toEqual(original);
+      expect(() => registerMxcPlugin(recovered.api)).not.toThrow();
+      expect(assertMxcReadinessMock).toHaveBeenCalledWith({ nativeEnv });
+      expect(readinessProbeExecMock).toHaveBeenCalledTimes(1);
+      expect(readBackend().factory).toEqual(expect.any(Function));
+      await recovered.stop();
+      expect(readBackend()).toEqual(original);
+    } finally {
+      Object.defineProperty(process.versions, "node", nodeVersion);
+      rmSync(root, { force: true, recursive: true });
+    }
   });
-
   test.each(["disable", "reset"] as const)(
     "preserves backend hooks during scoped %s cleanup",
     async (reason) => {
@@ -315,15 +321,13 @@ describe("registerMxcPlugin", () => {
     }
   });
 
-  test("keeps the existing binary-resolution failure path after host support passes", () => {
-    resolveMxcBinaryPathMock.mockImplementation(() => {
-      throw new Error("missing binary");
-    });
+  test("fails activation when the configured native components are missing", () => {
+    const missing = path.join(tmpdir(), "mxc-plugin-missing", arch, "wxc-exec.exe");
     const original = readBackend();
-    const { api, registerService, lifecycles } = createApi();
+    const { api, registerService, lifecycles } = createApi({ mxcBinaryPath: missing });
 
     expect(() => registerMxcPlugin(api)).toThrow(
-      "[mxc] MXC sandbox backend cannot load: missing binary. Install @microsoft/mxc-sdk or set mxcBinaryPath.",
+      `[mxc] MXC sandbox backend cannot load: MXC binary not found at configured path: ${missing}`,
     );
 
     expect(warnSpy).not.toHaveBeenCalled();

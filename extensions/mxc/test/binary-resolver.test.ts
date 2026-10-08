@@ -1,102 +1,90 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { buildMxcNativeEnv, resolveMxcNativeBinaries } from "../src/binary-resolver.js";
 
-// Mock node:fs and node:os for controlled testing
-const { existsSyncMock, homedirMock } = vi.hoisted(() => ({
-  existsSyncMock: vi.fn(),
-  homedirMock: vi.fn(),
-}));
+const arch = process.arch === "arm64" ? "arm64" : "x64";
+const otherArch = arch === "arm64" ? "x64" : "arm64";
 
-vi.mock("node:fs", () => ({
-  existsSync: existsSyncMock,
-}));
-
-vi.mock("node:os", () => ({
-  homedir: homedirMock,
-}));
-
-import { resolveMxcBinaryPath } from "../src/binary-resolver.js";
-
-describe("resolveMxcBinaryPath", () => {
-  const originalPath = process.env.PATH;
+describe("resolveMxcNativeBinaries", () => {
+  let root: string;
 
   beforeEach(() => {
-    existsSyncMock.mockReset();
-    homedirMock.mockReturnValue("/home/openclaw");
-    process.env.PATH = "";
+    root = mkdtempSync(path.join(tmpdir(), "mxc-native-"));
   });
 
   afterEach(() => {
-    process.env.PATH = originalPath;
+    rmSync(root, { force: true, recursive: true });
   });
 
-  test("config override returns the override path when file exists", () => {
-    existsSyncMock.mockReturnValue(true);
-    const result = resolveMxcBinaryPath("C:\\custom\\wxc-exec.exe");
-    expect(result).toBe("C:\\custom\\wxc-exec.exe");
+  function writeRelease(archDir: string, files = ["wxc-exec.exe", "mxc_ffi.dll"]): string {
+    const dir = path.join(root, archDir);
+    mkdirSync(dir, { recursive: true });
+    for (const file of files) {
+      writeFileSync(path.join(dir, file), "");
+    }
+    return path.join(dir, "wxc-exec.exe");
+  }
+
+  test("pins both native components from a matching override layout", () => {
+    const executorPath = writeRelease(arch);
+    const binaries = resolveMxcNativeBinaries(executorPath);
+
+    expect(binaries).toEqual({
+      binDir: root,
+      archDir: path.join(root, arch),
+      executorPath,
+      nativeLibraryPath: path.join(root, arch, "mxc_ffi.dll"),
+    });
+    expect(buildMxcNativeEnv(binaries)).toEqual({
+      MXC_BIN_DIR: root,
+      MXC_FFI_DIR: path.join(root, arch),
+    });
   });
 
-  test("config override returns an absolute path for relative inputs", () => {
-    const relativeOverride = path.join("tools", "wxc-exec.exe");
-    const absoluteOverride = path.resolve(relativeOverride);
-    existsSyncMock.mockImplementation((candidate) => candidate === absoluteOverride);
+  test("rejects an override without mxc_ffi.dll beside it", () => {
+    const executorPath = writeRelease(arch, ["wxc-exec.exe"]);
 
-    expect(resolveMxcBinaryPath(relativeOverride)).toBe(absoluteOverride);
+    expect(() => resolveMxcNativeBinaries(executorPath)).toThrow(/mxc_ffi\.dll.*same release/u);
   });
 
-  test("config override throws when file does not exist", () => {
-    existsSyncMock.mockReturnValue(false);
-    expect(() => resolveMxcBinaryPath("C:\\missing\\wxc-exec.exe")).toThrow(
-      /not found at configured path/,
+  test("rejects a flat SDK 0.8 style override", () => {
+    const executorPath = writeRelease("tools");
+
+    expect(() => resolveMxcNativeBinaries(executorPath)).toThrow(
+      new RegExp(`must be in an "${arch}" directory`, "u"),
     );
   });
 
-  test("ignores project, PATH, and home candidates during discovery", () => {
-    const projectCandidate = path.join(process.cwd(), "bin", "wxc-exec.exe");
-    const homeCandidate = path.join("/home/openclaw", ".mxc", "wxc-exec.exe");
-    const trustedDir = "/trusted-path";
-    const pathCandidate = path.join(trustedDir, "wxc-exec.exe");
-    process.env.PATH = trustedDir;
-    existsSyncMock.mockImplementation((candidate) => {
-      const candidatePath = String(candidate);
-      return [projectCandidate, homeCandidate, pathCandidate].includes(candidatePath);
-    });
+  test("rejects an override for the other architecture", () => {
+    const executorPath = writeRelease(otherArch);
 
-    expect(() => resolveMxcBinaryPath()).toThrow(/wxc-exec\.exe.*not found/u);
+    expect(() => resolveMxcNativeBinaries(executorPath)).toThrow(
+      new RegExp(`must be in an "${arch}" directory`, "u"),
+    );
   });
 
-  test("resolves the SDK arch binary", () => {
-    const arch = process.arch === "arm64" ? "arm64" : "x64";
-    let sdkCandidate: string | undefined;
-    existsSyncMock.mockImplementation((candidate) => {
-      const candidatePath = String(candidate);
-      if (candidatePath.endsWith(`${path.sep}bin${path.sep}${arch}`)) {
-        return true;
-      }
-      if (candidatePath.endsWith(`${path.sep}bin${path.sep}${arch}${path.sep}wxc-exec.exe`)) {
-        sdkCandidate = candidatePath;
-        return true;
-      }
-      return false;
-    });
-
-    expect(resolveMxcBinaryPath()).toBe(sdkCandidate);
+  test("rejects a missing override and a differently named executor", () => {
+    expect(() => resolveMxcNativeBinaries(path.join(root, arch, "wxc-exec.exe"))).toThrow(
+      /not found at configured path/u,
+    );
+    const renamed = path.join(root, arch, "old-wxc-exec.exe");
+    writeRelease(arch, ["old-wxc-exec.exe", "mxc_ffi.dll"]);
+    expect(() => resolveMxcNativeBinaries(renamed)).toThrow(/must name wxc-exec\.exe/u);
   });
 
-  test("falls back to SDK flat bin when arch bin is absent", () => {
-    let sdkCandidate: string | undefined;
-    existsSyncMock.mockImplementation((candidate) => {
-      const candidatePath = String(candidate);
-      if (candidatePath.endsWith(`${path.sep}bin`)) {
-        return true;
-      }
-      if (candidatePath.endsWith(`${path.sep}bin${path.sep}wxc-exec.exe`)) {
-        sdkCandidate = candidatePath;
-        return true;
-      }
-      return false;
-    });
+  test("defaults to the installed SDK architecture directory", () => {
+    const require = createRequire(import.meta.url);
+    const sdkRoot = path.dirname(require.resolve("@microsoft/mxc-sdk/package.json"));
+    const archDir = path.join(sdkRoot, "bin", arch);
 
-    expect(resolveMxcBinaryPath()).toBe(sdkCandidate);
+    expect(resolveMxcNativeBinaries()).toEqual({
+      binDir: path.join(sdkRoot, "bin"),
+      archDir,
+      executorPath: path.join(archDir, "wxc-exec.exe"),
+      nativeLibraryPath: path.join(archDir, "mxc_ffi.dll"),
+    });
   });
 });

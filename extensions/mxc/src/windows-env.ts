@@ -1,9 +1,9 @@
 // Windows process environment helpers for the MXC ProcessContainer backend.
 //
-// MXC's BaseContainerRunner treats a non-empty `process.env` as a replacement
-// environment block for CreateProcessInSandbox: when present it replaces the
-// entire default OS environment, so any required OS var (SystemRoot, COMSPEC, …)
-// that is not listed is missing and cmd.exe fails with ERROR_ENVVAR_NOT_FOUND.
+// MXC uses a supplied `environment` verbatim unless `inheritDefaultEnvironment`
+// is set: it replaces the entire default OS environment, so any required OS var
+// (SystemRoot, COMSPEC, …) that is not listed is missing and cmd.exe fails with
+// ERROR_ENVVAR_NOT_FOUND.
 // These helpers build a minimal-but-complete Windows env block from required OS
 // defaults plus caller overrides, and a separate launcher env for the spawn
 // process itself.
@@ -89,12 +89,12 @@ function setCaseInsensitiveEnvEntry(
 
 // Build the Windows replacement env block: required OS defaults first, then
 // caller overrides (case-insensitively, since Windows env names are
-// case-insensitive). Keys containing `=` are dropped so a malicious caller key
-// cannot inject extra `NAME=VALUE` pairs into the block.
+// case-insensitive). Keys containing `=` are dropped because the native layer
+// serializes the record into a `NAME=VALUE` block.
 export function normalizeWindowsProcessEnvRecord(
   callerEnv: Record<string, string>,
   hostEnv: NodeJS.ProcessEnv = process.env,
-): string[] {
+): Record<string, string> {
   const entries = new Map<string, { key: string; value: string }>();
   for (const key of WINDOWS_PROCESS_ENV_DEFAULT_KEYS) {
     setCaseInsensitiveEnvEntry(entries, key, getEnvValueCaseInsensitive(hostEnv, key));
@@ -102,12 +102,19 @@ export function normalizeWindowsProcessEnvRecord(
   for (const [key, value] of Object.entries(callerEnv)) {
     setCaseInsensitiveEnvEntry(entries, key, value);
   }
-  return [...entries.values()]
-    .toSorted((a, b) => a.key.localeCompare(b.key))
-    .map(({ key, value }) => `${key}=${value}`);
+  return Object.fromEntries(
+    [...entries.values()]
+      .toSorted((a, b) => a.key.localeCompare(b.key))
+      .map(({ key, value }) => [key, value]),
+  );
 }
 
-export function buildLauncherEnv(hostEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+// Host MXC_* variables are never forwarded; callers pin native components
+// explicitly through `nativeEnv`.
+export function buildLauncherEnv(
+  nativeEnv: Record<string, string>,
+  hostEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of LAUNCHER_ENV_KEYS) {
     const value = getEnvValueCaseInsensitive(hostEnv, key);
@@ -115,5 +122,5 @@ export function buildLauncherEnv(hostEnv: NodeJS.ProcessEnv = process.env): Node
       env[key] = value;
     }
   }
-  return env;
+  return { ...env, ...nativeEnv };
 }

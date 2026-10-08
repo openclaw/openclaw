@@ -17,6 +17,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { resolveConfig, type MxcConfig } from "../src/config.js";
 import { createMxcSandboxBackendFactory } from "../src/mxc-backend-factory.js";
 import { createMxcSandboxBackendHandle, mxcSandboxBackendManager } from "../src/mxc-backend.js";
+import {
+  decodePayload,
+  decodeRequest,
+  environmentEntries,
+  objectField,
+  stringArrayField,
+} from "./launcher-payload.test-support.js";
 
 const { spawnCommandMock, execFileSyncMock, mockedHomeDir } = vi.hoisted(() => ({
   spawnCommandMock: vi.fn(),
@@ -38,10 +45,6 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
   runCommandBuffered: spawnCommandMock,
-}));
-
-vi.mock("../src/binary-resolver.js", () => ({
-  resolveMxcBinaryPath: (configuredPath?: string) => configuredPath ?? "mxc-test-binary",
 }));
 
 const baseConfig: MxcConfig = {
@@ -73,50 +76,17 @@ function sandboxPolicyConfig(policy: unknown, config: MxcConfig = baseConfig): M
   };
 }
 
-function decodePayload(
-  argv: readonly string[],
-  options: { cleanupPayloadFile?: boolean } = {},
-): {
-  config: Record<string, unknown>;
-  options: Record<string, unknown>;
-} {
-  const payloadFileIndex = argv.indexOf("--payload-file");
-  const payloadFile = argv[payloadFileIndex + 1];
-  if (payloadFileIndex >= 0 && payloadFile !== undefined) {
-    const decoded = JSON.parse(readFileSync(payloadFile, "utf-8")) as {
-      config: Record<string, unknown>;
-      options: Record<string, unknown>;
-    };
-    if (options.cleanupPayloadFile !== false) {
-      rmSync(path.dirname(payloadFile), { force: true, recursive: true });
-    }
-    return decoded;
-  }
-  const payloadIndex = argv.indexOf("--payload");
-  const payload = argv[payloadIndex + 1];
-  if (payloadIndex < 0 || payload === undefined) {
-    throw new Error(`expected --payload in argv: ${JSON.stringify(argv)}`);
-  }
-  return JSON.parse(Buffer.from(payload, "base64").toString("utf-8")) as {
-    config: Record<string, unknown>;
-    options: Record<string, unknown>;
-  };
-}
+const nativeArch = process.arch === "arm64" ? "arm64" : "x64";
 
-function decodeContainerConfig(argv: readonly string[]): Record<string, unknown> {
-  return decodePayload(argv).config;
-}
-
-function objectField(value: Record<string, unknown>, key: string): Record<string, unknown> {
-  const field = value[key];
-  expect(field).toEqual(expect.any(Object));
-  return field as Record<string, unknown>;
-}
-
-function stringArrayField(value: Record<string, unknown>, key: string): string[] {
-  const field = value[key];
-  expect(field).toEqual(expect.any(Array));
-  return field as string[];
+function createNativeOverride(): { executorPath: string; binDir: string; archDir: string } {
+  const binDir = mkdtempSync(path.join(tmpdir(), "mxc-native-"));
+  testDirs.push(binDir);
+  const archDir = path.join(binDir, nativeArch);
+  mkdirSync(archDir);
+  const executorPath = path.join(archDir, "wxc-exec.exe");
+  writeFileSync(executorPath, "");
+  writeFileSync(path.join(archDir, "mxc_ffi.dll"), "");
+  return { executorPath, binDir, archDir };
 }
 
 function createSandboxBackendTestConfig(
@@ -258,42 +228,40 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     expect((spec as { requirePty?: boolean }).requirePty).toBeUndefined();
 
     const payload = decodePayload(spec.argv);
-    const cfg = payload.config;
-    const filesystem = objectField(cfg, "filesystem");
-    const network = objectField(cfg, "network");
-    const processConfig = objectField(cfg, "process");
-    const processContainer = objectField(cfg, "processContainer");
-    const ui = objectField(cfg, "ui");
+    const request = payload.request;
+    const filesystem = objectField(request, "filesystem");
+    const network = objectField(request, "network");
+    const ui = objectField(request, "ui");
     const expectedShell = process.env.ComSpec?.trim() || "cmd.exe";
-    expect(cfg.version).toBe("0.7.0-alpha");
-    expect(cfg.containment).toBe("process");
-    expect(cfg.lxc).toBeUndefined();
-    expect(processContainer).toEqual({
-      leastPrivilege: true,
-      capabilities: [],
-      ui: {
-        isolation: "container",
-        desktopSystemControl: false,
-        systemSettings: "none",
-        ime: false,
+    expect(request.containment).toEqual({
+      type: "processcontainer",
+      config: {
+        ui: {
+          isolation: "container",
+          desktopSystemControl: false,
+          systemSettings: "none",
+          ime: false,
+        },
       },
     });
     expect(ui).toEqual({
       disable: true,
       clipboard: "none",
-      injection: false,
+      allowInputInjection: false,
     });
-    expect(processConfig.commandLine).toBe(`${expectedShell} /d /s /c "echo hello"`);
-    expect(processConfig.cwd).toBe(baseParams.workdir);
-    expect(network.defaultPolicy).toBe("block");
-    expect(network.enforcementMode).toBe("capabilities");
+    expect(request.command).toBe(`${expectedShell} /d /s /c "echo hello"`);
+    expect(request.workingDirectory).toBe(baseParams.workdir);
+    expect(request.inheritDefaultEnvironment).toBe(false);
+    expect(network).toEqual({
+      egress: { default: "deny" },
+      ingress: { default: "deny", hostLoopback: "deny" },
+    });
     expect(filesystem.deniedPaths).toBeUndefined();
-    expect(processConfig.timeout).toBe(120_000);
-    expect(payload.options).toEqual({
-      debug: false,
-      executablePath: "mxc-test-binary",
-      usePty: false,
-    });
+    expect(filesystem.clearPolicyOnExit).toBe(true);
+    expect(request.timeoutMs).toBe(120_000);
+    expect(payload.options).toEqual({ debug: false, pty: false });
+    expect(spec.env.MXC_BIN_DIR).toEqual(expect.any(String));
+    expect(spec.env.MXC_FFI_DIR).toBe(path.join(String(spec.env.MXC_BIN_DIR), nativeArch));
   });
 
   test("normalizes agent-tool workdirs before execution", async () => {
@@ -379,16 +347,14 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
           usePty: false,
         });
 
-        const cfg = decodeContainerConfig(spec.argv);
-        const processContainer = objectField(cfg, "processContainer");
-        const processConfig = objectField(cfg, "process");
-        const network = objectField(cfg, "network");
-        const env = stringArrayField(processConfig, "env");
-        expect(cfg.containment).toBe("process");
-        expect(processContainer.ui).toMatchObject({ isolation: "container" });
-        expect(processContainer.leastPrivilege).toBe(true);
-        expect(processContainer.capabilities).toEqual([]);
-        expect(network.enforcementMode).toBe("capabilities");
+        const request = decodeRequest(spec.argv);
+        const env = environmentEntries(request);
+        expect(request.containment).toMatchObject({
+          type: "processcontainer",
+          config: { ui: { isolation: "container" } },
+        });
+        expect(request.network).toMatchObject({ egress: { default: "deny" } });
+        expect(spec.env.OPENCLAW_MXC_SECRET_TEST).toBeUndefined();
         expect(env).toContain("SystemRoot=C:\\Windows");
         expect(env).toContain("SystemDrive=C:");
         expect(env).toContain("USERPROFILE=C:\\Users\\openclaw");
@@ -415,10 +381,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       usePty: true,
     });
 
-    expect(decodePayload(spec.argv).options).toEqual({
-      debug: false,
-      executablePath: "mxc-test-binary",
-    });
+    expect(decodePayload(spec.argv).options).toEqual({ debug: false, pty: true });
     await handle.finalizeExec?.({
       status: "completed",
       exitCode: 0,
@@ -435,12 +398,11 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
 
     const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
-    const cfg = decodeContainerConfig(spec.argv);
-    const network = objectField(cfg, "network");
-    const processContainer = objectField(cfg, "processContainer");
-    expect(network.defaultPolicy).toBe("allow");
-    expect(network.enforcementMode).toBe("capabilities");
-    expect(processContainer.capabilities).toEqual(["internetClient"]);
+    // MXC derives the internetClient capability from the egress default.
+    expect(decodeRequest(spec.argv).network).toEqual({
+      egress: { default: "allow" },
+      ingress: { default: "deny", hostLoopback: "deny" },
+    });
   });
 
   test("Windows process containment caps long AppContainer names", async () => {
@@ -450,24 +412,36 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
     const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
 
-    // MXC names the AppContainer profile after the containerId.
-    const cfg = decodeContainerConfig(spec.argv);
-    expect(String(cfg.containerId).length).toBeLessThanOrEqual(64);
+    // MXC names the AppContainer profile after the containerName.
+    const request = decodeRequest(spec.argv);
+    expect(String(request.containerName).length).toBeLessThanOrEqual(64);
   });
 
-  test("buildExecSpec passes configured MXC binary path to the launcher options", async () => {
+  test("buildExecSpec pins the configured MXC native components in the launcher env", async () => {
+    const native = createNativeOverride();
     const handle = createMxcSandboxBackendHandle({
       ...baseParams,
-      config: { ...baseConfig, mxcBinaryPath: "C:\\Tools\\wxc-exec.exe" },
+      config: { ...baseConfig, mxcBinaryPath: native.executorPath },
     });
 
     const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
 
-    expect(decodePayload(spec.argv).options).toEqual({
-      debug: false,
-      executablePath: "C:\\Tools\\wxc-exec.exe",
-      usePty: false,
+    expect(decodePayload(spec.argv).options).toEqual({ debug: false, pty: false });
+    expect(spec.env.MXC_BIN_DIR).toBe(native.binDir);
+    expect(spec.env.MXC_FFI_DIR).toBe(native.archDir);
+  });
+
+  test("buildExecSpec fails closed before writing a payload when the native library is missing", async () => {
+    const native = createNativeOverride();
+    rmSync(path.join(native.archDir, "mxc_ffi.dll"));
+    const handle = createMxcSandboxBackendHandle({
+      ...baseParams,
+      config: { ...baseConfig, mxcBinaryPath: native.executorPath },
     });
+
+    await expect(
+      handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false }),
+    ).rejects.toThrow(/MXC native library .*mxc_ffi\.dll is missing/u);
   });
 
   test("processcontainer containment emits the Windows ProcessContainer payload", async () => {
@@ -477,9 +451,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
     const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
 
-    const cfg = decodeContainerConfig(spec.argv);
-    expect(cfg.containment).toBe("processcontainer");
-    expect(objectField(cfg, "processContainer").leastPrivilege).toBe(true);
+    expect(decodeRequest(spec.argv).containment).toMatchObject({ type: "processcontainer" });
   });
 
   test("filesystem baseline follows the host Windows system and program files roots", async () => {
@@ -508,7 +480,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
             usePty: false,
           });
 
-          const filesystem = objectField(decodeContainerConfig(spec.argv), "filesystem");
+          const filesystem = objectField(decodeRequest(spec.argv), "filesystem");
           const readonly = stringArrayField(filesystem, "readonlyPaths");
           expect(readonly).toContain(programFiles);
           expect(readonly).toContain(programFilesX86);
@@ -530,7 +502,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       });
       const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
 
-      const filesystem = objectField(decodeContainerConfig(spec.argv), "filesystem");
+      const filesystem = objectField(decodeRequest(spec.argv), "filesystem");
       const readwrite = stringArrayField(filesystem, "readwritePaths");
       const readonly = stringArrayField(filesystem, "readonlyPaths");
       expect(readwrite).not.toContain(path.resolve(baseParams.workdir));
@@ -545,7 +517,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
     const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
 
-    const filesystem = objectField(decodeContainerConfig(spec.argv), "filesystem");
+    const filesystem = objectField(decodeRequest(spec.argv), "filesystem");
     const readwrite = stringArrayField(filesystem, "readwritePaths");
     const readonly = stringArrayField(filesystem, "readonlyPaths");
     expect(readwrite).toContain(path.resolve(baseParams.workdir));
@@ -576,15 +548,15 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       });
 
       const noneFilesystem = objectField(
-        decodeContainerConfig(
+        decodeRequest(
           (await noneHandle.buildExecSpec({ command: "echo hello", env: {}, usePty: false })).argv,
         ),
         "filesystem",
       );
-      const roConfig = decodeContainerConfig(
+      const roConfig = decodeRequest(
         (await roHandle.buildExecSpec({ command: "echo hello", env: {}, usePty: false })).argv,
       );
-      const rwConfig = decodeContainerConfig(
+      const rwConfig = decodeRequest(
         (await rwHandle.buildExecSpec({ command: "echo hello", env: {}, usePty: false })).argv,
       );
       const roFilesystem = objectField(roConfig, "filesystem");
@@ -613,8 +585,8 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       expect(stringArrayField(rwFilesystem, "readwritePaths")).not.toContain(
         path.resolve(sandboxWorkdir),
       );
-      expect(objectField(rwConfig, "process").cwd).toBe(path.resolve(agentWorkspaceDir));
-      expect(objectField(roConfig, "process").cwd).toBe(path.resolve(sandboxWorkdir));
+      expect(rwConfig.workingDirectory).toBe(path.resolve(agentWorkspaceDir));
+      expect(roConfig.workingDirectory).toBe(path.resolve(sandboxWorkdir));
     } finally {
       rmSync(sandboxWorkdir, { recursive: true, force: true });
       rmSync(agentWorkspaceDir, { recursive: true, force: true });
@@ -702,7 +674,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       });
       const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
 
-      const filesystem = objectField(decodeContainerConfig(spec.argv), "filesystem");
+      const filesystem = objectField(decodeRequest(spec.argv), "filesystem");
       const readwrite = stringArrayField(filesystem, "readwritePaths");
       const readonly = stringArrayField(filesystem, "readonlyPaths");
       expect(readwrite).not.toContain(path.resolve(baseParams.workdir));
@@ -1109,8 +1081,8 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       usePty: false,
     });
 
-    const processConfig = objectField(decodeContainerConfig(spec.argv), "process");
-    const env = stringArrayField(processConfig, "env");
+    const launchRequest = decodeRequest(spec.argv);
+    const env = environmentEntries(launchRequest);
     expect(env).toContain("HOME=/home/test");
     expect(env).toContain("LANG=en_US.UTF-8");
     expect(env).toContain("CUSTOM_VAR=value");
@@ -1129,8 +1101,8 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
     const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
 
-    const processConfig = objectField(decodeContainerConfig(spec.argv), "process");
-    expect(processConfig.timeout).toBe(45_000);
+    const launchRequest = decodeRequest(spec.argv);
+    expect(launchRequest.timeoutMs).toBe(45_000);
   });
 
   test("timeout falls back to the built-in baseline when no policy paths are configured", async () => {
@@ -1140,8 +1112,8 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
     const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
 
-    const processConfig = objectField(decodeContainerConfig(spec.argv), "process");
-    expect(processConfig.timeout).toBe(300_000);
+    const launchRequest = decodeRequest(spec.argv);
+    expect(launchRequest.timeoutMs).toBe(300_000);
   });
 
   test("timeout policy caps explicit config timeouts", async () => {
@@ -1157,8 +1129,8 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
     const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
 
-    const processConfig = objectField(decodeContainerConfig(spec.argv), "process");
-    expect(processConfig.timeout).toBe(45_000);
+    const launchRequest = decodeRequest(spec.argv);
+    expect(launchRequest.timeoutMs).toBe(45_000);
   });
 
   test("rejects per-command workdirs outside the sandbox workspace", async () => {
@@ -1255,7 +1227,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       });
       const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
 
-      const filesystem = objectField(decodeContainerConfig(spec.argv), "filesystem");
+      const filesystem = objectField(decodeRequest(spec.argv), "filesystem");
       const readwrite = stringArrayField(filesystem, "readwritePaths");
       const readonly = stringArrayField(filesystem, "readonlyPaths");
       expect(readwrite).toContain(path.resolve(workdir));
@@ -1269,9 +1241,9 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
   });
 
   test("runShellCommand uses the inline Windows command line when no args are passed", async () => {
-    let processConfig: Record<string, unknown> | undefined;
+    let launchRequest: Record<string, unknown> | undefined;
     spawnCommandMock.mockImplementationOnce(async (argv: string[]) => {
-      processConfig = objectField(decodeContainerConfig(argv), "process");
+      launchRequest = decodeRequest(argv);
       return {
         code: 0,
         signal: null,
@@ -1289,14 +1261,14 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
 
     const expectedShell = process.env.ComSpec?.trim() || "cmd.exe";
-    expect(processConfig?.commandLine).toBe(`${expectedShell} /d /s /c "echo hello"`);
-    expect(String(processConfig?.commandLine)).not.toContain(".openclaw-mxc-cmd-");
+    expect(launchRequest?.command).toBe(`${expectedShell} /d /s /c "echo hello"`);
+    expect(String(launchRequest?.command)).not.toContain(".openclaw-mxc-cmd-");
   });
 
   test("runShellCommand timeout is capped by sandbox policy", async () => {
-    let processConfig: Record<string, unknown> | undefined;
+    let launchRequest: Record<string, unknown> | undefined;
     spawnCommandMock.mockImplementationOnce(async (argv: string[]) => {
-      processConfig = objectField(decodeContainerConfig(argv), "process");
+      launchRequest = decodeRequest(argv);
       return {
         code: 0,
         signal: null,
@@ -1322,7 +1294,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       allowFailure: false,
     });
 
-    expect(processConfig?.timeout).toBe(5_000);
+    expect(launchRequest?.timeoutMs).toBe(5_000);
   });
 
   test("runShellCommand uses curated Windows env and passes stdin through unchanged", async () => {
@@ -1338,7 +1310,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
         let commandFile: string | undefined;
         let launcherEnv: NodeJS.ProcessEnv | undefined;
         let launcherInput: Uint8Array | string | undefined;
-        let processConfig: Record<string, unknown> | undefined;
+        let launchRequest: Record<string, unknown> | undefined;
         spawnCommandMock.mockImplementationOnce(async (argv: string[], options: unknown) => {
           const spawnOptions = options as {
             baseEnv?: NodeJS.ProcessEnv;
@@ -1346,8 +1318,8 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
           };
           launcherEnv = spawnOptions.baseEnv;
           launcherInput = spawnOptions.input;
-          processConfig = objectField(decodeContainerConfig(argv), "process");
-          const commandLine = String(processConfig.commandLine);
+          launchRequest = decodeRequest(argv);
+          const commandLine = String(launchRequest.command);
           commandFile = /""([^"]+\.cmd)"/u.exec(commandLine)?.[1];
           expect(commandFile).toEqual(expect.any(String));
           bridgeScript = readFileSync(commandFile ?? "", "utf-8");
@@ -1372,11 +1344,11 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
           allowFailure: false,
         });
 
-        if (!processConfig) {
-          throw new Error("expected runShellCommand to create an MXC process config");
+        if (!launchRequest) {
+          throw new Error("expected runShellCommand to create an MXC container request");
         }
-        const env = stringArrayField(processConfig, "env");
-        const commandLine = String(processConfig.commandLine);
+        const env = environmentEntries(launchRequest);
+        const commandLine = String(launchRequest.command);
         expect(bridgeScript?.startsWith("@echo off\r\ntype con")).toBe(true);
         expect(commandLine).toMatch(/ \/c ""[^"]*\.openclaw-mxc-cmd-[^"]+\.cmd" /u);
         expect(commandLine).toContain(".cmd");
@@ -1387,6 +1359,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
         expect(env.some((entry) => entry.startsWith("OPENCLAW_MXC_SECRET_TEST="))).toBe(false);
         expect(launcherEnv?.SystemRoot).toBe("C:\\Windows");
         expect(launcherEnv?.OPENCLAW_MXC_SECRET_TEST).toBeUndefined();
+        expect(launcherEnv?.MXC_FFI_DIR).toEqual(expect.any(String));
         expect(launcherInput).toEqual(Buffer.from("shell-input", "utf-8"));
         expect(commandFile ? existsSync(path.dirname(commandFile)) : true).toBe(false);
       },
@@ -1403,12 +1376,11 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       async () => {
         let commandFile: string | undefined;
         let filesystemConfig: Record<string, unknown> | undefined;
-        let processConfig: Record<string, unknown> | undefined;
+        let launchRequest: Record<string, unknown> | undefined;
         spawnCommandMock.mockImplementationOnce(async (argv: string[]) => {
-          const config = decodeContainerConfig(argv);
-          filesystemConfig = objectField(config, "filesystem");
-          processConfig = objectField(config, "process");
-          commandFile = /""([^"]+\.cmd)"/u.exec(String(processConfig.commandLine))?.[1];
+          launchRequest = decodeRequest(argv);
+          filesystemConfig = objectField(launchRequest, "filesystem");
+          commandFile = /""([^"]+\.cmd)"/u.exec(String(launchRequest.command))?.[1];
           return {
             code: 0,
             signal: null,
@@ -1441,7 +1413,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
           expect(
             commandFile && sandboxTempDir ? isPathInside(sandboxTempDir, commandFile) : false,
           ).toBe(true);
-          expect(stringArrayField(processConfig ?? {}, "env")).toEqual(
+          expect(environmentEntries(launchRequest ?? {})).toEqual(
             expect.arrayContaining([`TEMP=${sandboxTempDir}`, `TMP=${sandboxTempDir}`]),
           );
           expect(stringArrayField(filesystemConfig ?? {}, "readonlyPaths")).toContain(

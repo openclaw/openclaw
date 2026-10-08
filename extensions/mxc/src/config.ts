@@ -35,7 +35,7 @@ const nonEmptyTrimmedString = (message: string) =>
 const MxcPluginConfigSchema = z.strictObject({
   mxcBinaryPath: nonEmptyTrimmedString("mxcBinaryPath must be a non-empty string")
     .describe(
-      "Absolute path to the MXC executor (wxc-exec.exe). When unset, the executor is discovered from the installed @microsoft/mxc-sdk.",
+      "Absolute path to an MXC 1.0 executor in an architecture directory (<dir>\\<x64|arm64>\\wxc-exec.exe) with mxc_ffi.dll from the same release beside it. When unset, both are taken from the installed @microsoft/mxc-sdk.",
     )
     .optional(),
   containment: z
@@ -68,7 +68,7 @@ const MxcPluginConfigSchema = z.strictObject({
     .optional(),
   debug: z
     .boolean({ error: "debug must be a boolean" })
-    .describe("Forward verbose debug output from the MXC SDK launcher.")
+    .describe("Write the resolved MXC native component paths and MXC SDK warnings to stderr.")
     .optional(),
   mxcPolicyPaths: z
     .array(nonEmptyTrimmedString("mxcPolicyPaths must be an array of non-empty strings"), {

@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+
+const EXECUTOR_NAME = "wxc-exec.exe";
+const NATIVE_LIBRARY_NAME = "mxc_ffi.dll";
+
+// Exit statuses owned by the launcher rather than the sandboxed command.
+export const EXIT_TIMED_OUT = 124;
+export const EXIT_LAUNCHER_FAILURE = 127;
 
 export function decodePayload(argv) {
   const payloadFileIndex = argv.indexOf("--payload-file");
@@ -15,7 +22,36 @@ export function decodePayload(argv) {
   }
   const payloadJson = readFileSync(payloadFile, "utf8");
   rmSync(path.dirname(payloadFile), { force: true, recursive: true });
-  return JSON.parse(payloadJson);
+  const payload = JSON.parse(payloadJson);
+  if (!payload || typeof payload !== "object" || !payload.request) {
+    throw new Error("MXC launcher payload is missing its container request");
+  }
+  return payload;
+}
+
+function sdkArch() {
+  return process.arch === "arm64" ? "arm64" : "x64";
+}
+
+/**
+ * Re-checks the native components the plugin pinned. The SDK falls back to its
+ * packaged binaries when an override directory is missing, so a vanished
+ * override must fail here instead of silently running different binaries.
+ */
+export function assertPinnedNativeComponents(env = process.env, fileExists = existsSync) {
+  const ffiDir = env.MXC_FFI_DIR;
+  const binDir = env.MXC_BIN_DIR;
+  if (!ffiDir || !binDir) {
+    throw new Error("MXC launcher requires MXC_FFI_DIR and MXC_BIN_DIR from the plugin");
+  }
+  const nativeLibraryPath = path.join(ffiDir, NATIVE_LIBRARY_NAME);
+  const executorPath = path.join(binDir, sdkArch(), EXECUTOR_NAME);
+  for (const file of [nativeLibraryPath, executorPath]) {
+    if (!fileExists(file)) {
+      throw new Error(`MXC native component is missing: ${file}`);
+    }
+  }
+  return { nativeLibraryPath, executorPath };
 }
 
 const FORWARDED_SIGNAL_EXIT_GRACE_MS = 1000;
@@ -28,9 +64,23 @@ function formatErrorStack(error) {
   return String(error);
 }
 
-export function forwardSignals(spawned, options = {}) {
+/**
+ * Kills the sandbox on a forwarded signal and exits after a grace period. The
+ * handlers are installed before spawn resolves; a signal that arrives earlier
+ * kills the process as soon as it exists.
+ */
+export function forwardSignals(options = {}) {
+  let target;
+  let pendingKill = false;
   let exitTimer;
   const exitGraceMs = options.exitGraceMs ?? FORWARDED_SIGNAL_EXIT_GRACE_MS;
+  const killTarget = () => {
+    try {
+      target?.kill();
+    } catch {
+      // Ignore kill errors while the sandbox process is already exiting.
+    }
+  };
   const scheduleExit = (signal) => {
     if (exitTimer) {
       return;
@@ -42,79 +92,100 @@ export function forwardSignals(spawned, options = {}) {
     }, exitGraceMs);
     exitTimer?.unref?.();
   };
-
+  const onSignal = options.onSignal ?? ((signal, handler) => process.on(signal, handler));
   for (const signal of FORWARDED_SIGNALS) {
-    process.on(signal, () => {
-      try {
-        spawned.kill(signal);
-      } catch {
-        // Ignore kill errors while the sandbox process is already exiting.
-      }
+    onSignal(signal, () => {
+      pendingKill = true;
+      killTarget();
       scheduleExit(signal);
     });
   }
+  return {
+    attach(spawned) {
+      target = spawned;
+      if (pendingKill) {
+        killTarget();
+      }
+    },
+  };
 }
 
-function bridgeStdio(pty) {
-  pty.onData((data) => {
-    process.stdout.write(data);
-  });
+const processIo = () => ({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
 
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (data) => {
-    pty.write(data);
-  });
-  process.stdin.on("end", () => {
-    pty.write("\x04");
-  });
-}
-
-function bridgeChildProcess(child) {
-  child.stdout?.on("data", (data) => {
-    process.stdout.write(data);
-  });
-  child.stderr?.on("data", (data) => {
-    process.stderr.write(data);
-  });
-  process.stdin.on("data", (data) => {
-    child.stdin?.write(data);
-  });
-  process.stdin.on("end", () => {
-    child.stdin?.end();
+function pipeOutput(source, sink, stderr) {
+  return new Promise((resolve) => {
+    if (!source) {
+      resolve();
+      return;
+    }
+    source.pipe(sink, { end: false });
+    source.once("end", resolve);
+    source.once("close", resolve);
+    source.once("error", (error) => {
+      stderr.write(`MXC output stream failed: ${formatErrorStack(error)}\n`);
+      resolve();
+    });
   });
 }
 
-export function exitOnChildProcessClose(child, options = {}) {
-  child.on("close", (exitCode, signal) => {
-    const exit = options.exit?.bind(undefined) ?? ((code) => process.exit(code));
-    exit(typeof exitCode === "number" ? exitCode : signalExitCode(signal));
-  });
-}
-
-function attachPtyProcess(spawned) {
-  bridgeStdio(spawned);
-  forwardSignals(spawned);
-  spawned.onExit(({ exitCode, signal }) => {
-    process.exit(typeof exitCode === "number" ? exitCode : signalExitCode(signal));
-  });
-}
-
-function attachChildProcess(spawned) {
-  bridgeChildProcess(spawned);
-  forwardSignals(spawned);
-  exitOnChildProcessClose(spawned);
-}
-
-export async function launchSandbox(spawnSandboxFromConfig, config, options, bridges = {}) {
-  // Normalize sync and Promise-returning SDK implementations before selecting an I/O bridge.
-  const spawned = await spawnSandboxFromConfig(config, options ?? {});
-
-  if (typeof spawned.onData === "function") {
-    (bridges.pty ?? attachPtyProcess)(spawned);
+function forwardInput(stdin, input, onEnd) {
+  if (!input) {
+    stdin.resume();
     return;
   }
+  input.on("error", () => {
+    // The sandbox may close stdin before the host stops writing.
+  });
+  stdin.on("data", (data) => {
+    input.write(data);
+  });
+  stdin.once("end", () => onEnd(input));
+}
 
-  (bridges.child ?? attachChildProcess)(spawned);
+/**
+ * Bridges a spawned process to the launcher's stdio and resolves with the exit
+ * status the launcher should report.
+ */
+export async function bridgeProcess(spawned, { pty, debug } = {}, io = processIo()) {
+  let outputs;
+  if (pty) {
+    forwardInput(io.stdin, spawned.input, (input) => input.write("\x04"));
+    outputs = [pipeOutput(spawned.output, io.stdout, io.stderr)];
+  } else {
+    forwardInput(io.stdin, spawned.standardInput, (input) => input.end());
+    outputs = [
+      pipeOutput(spawned.standardOutput, io.stdout, io.stderr),
+      pipeOutput(spawned.standardError, io.stderr, io.stderr),
+    ];
+  }
+  const result = await spawned.wait();
+  await Promise.all(outputs);
+  if (debug) {
+    for (const warning of spawned.warnings ?? []) {
+      io.stderr.write(`[mxc] warning: ${warning}\n`);
+    }
+  }
+  if (result.timedOut) {
+    io.stderr.write("MXC sandbox command timed out and was terminated.\n");
+    return EXIT_TIMED_OUT;
+  }
+  return result.exitCode;
+}
+
+/**
+ * Runs one sandbox request. `sdk` supplies the v1 `spawn` and `spawnWithPty`
+ * functions so tests can substitute them.
+ */
+export async function launchSandbox(
+  sdk,
+  request,
+  options = {},
+  signals = forwardSignals(),
+  io = processIo(),
+) {
+  const spawned = options.pty ? await sdk.spawnWithPty(request) : await sdk.spawn(request);
+  signals.attach(spawned);
+  return bridgeProcess(spawned, options, io);
 }
 
 const SIGNAL_NUMBERS = new Map([
@@ -145,15 +216,48 @@ function isMain() {
   return import.meta.url === pathToFileURL(path.resolve(mainPath)).href;
 }
 
-export async function main() {
+async function loadSdk() {
+  return import("@microsoft/mxc-sdk/v1");
+}
+
+/** Host probe for readiness: prints the probe output as JSON. */
+async function probeMain() {
+  assertPinnedNativeComponents();
+  const { probe } = await loadSdk();
+  const output = probe();
+  process.stdout.write(
+    `${JSON.stringify({ probe: output })}\n`,
+  );
+  return 0;
+}
+
+export async function main(argv = process.argv.slice(2)) {
+  let exitCode;
   try {
-    const { config, options } = decodePayload(process.argv.slice(2));
-    const { spawnSandboxFromConfig } = await import("@microsoft/mxc-sdk");
-    await launchSandbox(spawnSandboxFromConfig, config, options);
+    if (argv.includes("--probe")) {
+      exitCode = await probeMain();
+    } else {
+      const signals = forwardSignals();
+      const { request, options } = decodePayload(argv);
+      const pinned = assertPinnedNativeComponents();
+      if (options?.debug) {
+        process.stderr.write(
+          `[mxc] native library ${pinned.nativeLibraryPath}; executor ${pinned.executorPath}\n`,
+        );
+      }
+      exitCode = await launchSandbox(await loadSdk(), request, options ?? {}, signals);
+    }
   } catch (error) {
     process.stderr.write(`${formatErrorStack(error)}\n`);
-    process.exit(127);
+    exitCode = EXIT_LAUNCHER_FAILURE;
   }
+  // Windows pipes are asynchronous; let queued output drain before exiting.
+  await Promise.all(
+    [process.stdout, process.stderr].map(
+      (stream) => new Promise((resolve) => stream.write("", () => resolve())),
+    ),
+  );
+  process.exit(exitCode);
 }
 
 if (isMain()) {

@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import path from "node:path";
-import type { ContainerConfig } from "@microsoft/mxc-sdk";
+import type { ContainerRequest, FilesystemPolicy } from "@microsoft/mxc-sdk/v1";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import type { MxcConfig } from "./config.js";
 import { normalizeMxcPathForComparison } from "./path-comparison.js";
@@ -15,10 +15,6 @@ import {
   resolveMxcReadOnlySkillMounts,
   type MxcWorkspaceAccess,
 } from "./workspace-skill-mounts.js";
-
-const MXC_SCHEMA_VERSION = "0.7.0-alpha";
-
-type MxcFilesystemConfig = NonNullable<ContainerConfig["filesystem"]>;
 
 type FilesystemPathSpec = {
   path: string;
@@ -90,75 +86,75 @@ export function resolveMxcRuntimeWorkdir(
     : path.join(workspace.activeWorkspaceDir, relativePath);
 }
 
-export function buildMxcContainerConfig(params: {
+export function buildMxcContainerRequest(params: {
   config: MxcConfig;
   baseline: LoadedSandboxBaselinePolicy;
   baselineContext: BaselineApplicationContext;
-  containerId: string;
+  containerName: string;
   command: string;
   args?: readonly string[];
   sandboxTempDir: string;
   workdir: string;
   workspace: MxcWorkspaceContext;
   env: Record<string, string>;
-}): ContainerConfig {
+}): ContainerRequest {
   const networkAllowed = params.config.network === "default";
-  const filesystem = buildFilesystemConfig({
+  const filesystem = buildFilesystemPolicy({
     baseline: params.baseline,
     context: params.baselineContext,
     sandboxTempDir: params.sandboxTempDir,
     workspace: params.workspace,
   });
 
-  const processEnv = normalizeWindowsProcessEnvRecord({
+  const environment = normalizeWindowsProcessEnvRecord({
     ...params.env,
     TEMP: params.sandboxTempDir,
     TMP: params.sandboxTempDir,
   });
 
   return {
-    version: MXC_SCHEMA_VERSION,
-    containerId: params.containerId,
-    containment: params.config.containment,
-    // The raw config goes straight to wxc-exec, which only understands the wire
-    // `lifecycle.preservePolicy`; the SDK's `filesystem.clearPolicyOnExit` alias is
-    // mapped only by `createConfigFromPolicy`.
-    lifecycle: { destroyOnExit: true, preservePolicy: false },
-    process: {
-      commandLine: buildCommandLine(params.command, params.args ?? []),
-      cwd: params.workdir,
-      env: processEnv,
-      timeout: resolveProcessTimeoutSeconds(params.config, params.baseline) * 1000,
+    command: buildCommandLine(params.command, params.args ?? []),
+    workingDirectory: params.workdir,
+    // A supplied environment replaces the OS default block, so host
+    // variables outside the minimal Windows defaults never reach the child.
+    environment,
+    inheritDefaultEnvironment: false,
+    timeoutMs: resolveProcessTimeoutSeconds(params.config, params.baseline) * 1000,
+    containerName: params.containerName,
+    // Both configured containments have always meant the Windows
+    // ProcessContainer backend; only the explicit form accepts its UI block.
+    containment: {
+      type: "processcontainer",
+      config: {
+        ui: {
+          isolation: "container",
+          desktopSystemControl: false,
+          systemSettings: "none",
+          ime: false,
+        },
+      },
     },
     filesystem,
     ui: {
       disable: true,
       clipboard: "none",
-      injection: false,
+      allowInputInjection: false,
     },
+    // MXC derives the internetClient capability from egress; ingress and
+    // host loopback stay denied in both modes.
     network: {
-      defaultPolicy: networkAllowed ? "allow" : "block",
-      enforcementMode: "capabilities",
-    },
-    processContainer: {
-      leastPrivilege: true,
-      capabilities: networkAllowed ? ["internetClient"] : [],
-      ui: {
-        isolation: "container",
-        desktopSystemControl: false,
-        systemSettings: "none",
-        ime: false,
-      },
+      egress: { default: networkAllowed ? "allow" : "deny" },
+      ingress: { default: "deny", hostLoopback: "deny" },
     },
   };
 }
 
-function buildFilesystemConfig(params: {
+function buildFilesystemPolicy(params: {
   baseline: LoadedSandboxBaselinePolicy;
   context: BaselineApplicationContext;
   sandboxTempDir: string;
   workspace: MxcWorkspaceContext;
-}): MxcFilesystemConfig {
+}): FilesystemPolicy {
   const readwritePathSpecs: FilesystemPathSpec[] = [];
   const readonlyPathSpecs: FilesystemPathSpec[] = [];
   const workspace = params.workspace;
@@ -206,8 +202,8 @@ function buildFilesystemConfig(params: {
 
   return {
     readonlyPaths,
-    deniedPaths: undefined,
     readwritePaths,
+    clearPolicyOnExit: true,
   };
 }
 

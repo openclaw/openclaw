@@ -2,49 +2,113 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 
+const EXECUTOR_NAME = "wxc-exec.exe";
+const NATIVE_LIBRARY_NAME = "mxc_ffi.dll";
+
 /**
- * Resolve the bin/ directory inside the installed @microsoft/mxc-sdk package.
- * Returns the arch-specific subdirectory (x64 or arm64) if available.
+ * Native MXC components the plugin pins for one launcher run.
+ *
+ * MXC SDK 1.0 runs piped commands through the in-process `mxc_ffi` library
+ * and ProcessContainer PTY commands through `wxc-exec`. It silently falls back
+ * to its packaged binaries when `MXC_FFI_DIR`/`MXC_BIN_DIR` do not resolve, so
+ * the plugin validates both files from one directory and pins both variables.
  */
-function resolveSdkBinDir(): string | null {
-  try {
-    const require = createRequire(import.meta.url);
-    const sdkPkgPath = require.resolve("@microsoft/mxc-sdk/package.json");
-    const sdkRoot = path.dirname(sdkPkgPath);
-    const arch = process.arch === "arm64" ? "arm64" : "x64";
-    const archBin = path.join(sdkRoot, "bin", arch);
-    if (fs.existsSync(archBin)) {
-      return archBin;
-    }
-    const flatBin = path.join(sdkRoot, "bin");
-    if (fs.existsSync(flatBin)) {
-      return flatBin;
-    }
-  } catch {
-    // SDK not installed; skip.
-  }
-  return null;
+export type MxcNativeBinaries = {
+  /** `MXC_BIN_DIR`: the SDK appends `<arch>\wxc-exec.exe`. */
+  binDir: string;
+  /** `MXC_FFI_DIR`: the SDK appends `mxc_ffi.dll`. */
+  archDir: string;
+  executorPath: string;
+  nativeLibraryPath: string;
+};
+
+function sdkArch(): "arm64" | "x64" {
+  return process.arch === "arm64" ? "arm64" : "x64";
 }
 
-export function resolveMxcBinaryPath(configOverride?: string): string {
-  if (configOverride) {
-    const resolvedOverride = path.win32.isAbsolute(configOverride)
-      ? configOverride
-      : path.resolve(configOverride);
-    if (!fs.existsSync(resolvedOverride)) {
-      throw new Error(`MXC binary not found at configured path: ${configOverride}`);
-    }
-    return resolvedOverride;
+function isRegularFile(candidate: string): boolean {
+  try {
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
   }
+}
 
-  const binaryName = "wxc-exec.exe";
-  const sdkBinDir = resolveSdkBinDir();
-  const binaryPath = sdkBinDir ? path.join(sdkBinDir, binaryName) : undefined;
+function binariesInArchDir(archDir: string): MxcNativeBinaries {
+  return {
+    binDir: path.dirname(archDir),
+    archDir,
+    executorPath: path.join(archDir, EXECUTOR_NAME),
+    nativeLibraryPath: path.join(archDir, NATIVE_LIBRARY_NAME),
+  };
+}
 
-  if (!binaryPath || !fs.existsSync(binaryPath)) {
+function resolveSdkArchDir(): string | null {
+  try {
+    const require = createRequire(import.meta.url);
+    const sdkRoot = path.dirname(require.resolve("@microsoft/mxc-sdk/package.json"));
+    return path.join(sdkRoot, "bin", sdkArch());
+  } catch {
+    return null;
+  }
+}
+
+function resolveOverride(configOverride: string): MxcNativeBinaries {
+  const executorPath = path.win32.isAbsolute(configOverride)
+    ? configOverride
+    : path.resolve(configOverride);
+  const archDir = path.dirname(executorPath);
+  const arch = sdkArch();
+  const expectedLayout = `<directory>\\${arch}\\${EXECUTOR_NAME} with ${NATIVE_LIBRARY_NAME} beside it`;
+  if (path.basename(executorPath).toLowerCase() !== EXECUTOR_NAME) {
     throw new Error(
-      `MXC executor "${binaryName}" not found. Install @microsoft/mxc-sdk or set mxcBinaryPath in config.`,
+      `MXC binary override ${configOverride} must name ${EXECUTOR_NAME} (${expectedLayout}).`,
     );
   }
-  return binaryPath;
+  if (!isRegularFile(executorPath)) {
+    throw new Error(`MXC binary not found at configured path: ${configOverride}`);
+  }
+  if (path.basename(archDir).toLowerCase() !== arch) {
+    throw new Error(
+      `MXC binary override ${configOverride} must be in an "${arch}" directory matching this host (${expectedLayout}).`,
+    );
+  }
+  const binaries = binariesInArchDir(archDir);
+  if (!isRegularFile(binaries.nativeLibraryPath)) {
+    throw new Error(
+      `MXC native library ${binaries.nativeLibraryPath} is missing next to the configured ` +
+        `mxcBinaryPath. MXC SDK 1.0 needs both files from the same release (${expectedLayout}).`,
+    );
+  }
+  return binaries;
+}
+
+/**
+ * Resolves the native MXC components for the configured override or the
+ * installed SDK. Throws instead of selecting a partial or mixed layout.
+ */
+export function resolveMxcNativeBinaries(configOverride?: string): MxcNativeBinaries {
+  if (configOverride) {
+    return resolveOverride(configOverride);
+  }
+  const archDir = resolveSdkArchDir();
+  const binaries = archDir ? binariesInArchDir(archDir) : undefined;
+  const missing = binaries
+    ? [binaries.executorPath, binaries.nativeLibraryPath].filter((file) => !isRegularFile(file))
+    : [];
+  if (!binaries || missing.length > 0) {
+    throw new Error(
+      `MXC native components were not found${missing.length > 0 ? ` (${missing.join(", ")})` : ""}. ` +
+        `Install @microsoft/mxc-sdk or set mxcBinaryPath in config.`,
+    );
+  }
+  return binaries;
+}
+
+/** Launcher environment entries that pin the SDK to the validated components. */
+export function buildMxcNativeEnv(binaries: MxcNativeBinaries): Record<string, string> {
+  return {
+    MXC_BIN_DIR: binaries.binDir,
+    MXC_FFI_DIR: binaries.archDir,
+  };
 }

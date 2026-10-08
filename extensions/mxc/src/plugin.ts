@@ -1,6 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
-import { resolveMxcBinaryPath } from "./binary-resolver.js";
+import { buildMxcNativeEnv, resolveMxcNativeBinaries } from "./binary-resolver.js";
 import { resolveConfig } from "./config.js";
 import { createMxcSandboxBackendFactory } from "./mxc-backend-factory.js";
 import { mxcSandboxBackendManager } from "./mxc-backend.js";
@@ -20,17 +20,14 @@ export function registerMxcPlugin(api: OpenClawPluginApi): void {
     return;
   }
 
-  let mxcBinaryPath: string;
+  let nativeEnv: Record<string, string>;
   try {
-    mxcBinaryPath = resolveMxcBinaryPath(config.mxcBinaryPath);
+    nativeEnv = buildMxcNativeEnv(resolveMxcNativeBinaries(config.mxcBinaryPath));
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `[mxc] MXC sandbox backend cannot load: ${reason}. Install @microsoft/mxc-sdk or set mxcBinaryPath.`,
-      { cause: err },
-    );
+    throw new Error(`[mxc] MXC sandbox backend cannot load: ${reason}`, { cause: err });
   }
-  assertMxcReadiness({ executablePath: mxcBinaryPath });
+  assertMxcReadiness({ nativeEnv });
 
   // Advisory: warn (don't block) when the system drive lacks AppContainer
   // directory-access ACEs, which only degrades in-sandbox directory listing.

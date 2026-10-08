@@ -1771,8 +1771,8 @@ importers:
   extensions/mxc:
     dependencies:
       '@microsoft/mxc-sdk':
-        specifier: 0.8.0
-        version: 0.8.0
+        specifier: 1.0.0
+        version: 1.0.0
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -2881,7 +2881,7 @@ importers:
         version: link:../packages/gateway-protocol
       '@openclaw/libterminal':
         specifier: 0.3.7
-        version: 0.3.7
+        version: 0.3.7(node-pty@1.1.0)
       '@openclaw/media-core':
         specifier: workspace:*
         version: link:../packages/media-core
@@ -4455,9 +4455,9 @@ packages:
     resolution: {integrity: sha512-K8BeapFUfrfxbRAUQAG5oBOCwo1+bNWzaVnPxTCutkfrTBn6T/j91FIhqxWJ32SUeQ9T3iy1zcmPZ5ROZEvDrg==}
     engines: {node: '>=22.12.0'}
 
-  '@microsoft/mxc-sdk@0.8.0':
-    resolution: {integrity: sha512-pnf5QsASwp+qtRi5uth2GDjwuyG0rHWRpxCf3RbAjQ4wDTNfBX/9l0A+RVZspU2agpF3/11uWB1JisIS7WrNYg==}
-    engines: {node: '>=18.0.0'}
+  '@microsoft/mxc-sdk@1.0.0':
+    resolution: {integrity: sha512-7aVR+GHVKveIknZmUtkAEFwUBp61qgEmhJRe1ZyKHJ274yWlKWB/ZfDP/u/whfmDyck0wRNKZN49atlF+SZt2Q==}
+    engines: {node: '>=24.0.0'}
 
   '@microsoft/teams.api@2.1.0':
     resolution: {integrity: sha512-tS7NRqxpyzrgCwHCZh4xUys1Waon/cEtVb801Yx6DekOIOZaOgHA4KFuspM6FvlErzTt5tm6GGlXDstm4dkHbw==}
@@ -8730,8 +8730,8 @@ packages:
     resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
     hasBin: true
 
-  node-pty@1.2.0-beta.15:
-    resolution: {integrity: sha512-vORSzHXi4Ofl7HemVWpuudLqCPdaQb4LfpRCUpE5HPxhp4JYscl8zZwxh11p26v2wvW24WMwnMfLjhRLixrfxA==}
+  node-pty@1.1.0:
+    resolution: {integrity: sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg==}
 
   nodemailer@10.0.10:
     resolution: {integrity: sha512-He9XskOFms62SyAKkLu8CcGcYHAo+BSHSsORI8s4PJH8qZgZY4L4lDfvyN0twvmbpyG+eGrxpyBlskj9d9rJ8A==}
@@ -12162,9 +12162,10 @@ snapshots:
     dependencies:
       '@chevrotain/types': 11.1.2
 
-  '@microsoft/mxc-sdk@0.8.0':
+  '@microsoft/mxc-sdk@1.0.0':
     dependencies:
-      node-pty: 1.2.0-beta.15
+      koffi: 3.3.1
+      node-pty: 1.1.0
       semver: 7.8.5
 
   '@microsoft/teams.api@2.1.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
@@ -12445,9 +12446,11 @@ snapshots:
       '@openclaw/fs-safe-win32-x64-msvc': 0.24.2
       jszip: 3.10.2
 
-  '@openclaw/libterminal@0.3.7':
+  '@openclaw/libterminal@0.3.7(node-pty@1.1.0)':
     dependencies:
       ghostty-web: 0.4.0(patch_hash=d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524)
+    optionalDependencies:
+      node-pty: 1.1.0
 
   '@openclaw/proxyline@0.3.12(patch_hash=9e0969d2dc0abb32610053fba342756afb56f4996c90adfdc34f21ad090fbb0f)(undici@8.11.2)':
     dependencies:
@@ -16714,7 +16717,7 @@ snapshots:
 
   node-gyp-build@4.8.4: {}
 
-  node-pty@1.2.0-beta.15:
+  node-pty@1.1.0:
     dependencies:
       node-addon-api: 7.1.1
 
