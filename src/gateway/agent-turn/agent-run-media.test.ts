@@ -20,6 +20,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import * as hookRunnerGlobal from "../../plugins/hook-runner-global.js";
 import { createHookRunnerWithRegistry } from "../../plugins/hooks.test-fixtures.js";
@@ -59,12 +60,30 @@ async function runMediaTurn(
     incognito?: boolean;
     changeAfterPreparation?: "abort" | "permission" | "placement" | "route";
     abortAfterCommit?: boolean;
+    retargetBeforeNormalization?: boolean;
   },
 ) {
   const { runId, sessionKey, entry, context } = createTrackedDispatch();
   const sessionId = entry.sessionId;
-  const cfg = {
-    agents: { entries: { main: { workspace: state.workspaceDir } } },
+  const logicalStore = final?.retargetBeforeNormalization
+    ? state.statePath("media-session.json")
+    : undefined;
+  const cfg: OpenClawConfig = {
+    ...(logicalStore ? { session: { store: logicalStore } } : {}),
+    agents: {
+      entries: { main: { workspace: state.workspaceDir } },
+      ...(logicalStore
+        ? {
+            defaults: {
+              sandbox: {
+                mode: "off",
+                workspaceAccess: "none",
+                workspaceRoot: state.statePath("sandboxes"),
+              },
+            },
+          }
+        : {}),
+    },
     plugins: { enabled: false },
   };
   await state.writeConfig(cfg);
@@ -72,16 +91,32 @@ async function runMediaTurn(
     agentId: "main",
     sessionId,
     sessionKey,
-    storePath: loadSessionEntry(sessionKey, { agentId: "main" }).storePath,
+    storePath: logicalStore ?? loadSessionEntry(sessionKey, { agentId: "main" }).storePath,
+  };
+  const transcriptScope = {
+    ...scope,
+    storePath: logicalStore ? state.statePath("media-session.main.sqlite") : scope.storePath,
   };
   const sessionEntry = { sessionId, lifecycleRevision: "initial", updatedAt: 1 };
-  await replaceSessionEntry(scope, sessionEntry);
+  await replaceSessionEntry(transcriptScope, sessionEntry);
   // Admit the shared media store before entering the run-owned transcript context.
   expect(await listManagedImageRecordEntries({ sessionKey })).toEqual([]);
   const lifecycle = createEmbeddedAttemptTranscriptLifecycle({ runId, sessionId });
   let finalizationStatements = 0;
   const placements =
     final?.changeAfterPreparation === "placement" ? createWorkerSessionPlacementStore() : undefined;
+  if (final?.retargetBeforeNormalization) {
+    const prepare = replyMedia.prepareWebchatReplyMediaForDisplay;
+    vi.spyOn(replyMedia, "prepareWebchatReplyMediaForDisplay").mockImplementationOnce(
+      async (params) => {
+        await replaceSessionEntry(
+          { ...scope, storePath: state.statePath("media-session.sqlite") },
+          { ...sessionEntry, sandbox: "required" },
+        );
+        return prepare(params);
+      },
+    );
+  }
   if (final?.changeAfterPreparation) {
     const prepare = replyMedia.prepareWebchatReplyMediaForDisplay;
     vi.spyOn(replyMedia, "prepareWebchatReplyMediaForDisplay").mockImplementationOnce(
@@ -183,7 +218,7 @@ async function runMediaTurn(
   });
   const readMessage = () =>
     asOptionalRecord(
-      loadTranscriptEventsSync(scope)
+      loadTranscriptEventsSync(transcriptScope)
         .map(asOptionalRecord)
         .find((candidate) => candidate?.type === "message" && candidate.id === "progress")?.message,
     );
@@ -224,6 +259,9 @@ async function runMediaTurn(
     message: readMessage(),
     messageAtFinal,
     finalizationStatements,
+    retargetedEntry: logicalStore
+      ? loadSessionEntry(sessionKey, { agentId: "main" }).entry
+      : undefined,
   };
 }
 
@@ -351,6 +389,28 @@ it.each(["raw directive", "structured attachment"] as const)(
     });
   },
 );
+
+it("keeps final media under its original sandbox policy when the store alias changes", async () => {
+  await withOpenClawTestState({ label: "agent-final-media-alias" }, async (state) => {
+    const imagePath = path.join(state.workspaceDir, "completed.png");
+    await fs.mkdir(state.workspaceDir, { recursive: true });
+    await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 24, g: 64, b: 128 }));
+    const text = `Completed\nMEDIA:${imagePath}`;
+    const { result, context, messageAtFinal, retargetedEntry } = await runMediaTurn(
+      state,
+      makeAgentAssistantMessage({ content: [{ type: "text", text }], stopReason: "stop" }),
+      { payloads: [{ text }], retargetBeforeNormalization: true },
+    );
+    expect(retargetedEntry?.sandbox).toBe("required");
+    expect(result.terminalOutcome.status).toBe("ok");
+    expect(context.logGateway.warn).not.toHaveBeenCalled();
+    expect(messageAtFinal?.openclawDisplayContent).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "image", artifactId: expect.any(String) }),
+      ]),
+    );
+  });
+});
 
 it.each<{
   name: string;

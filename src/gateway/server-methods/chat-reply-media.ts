@@ -13,6 +13,7 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
@@ -56,6 +57,7 @@ type WebchatReplyMediaScope = {
   cfg: OpenClawConfig;
   agentId: string;
   sessionEntry: SessionEntry | undefined;
+  readSource?: CapturedSessionEntryReadSource;
   requesterContext?: WebchatReplyMediaRequesterContext;
   sessionKey?: string;
   accountId?: string;
@@ -329,18 +331,21 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
       await import("../../auto-reply/reply/reply-media-paths.js");
     assertCurrent?.();
     const workspaceOnly = resolveWebchatReplyWorkspaceOnly(params);
-    const normalizeMediaPaths = createReplyMediaPathNormalizer({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      workspaceDir,
-      sessionWorkspaceDir: workspaceOnly && !remote ? workspaceDir : undefined,
-      workspaceOnly,
-      allowHostWorkspace: !remote,
-      accountId: params.accountId,
-      ...resolveRequesterPolicyContext(params.requesterContext),
-      localMediaMaxBytes: WEBCHAT_LOCAL_MEDIA_MAX_BYTES,
-    });
+    const normalizeMediaPaths = createReplyMediaPathNormalizer(
+      {
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        workspaceDir,
+        sessionWorkspaceDir: workspaceOnly && !remote ? workspaceDir : undefined,
+        workspaceOnly,
+        allowHostWorkspace: !remote,
+        accountId: params.accountId,
+        ...resolveRequesterPolicyContext(params.requesterContext),
+        localMediaMaxBytes: WEBCHAT_LOCAL_MEDIA_MAX_BYTES,
+      },
+      params.readSource,
+    );
     const normalized: ReplyPayload[] = [];
     for (const payload of params.payloads) {
       if (payload.sensitiveMedia === true) {

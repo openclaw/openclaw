@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -554,19 +555,22 @@ export async function resolveSandboxContext(
   }
 }
 
-export async function ensureSandboxWorkspaceForSession(params: {
-  skillsSnapshot?: SkillSnapshot;
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  workspaceDir?: string;
-}): Promise<SandboxWorkspaceInfo | null> {
+export async function ensureSandboxWorkspaceForSession(
+  params: {
+    skillsSnapshot?: SkillSnapshot;
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionKey?: string;
+    workspaceDir?: string;
+  },
+  readSource?: CapturedSessionEntryReadSource,
+): Promise<SandboxWorkspaceInfo | null> {
   const readAuthority = captureChannelReadAuthority();
   const assertCurrent = () => readAuthority?.();
   const ownedParams = { ...params, assertCurrent };
   return withSandboxRuntimeStatusInWorker(
     { cfg: params.config, agentId: params.agentId, sessionKey: params.sessionKey },
-    { env: process.env, cwd: process.cwd(), assertCurrent },
+    { env: process.env, cwd: process.cwd(), assertCurrent, readSource },
     async (preparedRuntimeStatus) => {
       const resolved = resolveSandboxSession({ ...params, preparedRuntimeStatus });
       if (!resolved) {
