@@ -160,6 +160,12 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     requiresToolSummaryVisibility?: boolean;
   }) => {
     if (
+      params.replyOptions?.progressRequiresReply === true &&
+      state.replyOperationRunState.replyCompletion?.expectation !== "required"
+    ) {
+      return false;
+    }
+    if (
       options?.requiresToolSummaryVisibility === true &&
       !(await shouldSendToolSummariesAsync()) &&
       params.replyOptions?.suppressDefaultToolProgressMessages !== true &&

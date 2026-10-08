@@ -10,7 +10,10 @@ import {
   assertOpenClawDatabasesReady,
   preflightOpenClawStateDatabasePath,
 } from "./openclaw-database-preflight.js";
-import { snapshotSourceFamily } from "./openclaw-database-preflight.test-support.js";
+import {
+  snapshotSourceFamily,
+  writeUnreadableNewerStateSchema,
+} from "./openclaw-database-preflight.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -157,6 +160,43 @@ describe("explicit copied shared-state preflight", () => {
     await expect(admission).rejects.toThrow("requires repair");
     deepStrictEqual(snapshotSourceFamily(databasePath), before);
   });
+
+  it.each(["gateway-startup", "explicit-file"] as const)(
+    "reports only the newer schema for an unreadable catalog through %s",
+    async (operation) => {
+      const initialPath = createExplicitStateDatabase();
+      const stateDir = path.dirname(initialPath);
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      fs.mkdirSync(path.dirname(databasePath));
+      fs.renameSync(initialPath, databasePath);
+      writeUnreadableNewerStateSchema(databasePath);
+      const before = snapshotSourceFamily(databasePath);
+      let message: string;
+      if (operation === "explicit-file") {
+        const result = await preflightOpenClawStateDatabasePath(databasePath);
+        expect(result).toMatchObject({
+          status: "incompatible",
+          foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1,
+          requiresWrite: false,
+          issues: [],
+        });
+        message = result.reason ?? "";
+      } else {
+        const failure = await assertOpenClawDatabasesReady({
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          operation,
+          config: {},
+        }).catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error);
+        message = String(failure);
+      }
+      expect(message).toMatch(/newer/);
+      expect(message).toMatch(/build.*supports/);
+      expect(message).toMatch(/restore.*backup/);
+      expect(message).not.toMatch(/doctor --fix|registry query failed|integrity_check failed/);
+      deepStrictEqual(snapshotSourceFamily(databasePath), before);
+    },
+  );
 
   it("rejects an explicit preflight path with sidecars without touching it", async () => {
     const databasePath = createExplicitStateDatabase();

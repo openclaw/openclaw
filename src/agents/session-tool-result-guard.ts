@@ -364,11 +364,10 @@ export function installSessionToolResultGuard(
     acknowledgeInternalToolResult(acknowledgementSource);
     // Update only committed state, before callbacks can re-enter or throw.
     recordPendingReceipt(entryId, persistedMessage, viewWasSuperseded === true);
-    if (!appended) {
-      return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
+    if (appended) {
+      void opts?.onMessagePersisted?.(persistedMessage);
     }
-    void opts?.onMessagePersisted?.(persistedMessage);
-    if (!sessionTarget) {
+    if (!appended || !sessionTarget) {
       return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
     }
     return {
