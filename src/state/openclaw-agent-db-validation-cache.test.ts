@@ -15,7 +15,11 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
-import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
+import {
+  openOpenClawAgentDatabaseReadOnly,
+  hasOpenClawAgentReadOnlySchema,
+} from "./openclaw-agent-db-readonly-open.js";
+import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
   adoptOpenClawAgentDatabaseSchema,
   adoptOpenClawAgentDatabaseValidation,
@@ -133,6 +137,56 @@ describe("canonical proof on physical database validation", () => {
       expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
     });
   });
+
+  it.each(["refreshed", "replacement"] as const)(
+    "keeps %s proof when a retained reader observes the same foreign schema change",
+    async (receipt) => {
+      await withReceiptFixture(false, (database, options) => {
+        const reader = openOpenClawAgentDatabaseReadOnly(options);
+        if (!reader.found) {
+          throw new Error("Expected independent reader");
+        }
+        expect(hasOpenClawAgentCanonicalValidation(reader.database)).toBe(true);
+        const original = getOpenClawAgentDatabaseValidation(database)!.schema!;
+        const foreign = new DatabaseSync(database.path);
+        try {
+          foreign.exec("CREATE TABLE late_reader_fixture(value TEXT)");
+          refreshOpenClawAgentDatabaseSchema(database, () => {});
+          if (receipt === "replacement") {
+            setOpenClawAgentDatabaseValidation(database);
+          }
+          expect(Atomics.load(new Int32Array(original.valid), 0)).toBe(0);
+          expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
+          expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
+          expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
+          expect(Atomics.load(new Int32Array(original.valid), 0)).toBe(0);
+
+          // Local TEMP DDL still revokes even though main's schema markers do not change.
+          reader.database.db.exec("CREATE TEMP TABLE local_fixture(value TEXT)");
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+          refreshOpenClawAgentDatabaseSchema(database, () => {});
+          expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
+          expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
+
+          foreign.exec("CREATE TABLE later_foreign_fixture(value TEXT)");
+          expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+          refreshOpenClawAgentDatabaseSchema(database, () => {});
+          expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
+
+          foreign.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+          expect(() => hasOpenClawAgentReadOnlySchema(reader.database)).toThrow(/newer schema/);
+          expect(() => adoptOpenClawAgentDatabaseSchema(database, true, true)).toThrow(
+            "Agent schema admission changed",
+          );
+        } finally {
+          foreign.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+          foreign.close();
+          reader.database.close();
+        }
+      });
+    },
+  );
 
   it.each(["durable receipt", "empty view"] as const)(
     "does not certify an uncommitted %s",
