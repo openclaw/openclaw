@@ -247,10 +247,10 @@ describe("gateway agent handler chat.abort integration", () => {
       isWebchatConnect: () => false,
     });
 
-    expectRecordFields(mockCallArg(stopRespond, 0, 1), {
-      aborted: true,
-      runIds: [runId],
-    });
+    expect(stopRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ aborted: true, runIds: [runId] }),
+    );
     expect(active.controller.signal.aborted).toBe(true);
     expect(active.projectSessionActive).toBe(false);
     await execution.completion;
@@ -492,10 +492,10 @@ describe("gateway agent handler chat.abort integration", () => {
       isWebchatConnect: () => false,
     });
 
-    expectRecordFields(mockCallArg(stopRespond, 0, 1), {
-      aborted: true,
-      runIds: [runId],
-    });
+    expect(stopRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ aborted: true, runIds: [runId] }),
+    );
     expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
       runId,
       sessionKey: "agent:main:main",
