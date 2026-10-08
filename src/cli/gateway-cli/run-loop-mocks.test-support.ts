@@ -247,7 +247,8 @@ vi.mock("../../infra/restart.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../infra/restart-intent.js", () => ({
+vi.mock("../../infra/restart-intent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/restart-intent.js")>()),
   prepareGatewayRestartIntentConsumption: () => consumeGatewayRestartIntentPayload,
 }));
 
@@ -294,7 +295,8 @@ vi.mock("../../infra/restart-sentinel.js", () => ({
     writeRestartSentinelIfUnchanged(...args),
 }));
 
-vi.mock("../../infra/restart-handoff.js", () => ({
+vi.mock("../../infra/restart-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/restart-handoff.js")>()),
   writeGatewayRestartHandoff: (...args: Parameters<typeof writeGatewayRestartHandoff>) =>
     writeGatewayRestartHandoff(...args),
 }));
