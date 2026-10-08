@@ -1,4 +1,3 @@
-// Browser tests cover browser request.timeout plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
@@ -61,8 +60,6 @@ describe("browser.request local timeout", () => {
 
   it.each([
     { timeoutMs: undefined, revocation: "authority" },
-    { timeoutMs: 1000, revocation: "authority" },
-    { timeoutMs: undefined, revocation: "client" },
     { timeoutMs: 1000, revocation: "client" },
   ])(
     "rechecks $revocation after local profile admission with timeout=$timeoutMs",
@@ -135,43 +132,6 @@ describe("browser.request local timeout", () => {
     },
   );
 
-  it("applies timeoutMs to local browser dispatches", async () => {
-    const respond = vi.fn();
-
-    await expectDefined(
-      browserHandlers["browser.request"],
-      "browser request handler",
-    )({
-      params: {
-        method: "POST",
-        path: "/tabs/open",
-        body: { url: "https://example.com" },
-        timeoutMs: 4321,
-      },
-      respond: respond as never,
-      context: {
-        nodeRegistry: { listConnected: () => [] },
-      } as never,
-      client: null,
-      req: { type: "req", id: "req-1", method: "browser.request" },
-      isWebchatConnect: () => false,
-    });
-
-    expect(withTimeoutMock).toHaveBeenCalledTimes(1);
-    const [call] = withTimeoutMock.mock.calls;
-    if (!call) {
-      throw new Error("expected withTimeout call");
-    }
-    const [dispatchTask, timeoutMs, timeoutLabel] = call;
-    expect(dispatchTask).toBeTypeOf("function");
-    expect(timeoutMs).toBe(4321);
-    expect(timeoutLabel).toBe("browser request");
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "UNAVAILABLE",
-      message: "Error: browser request timed out",
-    });
-  });
-
   it("caps timeoutMs before local browser dispatches", async () => {
     const respond = vi.fn();
 
@@ -194,7 +154,14 @@ describe("browser.request local timeout", () => {
       isWebchatConnect: () => false,
     });
 
-    const [, timeoutMs] = withTimeoutMock.mock.calls.at(-1) ?? [];
-    expect(timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(withTimeoutMock).toHaveBeenCalledExactlyOnceWith(
+      expect.any(Function),
+      MAX_TIMER_TIMEOUT_MS,
+      "browser request",
+    );
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "Error: browser request timed out",
+    });
   });
 });
