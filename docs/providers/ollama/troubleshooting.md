@@ -53,9 +53,8 @@ sidebarTitle: "Troubleshooting"
 
   <Accordion title="Ollama not detected">
     Confirm Ollama is running and is in the agent's model scope. For ambient
-    localhost discovery, set `OLLAMA_API_KEY` (or an auth profile). A nonempty
-    manual model list skips discovery; an explicit self-hosted endpoint with
-    `models: []` does not:
+    localhost discovery, set `OLLAMA_API_KEY` (or an auth profile). An explicit
+    self-hosted endpoint is discovered whether or not it lists models:
 
     ```bash
     ollama serve

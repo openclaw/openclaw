@@ -25,7 +25,7 @@ Replace model IDs with exact names from `ollama list` or
     ```
 
     Leave `models.providers.ollama` unset to use the default local endpoint, or
-    configure a self-hosted endpoint with `models: []` to keep discovery eligible.
+    configure a self-hosted endpoint; both keep discovery eligible.
 
   </Accordion>
 
