@@ -29,6 +29,11 @@ const LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS = 300_000;
 const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
 const LOCAL_PROVIDER_AUTH_MARKERS = new Set(["custom-local", "ollama-local"]);
 const SELF_HOSTED_PROVIDER_ID_PREFIXES = ["ollama", "lmstudio", "vllm", "sglang", "llama-cpp"];
+const EXPLICIT_LOCAL_HOSTNAMES = new Set([
+  "docker.orb.internal",
+  "host.docker.internal",
+  "host.orb.internal",
+]);
 
 /**
  * Local endpoints can stay silent during prompt evaluation. Classify the URL
@@ -73,18 +78,7 @@ function isLocalProviderHostname(hostname: string): boolean {
   );
 }
 
-function isExplicitLocalHostname(hostname: string): boolean {
-  return (
-    hostname === "docker.orb.internal" ||
-    hostname === "host.docker.internal" ||
-    hostname === "host.orb.internal"
-  );
-}
-
 function isBareProviderHostname(hostname: string): boolean {
-  if (hostname.includes(".") || hostname.includes(":")) {
-    return false;
-  }
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(hostname);
 }
 
@@ -107,13 +101,12 @@ function findConfiguredProviderConfig(
     return undefined;
   }
   const providers = cfg?.models?.providers;
-  const exact = providers?.[normalizedProvider];
-  if (exact) {
-    return exact;
-  }
-  return Object.entries(providers ?? {}).find(
-    ([key]) => key.trim().toLowerCase() === normalizedProvider,
-  )?.[1];
+  return (
+    providers?.[normalizedProvider] ||
+    Object.entries(providers ?? {}).find(
+      ([key]) => key.trim().toLowerCase() === normalizedProvider,
+    )?.[1]
+  );
 }
 
 function hasLocalProviderAuthMarker(apiKey: unknown): boolean {
@@ -153,7 +146,7 @@ function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
       (isSelfHostedProviderId(params?.model?.provider) ||
         Boolean(
           hostname &&
-          (isExplicitLocalHostname(hostname) ||
+          (EXPLICIT_LOCAL_HOSTNAMES.has(hostname) ||
             (isBareProviderHostname(hostname) &&
               hasConfiguredLocalProviderSignal({
                 cfg: params?.cfg,
@@ -253,12 +246,7 @@ export function streamWithIdleTimeout(
     const trackCleanup = captureAsyncWorkTracker();
     const streamAbortController = new AbortController();
     const sourceSignal = options?.signal;
-    const abortStream = (reason?: unknown) => {
-      if (!streamAbortController.signal.aborted) {
-        streamAbortController.abort(reason);
-      }
-    };
-    const abortFromSourceSignal = () => abortStream(sourceSignal?.reason);
+    const abortFromSourceSignal = () => streamAbortController.abort(sourceSignal?.reason);
     // Mirror caller cancellation into the provider request while still allowing
     // this wrapper to abort independently on idle timeout.
     if (sourceSignal?.aborted) {
@@ -276,7 +264,7 @@ export function streamWithIdleTimeout(
         const budget = progress ? progressTimeoutMs : timeoutMs;
         const reason = progress ? "no model progress" : "no response from model";
         const error = new Error(`LLM idle timeout (${Math.floor(budget / 1000)}s): ${reason}`);
-        abortStream(error);
+        streamAbortController.abort(error);
         onIdleTimeout?.(error);
         reject(error);
       }, delay);

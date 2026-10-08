@@ -245,8 +245,8 @@ export class DraftPlaceBrowser {
       popoverOpen: this.popoverOpen(kind),
       popoverHiding: this.popoverHiding(kind),
       onGuardTransition: (event: MouseEvent) => this.guardPopoverTransition(event, kind),
-      onPopoverShow: () => this.onPopoverShow(kind),
-      onPopoverHide: () => this.onPopoverHide(kind),
+      onPopoverShow: () => this.transitionPopover(kind, true),
+      onPopoverHide: () => this.transitionPopover(kind, false),
       onPopoverAfterHide: () => this.onPopoverAfterHide(kind),
     };
   }
@@ -456,23 +456,18 @@ export class DraftPlaceBrowser {
     }
   }
 
-  onPopoverShow(kind: DraftPickerKind) {
-    this.openPopoverValue = kind;
-    if (kind === "where") {
-      this.environmentQueryValue = "";
-    }
-    if (kind === "project") {
-      this.showRoot();
+  private transitionPopover(kind: DraftPickerKind, showing: boolean) {
+    if (showing) {
+      this.openPopoverValue = kind;
+      if (kind === "where") {
+        this.environmentQueryValue = "";
+      }
     } else {
-      this.callbacks.requestUpdate();
+      if (this.openPopoverValue === kind) {
+        this.openPopoverValue = null;
+      }
+      this.hidingPopovers.add(kind);
     }
-  }
-
-  onPopoverHide(kind: DraftPickerKind) {
-    if (this.openPopoverValue === kind) {
-      this.openPopoverValue = null;
-    }
-    this.hidingPopovers.add(kind);
     if (kind === "project") {
       this.showRoot();
     } else {

@@ -158,10 +158,19 @@ Chat model menus, the Control UI, and `models list` display the catalog's refres
 warning. The CLI writes the warning to stderr, keeping JSON and plain stdout
 machine-readable.
 
-A provider that rejects authentication keeps its sign-in status without causing
-a catalog refresh warning. For an installed agent app, open **Models** in the
-Control UI and follow its sign-in guidance. Timeouts and other discovery failures
-still produce the refresh warning, even when another provider needs sign-in.
+A provider that rejects catalog authentication produces a separate CLI diagnostic
+with its provider and, when available, profile ID. Open **Models** in the Control
+UI to check sign-in and catalog access, then retry with `--refresh`. Catalog
+rejection alone does not cause the generic refresh warning or prove that model
+requests will fail. Timeouts and other discovery failures still produce the
+refresh warning, even when another provider needs sign-in.
+
+Discovery diagnostics go to stderr in every output mode. JSON output also includes
+`providerOutcomes` when the Gateway or local catalog publishes them: each entry
+contains `provider`, optional `profileId`, and `status` (`ready`, `auth-rejected`,
+or `unavailable`). These are catalog-wide outcomes, independent of model-row
+filters such as `--provider` and `--local`. Provider error bodies and credentials
+are not included. Plain stdout remains one model key per line.
 
 A selected Gateway must advertise `published-model-catalog`. If it does not,
 update or restart it and retry. Connection, authorization and capability errors

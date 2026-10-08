@@ -155,15 +155,13 @@ export async function maybeHandleResetCommand(
         }
         return { shouldContinue: false };
       }
-      return {
-        shouldContinue: false,
-        reply: { text: "✅ ACP session reset in place.", isStatusNotice: true },
-      };
     }
     return {
       shouldContinue: false,
       reply: {
-        text: "⚠️ ACP session reset failed. Check /acp status and try again.",
+        text: resetResult.ok
+          ? "✅ ACP session reset in place."
+          : "⚠️ ACP session reset failed. Check /acp status and try again.",
         isStatusNotice: true,
       },
     };

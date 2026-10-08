@@ -74,6 +74,12 @@ describe("settings search target manifest", () => {
         "#settings-appearance-typography",
       ],
       [
+        "appearanceTabIcon",
+        "/settings/appearance",
+        "?section=__appearance__",
+        "#settings-appearance-tab-icon",
+      ],
+      [
         "appearanceTextSize",
         "/settings/appearance",
         "?section=__appearance__",

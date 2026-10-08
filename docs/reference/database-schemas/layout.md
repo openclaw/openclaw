@@ -455,6 +455,22 @@ The normal handoff parent prepares this database before launching its sealed
 helper. The helper receives the captured database identity and operates only on
 that existing database, without resolving installation packages or recreating
 missing or empty state.
+Package recovery helpers are also self-contained: their status and recovery
+commands do not need neighboring installation assets or service controllers.
+
+Current update, Doctor, and handoff owners serialize coordinator writes before
+pinning a read snapshot. They prepare an existing-directory capability and use
+the coordinator's existing lock file, carrying the remaining five-second wait
+budget into SQLite. Other installations can still inspect their leases while a
+writer is active. SQLite admission remains non-waiting while the protective
+snapshot is held, so it cannot deadlock a writer's commit or replay a hot journal.
+Already-published synchronous helpers retain that conservative SQLite refusal;
+the new serialization does not change their protocol or lease rows.
+When an older update or Doctor holds SQLite, the current caller explains the
+contention and asks the operator to wait for it to finish, then rerun the command.
+If a holder removes its lock during inspection, admission re-observes the absent
+slot through the same directory capability and remaining budget. A replacement
+sidecar that is still present or a changed directory identity is refused.
 
 File creation applies private permissions before SQLite opens the file, including
 a protected ACL on Windows. Initialization follows the existing directory-durability

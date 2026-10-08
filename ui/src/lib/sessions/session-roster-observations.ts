@@ -1,6 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { projectSessionResultRows, reconcileRosterPresentationMetadata } from "./reconcile.ts";
 import type {
   SessionConnectionOwner,
   SessionConnectionScope,
@@ -644,18 +644,19 @@ export function createSessionRosterObservations(
     },
     accept(
       result: SessionsListResult | null,
-      previous: SessionsListResult | null,
+      previous: ReturnType<typeof host.readState>,
       primary: SessionsListResult | null,
       agentId?: string | null,
-      previousAgentId = agentId,
-      primaryAgentId = host.readState().agentId,
     ) {
-      const incomingRows = indexRows(result?.sessions ?? [], agentId);
+      const donor = previous.resultCached ? null : previous.result;
+      const presented = reconcileRosterPresentationMetadata(result, donor);
+      observations.inherit(presented, result, donor, agentId);
+      const incomingRows = indexRows(presented?.sessions ?? [], agentId);
       let accepted = merge(
-        merge(result, previous?.sessions ?? [], agentId, previousAgentId),
+        merge(presented, previous.result?.sessions ?? [], agentId, previous.agentId),
         primary?.sessions ?? [],
         agentId,
-        primaryAgentId,
+        host.readState().agentId,
       );
       const epoch = host.connection.capture()?.epoch;
       for (const entry of lists.values()) {

@@ -39,6 +39,7 @@ import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
 import { renderAgentConfigActions, type AgentConfigActions } from "./config-actions.ts";
+import { renderAgentPanelFacts } from "./panel-ui.ts";
 
 export type AgentIdentityDraft = {
   name: string | null;
@@ -106,6 +107,7 @@ export function renderAgentOverview(
     params.agentIdentity,
   );
   const isDefault = context.isDefault;
+  const primaryModelLabel = t(`agents.overview.primaryModel${isDefault ? "Default" : ""}`);
   const config = resolveAgentConfig(configForm, agent.id);
   const agentModel = visibleAgent.model;
   const entryPrimary = resolveModelPrimary(config.entry?.model);
@@ -282,10 +284,10 @@ export function renderAgentOverview(
     )}
     ${renderSettingsSection(
       { title: t("agents.overview.title"), description: t("agents.overview.subtitle") },
-      html`
-        <dl class="settings-kv">
-          <dt>${t("agents.context.workspace")}</dt>
-          <dd>
+      renderAgentPanelFacts([
+        [
+          "agents.context.workspace",
+          html`
             <openclaw-tooltip .content=${t("agents.context.openFilesTab")}>
               <button
                 type="button"
@@ -296,17 +298,13 @@ export function renderAgentOverview(
                 ${context.workspace}
               </button>
             </openclaw-tooltip>
-          </dd>
-          <dt>${t("agents.context.primaryModel")}</dt>
-          <dd><code>${context.model}</code></dd>
-          <dt>${t("agents.context.runtime")}</dt>
-          <dd><code>${context.runtime}</code></dd>
-          <dt>${t("agents.context.thinkingDefault")}</dt>
-          <dd><code>${thinkingDefault}</code></dd>
-          <dt>${t("agents.context.skillsFilter")}</dt>
-          <dd>${context.skillsLabel}</dd>
-        </dl>
-      `,
+          `,
+        ],
+        ["agents.context.primaryModel", html`<code>${context.model}</code>`],
+        ["agents.context.runtime", html`<code>${context.runtime}</code>`],
+        ["agents.context.thinkingDefault", html`<code>${thinkingDefault}</code>`],
+        ["agents.context.skillsFilter", context.skillsLabel],
+      ]),
     )}
     ${
       configDirty
@@ -321,13 +319,9 @@ export function renderAgentOverview(
       },
       html`
         ${renderSettingsRow({
-          title: isDefault
-            ? t("agents.overview.primaryModelDefault")
-            : t("agents.overview.primaryModel"),
+          title: primaryModelLabel,
           control: renderModelPicker({
-            label: isDefault
-              ? t("agents.overview.primaryModelDefault")
-              : t("agents.overview.primaryModel"),
+            label: primaryModelLabel,
             value: selectedPrimary ?? "",
             options: [
               {
@@ -402,27 +396,21 @@ export function renderAgentContextSection(
 ) {
   return renderSettingsSection(
     { title: t("agents.context.title"), description: subtitle },
-    html`
-      <dl class="settings-kv">
-        <dt>${t("agents.context.workspace")}</dt>
-        <dd>
+    renderAgentPanelFacts([
+      [
+        "agents.context.workspace",
+        html`
           <button type="button" class="workspace-link mono" @click=${() => onSelectPanel("files")}>
             ${context.workspace}
           </button>
-        </dd>
-        <dt>${t("agents.context.primaryModel")}</dt>
-        <dd><code>${context.model}</code></dd>
-        <dt>${t("agents.context.runtime")}</dt>
-        <dd><code>${context.runtime}</code></dd>
-        <dt>${t("agents.context.identityName")}</dt>
-        <dd>${context.identityName}</dd>
-        <dt>${t("agents.context.identityAvatar")}</dt>
-        <dd>${context.identityAvatar}</dd>
-        <dt>${t("agents.context.skillsFilter")}</dt>
-        <dd>${context.skillsLabel}</dd>
-        <dt>${t("agents.context.default")}</dt>
-        <dd>${context.isDefault ? t("common.yes") : t("common.no")}</dd>
-      </dl>
-    `,
+        `,
+      ],
+      ["agents.context.primaryModel", html`<code>${context.model}</code>`],
+      ["agents.context.runtime", html`<code>${context.runtime}</code>`],
+      ["agents.context.identityName", context.identityName],
+      ["agents.context.identityAvatar", context.identityAvatar],
+      ["agents.context.skillsFilter", context.skillsLabel],
+      ["agents.context.default", t(context.isDefault ? "common.yes" : "common.no")],
+    ]),
   );
 }

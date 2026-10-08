@@ -211,6 +211,12 @@ export function createManagedLinuxDesktop(
     !current.bus.activity.resultSettled &&
     !current.session.activity.resultSettled;
 
+  const assertStartupCurrent = (activeEpoch: number) => {
+    if (activeEpoch !== epoch || stopping) {
+      throw new Error("managed Linux desktop stopped during startup");
+    }
+  };
+
   const publicResult = (active: ManagedResources) => ({
     attachment: {
       kind: "tcp" as const,
@@ -312,9 +318,7 @@ export function createManagedLinuxDesktop(
       }
       await wait(readinessPollMs);
     }
-    if (activeEpoch !== epoch || stopping) {
-      throw new Error("managed Linux desktop stopped during startup");
-    }
+    assertStartupCurrent(activeEpoch);
     throw new Error(
       `managed Linux desktop did not become ready on 127.0.0.1:${active.port} within ${readinessTimeoutMs}ms (last check: ${lastProbe})`,
     );
@@ -396,11 +400,7 @@ export function createManagedLinuxDesktop(
         mode: "child",
         argv,
         ...(env ? { env } : {}),
-        assertCurrent: () => {
-          if (activeEpoch !== epoch || stopping) {
-            throw new Error("managed Linux desktop stopped during startup");
-          }
-        },
+        assertCurrent: () => assertStartupCurrent(activeEpoch),
         ...(onStdout ? { onStdout } : {}),
         stdinMode: "pipe-closed",
         maxCapturedOutputChars: STDERR_TAIL_CHARS,
@@ -430,9 +430,7 @@ export function createManagedLinuxDesktop(
           throw new Error(describeExit("Xtigervnc", exit));
         }),
       ]);
-      if (activeEpoch !== epoch || stopping) {
-        throw new Error("managed Linux desktop stopped during startup");
-      }
+      assertStartupCurrent(activeEpoch);
       let audioPair: ManagedPair | null = null;
       audioOwner = createAudio({
         supervisor,
@@ -633,9 +631,7 @@ export function createManagedLinuxDesktop(
   const start = async (activeEpoch: number): Promise<ManagedResources> => {
     try {
       resources = await prepareResources();
-      if (activeEpoch !== epoch || stopping) {
-        throw new Error("managed Linux desktop stopped during startup");
-      }
+      assertStartupCurrent(activeEpoch);
       const started = await startPair(resources, activeEpoch);
       monitorPair(started, resources, activeEpoch);
       return resources;

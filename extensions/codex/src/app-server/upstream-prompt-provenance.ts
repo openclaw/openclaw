@@ -13,6 +13,24 @@ function readCodexMeta(message: AgentMessage | undefined) {
     : undefined;
 }
 
+const ASSISTANT_ITEM_IDS = Symbol("codexAssistantItemIds");
+
+/** Follow snapshot copies without adding provider identities to durable messages. */
+export function attachCodexAssistantItemIds<T extends AgentMessage>(
+  message: T,
+  itemIds: readonly string[],
+): T {
+  return { ...message, [ASSISTANT_ITEM_IDS]: itemIds };
+}
+
+export function takeCodexAssistantItemIds(
+  message: AgentMessage & { [ASSISTANT_ITEM_IDS]?: readonly string[] },
+): readonly string[] | undefined {
+  const itemIds = message[ASSISTANT_ITEM_IDS];
+  delete message[ASSISTANT_ITEM_IDS];
+  return itemIds;
+}
+
 function attachCodexMeta<T extends AgentMessage>(message: T, key: string, value: string): T {
   return {
     ...message,

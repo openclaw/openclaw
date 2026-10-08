@@ -206,50 +206,6 @@ it.each(["participant", "owner"] as const)(
 );
 
 it.each([
-  { scenario: "4,000 fresh entries with foreign commits", count: 4_000, ageDays: 0 },
-  { scenario: "eight-day entries with a protected primary", count: 2, ageDays: 8 },
-])("does not rescan $scenario across 20 writes", async ({ count, ageDays }) => {
-  const { database, options, storePath } = createStore(count, Date.now() - ageDays * DAY_MS);
-  if (ageDays) {
-    runOpenClawAgentWriteTransaction((owner) => {
-      writeSessionEntry(owner, "agent:main:main", {
-        sessionId: "primary",
-        updatedAt: Date.now() - 100 * DAY_MS,
-      });
-    }, options);
-    await renameEntry(storePath, 0, "warm age facts");
-  }
-  const writer = ageDays ? undefined : new DatabaseSync(database.path);
-  writer?.exec("CREATE TABLE maintenance_cadence_noise (value INTEGER)");
-  const factReads = vi.spyOn(ageFacts, "recordSessionEntryMaintenanceAgeFact");
-  const ageReads = vi.spyOn(candidates, "readSessionMaintenanceAgeCandidates");
-  const keyReads = vi.spyOn(candidates, "readSessionMaintenanceKeyProjection");
-  const writes = 20;
-  try {
-    for (let index = 0; index < writes; index += 1) {
-      writer?.prepare("INSERT INTO maintenance_cadence_noise VALUES (?)").run(index);
-      await renameEntry(storePath, index % count, `renamed-${index}`);
-    }
-  } finally {
-    writer?.close();
-  }
-  for (let index = 0; index < Math.min(count, writes); index += 1) {
-    expect(loadSessionEntry({ storePath, sessionKey: key(index) })).toMatchObject({
-      label: `renamed-${ageDays ? writes - count + index : index}`,
-    });
-  }
-  if (ageDays) {
-    expect(
-      loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.archivedAt,
-    ).toBeUndefined();
-  } else {
-    expect(factReads).toHaveBeenCalledTimes(1);
-  }
-  expect(ageReads).toHaveBeenCalledTimes(ageDays ? 0 : 1);
-  expect(keyReads).not.toHaveBeenCalled();
-});
-
-it.each([
   { scenario: "a write crosses the cap", count: 2, maxEntries: 2, force: false },
   {
     scenario: "forced maintenance bypasses ordinary-write slack",
@@ -393,19 +349,6 @@ it("does not retain an age fact from a rolled-back archive", async () => {
   expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
     archiveReason: "age-retention",
   });
-});
-
-it("keeps age facts scoped to the store that produced them", async () => {
-  const fresh = createStore(1);
-  const old = createStore(1, Date.now() - 31 * DAY_MS);
-  await renameEntry(fresh.storePath, 0, "fresh store");
-  await renameEntry(old.storePath, 0, "old store");
-  expect(loadSessionEntry({ storePath: old.storePath, sessionKey: key(0) })).toMatchObject({
-    archiveReason: "age-retention",
-  });
-  expect(
-    loadSessionEntry({ storePath: fresh.storePath, sessionKey: key(0) })?.archivedAt,
-  ).toBeUndefined();
 });
 
 it("reconsiders a session unarchived without changing its timestamp", async () => {

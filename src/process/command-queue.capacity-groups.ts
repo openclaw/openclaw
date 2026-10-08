@@ -1,8 +1,5 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-// Capacity groups: a shared, hard aggregate budget across several command
-// lanes, with per-member reservations. Split out of command-queue.ts to keep
-// that file within its size budget; the queue supplies its own `drainLane` so
-// this module never has to import the queue runtime.
+// The queue supplies `drainLane` so capacity policy never imports the queue runtime.
 import {
   getQueueState,
   normalizeLane,
@@ -12,10 +9,8 @@ import {
 import type { CommandLaneBlockReason, CommandLaneSnapshot } from "./command-queue.types.js";
 import { CommandLane, SUBAGENT_LANE_PREFIX } from "./lanes.js";
 
-/** Internal bounded drain contract used by the group arbiter. */
 type BoundedDrainLaneFn = (lane: string, maxStarts?: number) => number | void;
 
-/** Declares a group's shared budget and its members' hard reservations. */
 export type CommandLaneGroupSpec = {
   /** Hard aggregate cap across all members. */
   budget: number;
@@ -148,8 +143,6 @@ export function canAdmitInGroup(lane: string): boolean {
 }
 
 /**
- * Define or replace a capacity group.
- *
  * Membership is held here, keyed by lane name, and deliberately NOT inside
  * `LaneState`: `setCommandLaneConcurrency` must not be able to detach a lane
  * from its group, or session suspend/resume would silently restore a member to

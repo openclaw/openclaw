@@ -34,7 +34,10 @@ import {
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
-import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  type InternalSessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   createLazyPromise,
@@ -646,8 +649,18 @@ export function startGatewayEventSubscriptions(params: {
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
     sessionActivitySummaries.handleTranscript(evt);
-    void dispatchEventHandler({
-      loadHandler: getTranscriptUpdateHandler,
+    // Share the agent queue so a later cumulative update cannot outrun retirement.
+    const agentHandler = agentEventHandlerLoader.peek();
+    void dispatchEventHandler<InternalSessionTranscriptUpdate>({
+      loadHandler: agentHandler
+        ? () =>
+            agentHandler
+              .then(
+                (handler) => handler.retireTranscript(evt),
+                () => undefined,
+              )
+              .then(getTranscriptUpdateHandler)
+        : getTranscriptUpdateHandler,
       event: evt,
       log: params.log,
       failureMessage: "Transcript update dispatch failed",

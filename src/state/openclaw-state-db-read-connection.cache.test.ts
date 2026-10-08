@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { constants } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   observeSqliteReadSql,
@@ -53,6 +54,7 @@ vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
   },
 }));
 import "./openclaw-state-read.worker.js";
+import { createDanglingSkillWorkshopReviewIndex } from "./openclaw-state-db-corruption.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -125,7 +127,11 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   const configSelect = /^select "value_json", "updated_at_ms" from "config_machine_state"/iu;
   const contentVersionSelect = /^select "value_json" from "config_machine_state"/iu;
   const dataVersion = /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu;
+  const userVersion = /^PRAGMA user_version$/iu;
+  const catalogRead = /\b(?:sqlite_schema|sqlite_master)\b/iu;
   expect(await value()).toBe(1);
+  expect.soft(observation.queries.filter((sql) => userVersion.test(sql))).toHaveLength(1);
+  expect.soft(observation.queries.filter((sql) => catalogRead.test(sql))).toHaveLength(1);
   expect(await value()).toBe(1);
   // First admission uses its native pragma; the retained observation caches on its second use.
   expect(await value()).toBe(1);
@@ -142,6 +148,8 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   const peer = new native.DatabaseSync(pathname);
   try {
     peer.exec("UPDATE config_machine_state SET value_json = '2', updated_at_ms = 2");
+    expect(await value()).toBe(2);
+    expect(observation.queries.filter((sql) => contentVersionSelect.test(sql))).toHaveLength(1);
     expect(await value()).toBe(2);
     expect(observation.queries.filter((sql) => contentVersionSelect.test(sql))).toHaveLength(1);
     expect(prepare.mock.calls.filter(([sql]) => configSelect.test(sql))).toHaveLength(0);
@@ -162,6 +170,30 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(1);
   observation.restore();
 });
+
+it.each([false, true])(
+  "preserves cold schema refusal precedence with a malformed catalog (newer header: %s)",
+  (newerHeader) => {
+    const { pathname, value } = fixture();
+    const seed = sqlite.openNodeSqliteDatabase(pathname);
+    try {
+      seed.exec(
+        "CREATE TABLE skill_workshop_collection_reviews (review_id TEXT PRIMARY KEY, create_time INTEGER)",
+      );
+      if (newerHeader) {
+        seed.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+      }
+    } finally {
+      seed.close();
+    }
+    createDanglingSkillWorkshopReviewIndex(pathname);
+    expect(value).toThrow(
+      newerHeader
+        ? /newer schema version/iu
+        : /legacy-workshop-review-index.*openclaw doctor --fix/iu,
+    );
+  },
+);
 
 it.each([
   { change: "insertion", before: undefined, after: "1", expected: 1 },
@@ -246,7 +278,6 @@ it.each(["read", "open"])(
 
 it("keeps content markers current through local writes, rollback, and authorizers", () => {
   const database = sqlite.openNodeSqliteDatabase(":memory:");
-  const { constants } = sqlite.requireNodeSqlite();
   database.exec(
     "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER)",
   );
@@ -317,35 +348,109 @@ it("observes peer commits and closes only the invalidated physical identity", ()
   expect(first.read(({ db }) => db) === reader).toBe(false);
 });
 
-it.each(["query", "schema"] as const)("evicts a reader after %s failure and recovers", (kind) => {
-  const { pathname, read, value } = fixture();
-  const reader = read(({ db }) => db);
-  if (kind === "query") {
-    expect(() =>
-      read(() => {
-        throw new Error("query refused");
-      }),
-    ).toThrow("query refused");
-    expect(reader.isOpen).toBe(false);
-    const transaction = read(({ db }) => {
-      db.exec("BEGIN");
-      return db;
-    });
-    expect(transaction.isOpen).toBe(false);
+it.each(["query", "schema", "newer content", "malformed content"] as const)(
+  "evicts a reader after %s failure and recovers",
+  (kind) => {
+    const { pathname, read, value } = fixture();
+    const reader = read(({ db }) => db);
     expect(value()).toBe(1);
-  } else {
-    const peer = sqlite.openNodeSqliteDatabase(pathname);
-    try {
-      peer.exec("PRAGMA user_version = 2147483647");
-      expect(() => value()).toThrow(/schema/i);
+    if (kind === "query") {
+      expect(() =>
+        read(() => {
+          throw new Error("query refused");
+        }),
+      ).toThrow("query refused");
       expect(reader.isOpen).toBe(false);
-      peer.exec("PRAGMA user_version = 0");
+      const transaction = read(({ db }) => {
+        db.exec("BEGIN");
+        return db;
+      });
+      expect(transaction.isOpen).toBe(false);
       expect(value()).toBe(1);
-    } finally {
-      peer.close();
+    } else {
+      const peer = sqlite.openNodeSqliteDatabase(pathname);
+      try {
+        if (kind === "schema") {
+          peer.exec("PRAGMA user_version = 2147483647");
+        } else {
+          peer
+            .prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
+            .run(
+              "state.schema.contentVersion",
+              kind === "malformed content" ? "{" : String(OPENCLAW_STATE_SCHEMA_VERSION + 1),
+            );
+        }
+        expect(() => value()).toThrow(
+          kind === "malformed content"
+            ? /invalid shared state schema content version/i
+            : /newer schema version/i,
+        );
+        expect(reader.isOpen).toBe(false);
+        if (kind === "schema") {
+          peer.exec("PRAGMA user_version = 0");
+        } else {
+          peer.exec(
+            "DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
+          );
+        }
+        expect(value()).toBe(1);
+      } finally {
+        peer.close();
+      }
     }
+  },
+);
+
+it("refreshes content markers after local mutation and rollback without retaining a version floor", () => {
+  const database = sqlite.openNodeSqliteDatabase(":memory:");
+  try {
+    database.exec(`
+      CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);
+      INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '4', 1);
+    `);
+    admitSqliteSchema(database);
+    const read = (published?: number) =>
+      runSqliteReadOperationSync(database, () =>
+        readStateSchemaContentVersion(database, published),
+      );
+    expect(read()).toBe(4);
+    expect(read(7)).toBe(7);
+    expect(read()).toBe(4);
+    database.exec("BEGIN; UPDATE config_machine_state SET value_json = '5'; SAVEPOINT marker");
+    expect(read()).toBe(5);
+    database.exec("UPDATE config_machine_state SET value_json = '6'");
+    expect(read()).toBe(6);
+    database.exec("ROLLBACK TO marker");
+    expect(read()).toBe(5);
+    database.exec("RELEASE marker; ROLLBACK");
+    expect(read()).toBe(4);
+    database.exec("DELETE FROM config_machine_state");
+    expect(read(7)).toBe(7);
+    expect(read()).toBe(0);
+  } finally {
+    database.close();
   }
 });
+
+it.skipIf(typeof sqlite.requireNodeSqlite().DatabaseSync.prototype.setAuthorizer !== "function")(
+  "rechecks dynamic authorizer policy before reusing a content marker",
+  () => {
+    const { read, value } = fixture();
+    const reader = read(({ db }) => db);
+    expect(value()).toBe(1);
+    let allowed = true;
+    reader.setAuthorizer((action, table) =>
+      !allowed && action === constants.SQLITE_READ && table === "config_machine_state"
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK,
+    );
+    expect(value()).toBe(1);
+    allowed = false;
+    expect(value).toThrow(/not authorized|prohibited|access to/i);
+    expect(reader.isOpen).toBe(false);
+    expect(value()).toBe(1);
+  },
+);
 
 it("retries idle reader disposal while other databases remain active", () => {
   const first = fixture();

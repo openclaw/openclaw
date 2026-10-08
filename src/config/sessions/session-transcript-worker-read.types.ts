@@ -39,13 +39,6 @@ export type SessionTranscriptSearchWorkerInput = {
   params: SessionTranscriptSearchParams;
 };
 
-export type SessionTranscriptSearchCurrentWorkerInput = {
-  kind: "transcript-search-current";
-  database: { agentId: string; path: string };
-  revision: string;
-  env: NodeJS.ProcessEnv;
-};
-
 export type SessionProjectionStatusWorkerInput = {
   kind: "projection-status";
   database: { agentId: string; path: string };

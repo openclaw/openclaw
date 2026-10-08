@@ -99,7 +99,6 @@ function isDataUrlPrefix(text: string, runStart: number): boolean {
 
 type Base64SafeTokenEnd = (text: string, start: number) => number | null;
 
-/** End of the maximal run of `isMember` characters starting at `start`. */
 function runEndOf(
   text: string,
   start: number,

@@ -9,6 +9,7 @@ import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
+import { resolveDeliveryQueueAttemptCount } from "../delivery-queue-sqlite.types.js";
 import {
   createDeliveryRecoveryCoordinator,
   createEmptyDeliveryRecoverySummary,
@@ -63,11 +64,7 @@ import {
   reconcileUnknownQueuedDelivery,
 } from "./delivery-queue-reconciliation.js";
 import { buildRecoveryDeliverParams } from "./delivery-queue-recovery-params.js";
-import {
-  isPermanentDeliveryError,
-  resolveMaxRetries,
-  resolveAttemptCount,
-} from "./delivery-queue-recovery-policy.js";
+import { isPermanentDeliveryError, resolveMaxRetries } from "./delivery-queue-recovery-policy.js";
 import {
   claimDeliveryPlatformSendAttempt,
   failDelivery,
@@ -136,60 +133,58 @@ type IndexedMessageSentEvent = {
   event: MessageSentEvent;
 };
 
-function emitRecoveredTerminalFailure(
+function emitRecoveredTerminalEvents(
   entry: QueuedDelivery,
-  error: string,
-  collected: readonly IndexedMessageSentEvent[] = [],
+  outcome:
+    | { result: OutboundDeliveryResult }
+    | { error: string; collected?: readonly IndexedMessageSentEvent[] },
 ): void {
   if (entry.legacyPreparedContentUnavailable) {
     return;
   }
   // Rendering can suppress an accepted payload before later payloads settle.
-  // Reconcile by source index so a gap cannot duplicate or misattribute events.
-  const collectedBySourceIndex = new Map(
-    collected.map(({ sourceIndex, event }) => [sourceIndex, event] as const),
-  );
-  const terminalEvents = acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => {
-    const summary = buildPayloadSummary(prepared.payload);
-    return (
-      collectedBySourceIndex.get(prepared.sourceIndex) ?? {
-        success: false,
-        content: summary.hookContent ?? summary.text,
-        error,
-      }
-    );
-  });
-  emitRecoveredMessageSentEvents(entry, terminalEvents);
-}
-
-function emitRecoveredTerminalSuccess(entry: QueuedDelivery, result: OutboundDeliveryResult): void {
-  if (entry.legacyPreparedContentUnavailable) {
-    return;
-  }
+  // Source indices keep a gap from duplicating or misattributing events.
+  const collectedBySourceIndex =
+    "error" in outcome
+      ? new Map(
+          (outcome.collected ?? []).map(({ sourceIndex, event }) => [sourceIndex, event] as const),
+        )
+      : undefined;
   const preparedEntries = acceptedPreparedOutboundEntries(entry.preparedBatch);
-  if (preparedEntries.length === 0) {
-    return;
+  let messageIds: readonly (string | undefined)[] = [];
+  if ("result" in outcome) {
+    if (preparedEntries.length === 0) {
+      return;
+    }
+    const { result } = outcome;
+    const receiptMessageIds = result.receipt?.parts.length
+      ? result.receipt.parts
+          .toSorted((left, right) => left.index - right.index)
+          .map((part) => part.platformMessageId)
+      : result.receipt?.platformMessageIds;
+    messageIds =
+      preparedEntries.length === 1
+        ? [result.messageId || receiptMessageIds?.[0]]
+        : receiptMessageIds?.length === preparedEntries.length
+          ? receiptMessageIds
+          : [];
   }
-  const receiptMessageIds = result.receipt?.parts.length
-    ? result.receipt.parts
-        .toSorted((left, right) => left.index - right.index)
-        .map((part) => part.platformMessageId)
-    : result.receipt?.platformMessageIds;
-  const messageIds =
-    preparedEntries.length === 1
-      ? [result.messageId || receiptMessageIds?.[0]]
-      : receiptMessageIds?.length === preparedEntries.length
-        ? receiptMessageIds
-        : [];
   emitRecoveredMessageSentEvents(
     entry,
     preparedEntries.map((prepared, index) => {
       const summary = buildPayloadSummary(prepared.payload);
+      const content = summary.hookContent ?? summary.text;
+      if ("error" in outcome) {
+        return (
+          collectedBySourceIndex?.get(prepared.sourceIndex) ?? {
+            success: false,
+            content,
+            error: outcome.error,
+          }
+        );
+      }
       const messageId = messageIds[index];
-      const event: MessageSentEvent = {
-        success: true,
-        content: summary.hookContent ?? summary.text,
-      };
+      const event: MessageSentEvent = { success: true, content };
       if (messageId) {
         event.messageId = messageId;
       }
@@ -321,7 +316,7 @@ async function settleQueuedFailure(
         return "already-gone";
       }
       terminalized = true;
-      emitRecoveredTerminalFailure(entry, settlement.error, params.events);
+      emitRecoveredTerminalEvents(entry, { error: settlement.error, collected: params.events });
       emitQueuedAuditTerminals(
         entry,
         settlement.terminals ??
@@ -370,7 +365,7 @@ async function settleQueuedFailure(
 function buildReconciledSentResult(
   entry: QueuedDelivery,
   reconciliation: Extract<ChannelMessageUnknownSendReconciliationResult, { status: "sent" }>,
-): OutboundDeliveryResult {
+) {
   return {
     channel: entry.channel,
     messageId:
@@ -379,7 +374,7 @@ function buildReconciledSentResult(
       reconciliation.receipt.platformMessageIds[0] ??
       "",
     receipt: reconciliation.receipt,
-  };
+  } satisfies OutboundDeliveryResult;
 }
 
 async function runReconciledSentCommitHooks(params: {
@@ -421,11 +416,7 @@ async function runReconciledSentCommitHooks(params: {
       text: payload.text ?? "",
       result: {
         messageId: result.messageId,
-        receipt: result.receipt ?? {
-          platformMessageIds: [result.messageId].filter(Boolean),
-          parts: [],
-          sentAt: Date.now(),
-        },
+        receipt: result.receipt,
       },
     };
     let context: ChannelMessageSendCommitContext;
@@ -520,7 +511,7 @@ async function resolveCompletedOwnerBeforeRecovery(
     const messageId = operation.platformMessageId;
     if (messageId) {
       const result: OutboundDeliveryResult = { channel: opts.entry.channel, messageId };
-      emitRecoveredTerminalSuccess(opts.entry, result);
+      emitRecoveredTerminalEvents(opts.entry, { result });
       await runOutboundDeliveryCommitHooks([result]);
       emitQueuedDeliveryResults(opts.entry, [result]);
     }
@@ -528,7 +519,7 @@ async function resolveCompletedOwnerBeforeRecovery(
     emitQueuedDeliveryResults(opts.entry, [], [], () => "platform_send");
     const error =
       operation.rejectionError ?? "delivery permanently rejected before platform dispatch";
-    emitRecoveredTerminalFailure(opts.entry, error);
+    emitRecoveredTerminalEvents(opts.entry, { error });
     opts.onFailed?.(opts.entry, error);
     return "failed";
   } else if (operation.state === "suppressed") {
@@ -563,7 +554,7 @@ async function drainQueuedEntry(
     stateContext,
   );
   const maxRetries = resolveMaxRetries(entry);
-  const attemptBudgetExhausted = resolveAttemptCount(entry) >= maxRetries;
+  const attemptBudgetExhausted = resolveDeliveryQueueAttemptCount(entry) >= maxRetries;
   let reconciledPlatformSendAttemptId: string | undefined;
   let reconciledPlatformSendStartedAt: number | undefined;
   const ownerState = await resolveCompletedOwnerBeforeRecovery({ ...opts, owner }, stateContext);
@@ -594,7 +585,7 @@ async function drainQueuedEntry(
           );
         }
         await owner.ack();
-        emitRecoveredTerminalSuccess(entry, result);
+        emitRecoveredTerminalEvents(entry, { result });
         await runReconciledSentCommitHooks({
           entry,
           cfg: opts.cfg,
@@ -1057,7 +1048,7 @@ async function processQueuedRecovery(
     return "continue";
   }
   const maxRetries = resolveMaxRetries(entry);
-  const attemptCount = resolveAttemptCount(entry);
+  const attemptCount = resolveDeliveryQueueAttemptCount(entry);
   if (attemptCount >= maxRetries && !needsUnknownSendReconciliation(entry)) {
     if (context.kind === "startup") {
       log.warn(`${label} exceeded max retries (${attemptCount}/${maxRetries}) — moving to failed/`);

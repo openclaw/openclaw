@@ -120,7 +120,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     private readonly ownerOptions: WorkerTaskPoolOwnerOptions = {},
   ) {
     this.observeTask = host.createTaskObserver?.(options.workerUrl);
-    this.maxWorkers = options.maxWorkers ?? availableParallelism();
+    this.maxWorkers = host.maxWorkers ?? options.maxWorkers ?? availableParallelism();
     this.maxPendingTasks = options.maxPendingTasks ?? DEFAULT_WORKER_PENDING_TASKS;
     this.maxPendingBytes = options.maxPendingBytes ?? DEFAULT_WORKER_PENDING_BYTES;
     for (const [name, value] of Object.entries({

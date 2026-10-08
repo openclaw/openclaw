@@ -361,13 +361,7 @@ function prepareChatSessionAbort(
     context: params.context,
     sessionId: params.sessionId,
   });
-  const {
-    authorizedRuns,
-    matchedRunIds: matchedActiveRunIds,
-    hasUnauthorizedRuns: hasUnauthorizedActiveRuns,
-    hasUnauthorizedProtectedRuns: hasUnauthorizedProtectedActiveRuns,
-    hasProtectedRuns: hasProtectedActiveRuns,
-  } = resolveAuthorizedRunsForSessionKeys({
+  const activePlan = resolveAuthorizedRunsForSessionKeys({
     ...ownerScope,
     chatAbortControllers: params.context.chatAbortControllers,
     sessionIds: [params.sessionId],
@@ -384,11 +378,10 @@ function prepareChatSessionAbort(
     });
   const pendingAgent = resolvePendingRuns("agent:");
   const pendingChat = resolvePendingRuns(PENDING_CHAT_SEND_DEDUPE_PREFIX);
-  const pendingPlans = [pendingAgent, pendingChat];
+  const runPlans = [activePlan, pendingAgent, pendingChat];
+  const { authorizedRuns, matchedRunIds: matchedActiveRunIds } = activePlan;
   const hasAuthorizedGatewayRuns =
-    authorizedRuns.length > 0 ||
-    queuedPlan.authorized.length > 0 ||
-    pendingPlans.some((plan) => plan.authorizedRuns.length > 0);
+    queuedPlan.authorized.length > 0 || runPlans.some((plan) => plan.authorizedRuns.length > 0);
   const isLifecycleAbort = Boolean(
     params.cascadeDescendants || params.onAuthorizedAfterQueuedAbort,
   );
@@ -401,15 +394,11 @@ function prepareChatSessionAbort(
   const hasControllerRepresentedWorkerRun =
     hasWorkerRun && matchedActiveRunIds.some((runId) => workerCancellation?.runIds.includes(runId));
   const hasUnauthorizedOwner =
-    hasUnauthorizedActiveRuns ||
     queuedPlan.hasUnauthorizedRuns ||
-    pendingPlans.some((plan) => plan.hasUnauthorizedRuns) ||
+    runPlans.some((plan) => plan.hasUnauthorizedRuns) ||
     (hasWorkerRun && !hasControllerRepresentedWorkerRun && !params.requester.isAdmin);
-  const hasProtectedLifecycleRuns =
-    hasProtectedActiveRuns || pendingPlans.some((plan) => plan.hasProtectedRuns);
-  const hasUnauthorizedProtectedOwner =
-    hasUnauthorizedProtectedActiveRuns ||
-    pendingPlans.some((plan) => plan.hasUnauthorizedProtectedRuns);
+  const hasProtectedLifecycleRuns = runPlans.some((plan) => plan.hasProtectedRuns);
+  const hasUnauthorizedProtectedOwner = runPlans.some((plan) => plan.hasUnauthorizedProtectedRuns);
   const hasUnauthorizedLifecycleOwner = isLifecycleAbort && hasUnauthorizedProtectedOwner;
   const canRunLifecycleCleanup = !hasUnauthorizedOwner && !hasProtectedLifecycleRuns;
   // Keep ordinary chat.abort's admin worker behavior; only the injected broad
@@ -571,9 +560,9 @@ function prepareChatSessionAbort(
     }
   };
   const hasOtherWork =
-    matchedActiveRunIds.some((runId) => runId !== selectedRunId) ||
-    queuedPlan.matchedRunIds.some((runId) => runId !== selectedRunId) ||
-    pendingPlans.some((plan) => plan.matchedRunIds.some((runId) => runId !== selectedRunId)) ||
+    [activePlan, queuedPlan, pendingAgent, pendingChat].some((plan) =>
+      plan.matchedRunIds.some((runId) => runId !== selectedRunId),
+    ) ||
     (hasWorkerRun && (!selectedRunId || !workerCancellation?.runIds.includes(selectedRunId)));
   return {
     canCascade: canRunLifecycleCleanup && !hasUnauthorizedLifecycleOwner,

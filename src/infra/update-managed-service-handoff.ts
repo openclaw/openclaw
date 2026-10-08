@@ -62,11 +62,10 @@ import {
 } from "./update-managed-service-handoff-current.js";
 import {
   assertManagedUpdateLeaseDatabaseIdentity,
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
+  prepareManagedHandoffLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import {
-  createManagedHandoffLeaseStore,
+  prepareManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "./update-managed-service-handoff-lease.js";
 import { MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE } from "./update-managed-service-handoff-native-scope-source.js";
@@ -81,7 +80,6 @@ import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-run
 import {
   resolveGatewayServiceRecovery,
   admitSystemdUpdate,
-  joinSystemServiceUpdateHandoffs,
   observeManagedServiceUpdateHandoffClose,
   resolveManagedHandoffCommandEnv,
   SYSTEM_SERVICE_UPDATE_SETTLED_MARKER,
@@ -121,22 +119,13 @@ function appendLog(line) {
   }
 }
 
-const { OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, createManagedHandoffLeaseStore, extractSqliteTableSchema, readRestartSentinelRowSync, writeRestartSentinelRowIfRevisionSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice } =
+const { OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, readRestartSentinelRowSync, writeRestartSentinelRowIfRevisionSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice } =
   require("./runtime/${MANAGED_HANDOFF_RUNTIME_ENTRY}");
 if (!params.updateLeaseDatabaseIdentity) {
   throw new Error("Managed handoff requires its prepared lease database identity");
 }
-const leaseStore = createManagedHandoffLeaseStore({
-  databasePath: params.updateLeaseDatabasePath,
-  serviceManagerEnv: params.serviceManagerEnv,
-  existingIdentity: params.updateLeaseDatabaseIdentity,
-  onProcessIdentityWarning: (pid, message) => {
-    appendLog(message);
-    runWarnings.set("warning:process-start-identity:" + pid, message);
-    if (runLedger && !updaterStarted) recordRunWarnings(runLedger);
-  },
-}, { warn: (message, metadata) => appendLog(message + " " + JSON.stringify(metadata)) });
-const { isPidAlive, properties: parseSystemdProperties, validFailure: validTriageFailure } = leaseStore;
+let leaseStore;
+let isPidAlive, parseSystemdProperties, validTriageFailure;
 const runWarnings = new Map();
 if (params.operatorRestartWarning) runWarnings.set("warning:managed-service-reconciliation", params.operatorRestartWarning);
 function recordRunWarnings(ledger) {
@@ -877,6 +866,17 @@ async function collectUpdateFailureTriage() {
 let automaticRequested = false;
 
 (async () => {
+  leaseStore = await prepareManagedHandoffLeaseStore({
+    databasePath: params.updateLeaseDatabasePath,
+    serviceManagerEnv: params.serviceManagerEnv,
+    existingIdentity: params.updateLeaseDatabaseIdentity,
+    onProcessIdentityWarning: (pid, message) => {
+      appendLog(message);
+      runWarnings.set("warning:process-start-identity:" + pid, message);
+      if (runLedger && !updaterStarted) recordRunWarnings(runLedger);
+    },
+  }, { warn: (message, metadata) => appendLog(message + " " + JSON.stringify(metadata)) });
+  ({ isPidAlive, properties: parseSystemdProperties, validFailure: validTriageFailure } = leaseStore);
   if (
     !params.triageTransition &&
     (!Number.isInteger(params.parentPid) ||
@@ -1215,8 +1215,7 @@ let automaticRequested = false;
 });
 `;
 
-export const waitForSystemServiceUpdateHandoffs = (): Promise<void> | undefined =>
-  joinSystemServiceUpdateHandoffs(activeManagedServiceUpdateHandoffs);
+export { waitForSystemServiceUpdateHandoffs } from "./update-managed-service-handoff-current.js";
 
 async function spawnManagedServiceUpdateHandoff(
   params: ManagedServiceUpdateHandoffParams & { handoffId: string },
@@ -1244,11 +1243,12 @@ async function spawnManagedServiceUpdateHandoff(
   // The helper and its parent retain one database identity through settlement.
   const updateLeaseDatabaseIdentity =
     owner.leaseDatabaseIdentity ??
-    createManagedHandoffLeaseDatabase(updateLeaseDatabasePath)(true, () =>
-      captureManagedUpdateLeaseDatabaseIdentity(updateLeaseDatabasePath),
-    );
+    (await prepareManagedHandoffLeaseDatabaseIdentity(updateLeaseDatabasePath, () => {
+      owner.requesterAuthority?.assertCurrent();
+      owner.requesterAuthority?.signal?.throwIfAborted();
+    }));
   owner.leaseDatabaseIdentity = updateLeaseDatabaseIdentity;
-  const identityStore = createManagedHandoffLeaseStore({
+  const identityStore = await prepareManagedHandoffLeaseStore({
     databasePath: updateLeaseDatabaseIdentity.databasePath,
     existingIdentity: updateLeaseDatabaseIdentity,
     serviceManagerEnv: resolveServiceManagerEnv(serviceEnv),

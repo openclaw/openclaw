@@ -30,11 +30,8 @@ type CodexSessionsCliOptions = CodexGatewayOptions & {
   cursor?: string;
 };
 
-type CodexActionCliOptions = CodexGatewayOptions & {
+type CodexArchiveCliOptions = CodexGatewayOptions & {
   host?: string;
-};
-
-type CodexArchiveCliOptions = CodexActionCliOptions & {
   confirmNoOtherRunner?: boolean;
 };
 
@@ -81,16 +78,12 @@ function parsePageLimit(value: string | undefined): number | undefined {
   return parsed;
 }
 
-function normalizeTimestampMs(value: number): number {
-  return Math.abs(value) < 1_000_000_000_000 ? value * 1000 : value;
-}
-
 function formatTimestamp(session: CodexSessionCatalogSession): string {
   const value = session.recencyAt ?? session.updatedAt ?? session.createdAt;
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "-";
   }
-  const date = new Date(normalizeTimestampMs(value));
+  const date = new Date(Math.abs(value) < 1_000_000_000_000 ? value * 1000 : value);
   return Number.isNaN(date.getTime())
     ? "-"
     : `${date.toISOString().replace("T", " ").slice(0, 16)}Z`;
@@ -218,20 +211,15 @@ async function listCodexSessions(options: CodexSessionsCliOptions): Promise<void
   });
 }
 
-function readThreadId(value: string): string {
-  const threadId = value.trim();
-  if (!threadId) {
-    throw new Error("Codex thread id must not be empty");
-  }
-  return threadId;
-}
-
 async function runCodexSessionAction(
   action: "continue" | "archive",
   threadIdValue: string,
   options: CodexArchiveCliOptions,
 ): Promise<void> {
-  const threadId = readThreadId(threadIdValue);
+  const threadId = threadIdValue.trim();
+  if (!threadId) {
+    throw new Error("Codex thread id must not be empty");
+  }
   const agentId = requestedAgentId(options);
   const hostId = options.host?.trim() || CODEX_LOCAL_SESSION_HOST_ID;
   if (action === "archive" && options.confirmNoOtherRunner !== true) {
@@ -292,30 +280,26 @@ export function registerCodexSessionCli(program: Command): void {
     { timeoutMs: CODEX_SESSION_CATALOG_CLI_TIMEOUT_MS },
   ).action(listCodexSessions);
 
-  addGatewayClientOptions(
-    codex
-      .command("continue <thread-id>")
-      .description("Continue a Gateway-local Codex thread as an OpenClaw branch")
+  for (const [action, description] of [
+    ["continue", "Continue a Gateway-local Codex thread as an OpenClaw branch"],
+    ["archive", "Archive a stored or idle Gateway-local Codex thread"],
+  ] as const) {
+    const command = codex
+      .command(`${action} <thread-id>`)
+      .description(description)
       .option("--agent <id>", "Agent id that owns the Codex session")
-      .option("--host <id>", "Stable local host id from codex sessions")
-      .option("--json", "Print the structured response", false),
-  ).action((threadId: string, options: CodexActionCliOptions) =>
-    runCodexSessionAction("continue", threadId, options),
-  );
-
-  addGatewayClientOptions(
-    codex
-      .command("archive <thread-id>")
-      .description("Archive a stored or idle Gateway-local Codex thread")
-      .option("--agent <id>", "Agent id that owns the Codex session")
-      .option("--host <id>", "Stable local host id from codex sessions")
-      .option(
+      .option("--host <id>", "Stable local host id from codex sessions");
+    if (action === "archive") {
+      command.option(
         "--confirm-no-other-runner",
         "Confirm no other Codex client or OpenClaw runner is using this thread",
         false,
-      )
-      .option("--json", "Print the structured response", false),
-  ).action((threadId: string, options: CodexArchiveCliOptions) =>
-    runCodexSessionAction("archive", threadId, options),
-  );
+      );
+    }
+    addGatewayClientOptions(
+      command.option("--json", "Print the structured response", false),
+    ).action((threadId: string, options: CodexArchiveCliOptions) =>
+      runCodexSessionAction(action, threadId, options),
+    );
+  }
 }

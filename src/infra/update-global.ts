@@ -1151,15 +1151,8 @@ export async function detectGlobalInstallManagerForRoot(
     return (await isPnpmGlobalPackageRoot(pkgRoot)) ? "pnpm" : "bun";
   }
 
-  const candidates: Array<{
-    manager: "npm" | "pnpm";
-    argv: string[];
-  }> = [
-    { manager: "npm", argv: ["npm", "root", "-g"] },
-    { manager: "pnpm", argv: ["pnpm", "root", "-g"] },
-  ];
-
-  for (const { manager, argv } of candidates) {
+  for (const manager of ["npm", "pnpm"] as const) {
+    const argv = [manager, "root", "-g"];
     const res = await runCommand(argv, { timeoutMs }).catch(() => null);
     const globalRoot = res?.code === 0 ? readPackageManagerProbeValue(res.stdout) : "";
     diagnostics.push(`${argv.join(" ")}: ${globalRoot || "unavailable"}`);
@@ -1225,16 +1218,13 @@ export function globalInstallArgs(
   npmLifecyclePolicy: NpmLifecyclePolicy = "allow-scripts",
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
-  if (resolved.manager === "pnpm") {
-    return [resolved.command, "add", "-g", PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG, spec];
-  }
-  if (resolved.manager === "bun") {
+  if (resolved.manager !== "npm") {
     return [
       resolved.command,
       "add",
       "-g",
-      BUN_OPENCLAW_TRUST_FLAG,
-      resolveBunGlobalInstallSpec(spec),
+      resolved.manager === "pnpm" ? PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG : BUN_OPENCLAW_TRUST_FLAG,
+      resolved.manager === "pnpm" ? spec : resolveBunGlobalInstallSpec(spec),
     ];
   }
   return [

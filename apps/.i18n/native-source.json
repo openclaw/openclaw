@@ -1,8 +1,6 @@
 {
   "version": 3,
   "sites": [
-    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/AssistantTextParser.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.61dba74761c9d9e6","source":"</\\(tag)"},
-    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/AssistantTextParser.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.4165ce794721016d","source":"<\\(tag)"},
     {"path":"apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.e0a3f5bd01e4e969","source":"Critical"},
     {"path":"apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.bed8cb6b0332b3ac","source":"Debug"},
     {"path":"apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.5c38ee0e8d3d2080","source":"Error"},
@@ -2494,6 +2492,8 @@
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.b6f001e69f4f4c76","source":"\"\\(trimmed)\""},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.14a9977c8e5dd6b1","source":"that request"},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.016b906cad16ecc4","source":"The saved fixture message is unavailable."},
+    {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.ccac75c899b90e8e","source":"Check local readiness."},
+    {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.5074c2bd90f261b6","source":"Local readiness checked."},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.f8896f44264e6de4","source":"OPENCLAW_LONG_CHAT_LATEST"},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.7f15ddf66c36dada","source":"Prepare a detailed project review."},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument-multiline","surface":"apple","id":"native.apple.cd0d41d2c20a48ff","source":"\\(self.fixture.responsePrefix) I can help with \\(subject), summarize current project context, prepare agent actions, and keep the mobile workflow connected to the gateway."},

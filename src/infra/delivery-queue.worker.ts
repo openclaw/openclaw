@@ -289,6 +289,12 @@ function writeOperation<Input, Output>(
     );
 }
 
+function readOperation<Input, Output>(
+  operation: (database: OpenClawStateDatabase, input: Input) => Output,
+) {
+  return (input: Input, { open }: WorkerOperationContext): Output => operation(open(), input);
+}
+
 export const deliveryQueueOperations = {
   "deliveryQueue.claimPreparation": writeOperation(
     "deliveryQueue.claimPreparation",
@@ -454,14 +460,8 @@ export const deliveryQueueOperations = {
     input: Parameters<typeof executePendingDeliveryFailure>[0],
     { open, stateOptions },
   ) => executePendingDeliveryFailure(input, { database: open(), ...stateOptions() }),
-  "deliveryQueue.findIntentOwners": (
-    input: Parameters<typeof findDeliveryIntentOwnersInDatabase>[1],
-    { open },
-  ) => findDeliveryIntentOwnersInDatabase(open(), input),
-  "deliveryQueue.inspectReceipt": (
-    input: Parameters<typeof inspectDeliveryQueueReceiptInDatabase>[1],
-    { open },
-  ) => inspectDeliveryQueueReceiptInDatabase(open(), input),
+  "deliveryQueue.findIntentOwners": readOperation(findDeliveryIntentOwnersInDatabase),
+  "deliveryQueue.inspectReceipt": readOperation(inspectDeliveryQueueReceiptInDatabase),
   "deliveryQueue.countFailed": (_input: undefined, { open }) =>
     countFailedDeliveryQueueEntriesInDatabase(open()),
   "deliveryQueue.countPending": (input: { queueNames: string[] }, { open }) =>
@@ -494,8 +494,7 @@ export const deliveryQueueOperations = {
         input.id,
       ),
   ),
-  "deliveryQueue.mediaRetentionSnapshot": (
-    input: Parameters<typeof loadDeliveryQueueMediaRetentionSnapshotInDatabase>[1],
-    { open },
-  ) => loadDeliveryQueueMediaRetentionSnapshotInDatabase(open(), input),
+  "deliveryQueue.mediaRetentionSnapshot": readOperation(
+    loadDeliveryQueueMediaRetentionSnapshotInDatabase,
+  ),
 } satisfies WorkerOperationHandlers;

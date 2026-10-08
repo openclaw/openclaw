@@ -41,20 +41,11 @@ function getOptionLabel<Value>(option: Option<Value>): string {
   return option.label ?? String(option.value ?? "");
 }
 
-function computeLabel(label: string, format: (text: string) => string): string {
-  return label.split("\n").map(format).join("\n");
-}
-
-function formatNavigationFooter(navigation: WizardPromptNavigation | undefined): string {
-  if (!navigation || (!navigation.canGoBack && !navigation.canGoForward)) {
-    return "";
-  }
-  return [
-    navigation.canGoBack ? styleText("dim", "← back") : undefined,
-    navigation.canGoForward ? styleText("dim", "→ next") : undefined,
-  ]
-    .filter(Boolean)
-    .join("  ");
+function computeLabel(label: string, style: Parameters<typeof styleText>[0]): string {
+  return label
+    .split("\n")
+    .map((text) => styleText(style, text))
+    .join("\n");
 }
 
 function navigationFooterLines(
@@ -63,11 +54,14 @@ function navigationFooterLines(
   navigation: WizardPromptNavigation | undefined,
   extraHints: string[] = [],
 ): string[] {
-  const footer = formatNavigationFooter(navigation);
-  if (!footer) {
+  if (!navigation || (!navigation.canGoBack && !navigation.canGoForward)) {
     return [];
   }
-  const hintLine = [footer, ...extraHints].join("  ");
+  const hintLine = [
+    ...(navigation.canGoBack ? [styleText("dim", "← back")] : []),
+    ...(navigation.canGoForward ? [styleText("dim", "→ next")] : []),
+    ...extraHints,
+  ].join("  ");
   const prefix = guideVisible ? `${styleText(barStyle, S_BAR)}  ` : "";
   return [`${prefix}${hintLine}`];
 }
@@ -76,21 +70,19 @@ function selectOptionRenderer<Value>(option: Option<Value>, state: string): stri
   const label = getOptionLabel(option);
   switch (state) {
     case "disabled":
-      return `${styleText("gray", S_RADIO_INACTIVE)} ${computeLabel(label, (text) => styleText("gray", text))}${
+      return `${styleText("gray", S_RADIO_INACTIVE)} ${computeLabel(label, "gray")}${
         option.hint ? ` ${styleText("dim", `(${option.hint})`)}` : ""
       }`;
     case "selected":
-      return computeLabel(label, (text) => styleText("dim", text));
+      return computeLabel(label, "dim");
     case "active":
       return `${styleText("green", S_RADIO_ACTIVE)} ${label}${
         option.hint ? ` ${styleText("dim", `(${option.hint})`)}` : ""
       }`;
     case "cancelled":
-      return computeLabel(label, (text) => styleText(["strikethrough", "dim"], text));
+      return computeLabel(label, ["strikethrough", "dim"]);
     default:
-      return `${styleText("dim", S_RADIO_INACTIVE)} ${computeLabel(label, (text) =>
-        styleText("dim", text),
-      )}`;
+      return `${styleText("dim", S_RADIO_INACTIVE)} ${computeLabel(label, "dim")}`;
   }
 }
 
@@ -412,9 +404,7 @@ function multiselectOptionRenderer<Value>(
 ): string {
   const label = getOptionLabel(option);
   if (state === "disabled") {
-    return `${styleText("gray", S_CHECKBOX_INACTIVE)} ${computeLabel(label, (str) =>
-      styleText(["strikethrough", "gray"], str),
-    )}${option.hint ? ` ${styleText("dim", `(${option.hint})`)}` : ""}`;
+    return `${styleText("gray", S_CHECKBOX_INACTIVE)} ${computeLabel(label, ["strikethrough", "gray"])}${option.hint ? ` ${styleText("dim", `(${option.hint})`)}` : ""}`;
   }
   if (state === "active") {
     return `${styleText("cyan", S_CHECKBOX_ACTIVE)} ${label}${
@@ -422,12 +412,10 @@ function multiselectOptionRenderer<Value>(
     }`;
   }
   if (state === "selected") {
-    return `${styleText("green", S_CHECKBOX_SELECTED)} ${computeLabel(label, (text) =>
-      styleText("dim", text),
-    )}${option.hint ? ` ${styleText("dim", `(${option.hint})`)}` : ""}`;
+    return `${styleText("green", S_CHECKBOX_SELECTED)} ${computeLabel(label, "dim")}${option.hint ? ` ${styleText("dim", `(${option.hint})`)}` : ""}`;
   }
   if (state === "cancelled") {
-    return computeLabel(label, (text) => styleText(["strikethrough", "dim"], text));
+    return computeLabel(label, ["strikethrough", "dim"]);
   }
   if (state === "active-selected") {
     return `${styleText("green", S_CHECKBOX_SELECTED)} ${label}${
@@ -435,11 +423,9 @@ function multiselectOptionRenderer<Value>(
     }`;
   }
   if (state === "submitted") {
-    return computeLabel(label, (text) => styleText("dim", text));
+    return computeLabel(label, "dim");
   }
-  return `${styleText("dim", S_CHECKBOX_INACTIVE)} ${computeLabel(label, (text) =>
-    styleText("dim", text),
-  )}`;
+  return `${styleText("dim", S_CHECKBOX_INACTIVE)} ${computeLabel(label, "dim")}`;
 }
 
 export function multiselectWithNavigationFooter<Value>(

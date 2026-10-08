@@ -298,7 +298,7 @@ it.each<{
     for (const { entry } of entries.filter(({ entry: candidate }) => candidate.skillsSnapshot)) {
       expect(entry.skillsSnapshot).toEqual(saved);
     }
-    expect(entries).toHaveLength(scope.cronRetention ? 6 : fullKeys.length);
+    expect(entries.map(({ sessionKey }) => sessionKey)).toEqual(fullKeys);
   },
 );
 

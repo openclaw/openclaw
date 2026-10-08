@@ -3,10 +3,6 @@
 // returned by sendPoll so a later vote can enter the normal inbound turn pipeline.
 import type { Chat } from "grammy/types";
 import { parseStrictInteger, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTelegramRuntime } from "./runtime.js";
@@ -26,26 +22,25 @@ export type TelegramPollRegistryEntry = {
   options: string[];
 };
 
-type TelegramPollRegistryStore = PluginStateKeyedStore<TelegramPollRegistryEntry>;
-
-function openPollRegistryStore(env?: NodeJS.ProcessEnv): TelegramPollRegistryStore {
-  return getTelegramRuntime().state.openKeyedStore<TelegramPollRegistryEntry>({
+function pollRegistryStoreOptions(env?: NodeJS.ProcessEnv) {
+  return {
     namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
     maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
+    overflowPolicy: "reject-new" as const,
     ...(env ? { env } : {}),
-  });
+  };
 }
 
-function openPollRegistrySyncStore(
-  env?: NodeJS.ProcessEnv,
-): PluginStateSyncKeyedStore<TelegramPollRegistryEntry> {
-  return getTelegramRuntime().state.openSyncKeyedStore<TelegramPollRegistryEntry>({
-    namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
-    maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-    ...(env ? { env } : {}),
-  });
+function openPollRegistryStore(env?: NodeJS.ProcessEnv) {
+  return getTelegramRuntime().state.openKeyedStore<TelegramPollRegistryEntry>(
+    pollRegistryStoreOptions(env),
+  );
+}
+
+function openPollRegistrySyncStore(env?: NodeJS.ProcessEnv) {
+  return getTelegramRuntime().state.openSyncKeyedStore<TelegramPollRegistryEntry>(
+    pollRegistryStoreOptions(env),
+  );
 }
 
 // Public poll ids are globally unique, but keying by account keeps registries isolated

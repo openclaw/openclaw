@@ -53,10 +53,7 @@ function remapEntryId(
   entryId: string | null | undefined,
   rewrittenEntryIds: ReadonlyMap<string, string>,
 ): string | null {
-  if (!entryId) {
-    return null;
-  }
-  return rewrittenEntryIds.get(entryId) ?? entryId;
+  return entryId ? (rewrittenEntryIds.get(entryId) ?? entryId) : null;
 }
 
 async function appendBranchEntry(params: {

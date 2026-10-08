@@ -282,14 +282,12 @@ function countJsonlLines(filePath: string): number {
   try {
     const chunk = Buffer.alloc(64 * 1024);
     let count = 0;
-    let hasBytes = false;
-    let endsWithNewline = false;
+    let endsWithNewline = true;
     for (;;) {
       const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
       if (bytesRead <= 0) {
         break;
       }
-      hasBytes = true;
       endsWithNewline = chunk[bytesRead - 1] === 0x0a;
       for (let index = 0; index < bytesRead; index += 1) {
         if (chunk[index] === 0x0a) {
@@ -297,7 +295,7 @@ function countJsonlLines(filePath: string): number {
         }
       }
     }
-    if (hasBytes && !endsWithNewline) {
+    if (!endsWithNewline) {
       count += 1;
     }
     return count;

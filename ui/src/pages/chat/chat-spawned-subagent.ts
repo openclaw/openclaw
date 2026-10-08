@@ -16,6 +16,11 @@ export type SubagentRoster = {
   subagentSessions?: readonly GatewaySessionRow[];
   /** True once the pane's own child query answered; seeded rows can be partial. */
   subagentSessionsHydrated?: boolean;
+  /**
+   * True once the pane's own child query answered at least once. Seeded rows
+   * take ancestry from the broad list, which outlives the child-link retention.
+   */
+  subagentSessionsRead?: boolean;
 };
 
 /** What a launch row needs to show its subagent's session and open it. */

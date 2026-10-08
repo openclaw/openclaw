@@ -182,20 +182,12 @@ function renderTokensCell(row: GatewaySessionRow) {
       : percent >= CONTEXT_METER_WARN_PERCENT
         ? "warn"
         : "ok";
-  const title = t(
-    limit.fromLastPrompt
-      ? fresh
-        ? "sessionsView.promptBudgetUsage"
-        : "sessionsView.promptBudgetUsageApprox"
-      : fresh
-        ? "sessionsView.contextUsage"
-        : "sessionsView.contextUsageApprox",
-    {
-      percent: String(percent),
-      used: total.toLocaleString(),
-      context: context.toLocaleString(),
-    },
-  );
+  const titleKey = limit.fromLastPrompt ? "promptBudgetUsage" : "contextUsage";
+  const title = t(`sessionsView.${titleKey}${fresh ? "" : "Approx"}`, {
+    percent: String(percent),
+    used: total.toLocaleString(),
+    context: context.toLocaleString(),
+  });
   return html`
     <openclaw-tooltip .content=${title}>
       <div class="session-tokens">
@@ -652,12 +644,10 @@ function renderSessionsTable(props: SessionsProps) {
                         !paginated.every((r) => props.selectedKeys.has(r.key))
                       }
                       @change=${() => {
-                        const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
-                        if (allSelected) {
-                          props.onDeselectPage(paginated.map((r) => r.key));
-                        } else {
-                          props.onSelectPage(paginated.map((r) => r.key));
-                        }
+                        const update = paginated.every((r) => props.selectedKeys.has(r.key))
+                          ? props.onDeselectPage
+                          : props.onSelectPage;
+                        update(paginated.map((r) => r.key));
                       }}
                       aria-label=${t("sessionsView.selectAllOnPage")}
                     />`
@@ -861,10 +851,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       }}
       @keydown=${(e: KeyboardEvent) => {
         openMenuFromEvent(e);
-        if (e.defaultPrevented) {
-          return;
-        }
-        if (isRowControlTarget(e.target)) {
+        if (e.defaultPrevented || isRowControlTarget(e.target)) {
           return;
         }
         if (e.key === "Enter" || e.key === " ") {
