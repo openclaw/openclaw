@@ -36,6 +36,8 @@ mkdir -p "$case_dir/home" "$case_dir/state" "$case_dir/host-cache" \
 
 cat > "$engine_root/containers.conf" <<CONFIG
 [engine]
+# This control proves delegated resource limits, not the host's Podman default.
+cgroup_manager = "systemd"
 static_dir = "$engine_root/data/containers/storage/libpod"
 tmp_dir = "$runtime_root/libpod/tmp"
 volume_path = "$engine_root/data/containers/storage/volumes"
@@ -47,7 +49,8 @@ runtime_env=(env -i PATH="$PATH" HOME="$case_dir/home" OPENCLAW_HOME="$case_dir/
   CONTAINERS_STORAGE_CONF="$engine_root/storage.conf" CONTAINERS_CONF="$engine_root/containers.conf")
 
 runtime() { timeout --foreground --kill-after=10s 180s "${runtime_env[@]}" podman "$@"; }
-fleet() { timeout --foreground --kill-after=10s 180s "${runtime_env[@]}" "$node_bin" "$cli_entry" fleet "$@"; }
+# This private control has only synthetic credentials; retain CLI causes for failed admission.
+fleet() { timeout --foreground --kill-after=10s 180s "${runtime_env[@]}" OPENCLAW_DEBUG=1 "$node_bin" "$cli_entry" fleet "$@"; }
 
 capture() {
   fleet status "$tenant" --json
@@ -165,7 +168,7 @@ assert.equal(info.store.volumePath, `${engine}/data/containers/storage/volumes`)
 console.log(JSON.stringify({control: 'podman', version: info.version.Version,
   rootless: info.host.security.rootless, serviceIsRemote: info.host.serviceIsRemote,
   cgroupVersion: info.host.cgroupVersion, cgroupManager: info.host.cgroupManager,
-  storageDriver: info.store.graphDriverName}));
+  storageDriver: info.store.graphDriverName, ociRuntime: info.host.ociRuntime}));
 JS
 private_store_verified=true
 "$node_bin" "$helper_dir/prepare-podman-storage.mjs" "$cli_entry" "$engine_root" "$runtime_root" "$control_root/info.json"
