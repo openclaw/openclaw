@@ -28,7 +28,6 @@ import type {
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import type { SessionPendingInputState } from "./session-pending-input-receipt.types.js";
 
-export type { SessionPendingInputState } from "./session-pending-input-receipt.types.js";
 export type SessionPendingInput = {
   id: string;
   runId: string;

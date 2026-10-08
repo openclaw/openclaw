@@ -467,7 +467,14 @@ if (fs.readFileSync(owner, 'utf8') === String(process.pid)) {
   return preload;
 }
 
-const SIGNAL_GRANDCHILD_SCRIPT = `const { writeFileSync } = require('node:fs'); writeFileSync(process.env.OPENCLAW_TEST_GRANDCHILD_PID, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`;
+const SIGNAL_GRANDCHILD_SCRIPT = `
+const { renameSync, writeFileSync } = require('node:fs');
+process.on('SIGTERM', () => {});
+const pidPath = process.env.OPENCLAW_TEST_GRANDCHILD_PID;
+writeFileSync(pidPath + '.tmp', String(process.pid));
+renameSync(pidPath + '.tmp', pidPath);
+setInterval(() => {}, 1000);
+`;
 const SIGNAL_PARENT_SCRIPT = `const { spawn } = require('node:child_process'); const { writeFileSync } = require('node:fs'); spawn(process.execPath, ['-e', ${JSON.stringify(SIGNAL_GRANDCHILD_SCRIPT)}], { env: process.env, stdio: 'ignore' }); writeFileSync(process.env.OPENCLAW_TEST_READY_FILE, 'ready'); process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000);`;
 
 function createSignaledHostCommandFixture() {

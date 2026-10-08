@@ -10,8 +10,7 @@ import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import {
   resolveReplyOperatorAuthorityKey,
-  resolveReplyScreenToolTarget,
-  resolveReplyThemeProfileId,
+  resolveReplyPersonalToolTargets,
   resolveReplyToolAuthorityContext,
 } from "../reply-tool-authority.js";
 import {
@@ -245,10 +244,14 @@ export async function prepareNextDeliveryGroup(
           index < 0
             ? undefined
             : resolveReplyToolAuthorityContext(item, undefined, statuses[index]).capabilityProfile;
+        const storageKey = resolveFollowupDeliveryStorageKey(item);
+        const personalTargets = profile
+          ? resolveReplyPersonalToolTargets(item, profile)
+          : undefined;
         const key = JSON.stringify([
-          resolveFollowupDeliveryStorageKey(item),
-          profile ? stableStringify(resolveReplyScreenToolTarget(item, profile) ?? null) : "null",
-          profile ? (resolveReplyThemeProfileId(item, profile) ?? "") : "",
+          storageKey,
+          personalTargets ? stableStringify(personalTargets.screenTarget ?? null) : "null",
+          personalTargets?.themeProfileId ?? "",
         ]);
         if (firstKey !== undefined && key !== firstKey) {
           break;
@@ -307,10 +310,7 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
   );
-  if (contexts.length === 0) {
-    return undefined;
-  }
-  if (contexts.length === 1) {
+  if (contexts.length <= 1) {
     return contexts[0]?.context;
   }
   const renderField = (field: "text" | "resumableText") => {
@@ -437,6 +437,19 @@ export function resolveOverflowSummaryInboundEventKind(
     : undefined;
 }
 
+export function getFollowupOriginRouting(source: FollowupRun) {
+  return {
+    originatingChannel: source.originatingChannel,
+    originatingTo: source.originatingTo,
+    originatingAccountId: source.originatingAccountId,
+    originatingThreadId: source.originatingThreadId,
+    originatingChatId: source.originatingChatId,
+    originatingReplyToId: source.originatingReplyToId,
+    originatingReplyToMode: source.originatingReplyToMode,
+    originatingChatType: source.originatingChatType,
+  };
+}
+
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
   return {
     prompt: source.prompt,
@@ -458,14 +471,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     messageId: source.messageId,
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,
-    originatingChannel: source.originatingChannel,
-    originatingTo: source.originatingTo,
-    originatingAccountId: source.originatingAccountId,
-    originatingThreadId: source.originatingThreadId,
-    originatingChatId: source.originatingChatId,
-    originatingReplyToId: source.originatingReplyToId,
-    originatingReplyToMode: source.originatingReplyToMode,
-    originatingChatType: source.originatingChatType,
+    ...getFollowupOriginRouting(source),
     abortSignal: source.abortSignal,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     replyOperationRunStates: source.replyOperationRunStates,

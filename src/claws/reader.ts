@@ -38,16 +38,6 @@ type ResolvedClawSource = Omit<ClawSourceIdentity, "integrity" | "integrityKind"
 const CLAW_MARKDOWN_FILENAME = "CLAW.md";
 const MAX_CLAW_PACKAGE_JSON_BYTES = 256 * 1024;
 
-async function readBoundedFile(path: string, maxBytes: number): Promise<Buffer> {
-  const fileRoot = await fsSafeRoot(dirname(path));
-  const read = await fileRoot.read(basename(path), {
-    hardlinks: "reject",
-    maxBytes,
-    symlinks: "reject",
-  });
-  return read.buffer;
-}
-
 function fileDiagnostic(code: string, message: string, path = "$"): ClawDiagnostic {
   return { level: "error", code, phase: "parse", path, message };
 }
@@ -59,15 +49,6 @@ function fileFailure(code: string, message: string, path = "$") {
 function isContained(root: string, candidate: string): boolean {
   const child = relative(root, candidate);
   return child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
-}
-
-function updateSnapshotHash(
-  hash: ReturnType<typeof createHash>,
-  label: string,
-  bytes: Buffer,
-): void {
-  hash.update(`${Buffer.byteLength(label, "utf8")}:${label}:${bytes.byteLength}:`, "utf8");
-  hash.update(bytes);
 }
 
 function workspaceSourceDiagnostic(error: unknown, sourcePath: string): ClawDiagnostic {
@@ -95,7 +76,8 @@ async function buildDevelopmentSnapshot(params: {
   const hash = createHash("sha256");
   let byteLength = 0;
   const add = (label: string, bytes: Buffer) => {
-    updateSnapshotHash(hash, label, bytes);
+    hash.update(`${Buffer.byteLength(label, "utf8")}:${label}:${bytes.byteLength}:`, "utf8");
+    hash.update(bytes);
     byteLength += bytes.byteLength;
   };
   const snapshotFile = (bytes: Buffer) => ({
@@ -328,7 +310,13 @@ async function readClawDocument(
 > {
   let raw: Buffer;
   try {
-    raw = await readBoundedFile(path, maxBytes);
+    const fileRoot = await fsSafeRoot(dirname(path));
+    const read = await fileRoot.read(basename(path), {
+      hardlinks: "reject",
+      maxBytes,
+      symlinks: "reject",
+    });
+    raw = read.buffer;
   } catch (error) {
     const tooLarge =
       error instanceof RangeError || (error instanceof FsSafeError && error.code === "too-large");

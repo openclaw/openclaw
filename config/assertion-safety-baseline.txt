@@ -669,7 +669,7 @@ extensions/policy/src/doctor/automatic-repairs.ts	7
 extensions/policy/src/doctor/evaluation.ts	3
 extensions/policy/src/doctor/exec-approval-findings.ts	1
 extensions/policy/src/doctor/policy-runtime.ts	2
-extensions/policy/src/doctor/routing-shapes.ts	2
+extensions/policy/src/doctor/routing-shapes.ts	1
 extensions/policy/src/doctor/strictness.ts	3
 extensions/policy/src/doctor/tool-findings.ts	2
 extensions/policy/src/policy-routing.ts	2
@@ -876,8 +876,6 @@ extensions/telegram/src/account-throttler.ts	2
 extensions/telegram/src/action-runtime.ts	1
 extensions/telegram/src/api-fetch.ts	1
 extensions/telegram/src/approval-handler.runtime.ts	2
-extensions/telegram/src/audit-membership-runtime.ts	1
-extensions/telegram/src/audit.ts	1
 extensions/telegram/src/bot-core.ts	1
 extensions/telegram/src/bot-deps.ts	1
 extensions/telegram/src/bot-handlers.callback-router-controls.ts	2
@@ -917,7 +915,7 @@ extensions/telegram/src/raw-update-log.ts	1
 extensions/telegram/src/reply-parameters.ts	2
 extensions/telegram/src/request-timeouts.ts	1
 extensions/telegram/src/rich-message.ts	1
-extensions/telegram/src/security-audit.ts	4
+extensions/telegram/src/security-audit.ts	3
 extensions/telegram/src/send-actions.ts	2
 extensions/telegram/src/send-context.ts	2
 extensions/telegram/src/send-edit.ts	1
@@ -1059,14 +1057,14 @@ packages/ai/src/providers/anthropic-refusal.ts	1
 packages/ai/src/providers/anthropic-server-fallback.ts	3
 packages/ai/src/providers/anthropic-thinking-replay.ts	2
 packages/ai/src/providers/anthropic-tool-projection.ts	2
-packages/ai/src/providers/anthropic-usage.ts	3
+packages/ai/src/providers/anthropic-usage.ts	1
 packages/ai/src/providers/anthropic.ts	3
 packages/ai/src/providers/azure-openai-responses.ts	1
-packages/ai/src/providers/clean-for-gemini.ts	6
+packages/ai/src/providers/clean-for-gemini.ts	5
 packages/ai/src/providers/google-shared.ts	2
 packages/ai/src/providers/mistral.ts	3
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
-packages/ai/src/providers/openai-chatgpt-responses.ts	19
+packages/ai/src/providers/openai-chatgpt-responses.ts	18
 packages/ai/src/providers/openai-completions-tool-calls.ts	3
 packages/ai/src/providers/openai-completions.ts	1
 packages/ai/src/providers/openai-reasoning-effort.ts	6
@@ -1558,7 +1556,6 @@ src/auto-reply/reply/commands-allowlist.ts	6
 src/auto-reply/reply/commands-config.ts	1
 src/auto-reply/reply/commands-context-report.ts	1
 src/auto-reply/reply/commands-context.ts	1
-src/auto-reply/reply/commands-export-session.ts	1
 src/auto-reply/reply/commands-login.ts	1
 src/auto-reply/reply/commands-mcp.ts	2
 src/auto-reply/reply/commands-plugin.ts	1
@@ -1568,7 +1565,7 @@ src/auto-reply/reply/commands-reset.ts	1
 src/auto-reply/reply/commands-subagents/action-log.ts	1
 src/auto-reply/reply/config-mutations.ts	1
 src/auto-reply/reply/conversation-turn-capture.ts	1
-src/auto-reply/reply/directive-handling.impl.ts	2
+src/auto-reply/reply/directive-handling.impl.ts	1
 src/auto-reply/reply/directive-handling.levels.ts	9
 src/auto-reply/reply/directive-handling.parse.ts	2
 src/auto-reply/reply/directives.ts	2
@@ -1577,7 +1574,7 @@ src/auto-reply/reply/dispatch-from-config.events.ts	1
 src/auto-reply/reply/dispatch-from-config.prepare-execution.ts	1
 src/auto-reply/reply/elevated-allowlist-matcher.ts	2
 src/auto-reply/reply/followup-delivery-payloads.ts	1
-src/auto-reply/reply/get-reply-directives.ts	8
+src/auto-reply/reply/get-reply-directives.ts	4
 src/auto-reply/reply/get-reply-exec-overrides.ts	1
 src/auto-reply/reply/get-reply-fast-path.ts	1
 src/auto-reply/reply/get-reply-run-execute.ts	3
@@ -1590,7 +1587,6 @@ src/auto-reply/reply/reply-operation-run-state.ts	1
 src/auto-reply/reply/reply-run-registry.registry.ts	1
 src/auto-reply/reply/reply-threading.ts	2
 src/auto-reply/reply/reply-timing-tracker.ts	2
-src/auto-reply/reply/restart-recovery-claim.ts	1
 src/auto-reply/reply/session-delivery.ts	1
 src/auto-reply/reply/session.ts	2
 src/auto-reply/reply/source-reply-delivery-runtime.ts	2
@@ -2804,7 +2800,6 @@ ui/src/lit/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2
 ui/src/main.ts	1
 ui/src/pages/activity/view.ts	2
-ui/src/pages/agents/memory/view.ts	1
 ui/src/pages/agents/model-config.ts	2
 ui/src/pages/agents/panels-overview.ts	2
 ui/src/pages/agents/panels-status-files.ts	1
@@ -2884,7 +2879,7 @@ ui/src/pages/devices/view.ts	5
 ui/src/pages/labs/labs-registry.ts	4
 ui/src/pages/logs/view.ts	2
 ui/src/pages/memory-import/view.ts	2
-ui/src/pages/model-providers/view.ts	3
+ui/src/pages/model-providers/view.ts	2
 ui/src/pages/model-setup/provider-picker.ts	2
 ui/src/pages/model-setup/view.ts	2
 ui/src/pages/new-session/draft-place-browser.ts	2
@@ -2894,10 +2889,10 @@ ui/src/pages/plugin/logbook-view.ts	1
 ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
-ui/src/pages/secrets/view.ts	5
+ui/src/pages/secrets/view.ts	3
 ui/src/pages/sessions/view.ts	7
 ui/src/pages/skills/view.ts	2
-ui/src/pages/usage/view-details.ts	5
+ui/src/pages/usage/view-details.ts	4
 ui/src/pages/usage/view-overview.ts	2
 ui/src/pages/usage/view.ts	5
 ui/src/pages/worktrees/worktrees-page.ts	2

@@ -9,7 +9,7 @@ import {
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
 import {
-  discardStreamSegmentIndexes,
+  pruneHistoryReplacedStreamSegments,
   prunePersistedAssistantStreamSegments,
   prunePersistedToolStreamMessages,
 } from "./stream-segment-pruning.ts";
@@ -278,7 +278,7 @@ describe("stream reconciliation", () => {
     expect(state.toolStreamOrder).toEqual([]);
   });
 
-  it("retains the cumulative baseline after discarding an earlier displayed prefix", () => {
+  it("retains the cumulative baseline after history replaces an earlier displayed prefix", () => {
     const state = makeIdleStreamState({
       chatStreamSegments: [
         {
@@ -294,7 +294,11 @@ describe("stream reconciliation", () => {
       ],
     });
 
-    discardStreamSegmentIndexes(state, [0]);
+    pruneHistoryReplacedStreamSegments(
+      [{ role: "assistant", content: "Before steer.", timestamp: 1 }],
+      state,
+      visibleStreamOptions,
+    );
 
     expect(visibleAssistantStreamParts(state, visibleStreamOptions)).toMatchObject([
       { text: "After steer." },

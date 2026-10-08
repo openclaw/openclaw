@@ -1,4 +1,3 @@
-// OpenClaw agent turns run the real embedded agent loop with the ring-zero tool.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
