@@ -4682,7 +4682,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "extensions/reef/src/setup.test.ts",
   "extensions/signal/src/client-container.handshake.loopback.test.ts",
   "extensions/signal/src/monitor.tool-result.autostart.test.ts",
-  "extensions/signal/src/monitor.tool-result.pairs-uuid-only-senders-uuid-allowlist-entry.test.ts",
   "extensions/signal/src/signal-ingress.test.ts",
   "extensions/slack/src/client.web-api.test.ts",
   "extensions/slack/src/monitor/http-handler.test.ts",
