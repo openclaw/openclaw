@@ -2,11 +2,11 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString, readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import {
-  normalizeMessageDeliveryStatus,
   pluginBroadcastHasDelivery,
   pluginEnvelopeHas,
   readEmbeddedMessageDeliveryFact,
 } from "./embedded-agent-message-delivery.js";
+import { normalizeMessageDeliveryStatus } from "./embedded-agent-messaging-status.js";
 import {
   isMessageToolConversationCreateActionName,
   isMessageToolSendActionName,

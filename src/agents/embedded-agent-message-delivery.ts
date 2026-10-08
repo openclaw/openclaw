@@ -8,6 +8,7 @@ import {
 import type { MessageReceipt } from "../channels/message/types.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import type { MessagePollResult, MessageSendResult } from "../infra/outbound/message.js";
+import { normalizeMessageDeliveryStatus } from "./embedded-agent-messaging-status.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 type EmbeddedMessageDeliveryFact = {
@@ -72,10 +73,6 @@ function projectReceiptDelivery(delivery?: {
     partialDelivery: false,
     createdThreadIds: [...new Set(createdThreadIds)],
   };
-}
-
-export function normalizeMessageDeliveryStatus(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim().toLowerCase() : undefined;
 }
 
 type PluginEnvelopePredicate = (

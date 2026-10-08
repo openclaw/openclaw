@@ -346,8 +346,6 @@ describe("embedded lifecycle", () => {
       );
       ctx.state.assistantTexts = ["done"];
       ctx.state.pendingCompactionRetry = 1;
-      const deferredReply = { text: "deferred answer" };
-      ctx.state.deferredBlockReplies.push(deferredReply);
 
       const endPromise = handleAgentEnd(ctx);
       await Promise.resolve();
@@ -363,7 +361,7 @@ describe("embedded lifecycle", () => {
         "[hooks] before_agent_finalize handler from test-plugin failed: timed out after 15000ms",
       );
       expect(ctx.clearAssistantStream).not.toHaveBeenCalled();
-      expect(ctx.state.deferredBlockReplies).toEqual([deferredReply]);
+      expect(ctx.clearDeferredBlockReplies).not.toHaveBeenCalled();
       expect(ctx.releaseDeferredReplies).toHaveBeenCalledTimes(1);
       expect(ctx.flushBlockReplyBuffer).toHaveBeenCalledWith({ final: true });
       expect(ctx.resolveCompactionRetry).toHaveBeenCalledTimes(1);

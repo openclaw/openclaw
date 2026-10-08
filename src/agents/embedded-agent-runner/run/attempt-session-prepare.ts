@@ -82,6 +82,11 @@ import {
 } from "./tool-loop-recovery.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+type ClientToolPreparation = Omit<
+  Parameters<typeof prepareEmbeddedAttemptClientTools>[0],
+  "attempt"
+>;
+
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
 
 export async function prepareEmbeddedAttemptAgentSession(input: {
@@ -89,7 +94,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   activeContextEngineInfo?: ContextEngine["info"];
   agentCoreThinkingLevel: CreateAgentSessionOptions["thinkingLevel"];
   agentDir: string;
-  clientToolPreparation: Omit<Parameters<typeof prepareEmbeddedAttemptClientTools>[0], "attempt">;
+  clientToolPreparation: ClientToolPreparation;
   effectiveCwd: string;
   getCurrentAttemptPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
   initialSystemPrompt: string;

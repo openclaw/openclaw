@@ -1,6 +1,5 @@
 import { hasRuntimeContextMarker, type AssistantMessage, type Message } from "@openclaw/llm-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
 import type { FileOperations } from "../types.js";
@@ -136,22 +135,13 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
   return sections.length > 0 ? `\n\n${sections.join("\n\n")}` : "";
 }
 
-/** Classify summary responses while each caller retains its own typed failure policy. */
-export function readSummaryResponse<TError>(
-  response: AssistantMessage,
-  onFailure: (kind: "aborted" | "error" | "empty") => TError,
-): Result<string, TError> {
-  if (response.stopReason === "aborted") {
-    return err(onFailure("aborted"));
-  }
-  if (response.stopReason === "error") {
-    return err(onFailure("error"));
-  }
+/** Extract visible summary text without normalizing valid model output. */
+export function extractSummaryText(response: AssistantMessage): string | undefined {
   const summary = response.content
     .filter((block): block is { type: "text"; text: string } => block.type === "text")
     .map((block) => block.text)
     .join("\n");
-  return summary.trim() ? ok(summary) : err(onFailure("empty"));
+  return summary.trim() ? summary : undefined;
 }
 
 const TOOL_RESULT_MAX_CHARS = 2000;

@@ -58,6 +58,7 @@ export function createContext(
     flushAssistantStream: vi.fn(),
     releaseDeferredReplies: vi.fn(),
     clearAssistantStream: vi.fn(),
+    clearDeferredBlockReplies: vi.fn(),
     resolveCompactionRetry: vi.fn(),
     maybeResolveCompactionWait: vi.fn(),
   } as unknown as EmbeddedAgentSubscribeContext;

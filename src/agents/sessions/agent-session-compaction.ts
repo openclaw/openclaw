@@ -142,25 +142,26 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         const message = compactionErrorMessage(error, "Compaction failed");
         const aborted =
           abortController.signal.aborted || (error instanceof Error && error.name === "AbortError");
-        this.emitCompactionOutcome(
-          "manual",
+        this.emit({
+          type: "compaction_end",
+          reason: "manual",
           itemId,
-          aborted
+          outcome: aborted
             ? { status: "aborted" }
             : { status: "failed", reason: `Compaction failed: ${message}` },
-        );
+        });
         throw error;
       }
       if (outcome.status === "skipped") {
-        this.emitCompactionOutcome("manual", itemId, outcome);
+        this.emit({ type: "compaction_end", reason: "manual", itemId, outcome });
         return outcome;
       }
       if (outcome.status === "aborted") {
-        this.emitCompactionOutcome("manual", itemId, outcome);
+        this.emit({ type: "compaction_end", reason: "manual", itemId, outcome });
         throw new Error("Compaction cancelled");
       }
 
-      this.emitCompactionOutcome("manual", itemId, outcome, false);
+      this.emitCompletedCompaction("manual", itemId, outcome, false);
       return outcome;
     } finally {
       if (this.compactionAbortController === abortController) {
@@ -170,25 +171,22 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
   }
 
-  private emitCompactionOutcome(
+  private emitCompletedCompaction(
     reason: CompactionReason,
     itemId: string,
-    outcome: CompactionWorkOutcome | { status: "failed"; reason: string },
-    willRetry = false,
+    outcome: Extract<CompactionWorkOutcome, { status: "completed" }>,
+    willRetry: boolean,
   ): void {
     this.emit({
       type: "compaction_end",
       reason,
       itemId,
-      outcome:
-        outcome.status === "completed"
-          ? {
-              status: "completed",
-              tokensBefore: outcome.result.tokensBefore,
-              tokensAfter: outcome.tokensAfter,
-              willRetry,
-            }
-          : outcome,
+      outcome: {
+        status: "completed",
+        tokensBefore: outcome.result.tokensBefore,
+        tokensAfter: outcome.tokensAfter,
+        willRetry,
+      },
     });
   }
 
@@ -642,10 +640,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         signal: abortController.signal,
       });
       if (outcome.status !== "completed") {
-        this.emitCompactionOutcome(reason, itemId, outcome);
+        this.emit({ type: "compaction_end", reason, itemId, outcome });
         return false;
       }
-      this.emitCompactionOutcome(reason, itemId, outcome, willRetry);
+      this.emitCompletedCompaction(reason, itemId, outcome, willRetry);
 
       if (willRetry) {
         const messages = this.agent.state.messages;
@@ -664,16 +662,21 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       return this.agent.hasQueuedMessages();
     } catch (error) {
       if (abortController.signal.aborted) {
-        this.emitCompactionOutcome(reason, itemId, { status: "aborted" });
+        this.emit({ type: "compaction_end", reason, itemId, outcome: { status: "aborted" } });
         return false;
       }
       const errorMessage = compactionErrorMessage(error, "compaction failed");
-      this.emitCompactionOutcome(reason, itemId, {
-        status: "failed",
-        reason:
-          reason === "overflow"
-            ? `Context overflow recovery failed: ${errorMessage}`
-            : `Auto-compaction failed: ${errorMessage}`,
+      this.emit({
+        type: "compaction_end",
+        reason,
+        itemId,
+        outcome: {
+          status: "failed",
+          reason:
+            reason === "overflow"
+              ? `Context overflow recovery failed: ${errorMessage}`
+              : `Auto-compaction failed: ${errorMessage}`,
+        },
       });
       return false;
     } finally {

@@ -24,7 +24,7 @@ import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
-  readSummaryResponse,
+  extractSummaryText,
   type FileOperations,
   formatFileOperations,
   mergeSummaryFileOperations,
@@ -223,24 +223,33 @@ export async function generateBranchSummary(
     : await resolveAgentCoreCompleteFn(options.runtime)(model, context, streamOptions);
   // Usage belongs to the completed provider request even when its summary is invalid.
   options.runtime?.internalUsageSink?.(response.usage);
-  const summary = readSummaryResponse(response, (kind) =>
-    kind === "aborted"
-      ? new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted")
-      : new BranchSummaryError(
-          "summarization_failed",
-          kind === "error"
-            ? `Branch summary failed: ${response.errorMessage || "Unknown error"}`
-            : "Branch summary failed: model returned no summary text",
-        ),
-  );
-  if (!summary.ok) {
-    return summary;
+  if (response.stopReason === "aborted") {
+    return err(
+      new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"),
+    );
+  }
+  if (response.stopReason === "error") {
+    return err(
+      new BranchSummaryError(
+        "summarization_failed",
+        `Branch summary failed: ${response.errorMessage || "Unknown error"}`,
+      ),
+    );
+  }
+
+  const summaryText = extractSummaryText(response);
+  if (summaryText === undefined) {
+    return err(
+      new BranchSummaryError(
+        "summarization_failed",
+        "Branch summary failed: model returned no summary text",
+      ),
+    );
   }
 
   const { readFiles, modifiedFiles } = computeFileLists(fileOps);
   return ok({
-    summary:
-      BRANCH_SUMMARY_PREAMBLE + summary.value + formatFileOperations(readFiles, modifiedFiles),
+    summary: BRANCH_SUMMARY_PREAMBLE + summaryText + formatFileOperations(readFiles, modifiedFiles),
     readFiles,
     modifiedFiles,
   });

@@ -103,6 +103,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
   const replyDelivery = createReplyDelivery({ params, state, log });
   const {
     clearAssistantStream,
+    clearDeferredBlockReplies,
     emitAssistantStreamData,
     emitBlockReply,
     finalizeAssistantTexts,
@@ -311,7 +312,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
       typeof params.onBeforeTerminalDelivery === "function" &&
       params.deferTerminalDelivery !== false;
     clearAssistantStream();
-    state.deferredBlockReplies.length = 0;
+    clearDeferredBlockReplies();
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
@@ -373,6 +374,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     flushAssistantStream,
     releaseDeferredReplies,
     clearAssistantStream,
+    clearDeferredBlockReplies,
     resetForCompactionRetry,
     finalizeAssistantTexts,
     trimMessagingToolSent,

@@ -323,7 +323,7 @@ export function handleAgentEnd(
   const applyBeforeTerminalDecision = (decision: BeforeTerminalDeliveryDecision) => {
     if (decision?.suppressTerminalDelivery === true) {
       ctx.clearAssistantStream();
-      ctx.state.deferredBlockReplies.length = 0;
+      ctx.clearDeferredBlockReplies();
       finalizeAgentEnd();
       return undefined;
     }

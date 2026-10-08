@@ -495,6 +495,10 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       emitBlockReplySafely(payload, deferredToolMedia);
     }
   };
+  const clearDeferredBlockReplies = () => {
+    state.deferredBlockReplies.length = 0;
+  };
+
   const rememberAssistantText = (text: string, normalizedText?: string) => {
     state.lastAssistantTextMessageIndex = state.assistantMessageIndex;
     state.lastAssistantTextContentIndex = state.lastAssistantStreamContentIndex;
@@ -591,6 +595,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   return {
     assistantTexts,
     clearAssistantStream,
+    clearDeferredBlockReplies,
     emitAssistantStreamData,
     emitBlockReply,
     finalizeAssistantTexts,
