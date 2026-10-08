@@ -77,16 +77,20 @@ async function readChannelStatusIssues(
   timeoutMs = 5_000,
 ): Promise<ChannelStatusIssue[]> {
   try {
-    const [{ callGateway }, { collectChannelStatusIssues }] = await Promise.all([
-      import("../../gateway/call.js"),
-      import("../../infra/channels-status-issues.js"),
-    ]);
+    const [{ callGateway }, { collectChannelStatusIssues }, { loadDeviceIdentityIfPresent }] =
+      await Promise.all([
+        import("../../gateway/call.js"),
+        import("../../infra/channels-status-issues.js"),
+        import("../../infra/device-identity.js"),
+      ]);
     const payload = await callGateway({
       method: "channels.status",
       params: { probe: false, timeoutMs },
       timeoutMs,
       config,
       sharedStateMode: "read-only",
+      // The RPC's default async identity lookup uses a writable actor, even for existing-only reads.
+      deviceIdentity: loadDeviceIdentityIfPresent(),
     });
     return collectChannelStatusIssues(payload, []);
   } catch {

@@ -30,10 +30,6 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import {
-  snapshotSourceFamily,
-  writeUnreadableNewerStateSchema,
-} from "../../state/openclaw-database-preflight.test-support.js";
-import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -461,27 +457,6 @@ afterEach(async () => {
 });
 
 describe("update status readiness outcome", () => {
-  it.each([true, false])(
-    "keeps newer-schema bytes, mtimes, and sidecars unchanged (JSON: %s)",
-    async (json) => {
-      const databasePath = openOpenClawStateDatabase().path;
-      await closeOpenClawStateDatabaseAsync();
-      writeUnreadableNewerStateSchema(databasePath);
-      const before = snapshotSourceFamily(databasePath);
-
-      await updateStatusCommand({ json });
-
-      const output = json
-        ? JSON.stringify(runtime.writeJson.mock.lastCall?.[0])
-        : runtime.log.mock.calls.flat().join("\n");
-      expect(output).toContain("newer schema version");
-      expect(output).toMatch(/build.*supports/);
-      expect(output).toMatch(/restore.*backup/);
-      expect(output).not.toContain("doctor --fix");
-      expect(snapshotSourceFamily(databasePath)).toEqual(before);
-    },
-  );
-
   it.each([false, true])(
     "prioritizes an active update over availability (finished=%s)",
     async (finished) => {

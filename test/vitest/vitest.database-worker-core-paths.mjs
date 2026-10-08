@@ -510,6 +510,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli.test.ts",
   "src/cli/update-cli.windows-lifecycle.test.ts",
   "src/cli/update-cli/status.test.ts",
+  "src/cli/update-cli/status.readonly.test.ts",
   "src/cli/update-cli/update-command-convergence-authority.test.ts",
   "src/cli/update-cli/update-command-doctor-authority-callers.test.ts",
   "src/cli/update-cli/update-command-doctor-capability.test.ts",
