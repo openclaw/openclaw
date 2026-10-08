@@ -90,6 +90,14 @@ function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): bool
   );
 }
 
+/** OpenClaw session/store/gateway owner for an ACP spawn. Raw harness ids stay runtime-only. */
+export function resolveAcpSpawnOpenClawOwnerAgentId(params: {
+  requesterAgentId: string;
+  configAgentId?: string;
+}): string {
+  return params.configAgentId ?? params.requesterAgentId;
+}
+
 export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>(listAgentIds(cfg));
   const candidates = [

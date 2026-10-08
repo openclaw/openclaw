@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listSessionBindingsBySessionAsync } from "../../../infra/outbound/session-binding-service.js";
 import {
   isSubagentSessionKey,
+  normalizeOptionalAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
@@ -145,7 +146,8 @@ export function shouldStreamAcpSpawnToParent(params: {
 
 export async function validateAcpResumeSessionOwnership(params: {
   cfg: OpenClawConfig;
-  targetAgentId: string;
+  ownerAgentId: string;
+  runtimeAgentId: string;
   backendId?: string;
   requesterSessionKey?: string;
   resumeSessionId?: string;
@@ -165,17 +167,20 @@ export async function validateAcpResumeSessionOwnership(params: {
 
   const owner = await readAcpResumeSessionOwner({
     cfg: params.cfg,
-    agentId: params.targetAgentId,
+    agentId: params.ownerAgentId,
     backendId: normalizeOptionalLowercaseString(params.backendId),
     resumeSessionId,
     assertCurrent: params.assertCurrent,
   });
   params.assertCurrent?.();
+  const persistedRuntimeAgent = normalizeOptionalAgentId(owner?.entry.acp?.agent);
+  const requestedRuntimeAgent = normalizeOptionalAgentId(params.runtimeAgentId);
   if (
     owner &&
     (owner.sessionKey === requesterSessionKey ||
       normalizeOptionalString(owner.entry.spawnedBy) === requesterSessionKey ||
-      normalizeOptionalString(owner.entry.parentSessionKey) === requesterSessionKey)
+      normalizeOptionalString(owner.entry.parentSessionKey) === requesterSessionKey) &&
+    (!persistedRuntimeAgent || persistedRuntimeAgent === requestedRuntimeAgent)
   ) {
     return { ok: true };
   }

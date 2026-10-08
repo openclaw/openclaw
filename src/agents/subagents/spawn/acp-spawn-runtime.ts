@@ -144,7 +144,8 @@ export async function initializeAcpSpawnRuntime(params: {
   assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
-  targetAgentId: string;
+  ownerAgentId: string;
+  runtimeAgentId: string;
   runtimeMode: AcpRuntimeSessionMode;
   backendId?: string;
   resumeSessionId?: string;
@@ -155,12 +156,12 @@ export async function initializeAcpSpawnRuntime(params: {
 }): Promise<AcpSpawnInitializedRuntime> {
   params.assertActive?.();
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
-    agentId: params.targetAgentId,
+    agentId: params.ownerAgentId,
   });
   const sessionEntry = loadSessionEntry({
     storePath,
     sessionKey: params.sessionKey,
-    agentId: params.targetAgentId,
+    agentId: params.ownerAgentId,
     clone: false,
   });
   const sessionId = sessionEntry?.sessionId;
@@ -168,8 +169,8 @@ export async function initializeAcpSpawnRuntime(params: {
     assertActive: params.assertActive,
     cfg: params.cfg,
     sessionKey: params.sessionKey,
-    agentId: params.targetAgentId,
-    agent: params.targetAgentId,
+    agentId: params.ownerAgentId,
+    agent: params.runtimeAgentId,
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
     runtimeOptions: params.runtimeOptions,

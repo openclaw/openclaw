@@ -25,6 +25,7 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
         backend?: string;
         owner?: string;
         parent?: string;
+        runtimeAgent?: string;
         resume?: string;
         binding?: string;
         startedAt?: number;
@@ -46,10 +47,18 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
             sessionStartedAt: options.startedAt,
             spawnedBy: options.owner ?? requester,
             parentSessionKey: options.parent,
+            acp: {
+              backend: options.backend ?? "fixture",
+              agent: options.runtimeAgent ?? agentId,
+              runtimeSessionName: name,
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: 100,
+            },
           });
       const meta: SessionAcpMeta = {
         backend: options.backend ?? "fixture",
-        agent: agentId,
+        agent: options.runtimeAgent ?? agentId,
         runtimeSessionName: name,
         mode: "persistent",
         state: "idle",
@@ -76,6 +85,7 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
     await seed("foreign", { owner: "agent:other:main" });
     await seed("backend", { backend: "other" });
     await seed("agent", { agentId: "other" });
+    await seed("runtime", { runtimeAgent: "cursor" });
     await seed("stale", { binding: "old-revision" });
     await seed("legacy", { binding: "session-legacy", startedAt: 90 });
     await seed("reset", { binding: "session-reset", startedAt: 110 });
@@ -91,7 +101,8 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
     await seed("b-owned", { resume: "duplicate-denied" });
     const input = {
       cfg,
-      targetAgentId: "coder",
+      ownerAgentId: "coder",
+      runtimeAgentId: "coder",
       backendId: "fixture",
       requesterSessionKey: requester,
     };
@@ -102,6 +113,7 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
       ["foreign", false],
       ["backend", false],
       ["agent", false],
+      ["runtime", false],
       ["stale", false],
       ["legacy", true],
       ["reset", false],
