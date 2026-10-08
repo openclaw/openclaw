@@ -125,6 +125,8 @@ Responses endpoint. Configure the existing model settings:
   direct function tool. OpenClaw sends the completed result in the next model
   request after the active response finishes. This
   applies to direct tools; code-mode tools retain their existing execution flow.
+  `sessions_yield` stays synchronous: it is how the model waits, so the response
+  pauses there and the next request delivers the earlier async results.
 - **Mid-turn steering:** [Steering messages](/concepts/queue#queue-modes) can
   reach Astra while it is reasoning, using the active session's cached
   WebSocket. Use `auto` or `websocket-cached`; SSE keeps ordinary queued

@@ -432,13 +432,7 @@ function readApprovalReactionEvent(
   if (!reactionKey || !primary || !actorHandle) {
     return null;
   }
-  const conversation = buildIMessageApprovalConversationKeyForInbound({
-    chatGuid: message.chat_guid,
-    chatIdentifier: message.chat_identifier,
-    chatId: message.chat_id,
-    isGroup: message.is_group,
-    actorHandle,
-  });
+  const conversation = buildIMessageApprovalConversationKeyForInbound(message, actorHandle);
   if (!normalizeConversationKey(conversation)) {
     return null;
   }

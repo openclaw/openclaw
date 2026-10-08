@@ -735,11 +735,12 @@ git diff --check
 If `pnpm docs:list` tries to reconcile dependencies in a linked Codex worktree,
 stop and use `node scripts/docs-list.js`.
 
-For a PR before requesting maintainer approval, bind the watcher to the PR's
+For a PR before requesting maintainer approval, follow the
+[shared review setup](../autoreview/SKILL.md) and bind the watcher to the PR's
 full 40-character head SHA:
 
 ```bash
-.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main
+python3 "$HOME/.agents/skills/autoreview/scripts/autoreview" --mode branch --base origin/main
 node scripts/watch-pr-ci.mjs <pr> <head-sha> --repo openclaw/openclaw
 ```
 

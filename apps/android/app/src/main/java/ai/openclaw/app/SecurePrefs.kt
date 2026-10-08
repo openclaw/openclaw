@@ -311,10 +311,7 @@ class SecurePrefs(
 
   fun setCameraEnabled(value: Boolean) = _cameraEnabled.persistBoolean(cameraEnabledKey, value)
 
-  fun setLocationMode(mode: LocationMode) {
-    plainPrefs.edit { putString(locationModeKey, mode.rawValue) }
-    _locationMode.value = mode
-  }
+  fun setLocationMode(mode: LocationMode) = _locationMode.persist(mode) { putString(locationModeKey, mode.rawValue) }
 
   fun setLocationPreciseEnabled(value: Boolean) = _locationPreciseEnabled.persistBoolean("location.preciseEnabled", value)
 
@@ -324,30 +321,23 @@ class SecurePrefs(
 
   fun setManualHost(value: String) = _manualHost.persistString("gateway.manual.host", value.trim())
 
-  fun setManualPort(value: Int) {
-    plainPrefs.edit { putInt("gateway.manual.port", value) }
-    _manualPort.value = value
-  }
+  fun setManualPort(value: Int) = _manualPort.persist(value) { putInt("gateway.manual.port", value) }
 
   fun setManualTls(value: Boolean) = _manualTls.persistBoolean("gateway.manual.tls", value)
 
   fun setOnboardingCompleted(value: Boolean) = _onboardingCompleted.persistBoolean("onboarding.completed", value)
 
-  fun grantInstalledAppsDisclosureConsent() {
-    plainPrefs.edit {
+  fun grantInstalledAppsDisclosureConsent() =
+    _installedAppsSharingEnabled.persist(true) {
       putBoolean(installedAppsSharingEnabledKey, true)
       putInt(installedAppsDisclosureConsentVersionKey, currentInstalledAppsDisclosureConsentVersion)
     }
-    _installedAppsSharingEnabled.value = true
-  }
 
-  fun revokeInstalledAppsDisclosureConsent() {
-    plainPrefs.edit {
+  fun revokeInstalledAppsDisclosureConsent() =
+    _installedAppsSharingEnabled.persist(false) {
       putBoolean(installedAppsSharingEnabledKey, false)
       remove(installedAppsDisclosureConsentVersionKey)
     }
-    _installedAppsSharingEnabled.value = false
-  }
 
   fun setAccessibilityControlEnabled(value: Boolean) = _accessibilityControlEnabled.persistBoolean(accessibilityControlEnabledKey, value)
 
@@ -411,10 +401,7 @@ class SecurePrefs(
 
   internal fun setNotificationForwardingEnabled(value: Boolean) = _notificationForwardingEnabled.persistBoolean(notificationsForwardingEnabledKey, value)
 
-  internal fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
-    plainPrefs.edit { putString(notificationsForwardingModeKey, mode.rawValue) }
-    _notificationForwardingMode.value = mode
-  }
+  internal fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) = _notificationForwardingMode.persist(mode) { putString(notificationsForwardingModeKey, mode.rawValue) }
 
   internal fun setNotificationForwardingPackages(packages: List<String>) {
     val sanitized =
@@ -692,10 +679,9 @@ class SecurePrefs(
 
   fun setPreferredAudioInputDevice(value: String?) {
     val key = value?.takeIf(String::isNotBlank)
-    plainPrefs.edit {
+    _preferredAudioInputDevice.persist(key) {
       if (key == null) remove(preferredAudioInputDeviceKey) else putString(preferredAudioInputDeviceKey, key)
     }
-    _preferredAudioInputDevice.value = key
   }
 
   private fun loadVoiceWakeWords(): List<String> {
@@ -723,10 +709,7 @@ class SecurePrefs(
   }
 
   @Synchronized
-  fun setAppearanceTextScale(scale: AppearanceTextScale) {
-    plainPrefs.edit { putInt(appearanceTextScaleKey, scale.percent) }
-    _appearanceTextScale.value = scale
-  }
+  fun setAppearanceTextScale(scale: AppearanceTextScale) = _appearanceTextScale.persist(scale) { putInt(appearanceTextScaleKey, scale.percent) }
 
   @Synchronized
   fun setAppearanceThemeMode(
@@ -1040,16 +1023,18 @@ class SecurePrefs(
   private fun MutableStateFlow<Boolean>.persistBoolean(
     key: String,
     next: Boolean,
-  ) {
-    plainPrefs.edit { putBoolean(key, next) }
-    value = next
-  }
+  ) = persist(next) { putBoolean(key, next) }
 
   private fun MutableStateFlow<String>.persistString(
     key: String,
     next: String,
+  ) = persist(next) { putString(key, next) }
+
+  private inline fun <T> MutableStateFlow<T>.persist(
+    next: T,
+    writeValue: SharedPreferences.Editor.() -> Unit,
   ) {
-    plainPrefs.edit { putString(key, next) }
+    plainPrefs.edit(action = writeValue)
     value = next
   }
 

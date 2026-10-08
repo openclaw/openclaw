@@ -8,12 +8,22 @@ import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-bi
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
+import type { SessionCatalogContinueProviderResult } from "./session-catalog.js";
 import { mapRegistryProviders } from "./web-provider-resolution-shared.js";
 
-function createOwner() {
-  const builder = createTestPluginRegistry();
+function createOwner(nativeCatalog = false) {
+  const runtime = nativeCatalog ? createPluginRuntime() : undefined;
+  if (runtime) {
+    runtime.config.current = () => ({
+      plugins: { entries: { "factory-owner": { config: { sessionCatalog: { enabled: true } } } } },
+    });
+  }
+  const builder = createTestPluginRegistry(runtime);
   const record = createPluginRecord({
     id: "factory-owner",
+    ...(nativeCatalog
+      ? { nativeSessionCatalog: { label: "Factory catalog", nodeCommands: [] } }
+      : {}),
     source: "/synthetic/factory-owner.ts",
     origin: "global",
     enabled: true,
@@ -157,6 +167,68 @@ describe("registered plugin factory bindings", () => {
         );
       } finally {
         consumer?.release();
+        await instance.dispose();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps catalog continuation data native and its callback scoped (native gate: %s)",
+    async (nativeCatalog) => {
+      const { builder, api, instance, expectScope } = createOwner(nativeCatalog);
+      const consumer = instance.retainConsumer();
+      const upstream = {
+        kind: "codex-app-server" as const,
+        ref: { threadId: "synthetic-thread", nested: ["source"] },
+        marker: { lastTurnId: "synthetic-turn" },
+      };
+      const conversationBinding = { data: { source: "synthetic-binding" } };
+      const plain = { sessionKey: "synthetic-session", upstream, conversationBinding };
+      const result: SessionCatalogContinueProviderResult = {
+        ...plain,
+        async afterConversationBound() {
+          expectScope();
+          await Promise.resolve();
+          expectScope();
+        },
+      };
+      let next = result;
+      try {
+        api.registerSessionCatalog({
+          id: "factory-catalog",
+          label: "Factory catalog",
+          supportsProcessHomeIsolation: true,
+          list: async () => [],
+          read: async () => ({ hostId: "synthetic-host", threadId: "synthetic-thread", items: [] }),
+          async continueSession() {
+            expectScope();
+            return next;
+          },
+        });
+        expect(builder.registry.diagnostics).toEqual([]);
+        const provider = builder.registry.sessionCatalogs[0]!.provider;
+        const request = { hostId: "synthetic-host", threadId: "synthetic-thread" };
+        const root = await provider.continueSession!(request);
+        const retained = await consumer.wrap(provider).continueSession!(request);
+        for (const value of [root, retained]) {
+          expect(value.upstream).toBe(upstream);
+          expect(value.conversationBinding).toBe(conversationBinding);
+          expect(structuredClone(value.upstream)).toEqual(upstream);
+          expect(structuredClone(value.conversationBinding)).toEqual(conversationBinding);
+        }
+        const rootCallback = root.afterConversationBound!;
+        const consumerCallback = retained.afterConversationBound!;
+        await consumerCallback();
+        next = plain;
+        expect(await provider.continueSession!(request)).toBe(plain);
+        consumer.release();
+        expect(() => consumerCallback()).toThrow("consumer is closed");
+        await rootCallback();
+        await instance.dispose();
+        expect(() => rootCallback()).toThrow("reloaded or disabled");
+        expect(structuredClone(upstream)).toEqual(upstream);
+      } finally {
+        consumer.release();
         await instance.dispose();
       }
     },

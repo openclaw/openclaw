@@ -465,6 +465,8 @@ describe("main session recovery store", () => {
     "admit_recovery",
   ] as const)("%s does not decode unrelated retained payloads", async (kind) => {
     const unrelatedPayload = `unrelated-recovery-payload:${"x".repeat(32 * 1024)}`;
+    // These rows exercise point reads, so automatic retention must not age them out.
+    const retainedUpdatedAt = Date.now();
     await seedExact({
       [sessionKey]: interruptedEntry(),
       ...Object.fromEntries(
@@ -472,7 +474,7 @@ describe("main session recovery store", () => {
           `agent:main:retained-${index}`,
           {
             sessionId: `retained-${index}`,
-            updatedAt: 100,
+            updatedAt: retainedUpdatedAt,
             lastHeartbeatText: unrelatedPayload,
           },
         ]),

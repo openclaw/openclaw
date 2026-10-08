@@ -469,6 +469,7 @@ export async function withTranscriptWriteLock<T>(
   }
   return withWorkerTranscriptWriteLock(
     { ...fenced, ...captured, storePath: captured.path },
+    fenced,
     run,
     runNativeTranscriptWriteLock,
   );
@@ -480,13 +481,14 @@ async function runNativeTranscriptWriteLock<T>(
   alreadyLocked = false,
   initialSnapshot?: SqliteTranscriptSnapshotState,
   onSnapshot?: (snapshot: SqliteTranscriptSnapshotState | undefined) => void,
+  ownerScope: SessionTranscriptWriteScope = scope,
 ): Promise<T> {
-  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
-  const resolved = resolveSqliteTranscriptScope(fencedScope);
+  const fencedScope = withOwnedSessionTranscriptWriterFence(ownerScope);
+  const resolved = resolveSqliteTranscriptScope(scope);
   // Nested compatibility appends share the worker callback's initial cold restoration.
   if (!alreadyLocked) {
     const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-    await restoreSessionColdTranscript({ ...fencedScope, sessionId: resolved.sessionId });
+    await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
   }
   const databaseOptions = toDatabaseOptions(resolved);
   const acquire: typeof runExclusiveSqliteSessionWrite = alreadyLocked
@@ -499,7 +501,7 @@ async function runNativeTranscriptWriteLock<T>(
       const context: SessionTranscriptWriteLockAccessorContext = {
         publishUpdate: async (update) => {
           assertOwnedTranscriptWriteCommit(fencedScope);
-          await publishTranscriptUpdate(fencedScope, update);
+          await publishTranscriptUpdate(scope, update);
         },
         readEvents: async () => {
           // openclaw-agent-db.ts cache rule: LRU eviction closes idle handles across caller awaits.
@@ -540,7 +542,7 @@ async function runNativeTranscriptWriteLock<T>(
         },
         appendMessage: async (requested) => {
           const prepare = requested.prepareMessageAfterIdempotencyCheckAsync
-            ? await prepareNativeLockedAppend(fencedScope, requested)
+            ? await prepareNativeLockedAppend(scope, requested)
             : undefined;
           let result: TranscriptMessageAppendResult<unknown> | undefined;
           const snapshotState = transcriptSnapshot;
@@ -577,7 +579,7 @@ async function runNativeTranscriptWriteLock<T>(
         },
         appendMessageWithMessageSequence: async (requested) => {
           const prepare = requested.prepareMessageAfterIdempotencyCheckAsync
-            ? await prepareNativeLockedAppend(fencedScope, requested)
+            ? await prepareNativeLockedAppend(scope, requested)
             : undefined;
           let result: TranscriptMessageAppendResult<unknown> | undefined;
           let lifecycleRevision: string | undefined;

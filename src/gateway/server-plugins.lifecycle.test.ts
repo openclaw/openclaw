@@ -3,7 +3,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished as registerTestCleanup, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configFileSource from "../config/source-file.js";
@@ -787,6 +787,17 @@ describe("gateway plugin instance bindings", () => {
     { timeout: 600_000 },
     async (serviceStopFailure) => {
       const { coordinator, bundledRoot } = await prepareInstanceBindingTest({ serviceStopFailure });
+      const startupPlugins = await import("./server-startup-plugins.js");
+      const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
+      const maintenanceSettled = createDeferred();
+      const maintenanceObserver = vi
+        .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
+        .mockImplementation((params) => {
+          const maintenance = runMaintenance(params);
+          maintenanceSettled.resolve(maintenance);
+          return maintenance;
+        });
+      registerTestCleanup(() => maintenanceObserver.mockRestore());
       finishServiceStops.push(coordinator.serviceStopCompletion.resolve);
       const hotReloadRecovery = vi.fn(() => {
         // No run loop consumes this synthetic emission, so release its signal-admission lease.
@@ -802,6 +813,8 @@ describe("gateway plugin instance bindings", () => {
       });
       started.push(server);
       await server.startupSettled;
+      // Mandatory sidecars settle before the deferred registry refresh releases its lease.
+      await maintenanceSettled.promise;
 
       const initialRegistry = getActivePluginRegistry();
       const initialMetadata = getGatewayPluginMetadataSnapshot();

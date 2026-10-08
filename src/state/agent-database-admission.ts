@@ -103,9 +103,17 @@ export function captureAgentDatabasePreparationDeletion(
   agentId: string,
   database: Pick<OpenClawStateDatabase, "db" | "path">,
 ): () => void {
+  return captureAgentDatabasePreparationDeletionForIdentity(agentId, {
+    identityKey: requireOpenClawStateDatabaseIdentity(database).key,
+    databasePath: database.path,
+  });
+}
+
+export function captureAgentDatabasePreparationDeletionForIdentity(
+  agentId: string,
+  { identityKey, databasePath }: { identityKey: string; databasePath: string },
+): () => void {
   const id = normalizeAgentId(agentId);
-  const identityKey = requireOpenClawStateDatabaseIdentity(database).key;
-  const databasePath = database.path;
   const captured = [...refusalsByState].flatMap(([key, owner]) => {
     const known = openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(key);
     const refusal = owner.refusals.get(id);

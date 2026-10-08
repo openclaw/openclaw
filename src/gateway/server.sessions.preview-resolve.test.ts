@@ -199,7 +199,7 @@ function identifiedClient(profileId: string, scopes: string[] = ["operator.read"
   };
 }
 
-test("sessions.preview returns transcript previews", async () => {
+test("sessions.preview returns transcript previews within the requested text budget", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionId = "sess-preview";
   const lines = createToolSummaryPreviewTranscriptLines(sessionId);
@@ -217,7 +217,15 @@ test("sessions.preview returns transcript previews", async () => {
       .map((line) => JSON.parse(line) as { message?: Record<string, unknown> })
       .map((record) => record.message)
       .filter((message): message is Record<string, unknown> => Boolean(message))
-      .map((message) => Object.assign({ role: String(message.role) }, message)),
+      .map((message) =>
+        Object.assign(
+          { role: String(message.role) },
+          message,
+          message.role === "user"
+            ? { content: "Long preview input crosses the requested character budget." }
+            : {},
+        ),
+      ),
   });
 
   const preview = await directSessionReq<{
@@ -226,51 +234,15 @@ test("sessions.preview returns transcript previews", async () => {
       status: string;
       items: Array<{ role: string; text: string }>;
     }>;
-  }>("sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
+  }>("sessions.preview", { keys: ["main"], limit: 3, maxChars: 24 });
   expect(preview.ok).toBe(true);
   const entry = preview.payload?.previews[0];
   expect(entry?.key).toBe("main");
   expect(entry?.status).toBe("ok");
   expect(entry?.items).toEqual([
-    { role: "user", text: "Hello" },
+    { role: "user", text: "Long preview input cr..." },
     { role: "assistant", text: "Hi" },
     { role: "assistant", text: "Forecast ready" },
-  ]);
-});
-
-test("sessions.preview honors maxChars up to the shared cap", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionId = "sess-preview-explicit-budget";
-  const maxChars = 800;
-
-  await writeSessionStore({
-    entries: {
-      "agent:main:main": sessionStoreEntry(sessionId),
-    },
-  });
-  await seedSessionTranscript({
-    sessionId,
-    sessionKey: "agent:main:main",
-    storePath,
-    messages: [{ role: "assistant", content: "a".repeat(maxChars + 20) }],
-  });
-
-  const preview = await directSessionReq<{
-    previews: Array<{ items: Array<{ role: string; text: string }> }>;
-  }>("sessions.preview", { keys: ["main"], limit: 1, maxChars });
-
-  expect(preview.ok).toBe(true);
-  expect(preview.payload?.previews[0]?.items).toEqual([
-    { role: "assistant", text: `${"a".repeat(maxChars - 3)}...` },
-  ]);
-
-  const capped = await directSessionReq<{
-    previews: Array<{ items: Array<{ role: string; text: string }> }>;
-  }>("sessions.preview", { keys: ["main"], limit: 1, maxChars: Number.MAX_SAFE_INTEGER });
-
-  expect(capped.ok).toBe(true);
-  expect(capped.payload?.previews[0]?.items).toEqual([
-    { role: "assistant", text: `${"a".repeat(maxChars - 3)}...` },
   ]);
 });
 

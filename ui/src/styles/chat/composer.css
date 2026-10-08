@@ -3168,7 +3168,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   .agent-chat__input .chat-controls__model-trigger {
     gap: 3px;
     justify-content: center;
-    padding-inline: 0;
+    padding-inline: 2px;
   }
 
   .agent-chat__input .chat-controls__model-settings .chat-controls__inline-select-chevron {
@@ -3211,6 +3211,11 @@ html[dir="rtl"] .chat-attachment-loading > span {
     border-radius: var(--radius-full);
     background: transparent;
     content: "";
+  }
+
+  /* The text picker has a slimmer wash without shrinking its 44px touch target. */
+  .agent-chat__input--mobile-toolbar .chat-controls__model-trigger::before {
+    inset-block: 6px;
   }
 
   .agent-chat__input--mobile-toolbar

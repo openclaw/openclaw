@@ -10,8 +10,8 @@ import {
 } from "./sqlite-pinned-read-snapshot.js";
 import { findSqlCharacter } from "./sqlite-schema-sql.js";
 import {
-  prepareSqliteTempGenerationSchema,
-  type SqliteTempGenerationSchema,
+  prepareSqliteTempTrackingSchema,
+  type SqliteTempTrackingSchema,
 } from "./sqlite-temp-generation-schema.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
@@ -46,7 +46,7 @@ type SchemaOwner = {
   scope?: SchemaScope;
   scopeRevision?: number;
   mutationListeners?: Set<() => void>;
-  installTempGenerationSchema?: (schema: SqliteTempGenerationSchema, advance: boolean) => void;
+  installTempTrackingSchema?: (schema: SqliteTempTrackingSchema) => void;
 };
 
 type SchemaScope = { key?: string; revision: number; users: number };
@@ -142,17 +142,16 @@ export function registerSqliteSchemaMutationListener(
   return () => listeners.delete(listener);
 }
 
-/** Only the fixed counter/trigger shapes are non-revoking; ordinary TEMP DDL stays observed. */
-export function installSqliteTempGenerationSchema(
+/** Only the fixed tracking shapes are non-revoking; ordinary TEMP DDL stays observed. */
+export function installSqliteTempTrackingSchema(
   database: DatabaseSync,
-  schema: SqliteTempGenerationSchema,
-  advance: boolean,
+  schema: SqliteTempTrackingSchema,
 ): void {
   const owner = owners.get(database);
-  if (!owner?.admitted || owner.authorizerActive || !owner.installTempGenerationSchema) {
-    throw new Error("SQLite generation tracking requires admitted schema facts");
+  if (!owner?.admitted || owner.authorizerActive || !owner.installTempTrackingSchema) {
+    throw new Error("SQLite tracking requires admitted schema facts");
   }
-  owner.installTempGenerationSchema(schema, advance);
+  owner.installTempTrackingSchema(schema);
 }
 
 // Conservative matching also covers multi-statement migration batches and catalog repairs.
@@ -302,11 +301,11 @@ function trackSchemaChanges(
       finishReadScope(wasTransaction, expiresRead, succeeded);
     }
   };
-  owner.installTempGenerationSchema = (schema, advance) => {
-    const { sql, unexpected } = prepareSqliteTempGenerationSchema(database, schema, advance);
+  owner.installTempTrackingSchema = (schema) => {
+    const { sql, unexpected } = prepareSqliteTempTrackingSchema(database, schema);
     try {
       // No suppression scope: native callbacks still execute through the ordinary observer.
-      // sqlite-allow-raw -- The schema owner generates only the declared connection-local counter shapes.
+      // sqlite-allow-raw -- The schema owner generates only the declared connection-local tracking shapes.
       execute(
         () => native.DatabaseSync.prototype.exec.call(database, sql),
         unexpected,
