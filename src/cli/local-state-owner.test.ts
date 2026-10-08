@@ -2,13 +2,17 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { useManagedWorktreeTestRepository } from "../agents/worktrees/service.test-support.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
+import {
+  DEFAULT_CLI_STATE_OWNER_GATEWAY_TIMEOUT_MS,
+  resolveCliStateOwnerGatewayTimeoutMs,
+} from "./state-owner-timeout.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const initializeRepository = useManagedWorktreeTestRepository();
@@ -65,4 +69,38 @@ it("refuses an ambient state/config switch during offline admission before creat
   for (const config of configs) {
     await expect(fs.access(config.worktreeRoot)).rejects.toMatchObject({ code: "ENOENT" });
   }
+});
+
+describe("resolveCliStateOwnerGatewayTimeoutMs", () => {
+  it("uses a bounded default so a starved Gateway cannot hang the CLI silently", () => {
+    expect(DEFAULT_CLI_STATE_OWNER_GATEWAY_TIMEOUT_MS).toBeLessThanOrEqual(120_000);
+    expect(resolveCliStateOwnerGatewayTimeoutMs({})).toBe(
+      DEFAULT_CLI_STATE_OWNER_GATEWAY_TIMEOUT_MS,
+    );
+  });
+
+  it("honours an explicit OPENCLAW_CLI_STATE_OWNER_TIMEOUT_MS override", () => {
+    expect(
+      resolveCliStateOwnerGatewayTimeoutMs({ OPENCLAW_CLI_STATE_OWNER_TIMEOUT_MS: "45000" }),
+    ).toBe(45_000);
+    expect(
+      resolveCliStateOwnerGatewayTimeoutMs({ OPENCLAW_CLI_STATE_OWNER_TIMEOUT_MS: " 5000 " }),
+    ).toBe(5_000);
+  });
+
+  it("treats an empty or whitespace override as unset", () => {
+    for (const value of ["", " "]) {
+      expect(
+        resolveCliStateOwnerGatewayTimeoutMs({ OPENCLAW_CLI_STATE_OWNER_TIMEOUT_MS: value }),
+      ).toBe(DEFAULT_CLI_STATE_OWNER_GATEWAY_TIMEOUT_MS);
+    }
+  });
+
+  it("rejects non-positive or non-integer overrides", () => {
+    for (const value of ["0", "-1", "1.5", "abc"]) {
+      expect(() =>
+        resolveCliStateOwnerGatewayTimeoutMs({ OPENCLAW_CLI_STATE_OWNER_TIMEOUT_MS: value }),
+      ).toThrow(/OPENCLAW_CLI_STATE_OWNER_TIMEOUT_MS must be a positive integer/u);
+    }
+  });
 });
