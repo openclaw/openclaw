@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
 import type { SessionTranscriptWriteScope } from "../../../config/sessions/session-accessor.sqlite-contract.js";
 import { readSessionTranscriptAnchorsAsync } from "../../../config/sessions/session-transcript-anchor-read.js";
+import { SessionTranscriptReadFenceError } from "../../../config/sessions/session-transcript-read-fence-error.js";
 import { withSessionTranscriptReadSource } from "../../../config/sessions/session-transcript-read-source.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -19,6 +20,7 @@ import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
 } from "../../run-termination.js";
+import { isTalkRealtimeVoiceEntry } from "../../sessions/session-manager-codec.js";
 import {
   sessionManagerPrepareCurrentTurnReplay,
   type CurrentTurnReplayWitness,
@@ -55,6 +57,23 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
         ? message.errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE
         : message.errorMessage === AGENT_RUN_RESTART_ABORT_ERROR) &&
       message.content.every((part) => part.type === "text" && part.text === ""))
+  );
+}
+
+/** Bounded retries for transcript reads racing finalized Talk speech appends. */
+const CONCURRENT_APPEND_READ_ATTEMPTS = 3;
+
+/** Finalized Talk speech records history without closing the consult's keyed input. */
+function isReplayTurnTailEntry(entry: SessionEntry, runId: string): boolean {
+  return isInterruptedTurnEntry(entry, runId) || isTalkRealtimeVoiceEntry(entry);
+}
+
+/** Only an appended transcript change rejects; ownership fences stay fatal. */
+function isConcurrentTranscriptAppendRejection(error: unknown): boolean {
+  return (
+    error instanceof SessionTranscriptReadFenceError &&
+    (error.message === "Persisted user turn changed before replay admission" ||
+      error.message === "Session transcript changed during context read")
   );
 }
 
@@ -168,19 +187,41 @@ export async function preparePersistedCurrentUserTurn(params: {
     consume: (prepared: CurrentTurnReplayWitness | undefined) => void,
   ) =>
     withSource(signal, async (target, assertSource) => {
-      await sessionManager.reloadPersistedTranscriptAsync(signal);
-      assertSource();
-      assertCurrent();
-      const prepared = await sessionManager[sessionManagerPrepareCurrentTurnReplay](
-        (entry) => isInterruptedTurnEntry(entry, runId),
-        (entry) =>
-          entry?.type === "message" &&
-          entry.message.role === "user" &&
-          isDeepStrictEqual(entry.message, message),
-        signal,
-      );
-      await validate(target, assertSource, prepared, signal, () => consume(prepared));
-      return prepared;
+      // Finalized realtime speech (for example the forced-consult checking
+      // acknowledgment) can append to the shared transcript between the manager
+      // reload and the awaited current-turn read. Re-prepare against the appended
+      // state instead of rejecting the consult; a concurrent write that closes the
+      // consult (a newer admitted task or completed answer) still fails the
+      // retried walk, and every fence is revalidated on each attempt.
+      for (let attempt = 1; ; attempt++) {
+        let consumed = false;
+        try {
+          await sessionManager.reloadPersistedTranscriptAsync(signal);
+          assertSource();
+          assertCurrent();
+          const prepared = await sessionManager[sessionManagerPrepareCurrentTurnReplay](
+            (entry) => isReplayTurnTailEntry(entry, runId),
+            (entry) =>
+              entry?.type === "message" &&
+              entry.message.role === "user" &&
+              isDeepStrictEqual(entry.message, message),
+            signal,
+          );
+          await validate(target, assertSource, prepared, signal, () => {
+            consumed = true;
+            consume(prepared);
+          });
+          return prepared;
+        } catch (error) {
+          if (
+            attempt >= CONCURRENT_APPEND_READ_ATTEMPTS ||
+            consumed ||
+            !isConcurrentTranscriptAppendRejection(error)
+          ) {
+            throw error;
+          }
+        }
+      }
     });
   const initial = await readCurrentTurn(params.signal, (prepared) => {
     if (prepared) {

@@ -6,6 +6,7 @@ import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
+import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionTranscriptCurrentTurnEntryRead,
@@ -31,7 +32,9 @@ export function readSessionTranscriptCurrentTurnEntry(
         version.rawSeq !== options.version.rawSeq ||
         version.updatedAt !== options.version.updatedAt
       ) {
-        throw new Error("Persisted user turn changed before replay admission");
+        throw new SessionTranscriptReadFenceError(
+          "Persisted user turn changed before replay admission",
+        );
       }
       const anchor = readActiveTranscriptEntryAnchorInTransaction({
         database,
