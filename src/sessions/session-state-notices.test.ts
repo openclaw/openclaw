@@ -24,7 +24,9 @@ vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   enqueueSessionEventForHost: mocks.enqueue,
   assertSessionEventTargetCurrent: vi.fn(),
 }));
+// mock-isolation: Fake-time coalescing must not borrow another suite's live store resolver.
 vi.mock("../infra/system-event-ownership.js", () => ({ isSystemEventStoreCurrent: () => true }));
+// mock-isolation: Keep pending occurrences local so these timer cases cannot drain shared queues.
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEventEntry: (text: string, options: Partial<SystemEvent>) => {
     const occurrence: SystemEvent = { text, ...options, id: String(mocks.pending.length), ts: 1 };
@@ -33,6 +35,7 @@ vi.mock("../infra/system-events.js", () => ({
   },
   peekSystemEventEntries: () => [...mocks.pending],
 }));
+// mock-isolation: Observe adoption without opening cursor writers; the permissions suite covers native custody.
 vi.mock("./session-state-notice-acknowledgment.js", () => ({
   acknowledgeSessionStateNoticesInWorker: mocks.acknowledge,
 }));

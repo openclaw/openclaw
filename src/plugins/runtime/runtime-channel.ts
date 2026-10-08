@@ -130,7 +130,7 @@ export function createRuntimeChannel(options?: {
   const runInbound = <TRaw, TResult>(
     params: PublicChannelTurnParams<TRaw, TResult, ChannelTurnDeliveryAdapter>,
   ): Promise<ChannelTurnResult<TResult>> => {
-    // Core's implementation handles both delivery adapters while preserving the result type.
+    // SAFETY: Core's implementation handles both delivery adapters while preserving the result type.
     const run = runChannelTurn as (
       value: RunChannelTurnParams<TRaw, TResult, ChannelTurnDeliveryAdapter>,
     ) => Promise<ChannelTurnResult<TResult>>;
