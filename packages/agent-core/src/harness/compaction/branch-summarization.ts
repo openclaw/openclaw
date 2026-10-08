@@ -19,11 +19,12 @@ import {
   createSummarizationContext,
   SUMMARIZATION_SYSTEM_PROMPT,
 } from "./summarization-prompts.js";
+import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
-  extractSummaryText,
+  readSummaryResponse,
   type FileOperations,
   formatFileOperations,
   mergeSummaryFileOperations,
@@ -135,34 +136,17 @@ Summary of that exploration:
 
 `;
 
-const BRANCH_SUMMARY_PROMPT = `Create a structured summary of this conversation branch for context when returning later.
-
-Use this EXACT format:
-
-## Goal
-[What was the user trying to accomplish in this branch?]
-
-## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned]
-- [Or "(none)" if none were mentioned]
-
-## Progress
-### Done
-- [x] [Completed tasks/changes]
-
-### In Progress
-- [ ] [Work that was started but not finished]
-
-### Blocked
-- [Issues preventing progress, if any]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale]
-
-## Next Steps
-1. [What should happen next to continue this work]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+const BRANCH_SUMMARY_PROMPT = buildSummaryCheckpointPrompt({
+  introduction:
+    "Create a structured summary of this conversation branch for context when returning later.",
+  goal: "[What was the user trying to accomplish in this branch?]",
+  constraints:
+    '- [Any constraints, preferences, or requirements mentioned]\n- [Or "(none)" if none were mentioned]',
+  inProgress: "- [ ] [Work that was started but not finished]",
+  blocked: "- [Issues preventing progress, if any]",
+  decisions: "- **[Decision]**: [Brief rationale]",
+  nextSteps: "1. [What should happen next to continue this work]",
+});
 
 /** Generate a summary for abandoned branch entries. */
 export async function generateBranchSummary(
@@ -239,33 +223,24 @@ export async function generateBranchSummary(
     : await resolveAgentCoreCompleteFn(options.runtime)(model, context, streamOptions);
   // Usage belongs to the completed provider request even when its summary is invalid.
   options.runtime?.internalUsageSink?.(response.usage);
-  if (response.stopReason === "aborted") {
-    return err(
-      new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"),
-    );
-  }
-  if (response.stopReason === "error") {
-    return err(
-      new BranchSummaryError(
-        "summarization_failed",
-        `Branch summary failed: ${response.errorMessage || "Unknown error"}`,
-      ),
-    );
-  }
-
-  const summaryText = extractSummaryText(response);
-  if (summaryText === undefined) {
-    return err(
-      new BranchSummaryError(
-        "summarization_failed",
-        "Branch summary failed: model returned no summary text",
-      ),
-    );
+  const summary = readSummaryResponse(response, (kind) =>
+    kind === "aborted"
+      ? new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted")
+      : new BranchSummaryError(
+          "summarization_failed",
+          kind === "error"
+            ? `Branch summary failed: ${response.errorMessage || "Unknown error"}`
+            : "Branch summary failed: model returned no summary text",
+        ),
+  );
+  if (!summary.ok) {
+    return summary;
   }
 
   const { readFiles, modifiedFiles } = computeFileLists(fileOps);
   return ok({
-    summary: BRANCH_SUMMARY_PREAMBLE + summaryText + formatFileOperations(readFiles, modifiedFiles),
+    summary:
+      BRANCH_SUMMARY_PREAMBLE + summary.value + formatFileOperations(readFiles, modifiedFiles),
     readFiles,
     modifiedFiles,
   });

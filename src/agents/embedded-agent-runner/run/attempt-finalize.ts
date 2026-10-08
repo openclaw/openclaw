@@ -518,21 +518,6 @@ export function createEmbeddedAttemptRunAbort(input: {
   state: Pick<EmbeddedAttemptExecutionState, "terminal">;
 }): RunAbort {
   let abortAccepted = false;
-  const abortCompaction = () => {
-    if (!input.activeSession.isCompacting) {
-      return;
-    }
-    try {
-      input.activeSession.abortCompaction();
-    } catch (error) {
-      if (!input.isProbeSession) {
-        input.log.warn(
-          `embedded run abortCompaction failed: runId=${input.attempt.runId} sessionId=${input.attempt.sessionId} err=${String(error)}`,
-        );
-      }
-    }
-  };
-
   return (isTimeout = false, reason?: unknown) => {
     // Reply-operation cancellation can synchronously re-enter through its abort signal.
     // The attempt owner accepts the first reason so session and lock cleanup run once.
@@ -553,7 +538,17 @@ export function createEmbeddedAttemptRunAbort(input: {
     } else {
       input.runAbortController.abort(reason);
     }
-    abortCompaction();
+    if (input.activeSession.isCompacting) {
+      try {
+        input.activeSession.abortCompaction();
+      } catch (error) {
+        if (!input.isProbeSession) {
+          input.log.warn(
+            `embedded run abortCompaction failed: runId=${input.attempt.runId} sessionId=${input.attempt.sessionId} err=${String(error)}`,
+          );
+        }
+      }
+    }
     void input.abortActiveSession(input.runAbortController.signal.reason);
     const queueHandle = input.getQueueHandle();
     if (isTimeout && queueHandle) {

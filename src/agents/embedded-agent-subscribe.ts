@@ -103,7 +103,6 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
   const replyDelivery = createReplyDelivery({ params, state, log });
   const {
     clearAssistantStream,
-    clearDeferredBlockReplies,
     emitAssistantStreamData,
     emitBlockReply,
     finalizeAssistantTexts,
@@ -140,6 +139,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
         log.debug(`compaction promise rejected (no waiter): ${String(err)}`);
       });
     }
+    return compactionRetry.promise;
   };
 
   const noteCompactionRetry = () => {
@@ -312,7 +312,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
       typeof params.onBeforeTerminalDelivery === "function" &&
       params.deferTerminalDelivery !== false;
     clearAssistantStream();
-    clearDeferredBlockReplies();
+    state.deferredBlockReplies.length = 0;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
@@ -321,21 +321,6 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     state.livenessState = "working";
     streamRendering.resetAssistantMessageState(0);
   };
-
-  // Re-filter the full raw buffer. Reusing live scanner state would hide the
-  // visible prefix when timeout interrupts an open <think> or <final> block.
-  const finalizeFlushedAssistantText = (text: string) =>
-    stripDowngradedToolCallText(
-      streamRendering.stripBlockTags(
-        text,
-        {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
-        { final: true },
-      ),
-    ).trimEnd();
 
   // Settlement calls this only for the final, failure-free run-budget terminal.
   // Retain and re-filter the full buffer so queued suffixes keep hidden-tag
@@ -349,7 +334,18 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
       state.hasFlushedPartialText = false;
       return;
     }
-    const visibleText = finalizeFlushedAssistantText(text);
+    // Re-filter the full raw buffer; live scanner state may hide an interrupted prefix.
+    const visibleText = stripDowngradedToolCallText(
+      streamRendering.stripBlockTags(
+        text,
+        {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        { final: true },
+      ),
+    ).trimEnd();
     if (assistantTexts.length > state.assistantTextBaseline || state.hasFlushedPartialText) {
       replyDelivery.replaceCurrentAssistantText(visibleText);
     } else if (visibleText) {
@@ -378,7 +374,6 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     flushAssistantStream,
     releaseDeferredReplies,
     clearAssistantStream,
-    clearDeferredBlockReplies,
     resetForCompactionRetry,
     finalizeAssistantTexts,
     trimMessagingToolSent,
@@ -520,8 +515,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
         return Promise.reject(createAbortError("Unsubscribed during compaction wait"));
       }
       if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
-        ensureCompactionPromise();
-        return compactionRetry?.promise ?? Promise.resolve();
+        return ensureCompactionPromise();
       }
       return new Promise<void>((resolve, reject) => {
         queueMicrotask(() => {
@@ -530,8 +524,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
             return;
           }
           if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
-            ensureCompactionPromise();
-            void (compactionRetry?.promise ?? Promise.resolve()).then(resolve, reject);
+            void ensureCompactionPromise().then(resolve, reject);
           } else {
             resolve();
           }

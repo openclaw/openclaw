@@ -29,6 +29,11 @@ const LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS = 300_000;
 const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
 const LOCAL_PROVIDER_AUTH_MARKERS = new Set(["custom-local", "ollama-local"]);
 const SELF_HOSTED_PROVIDER_ID_PREFIXES = ["ollama", "lmstudio", "vllm", "sglang", "llama-cpp"];
+const EXPLICIT_LOCAL_HOSTNAMES = new Set([
+  "docker.orb.internal",
+  "host.docker.internal",
+  "host.orb.internal",
+]);
 
 /**
  * Local endpoints can stay silent during prompt evaluation. Classify the URL
@@ -70,14 +75,6 @@ function isLocalProviderHostname(hostname: string): boolean {
     (a === 172 && b !== undefined && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
     (a === 100 && b !== undefined && b >= 64 && b <= 127)
-  );
-}
-
-function isExplicitLocalHostname(hostname: string): boolean {
-  return (
-    hostname === "docker.orb.internal" ||
-    hostname === "host.docker.internal" ||
-    hostname === "host.orb.internal"
   );
 }
 
@@ -149,7 +146,7 @@ function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
       (isSelfHostedProviderId(params?.model?.provider) ||
         Boolean(
           hostname &&
-          (isExplicitLocalHostname(hostname) ||
+          (EXPLICIT_LOCAL_HOSTNAMES.has(hostname) ||
             (isBareProviderHostname(hostname) &&
               hasConfiguredLocalProviderSignal({
                 cfg: params?.cfg,

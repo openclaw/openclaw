@@ -10,8 +10,6 @@ const LIVE_EDIT_DIFF_MAX_TRACKED_CALLS = 64;
 export type LiveEditDiffProgressState = {
   added: number;
   removed: number;
-  emittedAdded: number;
-  emittedRemoved: number;
   lastCheckedAtMs: number;
 };
 
@@ -90,7 +88,7 @@ export function updateLiveEditDiffProgress(
     if (stateByToolCallId.size >= LIVE_EDIT_DIFF_MAX_TRACKED_CALLS) {
       return undefined;
     }
-    progress = { added: 0, removed: 0, emittedAdded: 0, emittedRemoved: 0, lastCheckedAtMs: 0 };
+    progress = { added: 0, removed: 0, lastCheckedAtMs: 0 };
     stateByToolCallId.set(toolCallId, progress);
   }
 
@@ -107,16 +105,16 @@ export function updateLiveEditDiffProgress(
   const counted = countStreamingFileMutationLines(kind, parseStreamingJson(partialJson));
   // Streaming parses are best effort. Never move a visible counter backwards if
   // an incomplete JSON boundary temporarily exposes less of the same arguments.
-  progress.added = Math.max(progress.added, counted.added);
-  progress.removed = Math.max(progress.removed, counted.removed);
-  if (progress.added === progress.emittedAdded && progress.removed === progress.emittedRemoved) {
+  const added = Math.max(progress.added, counted.added);
+  const removed = Math.max(progress.removed, counted.removed);
+  if (added === progress.added && removed === progress.removed) {
     return undefined;
   }
-  progress.emittedAdded = progress.added;
-  progress.emittedRemoved = progress.removed;
+  progress.added = added;
+  progress.removed = removed;
   return {
     toolCallId,
     name: normalizeLowercaseStringOrEmpty(name),
-    diff: { added: progress.added, removed: progress.removed },
+    diff: { added, removed },
   };
 }

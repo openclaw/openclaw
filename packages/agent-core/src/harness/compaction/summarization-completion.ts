@@ -14,15 +14,13 @@ import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import { convertToLlm } from "../messages.js";
 import {
   CompactionError,
-  err,
   InvalidSummaryOutputError,
-  ok,
   SummaryOutputBudgetError,
   SummaryProviderError,
   type Result,
 } from "../types.js";
 import { createSummarizationContext } from "./summarization-prompts.js";
-import { extractSummaryText, serializeConversation } from "./utils.js";
+import { readSummaryResponse, serializeConversation } from "./utils.js";
 
 export interface SummarizationCompletionParams {
   messages: AgentMessage[];
@@ -68,32 +66,26 @@ export async function runSummarizationCompletion(
     : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
   // Usage belongs to the completed provider request even when its summary is invalid.
   params.runtime?.internalUsageSink?.(response.usage);
-  if (response.stopReason === "aborted") {
-    return err(
-      new CompactionError("aborted", response.errorMessage || `${params.errorLabel} aborted`),
-    );
-  }
-  if (response.stopReason === "error") {
-    return err(
-      new SummaryProviderError(
-        `${params.errorLabel} failed: ${response.errorMessage || "Unknown error"}`,
-        response,
-      ),
-    );
-  }
-
-  const summary = extractSummaryText(response);
-  if (summary === undefined) {
-    if (response.stopReason === "length") {
-      return err(
-        new SummaryOutputBudgetError(
-          `${params.errorLabel} failed: summary output budget (${params.maxTokens} tokens) was exhausted without visible text; reduce thinking or increase the selected model's maxTokens before retrying`,
-        ),
+  return readSummaryResponse(response, (kind) => {
+    if (kind === "aborted") {
+      return new CompactionError(
+        "aborted",
+        response.errorMessage || `${params.errorLabel} aborted`,
       );
     }
-    return err(
-      new InvalidSummaryOutputError(`${params.errorLabel} failed: model returned no summary text`),
+    if (kind === "error") {
+      return new SummaryProviderError(
+        `${params.errorLabel} failed: ${response.errorMessage || "Unknown error"}`,
+        response,
+      );
+    }
+    if (response.stopReason === "length") {
+      return new SummaryOutputBudgetError(
+        `${params.errorLabel} failed: summary output budget (${params.maxTokens} tokens) was exhausted without visible text; reduce thinking or increase the selected model's maxTokens before retrying`,
+      );
+    }
+    return new InvalidSummaryOutputError(
+      `${params.errorLabel} failed: model returned no summary text`,
     );
-  }
-  return ok(summary);
+  });
 }

@@ -329,7 +329,6 @@ export type EmbeddedAgentSubscribeContext = {
   flushAssistantStream: () => void;
   releaseDeferredReplies: () => void;
   clearAssistantStream: () => void;
-  clearDeferredBlockReplies: () => void;
 };
 
 export type ToolHandlerContext = Pick<
