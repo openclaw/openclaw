@@ -225,6 +225,43 @@ describe("generic current-conversation bindings", () => {
     await fs.rm(testStateDir, { recursive: true, force: true });
   });
 
+  it("persists an absolute restored deadline through touch and reopen", async () => {
+    const conversation = workspaceConversation("user:back-deadline");
+    const deadline = Date.now() + 60_000;
+    const bound = expectSessionBinding(
+      await bindGenericCurrentConversation({
+        targetSessionKey: "agent:codex:acp:workspace-dm",
+        targetKind: "session",
+        conversation,
+        expiresAt: deadline,
+      }),
+    );
+    expect(bound.expiresAt).toBe(deadline);
+    touchGenericCurrentConversationBinding(bound.bindingId, deadline - 1_000);
+    closeOpenClawStateDatabaseForTest();
+    expect(resolveGenericCurrentConversationBinding(conversation)?.expiresAt).toBe(deadline);
+  });
+
+  it("persists a fresh generation for same-millisecond replacement", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-30T16:00:00.000Z"));
+    const first = expectSessionBinding(await bindWorkspaceConversation("user:aba"));
+    const second = expectSessionBinding(await bindWorkspaceConversation("user:aba"));
+    expect(second.bindingId).toBe(first.bindingId);
+    expect(second.boundAt).toBe(first.boundAt);
+    expect(first.generation).toBe(first.metadata?.["__threadBindingGeneration"]);
+    expect(second.generation).toBe(second.metadata?.["__threadBindingGeneration"]);
+    expect(second.generation).not.toBe(first.generation);
+    expect(second.metadata?.["__threadBindingGeneration"]).not.toBe(
+      first.metadata?.["__threadBindingGeneration"],
+    );
+    closeOpenClawStateDatabaseForTest();
+    expect(resolveWorkspaceConversation("user:aba")?.generation).toBe(second.generation);
+    expect(resolveWorkspaceConversation("user:aba")?.metadata?.["__threadBindingGeneration"]).toBe(
+      second.metadata?.["__threadBindingGeneration"],
+    );
+  });
+
   it("inspects expired ownership without deleting the durable row", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(1_000_000));
@@ -365,6 +402,7 @@ describe("generic current-conversation bindings", () => {
         ...(replace ? {} : metadata),
         label: "updated",
         lastActivityAt: expect.any(Number),
+        __threadBindingGeneration: expect.any(String),
       });
     },
   );
@@ -681,6 +719,22 @@ describe("generic current-conversation bindings", () => {
         conversationId: "6098642967",
       }),
     ).toBeNull();
+  });
+
+  it("keeps a generic binding when Back removal authority is revoked", async () => {
+    const bound = expectSessionBinding(await bindWorkspaceConversation("user:revoked-back"));
+    await expect(
+      unbindGenericCurrentConversationBindings({
+        bindingId: bound.bindingId,
+        reason: "conversation-fork-back",
+        assertCurrent: () => {
+          throw new Error("revoked");
+        },
+      }),
+    ).rejects.toThrow("revoked");
+    expect(resolveGenericCurrentConversationBinding(bound.conversation)?.targetSessionKey).toBe(
+      bound.targetSessionKey,
+    );
   });
 
   it.each(["touch", "unbind"] as const)(

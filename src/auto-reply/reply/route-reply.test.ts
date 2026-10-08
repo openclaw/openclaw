@@ -183,6 +183,24 @@ describe("routeReply", () => {
     setActivePluginRegistry(createTestRegistry());
   });
 
+  it("carries a live replay guard through reply preparation to adapter handoff", async () => {
+    let authorized = true;
+    await routeTestReply({
+      payload: { text: "fork replay" },
+      channel: "telegram",
+      to: "chat:fork",
+      assertDirectAdapterHandoff: () => {
+        if (!authorized) {
+          throw new Error("owner revoked");
+        }
+      },
+    });
+    const handoff = lastDelivery().assertDirectAdapterHandoff;
+    expect(typeof handoff).toBe("function");
+    authorized = false;
+    expect(() => (handoff as () => void)()).toThrow("owner revoked");
+  });
+
   it.each([
     { channel: "slack", aborted: true, error: "Reply routing aborted" },
     {

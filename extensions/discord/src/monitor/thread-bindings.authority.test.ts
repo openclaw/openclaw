@@ -263,4 +263,39 @@ describe("thread binding current authority", () => {
       await manager.stop();
     }
   });
+
+  it("does not publish a fork route after child thread creation revokes its owner", async () => {
+    const manager = await createTestThreadBindingManager();
+    let ownerCurrent = true;
+    fixture.restGet.mockResolvedValueOnce({ id: PARENT_ID, type: ChannelType.GuildText });
+    fixture.restPost.mockImplementationOnce(async () => {
+      ownerCurrent = false;
+      return { id: CREATED_THREAD_ID };
+    });
+    try {
+      await expect(
+        getSessionBindingService().bind({
+          targetSessionKey: "agent:main:forked",
+          targetKind: "session",
+          conversation: {
+            channel: "discord",
+            accountId: "default",
+            conversationId: PARENT_ID,
+            parentConversationId: PARENT_ID,
+          },
+          placement: "child",
+          metadata: { conversationFork: { version: 1 } },
+          assertCurrent: () => {
+            if (!ownerCurrent) {
+              throw new Error("Command owner was revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("Command owner was revoked");
+      expect(manager.getByThreadId(CREATED_THREAD_ID)).toBeUndefined();
+      expect(fixture.restPost).toHaveBeenCalledOnce();
+    } finally {
+      await manager.stop();
+    }
+  });
 });

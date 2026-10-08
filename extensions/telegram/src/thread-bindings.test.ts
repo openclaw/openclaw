@@ -421,13 +421,9 @@ describe("telegram thread bindings", () => {
         expect(nativeCreates).toBe(0);
         expect(manager.getByConversationId("-100200300:topic:88")).toBeUndefined();
       } else {
-        await expect(result).resolves.toMatchObject({
-          targetSessionKey: "agent:main:created-topic",
-        });
+        await expect(result).rejects.toThrow("failed to bind");
         expect(nativeCreates).toBe(1);
-        expect(manager.getByConversationId("-100200300:topic:88")).toMatchObject({
-          targetSessionKey: "agent:main:created-topic",
-        });
+        expect(manager.getByConversationId("-100200300:topic:88")).toBeUndefined();
       }
     },
   );
@@ -703,12 +699,18 @@ describe("telegram thread bindings", () => {
           boundAt: Date.parse("2026-03-06T10:00:00.000Z"),
           lastActivityAt: Date.parse("2026-03-06T12:00:00.000Z"),
         });
-        expect(reloaded.getByConversationId("thread")?.metadata).toStrictEqual({ retained: "yes" });
+        expect(reloaded.getByConversationId("thread")?.metadata).toEqual({
+          retained: "yes",
+          __threadBindingGeneration: expect.any(String),
+        });
         const stored = (await storedBindings()).find(
           (binding) => binding.accountId === manager.accountId,
         );
         expect(stored?.idleTimeoutMs).toBe(90_000);
-        expect(stored?.metadata).toStrictEqual({ retained: "yes" });
+        expect(stored?.metadata).toEqual({
+          retained: "yes",
+          __threadBindingGeneration: expect.any(String),
+        });
       } else {
         expect(reloaded.getByConversationId("thread")).toBeUndefined();
         expect(

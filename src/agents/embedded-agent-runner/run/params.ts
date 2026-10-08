@@ -55,6 +55,8 @@ export type ResolvedToolPromptFinalizer = (params: {
 }) => string;
 
 export type RunEmbeddedAgentParams = {
+  /** Host-only fork replay authority, rechecked at each physical provider call. */
+  assertForkReplaySourceCurrent?: () => void;
   /** Host-minted parent audience inherited by a trusted internal child run. */
   memoryAudience?: import("../../../plugins/memory-provider-types.js").MemoryAudience;
   /** Detached runs may read session identity but never write its durable transcript or metadata. */

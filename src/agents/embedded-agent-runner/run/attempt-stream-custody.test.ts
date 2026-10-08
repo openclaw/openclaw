@@ -85,6 +85,7 @@ async function createFixture(
     >["withSessionWriteSettlement"];
     toolNames?: string[];
     thinkingRecovery?: boolean;
+    assertForkReplaySourceCurrent?: () => void;
   } = {},
 ) {
   const model = options.thinkingRecovery
@@ -178,6 +179,7 @@ async function createFixture(
       sessionId: target.sessionId,
       sessionKey: target.sessionKey,
       timeoutMs: 120_000,
+      assertForkReplaySourceCurrent: options.assertForkReplaySourceCurrent,
     },
     runAbortController: controller,
     prepared: {
@@ -255,6 +257,23 @@ async function createFixture(
 }
 
 describe("installed replay repair ownership", () => {
+  it("checks fork replay source immediately before physical provider I/O", async () => {
+    let current = true;
+    const provider = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    const fixture = await createFixture(provider, {
+      assertForkReplaySourceCurrent: () => {
+        if (!current) {
+          throw new Error("fork replay source changed");
+        }
+      },
+    });
+    current = false;
+    await expect(Promise.resolve().then(() => fixture.open())).rejects.toThrow(
+      "fork replay source changed",
+    );
+    expect(provider).not.toHaveBeenCalled();
+  });
+
   it("closes a partial-only thinking stream without waiting for ordinary provider completion", async () => {
     const source = createAssistantMessageEventStream();
     const fixture = await createFixture(

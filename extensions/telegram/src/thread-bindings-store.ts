@@ -11,6 +11,7 @@ export type TelegramThreadBindingRecord =
   AccountScopedConversationBindingRecord<TelegramBindingTargetKind> & {
     idleTimeoutMs?: number;
     maxAgeMs?: number;
+    expiresAt?: number;
     metadata?: Record<string, unknown>;
   };
 
@@ -31,6 +32,7 @@ export type TelegramThreadBindingManager = {
     reason?: string;
     sendFarewell?: boolean;
     throwOnPersistError?: boolean;
+    assertCurrent?: () => void;
   }) => Promise<TelegramThreadBindingRecord | null>;
   unbindBySessionKey: (params: {
     targetSessionKey: string;
@@ -105,6 +107,9 @@ export function sanitizeStoredBinding(
   }
   if (typeof entry?.maxAgeMs === "number" && Number.isFinite(entry.maxAgeMs)) {
     record.maxAgeMs = Math.max(0, Math.floor(entry.maxAgeMs));
+  }
+  if (typeof entry?.expiresAt === "number" && Number.isFinite(entry.expiresAt)) {
+    record.expiresAt = Math.floor(entry.expiresAt);
   }
   for (const field of ["agentId", "label", "boundBy"] as const) {
     const value = entry?.[field];

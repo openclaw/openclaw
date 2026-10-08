@@ -388,6 +388,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     }),
     personalBootstrapEligible,
     operatorAuthority: opts?.operatorAuthority,
+    assertForkReplaySourceCurrent: opts?.assertForkReplaySourceCurrent,
+    disableCollectBatching: Boolean(opts?.assertForkReplaySourceCurrent),
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,

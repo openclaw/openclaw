@@ -500,6 +500,18 @@ export function buildBuiltinChatCommands(
         }),
       ],
     }),
+    defineBuiltinCommand(
+      "fork",
+      "Fork this conversation (or /fork --back to return).",
+      "session",
+      "essential",
+      {
+        acceptsArgs: true,
+        activeRunSafe: true,
+        modelIndependent: "always",
+        textAliases: ["/fork", "/split"],
+      },
+    ),
     defineBuiltinCommand("compact", "Compact the session context.", "session", "essential", {
       args: [
         defineCommandArgument("instructions", "Extra compaction instructions", {

@@ -17,6 +17,8 @@ export type ThreadBindingRecord = {
   idleTimeoutMs?: number;
   /** Hard max-age window in milliseconds from bind time (0 disables hard cap). */
   maxAgeMs?: number;
+  /** Original route deadline restored by /fork --back; never extended by touch. */
+  expiresAt?: number;
   metadata?: Record<string, unknown>;
 };
 
@@ -53,10 +55,11 @@ export type ThreadBindingManager = {
     webhookId?: string;
     webhookToken?: string;
     metadata?: Record<string, unknown>;
+    expiresAt?: number;
   }) => Promise<ThreadBindingRecord | null>;
   unbindThread: (params: {
-    assertCurrent?: () => void;
     threadId: string;
+    assertCurrent?: () => void;
     expected?: ThreadBindingRecord;
     persist?: boolean;
     reason?: string;

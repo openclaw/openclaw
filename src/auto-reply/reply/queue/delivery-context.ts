@@ -4,6 +4,8 @@ import { withSandboxRuntimeStatusesInWorker } from "../../../agents/sandbox/runt
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { combineChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { combineGatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
@@ -19,6 +21,23 @@ import {
   type FollowupRun,
   type QueuedFollowupReplyBatch,
 } from "./types.js";
+
+export function resolveFollowupTranscriptTarget(source: FollowupRun) {
+  const sessionKey = normalizeOptionalString(source.run.sessionKey) ?? source.run.sessionId;
+  const storePath = resolveSessionStorePathCore(source.run.config.session?.store, {
+    agentId: source.run.agentId,
+  });
+  const sessionEntry = loadSessionEntryReadOnly({ storePath, sessionKey, clone: false });
+  return {
+    sessionId: sessionEntry?.sessionId ?? source.run.sessionId,
+    sessionKey,
+    sessionEntry,
+    storePath,
+    agentId: source.run.agentId,
+    cwd: source.run.cwd ?? source.run.workspaceDir,
+    config: source.run.config,
+  };
+}
 
 export function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
   return (
@@ -288,6 +307,7 @@ type FollowupRuntimeMetadata = Pick<
   FollowupRun,
   | "sourceTurnId"
   | "operatorAuthority"
+  | "assertForkReplaySourceCurrent"
   | "personalBootstrapEligible"
   | "currentInboundEventKind"
   | "currentInboundAudio"
@@ -402,6 +422,13 @@ export function collectRuntimeMetadata(
   return {
     sourceTurnId: authoritySource?.sourceTurnId,
     operatorAuthority: authoritySource?.operatorAuthority,
+    assertForkReplaySourceCurrent: items.some((item) => item.assertForkReplaySourceCurrent)
+      ? () => {
+          for (const item of items) {
+            item.assertForkReplaySourceCurrent?.();
+          }
+        }
+      : undefined,
     ...(items.length > 0 && items.every((item) => item.personalBootstrapEligible === true)
       ? { personalBootstrapEligible: true }
       : {}),
@@ -456,6 +483,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     sourceTurnId: source.sourceTurnId,
     admissionSessionId: source.admissionSessionId,
     operatorAuthority: source.operatorAuthority,
+    assertForkReplaySourceCurrent: source.assertForkReplaySourceCurrent,
     personalBootstrapEligible: source.personalBootstrapEligible,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,

@@ -154,6 +154,34 @@ describe("thread binding creation", () => {
     },
   );
 
+  it("keeps a restored Discord route's absolute deadline through activity refresh", async () => {
+    await createTestThreadBindingManager({ accountId: "default" });
+    const restoredConversation = {
+      channel: "discord",
+      accountId: "default",
+      conversationId: "user:1177378744822943744",
+    };
+    const deadline = Date.now() + 60_000;
+    const restored = await service.bind({
+      targetSessionKey: "agent:main:source",
+      targetKind: "session",
+      conversation: restoredConversation,
+      placement: "current",
+      expiresAt: deadline,
+    });
+    expect(restored.expiresAt).toBe(deadline);
+    expect(restored.generation).toEqual(expect.any(String));
+    expect(restored.metadata?.["__threadBindingGeneration"]).toBe(restored.generation);
+    service.touch(restored.bindingId, deadline - 1_000, {
+      channel: "discord",
+      accountId: "default",
+    });
+    expect(service.resolveByConversation(restoredConversation)?.expiresAt).toBe(deadline);
+    expect(service.resolveByConversation(restoredConversation)?.generation).toBe(
+      restored.generation,
+    );
+  });
+
   it("isolates overlapping thread ids across accounts", async () => {
     const a = await createTestThreadBindingManager({ accountId: "a" });
     const b = await createTestThreadBindingManager({ accountId: "b" });

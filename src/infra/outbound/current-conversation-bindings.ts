@@ -1,5 +1,6 @@
 // Generic current-conversation bindings persist lightweight conversation ->
 // session links for plugin channels without a custom binding adapter.
+import { randomUUID } from "node:crypto";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   asDateTimestampMs,
@@ -278,31 +279,44 @@ export async function bindGenericCurrentConversation(
     typeof input.ttlMs === "number" && Number.isFinite(input.ttlMs)
       ? Math.max(0, Math.floor(input.ttlMs))
       : undefined;
+  const absoluteExpiresAt =
+    input.expiresAt === undefined ? undefined : asDateTimestampMs(input.expiresAt);
   const expiresAt =
-    ttlMs === undefined
-      ? undefined
-      : ttlMs === 0
-        ? now
-        : resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
-  if (ttlMs !== undefined && expiresAt === undefined) {
+    input.expiresAt !== undefined
+      ? absoluteExpiresAt
+      : ttlMs === undefined
+        ? undefined
+        : ttlMs === 0
+          ? now
+          : resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  if (
+    (input.expiresAt !== undefined && (expiresAt === undefined || expiresAt <= now)) ||
+    (ttlMs !== undefined && expiresAt === undefined)
+  ) {
     return null;
   }
   const captured = captureGenericBindingSupport(conversation);
   if (!captured.supported) {
     return null;
   }
+  const generation = randomUUID();
   return bindCurrentConversationRecordAsync(
     {
       expected: input[expectedCurrentSessionBinding],
       record: {
         bindingId: buildBindingId(conversation),
+        generation,
         targetSessionKey,
         targetKind: input.targetKind,
         conversation,
         status: "active",
         boundAt: now,
         ...(expiresAt !== undefined ? { expiresAt } : {}),
-        metadata: { ...input.metadata, lastActivityAt: now },
+        metadata: {
+          ...input.metadata,
+          lastActivityAt: now,
+          __threadBindingGeneration: generation,
+        },
       },
     },
     () => {
@@ -375,7 +389,10 @@ export async function unbindGenericCurrentConversationBindings(
             bindingId: normalizedBindingId,
             expected: input[expectedCurrentSessionBinding],
           },
-          captured.assertCurrent,
+          () => {
+            input.assertCurrent?.();
+            captured.assertCurrent();
+          },
         )
       : [];
   }
@@ -389,6 +406,7 @@ export async function unbindGenericCurrentConversationBindings(
           genericOnly: true,
         },
         () => {
+          input.assertCurrent?.();
           if (getActivePluginChannelRegistrySnapshotFromState() !== registry) {
             throw new SessionBindingError(
               "BINDING_ADAPTER_UNAVAILABLE",

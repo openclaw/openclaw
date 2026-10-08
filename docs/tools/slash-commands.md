@@ -212,6 +212,8 @@ plugins, and installed skills.
     | `/new [model]` | Archive the current session and start a fresh one |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
     | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
+    | `/fork [title]` | Owner-only. Fork at the current tip, or reply to a text user message with recorded conversation provenance to branch from that turn. Replies to assistant or media messages are not yet supported. Creates a child conversation where supported; otherwise switches this conversation. Alias: `/split` |
+    | `/fork --back` | Return to the previous session in the current conversation, or show the original conversation link from a child topic |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |

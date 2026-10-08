@@ -1,13 +1,10 @@
 import { createHash } from "node:crypto";
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions.js";
-import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import {
   channelRouteCompactKey,
   channelRouteDedupeKey,
@@ -49,6 +46,7 @@ import {
   prepareNextDeliveryGroup,
   resolveFollowupReplyAnchor,
   resolveOverflowSummaryInboundEventKind,
+  resolveFollowupTranscriptTarget,
 } from "./delivery-context.js";
 import {
   admitFollowupRunLifecycle,
@@ -328,27 +326,6 @@ function buildCollectTranscriptInput(
     },
   });
   return { text, mentions };
-}
-
-function resolveFollowupTranscriptTarget(source: FollowupRun) {
-  const sessionKey = normalizeOptionalString(source.run.sessionKey) ?? source.run.sessionId;
-  const storePath = resolveSessionStorePathCore(source.run.config.session?.store, {
-    agentId: source.run.agentId,
-  });
-  const sessionEntry = loadSessionEntryReadOnly({
-    storePath,
-    sessionKey,
-    clone: false,
-  });
-  return {
-    sessionId: sessionEntry?.sessionId ?? source.run.sessionId,
-    sessionKey,
-    sessionEntry,
-    storePath,
-    agentId: source.run.agentId,
-    cwd: source.run.cwd ?? source.run.workspaceDir,
-    config: source.run.config,
-  };
 }
 
 function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
@@ -791,6 +768,8 @@ async function runSyntheticOverflowSummary(params: {
     channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
     gatewayLocalUserIngress: runtimeMetadata.gatewayLocalUserIngress,
     operatorAuthority: runtimeMetadata.operatorAuthority,
+    assertForkReplaySourceCurrent: runtimeMetadata.assertForkReplaySourceCurrent,
+    disableCollectBatching: Boolean(runtimeMetadata.assertForkReplaySourceCurrent),
     personalBootstrapEligible: runtimeMetadata.personalBootstrapEligible,
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,

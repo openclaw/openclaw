@@ -18,6 +18,25 @@ import {
   readGatewayLocalUserIngressFacts,
   type GatewayLocalUserIngress,
 } from "../../gateway/local-user-ingress.js";
+import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
+
+export function resolveAgentRunSourceAssertion(followupRun: {
+  run: object & { senderIsOwner?: boolean };
+  assertForkReplaySourceCurrent?: () => void;
+}): (() => void) | undefined {
+  const assertOwnerCurrent =
+    followupRun.run.senderIsOwner === true
+      ? captureCommandOwnerAssertion(followupRun.run)
+      : undefined;
+  const assertForkReplaySourceCurrent = followupRun.assertForkReplaySourceCurrent;
+  if (!assertOwnerCurrent && !assertForkReplaySourceCurrent) {
+    return undefined;
+  }
+  return () => {
+    assertOwnerCurrent?.();
+    assertForkReplaySourceCurrent?.();
+  };
+}
 
 /** Adapt reply ingress to admission; authenticated Gateway attach has no plugin-channel decision. */
 function consumeChannelRunAdmission(

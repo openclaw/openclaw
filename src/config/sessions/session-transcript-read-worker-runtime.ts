@@ -10,6 +10,7 @@ import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-err
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { createSessionTranscriptReadPool } from "./session-transcript-read-pools.js";
 import type {
+  SessionForkReplySelectionWorkerInput,
   SessionEntryWorkerInput,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
@@ -27,6 +28,22 @@ const modelContextReads = createSessionTranscriptReadPool<
 const sessionEntries = createSessionTranscriptReadPool<
   SessionEntryWorkerInput | SessionResetRecallWorkerInput
 >(resolveWorkerPoolSize("singleton"), true);
+
+const forkReplySelections = createSessionTranscriptReadPool<SessionForkReplySelectionWorkerInput>(
+  resolveWorkerPoolSize("singleton"),
+  true,
+);
+
+export async function readSessionForkReplySelectionInWorker(
+  input: Omit<SessionForkReplySelectionWorkerInput, "kind">,
+) {
+  return unwrapSessionTranscriptWorkerReply<"fork-reply-selection">(
+    await forkReplySelections.run(
+      { kind: "fork-reply-selection", ...input },
+      { inputBytes: JSON.stringify(input).length * 2, timeoutMs: 60_000 },
+    ),
+  );
+}
 
 export async function readSessionTranscriptModelContextInWorker(
   target: SessionTranscriptRuntimeTarget,

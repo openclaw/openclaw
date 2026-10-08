@@ -9,6 +9,7 @@ import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import { handleContextCommand } from "./commands-context-command.js";
 import { handleDashboardCommand } from "./commands-dashboard.js";
 import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
+import { handleForkCommand } from "./commands-fork.js";
 import { handleGoalCommand } from "./commands-goal.js";
 import {
   handleCommandsListCommand,
@@ -49,6 +50,7 @@ export function loadCommandHandlers(): CommandHandler[] {
   return [
     // Plugin text commands must win before built-in auth routing handles /login.
     handlePluginCommand,
+    handleForkCommand,
     handleLoginCommand,
     handleBtwCommand,
     handleBashCommand,

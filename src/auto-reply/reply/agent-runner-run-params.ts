@@ -211,6 +211,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     currentInboundEventKind: turn.followupRun.currentInboundEventKind,
     currentInboundContext: turn.followupRun.currentInboundContext,
+    assertForkReplaySourceCurrent: turn.followupRun.assertForkReplaySourceCurrent,
     extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
     sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
     // Omit false so heartbeat routes require explicit recipients without changing subagent defaults.

@@ -254,6 +254,7 @@ function createLoadedThreadBindingManager(
       return null;
     }
     const { bindingKey, record: existingLocal } = binding;
+    unbindParams.assertCurrent?.();
     await commitBindingRecord({
       bindingKey,
       previous: existingLocal,
@@ -476,11 +477,28 @@ function createLoadedThreadBindingManager(
               ? existingValue.idleTimeoutMs
               : idleTimeoutMs,
           maxAgeMs: typeof existingValue?.maxAgeMs === "number" ? existingValue.maxAgeMs : maxAgeMs,
-          metadata: { ...previous?.metadata, ...bindParams.metadata },
+          ...(bindParams.expiresAt !== undefined
+            ? { expiresAt: Math.floor(bindParams.expiresAt) }
+            : previous?.expiresAt !== undefined
+              ? { expiresAt: previous.expiresAt }
+              : {}),
+          metadata: {
+            ...previous?.metadata,
+            ...bindParams.metadata,
+            __threadBindingGeneration: crypto.randomUUID(),
+          },
         };
+        if (
+          bindParams.expiresAt !== undefined &&
+          (!Number.isFinite(record.expiresAt) || (record.expiresAt ?? 0) <= now)
+        ) {
+          throw new Error("saved binding deadline expired before return");
+        }
 
-        // A confirmed native create must be published even if its initiator was revoked in flight.
-        if (!nativeBindingCreated) {
+        // Fork placement cannot grant a route after its initiating owner is revoked.
+        // Other callers retain the established native-create settlement contract.
+        const requireForkAuthority = bindParams.metadata?.conversationFork !== undefined;
+        if (!nativeBindingCreated || requireForkAuthority) {
           assertCurrent?.();
         }
         await runThreadBindingMutation(() =>
@@ -491,7 +509,7 @@ function createLoadedThreadBindingManager(
             persist,
             assertCurrent: () => {
               assertManagerCurrent();
-              if (!nativeBindingCreated) {
+              if (!nativeBindingCreated || requireForkAuthority) {
                 assertCurrent?.();
               }
             },

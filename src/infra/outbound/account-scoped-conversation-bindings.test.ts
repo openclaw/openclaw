@@ -79,6 +79,89 @@ describe("account-scoped conversation binding expiry", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps an absolute restored deadline through worker touch and reopen", async () => {
+    const manager = createManager();
+    const service = getSessionBindingService();
+    const conversation = {
+      channel: "imessage",
+      accountId: manager.accountId,
+      conversationId: "chat:back-deadline",
+    };
+    const deadline = Date.now() + 60_000;
+    const bound = await service.bind({
+      targetSessionKey: "agent:main:source",
+      targetKind: "session",
+      conversation,
+      expiresAt: deadline,
+    });
+    expect(bound.expiresAt).toBe(deadline);
+    await service.touchAsync(bound.bindingId, Date.now() + 1_000, {
+      channel: "imessage",
+      accountId: manager.accountId,
+    });
+    expect(service.resolveByConversation(conversation)?.expiresAt).toBe(deadline);
+    manager.stop();
+    closeOpenClawStateDatabaseForTest();
+    createManager();
+    expect(service.resolveByConversation(conversation)?.expiresAt).toBe(deadline);
+  });
+
+  it("mints a new generation on replacement and keeps it through both touch paths and reopen", async () => {
+    const manager = createManager();
+    const service = getSessionBindingService();
+    const conversation = {
+      channel: "imessage",
+      accountId: manager.accountId,
+      conversationId: "chat:fork-generation",
+    };
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const input = {
+      targetSessionKey: "agent:main:source",
+      targetKind: "session" as const,
+      conversation,
+    };
+    const first = await service.bind(input);
+    const second = await service.bind(input);
+    clock.mockRestore();
+    expect(first.generation).toEqual(expect.any(String));
+    expect(second.generation).toEqual(expect.any(String));
+    expect(second.generation).not.toBe(first.generation);
+    expect(second.metadata?.["__threadBindingGeneration"]).toBe(second.generation);
+
+    manager.touchConversation(conversation.conversationId, now + 1_000);
+    expect(service.resolveByConversation(conversation)?.generation).toBe(second.generation);
+    await service.touchAsync(second.bindingId, now + 2_000, {
+      channel: "imessage",
+      accountId: manager.accountId,
+    });
+    expect(service.resolveByConversation(conversation)?.generation).toBe(second.generation);
+    manager.stop();
+    closeOpenClawStateDatabaseForTest();
+    createManager();
+    expect(service.resolveByConversation(conversation)?.generation).toBe(second.generation);
+  });
+
+  it("checks live authority inside an account-scoped binding replacement", async () => {
+    const manager = createManager();
+    const conversation = {
+      channel: "imessage",
+      accountId: manager.accountId,
+      conversationId: "chat:denied-fork",
+    };
+    await expect(
+      getSessionBindingService().bind({
+        targetSessionKey: "agent:main:fork",
+        targetKind: "session",
+        conversation,
+        assertCurrent: () => {
+          throw new Error("owner revoked");
+        },
+      }),
+    ).rejects.toThrow("owner revoked");
+    expect(getSessionBindingService().resolveByConversation(conversation)).toBeNull();
+  });
+
   it("preserves account-owned bindings after stop, manager recreation, and database reopen", () => {
     const manager = createManager();
     const binding = bindConversation(manager, { conversationId: "chat:durable-owner" });

@@ -4,14 +4,12 @@ import {
   resolveThreadBindingLifecycle,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { runQueuedStoreWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createAccountScopedBindingAdapter } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
-import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   loadBindingsFromStore,
   persistBindingMutation,
@@ -36,7 +34,7 @@ import {
   type TelegramThreadBindingManager,
   type TelegramThreadBindingRecord,
 } from "./thread-bindings-store.js";
-import { resolveTelegramToken } from "./token.js";
+import { createChildForumTopic } from "./thread-bindings-topic.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
@@ -180,7 +178,11 @@ async function initializeThreadBindingManager(
         return nextRecord;
       });
     },
-    unbindConversation: ({ conversationId: conversationIdRaw, throwOnPersistError }) =>
+    unbindConversation: ({
+      conversationId: conversationIdRaw,
+      throwOnPersistError,
+      assertCurrent,
+    }) =>
       mutate(async () => {
         const mutation = captureConversationMutation(conversationIdRaw);
         if (!mutation?.previous) {
@@ -191,6 +193,7 @@ async function initializeThreadBindingManager(
           remove: true,
           reason: "unbind-conversation",
           throwOnError: throwOnPersistError,
+          assertCurrent,
         });
         return removed;
       }),
@@ -320,26 +323,18 @@ async function initializeThreadBindingManager(
             (normalizeOptionalString(metadata.threadName) ?? "") ||
             (normalizeOptionalString(metadata.label) ?? "") ||
             `Agent: ${targetSessionKey.split(":").pop()}`;
-          try {
-            const tokenResolution = resolveTelegramToken(params.cfg, { accountId });
-            if (!tokenResolution.token) {
-              return null;
-            }
-            const { createForumTopicTelegram } = await loadTelegramSendModule();
-            const result = await createForumTopicTelegram(chatId, threadName, {
-              cfg: params.cfg,
-              token: tokenResolution.token,
-              accountId,
-              ...(assertCurrent ? { assertPlatformSendAuthorized: assertCurrent } : {}),
-            });
-            conversationId = `${result.chatId}:topic:${result.topicId}`;
-            nativeTopicCreated = true;
-          } catch (err) {
-            logVerbose(
-              `telegram: child thread-binding failed for ${chatId}: ${formatErrorMessage(err)}`,
-            );
+          const topic = await createChildForumTopic({
+            cfg: params.cfg,
+            accountId,
+            chatId,
+            threadName,
+            assertCurrent,
+          });
+          if (!topic) {
             return null;
           }
+          conversationId = `${topic.chatId}:topic:${topic.topicId}`;
+          nativeTopicCreated = true;
         } else {
           conversationId = normalizeOptionalString(prepared.conversation.conversationId);
         }
@@ -356,6 +351,7 @@ async function initializeThreadBindingManager(
             targetKind,
             conversationId,
             metadata,
+            ...(prepared.expiresAt !== undefined ? { expiresAt: prepared.expiresAt } : {}),
           },
         });
         if (!nativeTopicCreated) {
@@ -399,12 +395,13 @@ async function initializeThreadBindingManager(
       manager.updateConversationSync(conversationId, (current) => ({ ...current, lastActivityAt }));
     },
     touchConversationAsync: manager.touchConversation,
-    unbindConversation: (conversationId, reason) =>
+    unbindConversation: (conversationId, reason, assertCurrent) =>
       manager.unbindConversation({
         conversationId,
         reason,
         sendFarewell: false,
         throwOnPersistError: true,
+        assertCurrent,
       }),
     unbindBySessionKey: (targetSessionKey, reason) =>
       manager.unbindBySessionKey({

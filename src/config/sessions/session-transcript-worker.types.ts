@@ -73,6 +73,7 @@ import type {
   SessionEntryReadScope,
   SessionEntrySummary,
   SessionTranscriptReadScope,
+  SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type {
@@ -420,8 +421,17 @@ export type SessionHistoryWorkerInput =
   | SessionTranscriptSearchWorkerInput
   | SessionTranscriptMatchWorkerInput;
 
+export type SessionForkReplySelectionWorkerInput = {
+  kind: "fork-reply-selection";
+  target: SessionTranscriptRuntimeTarget;
+  replyToId: string;
+  conversation: import("../../infra/outbound/session-binding.types.js").ConversationRef;
+  replyConversationRef?: string;
+};
+
 export type SessionTranscriptWorkerInput =
   | SessionSqliteTargetWorkerInput
+  | SessionForkReplySelectionWorkerInput
   | SessionHistoryWorkerInput
   | SessionModelContextWorkerInput
   | SessionContextMessagesWorkerInput
@@ -446,6 +456,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     result: SessionTranscriptVisibleMessageDeltaResult;
   };
   "session-memory-capture": { kind: "session-memory-capture"; result: SessionMemoryTranscript };
+  "fork-reply-selection": import("./session-transcript-fork-reply.js").SessionForkReplySelection;
   "board-snapshot": {
     kind: "board-snapshot";
     value: BoardReadOperations["boards.readSnapshot"]["output"];

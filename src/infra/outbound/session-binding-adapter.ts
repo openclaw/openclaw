@@ -22,6 +22,7 @@ export function projectThreadBindingRecord(
     bindingId?: string;
     targetKind: BindingTargetKind;
     lifecycle: { expiresAt?: number; idleTimeoutMs: number; maxAgeMs: number };
+    generation?: string;
     metadata?: (lifecycleMetadata: Record<string, unknown>) => Record<string, unknown>;
   },
 ): SessionBindingRecord {
@@ -37,6 +38,7 @@ export function projectThreadBindingRecord(
   };
   return {
     bindingId: params.bindingId ?? `${record.accountId}:${params.conversation.conversationId}`,
+    ...(params.generation ? { generation: params.generation } : {}),
     targetSessionKey: record.targetSessionKey,
     targetKind: params.targetKind,
     conversation: { channel, accountId: record.accountId, ...conversation },
@@ -58,7 +60,11 @@ export function createAccountScopedBindingAdapter<T>(params: {
   getByConversation: (ref: ConversationRef) => T | null | undefined;
   touchConversation: (conversationId: string, at?: number) => unknown;
   touchConversationAsync?: (conversationId: string, at?: number) => Promise<unknown>;
-  unbindConversation: (conversationId: string, reason: string) => T | null | Promise<T | null>;
+  unbindConversation: (
+    conversationId: string,
+    reason: string,
+    assertCurrent?: () => void,
+  ) => T | null | Promise<T | null>;
   unbindBySessionKey: (targetSessionKey: string, reason: string) => T[] | Promise<T[]>;
 }): SessionBindingAdapter {
   const touchAsync = params.touchConversationAsync;
@@ -98,7 +104,7 @@ export function createAccountScopedBindingAdapter<T>(params: {
       }
       const conversationId = conversationIdFromBinding(input.bindingId);
       const removed = conversationId
-        ? await params.unbindConversation(conversationId, input.reason)
+        ? await params.unbindConversation(conversationId, input.reason, input.assertCurrent)
         : null;
       return removed ? [params.project(removed)] : [];
     },
