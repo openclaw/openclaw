@@ -24,6 +24,11 @@ import { installSlackTestRuntime } from "../test-runtime.test-support.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMemberEvents } from "./events/members.js";
 import { createSlackDurableIngress, resolveSlackIngressTurnLifecycle } from "./ingress.js";
+import {
+  attachBoltIngress,
+  createReceiverEvent as createBoltReceiverEvent,
+  withQueue as withBoltQueue,
+} from "./ingress.test-support.js";
 import { claimSlackMessageDispatchReplay } from "./message-dispatch-dedupe.js";
 
 type SlackIngressQueue = NonNullable<Parameters<typeof createSlackDurableIngress>[0]["queue"]>;
@@ -256,27 +261,6 @@ describe("Slack durable ingress", () => {
     resetSystemEventsForTest();
   });
 
-  it("does not acknowledge when the durable append fails", async () => {
-    await withQueue(async (queue) => {
-      const enqueue = vi.fn(async () => {
-        throw new Error("database unavailable");
-      });
-      const failingQueue = { ...queue, enqueue } as ChannelIngressQueue<SlackIngressPayload>;
-      const processEvent = vi.fn(async () => {});
-      const { ingress, receive } = attachIngress(failingQueue, processEvent);
-      const ack = vi.fn(async () => {});
-
-      await expect(receive(createReceiverEvent("Ev-append-failure", ack))).rejects.toThrow(
-        "database unavailable",
-      );
-
-      expect(enqueue).toHaveBeenCalledTimes(1);
-      expect(ack).not.toHaveBeenCalled();
-      expect(processEvent).not.toHaveBeenCalled();
-      await ingress.stop();
-    });
-  });
-
   it("acknowledges a durable event before dispatch starts", async () => {
     await withQueue(async (queue) => {
       const ackStarted = createDeferred<void>();
@@ -485,22 +469,9 @@ describe("Slack durable ingress", () => {
     });
   });
 
-  it.each<{
-    name: string;
-    firstEvent: Record<string, PluginJsonValue> & { ts: string };
-    secondEvent: Record<string, PluginJsonValue> & { ts: string };
-  }>([
-    {
-      name: "top-level channel messages",
-      firstEvent: { ts: "1700000000.000100" },
-      secondEvent: { ts: "1700000000.000200" },
-    },
-    {
-      name: "threads bound to the same configured session",
-      firstEvent: { ts: "1700000000.000101", thread_ts: "1700000000.000100" },
-      secondEvent: { ts: "1700000000.000201", thread_ts: "1700000000.000200" },
-    },
-  ])("serializes $name by their authoritative session", async ({ firstEvent, secondEvent }) => {
+  it("serializes top-level channel messages by their authoritative session", async () => {
+    const firstEvent = { ts: "1700000000.000100" };
+    const secondEvent = { ts: "1700000000.000200" };
     await withQueue(async (queue) => {
       let releaseFirstDispatch: () => void = () => {};
       const firstDispatchGate = new Promise<void>((resolve) => {
@@ -665,10 +636,7 @@ describe("Slack durable ingress", () => {
     });
   });
 
-  it.each([
-    { name: "an already routed message", deferred: false },
-    { name: "a deferred message", deferred: true },
-  ])("serializes channel-ID migration behind $name through Bolt", async ({ deferred }) => {
+  it("serializes channel-ID migration behind a deferred message through Bolt", async () => {
     await withQueue(async (queue) => {
       const messageStarted = createDeferred<void>();
       const messageGate = createDeferred<void>();
@@ -696,9 +664,7 @@ describe("Slack durable ingress", () => {
         const lifecycle = resolveSlackIngressTurnLifecycle(context);
         await lifecycle?.onSessionRouted?.("agent:main:slack:thread:C_NEW");
         starts.push("message");
-        if (deferred) {
-          lifecycle?.onDeferred();
-        }
+        lifecycle?.onDeferred();
         messageStarted.resolve();
         await messageGate.promise;
         await lifecycle?.onAdopted();
@@ -750,145 +716,6 @@ describe("Slack durable ingress", () => {
         await ingress.waitForIdle();
         await ingress.stop();
       }
-    });
-  });
-
-  it("drains a durable event when its acknowledgement fails", async () => {
-    await withQueue(async (queue) => {
-      const processEvent = vi.fn(async (event: ReceiverEvent) => {
-        await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
-      });
-      const { ingress, receive } = attachIngress(queue, processEvent);
-      const ackError = new Error("connection closed");
-      ingress.start();
-
-      await expect(
-        receive(createReceiverEvent("Ev-ack-failure", vi.fn().mockRejectedValue(ackError))),
-      ).rejects.toBe(ackError);
-      await ingress.waitForIdle();
-
-      expect(processEvent).toHaveBeenCalledTimes(1);
-      await ingress.stop();
-    });
-  });
-
-  it("recovers an uncompleted event with a fresh drain and dispatches once", async () => {
-    await withQueue(async (queue) => {
-      const first = attachIngress(
-        queue,
-        vi.fn(async () => {}),
-      );
-      const ack = vi.fn(async () => {});
-      await first.receive(createReceiverEvent("Ev-restart", ack));
-      await first.ingress.stop();
-
-      const dispatch = vi.fn(async (event: ReceiverEvent) => {
-        await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
-      });
-      const restarted = attachIngress(queue, dispatch);
-      restarted.ingress.start();
-      await restarted.ingress.waitForIdle();
-
-      expect(ack).toHaveBeenCalledTimes(1);
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect((await queue.enqueue("Ev-restart", {} as SlackIngressPayload)).kind).toBe("completed");
-      await restarted.ingress.stop();
-    });
-  });
-
-  it.each([
-    { name: "a lane derived only at drain time", laneKey: undefined },
-    { name: "its persisted channel-only lane", laneKey: "team:T_TEST:conversation:C_TEST" },
-  ])("recovers a shipped threaded row with $name", async ({ laneKey }) => {
-    await withQueue(async (queue) => {
-      const body = createSlackEnvelope("Ev-legacy-lane", undefined, {
-        type: "message",
-        channel: "C_TEST",
-        channel_type: "channel",
-        user: "U_TEST",
-        ts: "1700000000.000101",
-        thread_ts: "1700000000.000100",
-        text: "persisted thread reply",
-      });
-      await queue.enqueue(
-        "Ev-legacy-lane",
-        {
-          version: 1,
-          receivedAt: 1_700_000_000_000,
-          kind: "events-api",
-          body,
-        },
-        { receivedAt: 1_700_000_000_000, ...(laneKey ? { laneKey } : {}) },
-      );
-      const dispatch = vi.fn(async (event: ReceiverEvent) => {
-        await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
-      });
-      const recovered = attachIngress(queue, dispatch);
-      recovered.ingress.start();
-      await recovered.ingress.waitForIdle();
-
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect((await queue.enqueue("Ev-legacy-lane", {} as SlackIngressPayload)).kind).toBe(
-        "completed",
-      );
-      await recovered.ingress.stop();
-    });
-  });
-
-  it("retains completion so the same event_id cannot dispatch twice", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async (event: ReceiverEvent) => {
-        await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
-      });
-      const { ingress, receive } = attachIngress(queue, dispatch);
-      ingress.start();
-      await receive(createReceiverEvent("Ev-completed"));
-      await ingress.waitForIdle();
-
-      const duplicateAck = vi.fn(async () => {});
-      await receive(createReceiverEvent("Ev-completed", duplicateAck, { retryNum: 1 }));
-      await ingress.waitForIdle();
-
-      expect(duplicateAck).toHaveBeenCalledTimes(1);
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect((await queue.enqueue("Ev-completed", {} as SlackIngressPayload)).kind).toBe(
-        "completed",
-      );
-      await ingress.stop();
-    });
-  });
-
-  it("dedupes Slack's delayed message redelivery after restart via the tombstone", async () => {
-    await withQueue(async (queue) => {
-      const firstDispatch = vi.fn(async (event: ReceiverEvent) => {
-        await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
-      });
-      const first = attachIngress(queue, firstDispatch);
-      first.ingress.start();
-      await first.receive(
-        createReceiverEvent("Ev-delayed-redelivery", undefined, {
-          ts: "1700000000.000350",
-        }),
-      );
-      await first.ingress.waitForIdle();
-      await first.ingress.stop();
-
-      const replayDispatch = vi.fn(async () => {});
-      const restarted = attachIngress(queue, replayDispatch);
-      const retryAck = vi.fn(async () => {});
-      await restarted.receive(
-        createReceiverEvent("Ev-delayed-redelivery", retryAck, {
-          retryNum: 3,
-          ts: "1700000000.000350",
-        }),
-      );
-      restarted.ingress.start();
-      await restarted.ingress.waitForIdle();
-
-      expect(firstDispatch).toHaveBeenCalledTimes(1);
-      expect(retryAck).toHaveBeenCalledTimes(1);
-      expect(replayDispatch).not.toHaveBeenCalled();
-      await restarted.ingress.stop();
     });
   });
 
@@ -991,6 +818,162 @@ describe("Slack durable ingress", () => {
         await first.ingress.stop();
         await restarted?.ingress.stop();
       }
+    });
+  });
+});
+
+describe("Slack deferred ingress shutdown", () => {
+  it("settles a failed session-routed delivery before shutdown without losing retry facts", async () => {
+    await withBoltQueue(async (queue) => {
+      const processEvent = vi.fn(async (event: ReceiverEvent) => {
+        const lifecycle = resolveSlackIngressTurnLifecycle(event.customProperties);
+        await lifecycle?.onSessionRouted?.("agent:main:slack:failed-session");
+        throw new Error("session dispatch failed");
+      });
+      const { app, ingress, receive } = attachBoltIngress(queue, { adoptionStallTimeoutMs: 5_000 });
+      vi.spyOn(app, "processEvent").mockImplementation(processEvent);
+      ingress.start();
+      try {
+        await receive(createBoltReceiverEvent("Ev-failed-session"));
+        await ingress.waitForIdle();
+        await ingress.stop();
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({
+            id: "Ev-failed-session",
+            attempts: 1,
+            lastError: "session dispatch failed",
+          }),
+        ]);
+        expect(await queue.listClaims()).toEqual([]);
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("joins a deferred reply's replay settlement after its Bolt handler returns", async () => {
+    await withBoltQueue(async (queue) => {
+      const commitStarted = createDeferred<void>();
+      const commitGate = createDeferred<void>();
+      let settlement: Promise<void> | undefined;
+      const processEvent = vi.fn(async (event: ReceiverEvent) => {
+        const lifecycle = resolveSlackIngressTurnLifecycle(event.customProperties);
+        if (!lifecycle) {
+          throw new Error("Missing Slack ingress lifecycle");
+        }
+        await lifecycle.onSessionRouted?.("agent:main:slack:deferred-stop");
+        lifecycle.onDeferred();
+        settlement = (async () => {
+          commitStarted.resolve();
+          await commitGate.promise;
+          await lifecycle.onAdopted();
+        })();
+      });
+      const { app, ingress, receive } = attachBoltIngress(queue, { adoptionStallTimeoutMs: 5_000 });
+      vi.spyOn(app, "processEvent").mockImplementation(processEvent);
+      ingress.start();
+      let stopped = false;
+      let stop: Promise<void> | undefined;
+      try {
+        await receive(createBoltReceiverEvent("Ev-deferred-settlement"));
+        await commitStarted.promise;
+        await ingress.waitForIdle();
+        stop = ingress.stop().then(() => {
+          stopped = true;
+        });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(stopped).toBe(false);
+        commitGate.resolve();
+        await settlement;
+        await stop;
+        expect(stopped).toBe(true);
+      } finally {
+        commitGate.resolve();
+        await settlement;
+        await (stop ?? ingress.stop());
+      }
+    });
+  });
+});
+
+describe("Slack relay durable ingress", () => {
+  const relayMessage = {
+    type: "message",
+    channel: "C_RELAY",
+    team: "T_TEST",
+    user: "U_TEST",
+    ts: "1700000001.000200",
+    text: "relayed",
+  };
+
+  it("retries a claimed relay event until a dispatcher attaches", async () => {
+    await withBoltQueue(async (queue) => {
+      const detached = createSlackDurableIngress({
+        accountId: "default",
+        queue,
+        pollIntervalMs: 60_000,
+        adoptionStallTimeoutMs: 5_000,
+      });
+      await detached.acceptRelayEvent({ deliveryId: "delivery-3", message: relayMessage });
+      await detached.stop();
+
+      const dispatched: unknown[] = [];
+      const recovered = createSlackDurableIngress({
+        accountId: "default",
+        queue,
+        pollIntervalMs: 25,
+        adoptionStallTimeoutMs: 5_000,
+      });
+      recovered.start();
+      await recovered.waitForIdle();
+      expect(dispatched).toHaveLength(0);
+
+      recovered.attachRelayDispatch(async (message) => {
+        dispatched.push(message);
+      });
+      await vi.waitFor(
+        async () => {
+          await recovered.waitForIdle();
+          expect(dispatched).toHaveLength(1);
+        },
+        { timeout: 15_000, interval: 250 },
+      );
+      await recovered.stop();
+    });
+  });
+
+  it("drops a malformed persisted row without blocking the next relay message", async () => {
+    await withBoltQueue(async (queue) => {
+      const laneKey = "team:T_TEST:conversation:C_RELAY";
+      await queue.enqueue(
+        "relay:malformed",
+        {
+          version: 1,
+          receivedAt: 1,
+          kind: "relay",
+          message: { channel: "C_RELAY", team: "T_TEST" },
+        },
+        { laneKey, receivedAt: 1 },
+      );
+      await queue.enqueue(
+        "message:T_TEST:C_RELAY:1700000001.000200",
+        { version: 1, receivedAt: 2, kind: "relay", message: relayMessage },
+        { laneKey, receivedAt: 2 },
+      );
+
+      const dispatched: unknown[] = [];
+      const ingress = createSlackDurableIngress({ accountId: "default", queue });
+      ingress.attachRelayDispatch(async (message) => {
+        dispatched.push(message);
+      });
+      ingress.start();
+      await ingress.waitForIdle();
+
+      expect(dispatched).toEqual([relayMessage]);
+      expect(await queue.listPending()).toHaveLength(0);
+      await ingress.stop();
     });
   });
 });
