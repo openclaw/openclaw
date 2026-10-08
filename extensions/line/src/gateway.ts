@@ -45,7 +45,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
       }
     } catch (err) {
       if (getLineRuntime().logging.shouldLogVerbose()) {
-        ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+        ctx.log?.debug?.(`[${account.accountId}] bot check failed: ${String(err)}`);
       }
     }
 

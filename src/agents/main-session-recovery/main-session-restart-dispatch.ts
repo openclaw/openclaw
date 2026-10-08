@@ -19,6 +19,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
 import { listSubagentRunsForRequester } from "../subagents/registry/subagent-registry-read.js";
 import {
   buildSubagentRestartRecoveryRoster,
@@ -58,13 +59,10 @@ import {
 import { mainSessionRecoveryLog as log } from "./main-session-restart-recovery-shared.js";
 
 const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
-  "Your previous turn was interrupted by a gateway restart while " +
-    "OpenClaw was waiting on tool/model work. The restart did not cancel the user's task. " +
+  `${RESTART_RECOVERY_INTERRUPTION_NOTE} The restart did not cancel the user's task. ` +
     "Continue from the existing transcript: check the current state, recover interrupted work, " +
     "and finish the task without asking the user to repeat the request. " +
-    `${SUBAGENT_RESTART_RECOVERY_INSTRUCTION} Treat a tool result ` +
-    "marked interrupted or missing as having an unknown outcome; verify what happened before " +
-    `repeating an action. ${TOOL_FAILURE_INSTRUCTION}`,
+    `${SUBAGENT_RESTART_RECOVERY_INSTRUCTION} ${TOOL_FAILURE_INSTRUCTION}`,
 );
 
 const RESTART_SAFE_TOOLS_NOTICE =

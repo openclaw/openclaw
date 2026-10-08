@@ -27,11 +27,11 @@ function mountPicker() {
     sessionModelPinned: true,
     sessionKey: "main",
     triggerModelLabel: "Alpha",
-    modelOptions: ["Alpha", "Beta"].map((label) => ({
+    modelOptions: ["Alpha", "Beta", "Gamma"].map((label) => ({
       label,
-      value: "example/" + label.toLowerCase(),
-      commitValue: "example/" + label.toLowerCase(),
-      provider: "example",
+      value: (label === "Gamma" ? "other/" : "example/") + label.toLowerCase(),
+      commitValue: (label === "Gamma" ? "other/" : "example/") + label.toLowerCase(),
+      provider: label === "Gamma" ? "other" : "example",
       isDefault: false,
     })),
     onModelSelect: vi.fn(async () => {}),
@@ -135,5 +135,59 @@ it.each(["closed", "removed", "focus moved"])(
     );
     await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
     expect(document.activeElement).toBe(composer);
+  },
+);
+
+it.each(["trigger", "Escape", "selection"])(
+  "retains provider toggles after closing through %s",
+  async (close) => {
+    const { picker, trigger, search, toggle, update, params } = mountPicker();
+    const selectedToggle = picker.querySelector<HTMLButtonElement>(
+      '[data-chat-model-provider-group="example"] [data-chat-model-provider-toggle]',
+    )!;
+    const otherToggle = picker.querySelector<HTMLButtonElement>(
+      '[data-chat-model-provider-group="other"] [data-chat-model-provider-toggle]',
+    )!;
+    await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
+    await userEvent.click(selectedToggle);
+    await userEvent.click(otherToggle);
+    expect(selectedToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(otherToggle.getAttribute("aria-expanded")).toBe("true");
+    // Search reveals matching rows temporarily without changing group intent.
+    await userEvent.click(search);
+    await userEvent.keyboard("beta");
+    expect(
+      picker.querySelector<HTMLButtonElement>('[data-chat-model-option="example/beta"]')!.hidden,
+    ).toBe(false);
+    update();
+    await Promise.resolve();
+    if (close === "trigger") {
+      await toggle(() => userEvent.click(trigger));
+    } else if (close === "Escape") {
+      await userEvent.keyboard("{Escape}");
+      await toggle(() => userEvent.keyboard("{Escape}"));
+    } else {
+      await toggle(() => page.getByText("Beta", { exact: true }).click());
+      expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
+    }
+    expect(picker.open).toBe(false);
+    expect(search.value).toBe("");
+    update();
+    await toggle(() => userEvent.click(trigger));
+    expect(selectedToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(otherToggle.getAttribute("aria-expanded")).toBe("true");
+    const hidden = picker.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="example/beta"]',
+    )!;
+    const visible = picker.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="other/gamma"]',
+    )!;
+    expect(hidden.hidden).toBe(true);
+    expect(hidden.checkVisibility()).toBe(false);
+    expect(visible.hidden).toBe(false);
+    expect(visible.checkVisibility()).toBe(true);
+    trigger.focus();
+    await toggle(() => userEvent.keyboard("1"));
+    expect(params.onModelSelect).toHaveBeenLastCalledWith("other/gamma", "main", undefined);
   },
 );

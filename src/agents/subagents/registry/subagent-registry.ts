@@ -382,6 +382,7 @@ const subagentRestorer = createSubagentRegistryRestorer({
   ensureListener: () => subagentListener.ensure(),
   startSweeper: () => subagentSweeper.start(),
   scheduleSweep: scheduleSubagentRegistrySweep,
+  recoverInterruptedRuns: () => subagentSweeper.recoverInterruptedRuns(),
   resumeRun: (runId) => resumeSubagentRun(runId, "restore"),
   listSwarmRunsForGroup: (groupId, requesterSessionKey, requesterAgentId) =>
     listSwarmRunsForGroup(groupId, requesterSessionKey, requesterAgentId),

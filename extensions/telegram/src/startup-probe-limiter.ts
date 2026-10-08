@@ -4,7 +4,7 @@ const TELEGRAM_STARTUP_PROBE_CONCURRENCY = 2;
 const startupProbePermits = createPermitPool(TELEGRAM_STARTUP_PROBE_CONCURRENCY);
 
 function buildStartupProbeAbortError(): Error {
-  return new Error("telegram startup probe wait aborted");
+  return new Error("telegram startup check wait aborted");
 }
 
 export async function withTelegramStartupProbeSlot<T>(
