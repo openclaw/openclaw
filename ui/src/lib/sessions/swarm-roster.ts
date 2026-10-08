@@ -90,6 +90,11 @@ export class SwarmRosterHydrator {
   rows: GatewaySessionRow[] = [];
   /** True once the child query has filled `rows`; the seed can hold only some children. */
   hydrated = false;
+  /**
+   * True once the first child read has answered. Unlike `hydrated`, a launch's
+   * re-read keeps it, so it marks when seeded ancestry has been replaced.
+   */
+  childrenRead = false;
   private key = "";
   private generation = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -111,8 +116,6 @@ export class SwarmRosterHydrator {
   private parentRefreshQueued = false;
   private parentRefreshForced = false;
   private publishingParentRead = false;
-  /** True once the first child read has answered. */
-  private childrenRead = false;
   /** Parent-named children the child query has already been asked to bring in. */
   private readonly requestedChildren = new Set<string>();
 

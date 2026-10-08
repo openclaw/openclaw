@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 import {
   parseIrcLine,
   parseIrcPrefix,
@@ -39,16 +40,9 @@ function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): 
   if (end === text.length) {
     return text;
   }
-  const fitted = text.slice(0, end);
-  // A delimiter just beyond the cap already gives this chunk a clean word boundary.
-  if (text[end] === " ") {
-    return fitted;
-  }
-  const splitAt = fitted.lastIndexOf(" ");
-  if (splitAt >= Math.floor(fitted.length / 2)) {
-    return fitted.slice(0, splitAt);
-  }
-  return fitted;
+  const splitAt = text.lastIndexOf(" ", end);
+  const preferredEnd = splitAt >= Math.floor(end / 2) ? splitAt : end;
+  return text.slice(0, findGraphemeChunkEnd(text, 0, end, preferredEnd));
 }
 
 type IrcPrivmsgEvent = {
@@ -225,7 +219,6 @@ export async function connectIrcClient(options: IrcClientOptions) {
     }
     const lineOverheadBytes = Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
-    // Encode the original text with the reference so escapes are not decoded twice.
     let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
     const chunks: string[] = [];
     while (remaining.length > 0) {
@@ -415,8 +408,15 @@ export async function connectIrcClient(options: IrcClientOptions) {
 
   socket.once("connect", () => {
     try {
-      if (options.password && options.password.trim()) {
-        sendRaw(`PASS ${options.password.trim()}`);
+      const password = options.password?.trim();
+      if (password) {
+        // Servers read only the first word of a middle parameter, so a passphrase
+        // with spaces or a leading ":" must go in the trailing parameter.
+        sendRaw(
+          password.includes(" ") || password.startsWith(":")
+            ? `PASS :${password}`
+            : `PASS ${password}`,
+        );
       }
       sendRaw(`NICK ${options.nick.trim()}`);
       sendRaw(`USER ${options.username.trim()} 0 * :${sanitizeIrcOutboundText(options.realname)}`);

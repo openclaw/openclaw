@@ -52,7 +52,7 @@ import {
   readLiveRegistryWorktreeByPath,
   readLiveRegistryWorktreeByOwner,
 } from "./registry-read.js";
-import { deferTimedOutWorktreeRemoval, isWorktreeRemovalTimeout } from "./registry-retirement.js";
+import { deferFailedWorktreeRemoval, isWorktreeRemovalTimeout } from "./registry-retirement.js";
 import {
   assertWorktreeRemovalAvailable,
   insertRegistryWorktree,
@@ -959,30 +959,18 @@ export class ManagedWorktreeService {
       let failure = error;
       try {
         if (timing && isWorktreeRemovalTimeout(error)) {
-          const assertClaim = createWorktreeRemovalClaimsGuard(this.env, [record.id], claimToken);
-          const assertCurrent = () => {
-            params.rollbackGuard();
-            assertClaim();
-          };
-          // An admitted deletion outlives caller cancellation and session retirement.
-          // Publish its timeout before releasing the claim, under retained checkout custody.
-          const observed = await readRegistryWorktreeForMutation({
+          const progress = timing.removalProgress();
+          const deferred = await deferFailedWorktreeRemoval({
             env: this.env,
             id: record.id,
-            commitGuard: assertCurrent,
+            ...progress,
+            reason: `Git ${progress.stage} timed out; cleanup deferred`,
+            now: this.now(),
+            previousAttempts: record.gcRetry?.attempts ?? 0,
+            claimToken,
+            assertCurrent: params.rollbackGuard,
           });
-          if (observed && observed.removedAt === undefined) {
-            const deferred = await deferTimedOutWorktreeRemoval({
-              env: this.env,
-              observed,
-              ...timing.removalProgress(),
-              now: this.now(),
-              previousAttempts: record.gcRetry?.attempts ?? 0,
-              claimToken,
-              assertCurrent,
-            });
-            onDeferred?.(deferred);
-          }
+          onDeferred?.(deferred);
         }
       } catch (deferralError) {
         if (hasWorktreeUnknownOutcome(deferralError)) {
@@ -1134,8 +1122,9 @@ export class ManagedWorktreeService {
           },
           classification,
         );
-      const { remove, retireMissing, onError } = createWorktreeGcRemoval({
+      const { remove, retireMissing, onError, repositoryProtection } = createWorktreeGcRemoval({
         env: this.env,
+        records,
         now,
         progress,
         policy: params,
@@ -1180,6 +1169,11 @@ export class ManagedWorktreeService {
           if (retiredOwner || now - record.lastActiveAt > IDLE_GC_MS) {
             // Capacity eviction and idle cleanup share one decision per record per pass.
             if (!progress.start(record.id)) {
+              continue;
+            }
+            const repositoryReason = repositoryProtection(record.repoRoot);
+            if (repositoryReason) {
+              progress.protect("idle", record.id, repositoryReason);
               continue;
             }
             const protection = await protect(record);
@@ -1227,7 +1221,7 @@ export class ManagedWorktreeService {
       progress.result.snapshotsPruned = snapshotsPruned;
       assertCurrent();
       // Cleanup has released allocation ownership and retired its refs before maintenance.
-      await this.maintainGit(params);
+      await this.maintainGit({ ...params, shouldDeferRepository: repositoryProtection });
       assertCurrent();
       return progress.result;
     });

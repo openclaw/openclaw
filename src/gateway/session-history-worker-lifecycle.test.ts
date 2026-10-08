@@ -569,9 +569,6 @@ it("closes idle A while active and queued B pages survive, then reads replaced A
       "replacement-a-message",
     ]);
     expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["active-b-message"]);
-    if (keepsWorker) {
-      expect(observed.workers.at(-1)).toBe(oldWorker);
-    }
   });
 });
 

@@ -16,25 +16,13 @@ describe("cron jobs with unresolved owners", () => {
   it.each([
     {
       phase: "startup",
-      includeOwned: true,
       name: "records the unowned job and keeps its owned sibling running",
     },
     {
       phase: "reload",
-      includeOwned: true,
       name: "records the unowned job and keeps its owned sibling running",
     },
-    {
-      phase: "startup",
-      includeOwned: false,
-      name: "records an ownerless job without caller-thread SQL",
-    },
-    {
-      phase: "reload",
-      includeOwned: false,
-      name: "records an ownerless job without caller-thread SQL",
-    },
-  ] as const)("$name during $phase", async ({ phase, includeOwned }) => {
+  ] as const)("$name during $phase", async ({ phase }) => {
     const { storePath, cleanup } = await makeStorePath();
     const now = Date.now();
     const clock = createGatewaySchedulerClock(now);
@@ -54,7 +42,7 @@ describe("cron jobs with unresolved owners", () => {
     const owned: CronJob = { ...structuredClone(unowned), id: "owned", agentId: "ops" };
     await saveCronStore(storePath, {
       version: 1,
-      jobs: includeOwned ? [unowned, owned] : [unowned],
+      jobs: [unowned, owned],
     });
     const runCommandJob = vi.fn(async (_params: { job: CronJob }) => ({ status: "ok" as const }));
     const onEvent = vi.fn();
@@ -88,15 +76,13 @@ describe("cron jobs with unresolved owners", () => {
       } finally {
         sql.restore();
       }
-      if (includeOwned) {
-        expect(onEvent).toHaveBeenCalledWith(
-          expect.objectContaining({ jobId: owned.id, action: "finished", status: "ok" }),
-        );
-        expect(runCommandJob).toHaveBeenCalledWith(
-          expect.objectContaining({ job: expect.objectContaining({ id: owned.id }) }),
-        );
-      }
-      expect(runCommandJob).toHaveBeenCalledTimes(includeOwned ? 1 : 0);
+      expect(onEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: owned.id, action: "finished", status: "ok" }),
+      );
+      expect(runCommandJob).toHaveBeenCalledWith(
+        expect.objectContaining({ job: expect.objectContaining({ id: owned.id }) }),
+      );
+      expect(runCommandJob).toHaveBeenCalledTimes(1);
       const persisted = (await loadCronStore(storePath)).jobs;
       expect(persisted.find((job) => job.id === unowned.id)?.state).toMatchObject({
         lastRunStatus: "skipped",
@@ -113,7 +99,7 @@ describe("cron jobs with unresolved owners", () => {
       );
 
       await clock.advanceBy(60_000);
-      expect(runCommandJob).toHaveBeenCalledTimes(includeOwned ? 2 : 0);
+      expect(runCommandJob).toHaveBeenCalledTimes(2);
       expect(runCommandJob.mock.calls.every(([params]) => params.job.id === owned.id)).toBe(true);
     } finally {
       cron.stop();

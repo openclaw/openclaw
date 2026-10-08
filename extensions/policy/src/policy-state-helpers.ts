@@ -40,3 +40,15 @@ export function collectPolicyConfiguredAgents(agents: Record<string, unknown>) {
       }))
     : [];
 }
+
+export function resolvePolicyValue<T extends string | boolean>(
+  local: T | undefined,
+  inherited: T | undefined,
+  fallback: T,
+) {
+  return {
+    value: local ?? inherited ?? fallback,
+    explicit: local !== undefined || inherited !== undefined,
+    inherited: local === undefined && inherited !== undefined,
+  };
+}

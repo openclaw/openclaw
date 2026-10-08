@@ -23,10 +23,7 @@ import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import {
-  renderLazyDevicePairSetup,
-  type DevicePairSetupHost,
-} from "./app-shell-device-pair-setup.ts";
+import { renderLazyDevicePairSetup } from "./app-shell-device-pair-setup.ts";
 import { renderShellDocks } from "./app-shell-docks.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import { renderShellLazyOverlays, type ShellLazyOverlayHost } from "./app-shell-lazy-view.ts";
@@ -57,10 +54,9 @@ import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, normalizeCatalogOpenTarget } from "./sett
 import { renderCollapsedHomeToggle } from "./shell-assistant-toggles.ts";
 import type { ShellLayoutController } from "./shell-layout-traits.ts";
 
-type SettingsSidebarHost = Parameters<typeof renderLazySettingsSidebar>[0];
-
-export interface ShellViewHost
-  extends DevicePairSetupHost, ShellLazyOverlayHost, SettingsSidebarHost {
+export interface ShellViewHost extends ShellLazyOverlayHost {
+  readonly devicePairSetup: Parameters<typeof renderLazyDevicePairSetup>[0];
+  readonly settingsSidebar: Parameters<typeof renderLazySettingsSidebar>[0];
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
@@ -283,7 +279,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const shellConnectionStatus =
     (navigationSurfaceHidden ||
       (settingsTakeover
-        ? host.settingsSidebarRenderer === null
+        ? host.settingsSidebar.renderer === null
         : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT))) &&
     !nativeEmbed &&
     !onboarding &&
@@ -303,7 +299,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   };
   const navigationContent =
     settingsTakeover || embedNavigation
-      ? renderLazySettingsSidebar(host, {
+      ? renderLazySettingsSidebar(host.settingsSidebar, {
           presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
           basePath: context.basePath,
           activeRouteId: activeRoute,
@@ -602,7 +598,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             ></openclaw-exec-approval>`
           : nothing
       }
-      ${renderLazyDevicePairSetup(host, {
+      ${renderLazyDevicePairSetup(host.devicePairSetup, {
         open: overlaySnapshot.devicePairSetupOpen,
         lifecycle: overlaySnapshot.devicePairSetupLifecycle,
         nowMs: Date.now(),

@@ -47,6 +47,7 @@ export type SessionTranscriptModelContext = {
 export type SessionTranscriptReadSnapshot = {
   events: TranscriptEvent[];
   eventJson?: string[];
+  eventSeqs?: number[];
   version: SessionTranscriptContextVersion;
 };
 

@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
 import { publishedNativeAssignments } from "./native-assignment-summary.mjs";
+import { assertPackageRecoveryEvidence } from "./package-activation-recovery.mjs";
 import { publishedPluginPolicy } from "./plugin-policy-summary.mjs";
 
 // Capture and snapshot validation stay plain Node. The host entrypoint owns
@@ -84,6 +85,12 @@ const logNames = [
   "repair.err",
   "recovery-update.json",
   "recovery-update.err",
+  "interrupted-update.json",
+  "interrupted-update.err",
+  "next-update.json",
+  "next-update.err",
+  "stranded-update.json",
+  "stranded-update.err",
   "post-update-validate.json",
   "post-update-validate.err",
   "doctor.log",
@@ -1681,6 +1688,36 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
   }
   const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
   const nativeAssignments = publishedNativeAssignments(snapshot);
+  let packageActivationRecovery;
+  if (
+    ["package-publication-recovery", "package-verification-recovery"].includes(snapshot.scenario)
+  ) {
+    const proof = snapshot.packageActivationRecovery;
+    assertPackageRecoveryEvidence(proof);
+    packageActivationRecovery = {
+      status: proof.status,
+      cut: proof.interruption.cut,
+      phase: proof.interruption.phase,
+      writerVersion: proof.interruption.writerVersion,
+      candidateVersion: proof.candidate.version,
+      candidateSha256: proof.candidate.tarballSha256,
+      nextVersion: proof.nextUpdate.installed.version,
+      helperPreserved: true,
+      retainedBytesPreserved: true,
+      repeatRepairPassed: true,
+      distinctNextUpdatePassed: true,
+    };
+  } else if (snapshot.scenario === "package-stranded-first-hop") {
+    const proof = snapshot.packageActivationRecovery;
+    assertPackageRecoveryEvidence(proof);
+    packageActivationRecovery = {
+      status: proof.status,
+      writerVersion: "2026.9.7",
+      installedVersion: "2026.9.8",
+      firstHop: proof.firstHop,
+      newerCandidateInvoked: false,
+    };
+  }
   for (const value of [
     snapshot.baseline?.spec,
     snapshot.baseline?.version,
@@ -1774,6 +1811,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     backupRollback: publishedBackupRollback(snapshot, { sanitize, boundedList, textFields }),
     ...(pluginPolicy ? { pluginPolicy } : {}),
     ...(nativeAssignments ? { nativeAssignments } : {}),
+    ...(packageActivationRecovery ? { packageActivationRecovery } : {}),
     timings,
     phases: boundedList(snapshot.phases).map((event) => {
       if (

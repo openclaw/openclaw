@@ -47,7 +47,6 @@ import {
 import {
   checkBotMentioned,
   normalizeFeishuCommandProbeBody,
-  normalizeMentions,
   parseMessageContent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
@@ -71,6 +70,7 @@ import {
   extractMentionTargets,
   isFeishuBroadcastMention,
   isMentionForwardRequest,
+  normalizeMentions,
 } from "./mention.js";
 import {
   hasExplicitFeishuGroupConfig,
@@ -923,6 +923,15 @@ export async function handleFeishuMessage(params: {
       accountId: account.accountId,
     });
 
+    const fetchedContextPolicy = {
+      cfg,
+      accountId: account.accountId,
+      chatId: ctx.chatId,
+      isGroup,
+      allowFrom: effectiveGroupSenderAllowFrom,
+      mode: contextVisibilityMode,
+    };
+
     // Do not enqueue inbound user previews as system events.
     // System events are prepended to future prompts and can be misread as
     // authoritative transcript turns.
@@ -963,12 +972,7 @@ export async function handleFeishuMessage(params: {
         if (
           quotedMessageInfo &&
           (await shouldIncludeFetchedGroupContextMessage({
-            cfg,
-            accountId: account.accountId,
-            chatId: ctx.chatId,
-            isGroup,
-            allowFrom: effectiveGroupSenderAllowFrom,
-            mode: contextVisibilityMode,
+            ...fetchedContextPolicy,
             kind: "quote",
             senderId: quotedMessageInfo.senderId,
             senderType: quotedMessageInfo.senderType,
@@ -1189,12 +1193,7 @@ export async function handleFeishuMessage(params: {
       if (
         rootMsg &&
         !(await shouldIncludeFetchedGroupContextMessage({
-          cfg,
-          accountId: account.accountId,
-          chatId: ctx.chatId,
-          isGroup,
-          allowFrom: effectiveGroupSenderAllowFrom,
-          mode: contextVisibilityMode,
+          ...fetchedContextPolicy,
           kind: "thread",
           senderId: rootMsg.senderId,
           senderType: rootMsg.senderType,
@@ -1230,12 +1229,7 @@ export async function handleFeishuMessage(params: {
           [ctx.senderOpenId, senderUserId].filter((id): id is string => Boolean(id)),
         );
         const allowlistedMessages = await filterFetchedGroupContextMessages(threadMessages, {
-          cfg,
-          accountId: account.accountId,
-          chatId: ctx.chatId,
-          isGroup,
-          allowFrom: effectiveGroupSenderAllowFrom,
-          mode: contextVisibilityMode,
+          ...fetchedContextPolicy,
           kind: "history",
         });
         const relevantMessages = senderScoped

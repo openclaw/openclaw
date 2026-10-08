@@ -14,6 +14,7 @@ import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-
 import { GatewayLockError, readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
@@ -356,21 +357,23 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     if (authorityRefused || error instanceof DoctorUnreadableStateDatabaseError) {
       throw error;
     }
+    const newerSchema = findStartupMaintenanceRequiredError(error)?.kind === "newer-schema";
     // Released Git drivers consume the original refusal prefix and recovery tail.
     const refusal =
       error instanceof DoctorMaintenanceRefusalError
         ? error
         : new DoctorMaintenanceRefusalError(
-            `Doctor could not enter maintenance. ${error instanceof GatewayLockError ? formatGatewayLockFailure(error) : String(error)}${hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
+            `Doctor could not enter maintenance. ${error instanceof GatewayLockError ? formatGatewayLockFailure(error) : String(error)}${newerSchema || hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
             classifyDoctorMaintenanceRefusal(error),
             {
               cause: error,
               ...(error instanceof UpdateDoctorError ? { failureFacts: error.failureFacts } : {}),
             },
           );
-    const recovery = inspectingActivation
-      ? await resolveUpdateDoctorGitRecovery({ root: params.root })
-      : undefined;
+    const recovery =
+      inspectingActivation && !newerSchema
+        ? await resolveUpdateDoctorGitRecovery({ root: params.root })
+        : undefined;
     if (recovery) {
       refusal.message += `\n${recovery.message}`;
       recordUpdateDoctorRefusal(refusal.message);

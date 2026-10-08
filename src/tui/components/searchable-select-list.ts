@@ -25,6 +25,10 @@ export interface SearchableSelectListTheme extends SelectListTheme {
 
 export interface SearchableSelectItem extends SelectItem {
   searchText?: string;
+  /** Listed only while searching or after the user chooses an expander row. */
+  collapsed?: boolean;
+  /** Choosing this row reveals the collapsed rows in place instead of selecting it. */
+  expandsCollapsed?: boolean;
 }
 
 export class SearchableSelectList implements Component, Focusable {
@@ -41,6 +45,7 @@ export class SearchableSelectList implements Component, Focusable {
   private searchInput: Input;
   private highlightPatterns?: RegExp[];
   private emptyMessage = "No matches";
+  private expanded = false;
 
   onSelect?: (item: SearchableSelectItem) => void;
   onCancel?: () => void;
@@ -57,7 +62,7 @@ export class SearchableSelectList implements Component, Focusable {
     private readonly theme: SearchableSelectListTheme,
   ) {
     this.items = items;
-    this.filteredItems = items;
+    this.filteredItems = items.filter((item) => !item.collapsed);
     this.searchInput = new Input();
     this.searchInput.onEscape = () => this.onCancel?.();
   }
@@ -91,7 +96,9 @@ export class SearchableSelectList implements Component, Focusable {
   private updateFilter() {
     const query = this.searchInput.getValue().trim();
 
-    this.filteredItems = query ? this.smartFilter(query) : this.items;
+    this.filteredItems = query
+      ? this.smartFilter(query)
+      : this.items.filter((item) => (this.expanded ? !item.expandsCollapsed : !item.collapsed));
     this.selectedIndex = 0;
   }
 
@@ -118,6 +125,9 @@ export class SearchableSelectList implements Component, Focusable {
       };
     });
     for (const prepared of this.preparedItems) {
+      if (prepared.item.expandsCollapsed) {
+        continue;
+      }
       const labelIndex = prepared.label.indexOf(q);
       if (labelIndex !== -1) {
         scoredItems.push({ item: prepared.item, tier: 0, score: labelIndex });
@@ -291,6 +301,14 @@ export class SearchableSelectList implements Component, Focusable {
 
     if (matchesKey(keyData, "enter")) {
       const item = this.filteredItems[this.selectedIndex];
+      if (item?.expandsCollapsed) {
+        // The expander's slot becomes the first revealed row; callers order rows to match.
+        const index = this.selectedIndex;
+        this.expanded = true;
+        this.updateFilter();
+        this.selectedIndex = Math.min(index, this.filteredItems.length - 1);
+        return;
+      }
       if (item && this.onSelect) {
         this.onSelect(item);
       }

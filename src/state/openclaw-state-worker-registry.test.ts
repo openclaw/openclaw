@@ -23,9 +23,6 @@ vi.mock("../infra/push-web-store.worker.js", () => {
 vi.mock("../agents/worktrees/dispatch.worker.js", () => {
   throw new Error("APNs preparation loaded worktrees");
 });
-vi.mock("../fleet/registry.worker.js", () => {
-  throw new Error("APNs preparation loaded fleet");
-});
 
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 

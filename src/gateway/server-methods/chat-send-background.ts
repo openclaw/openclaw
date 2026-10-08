@@ -3,7 +3,6 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   buildDashboardSessionTitleSource,
   isDashboardSessionTitleCandidate,
@@ -49,13 +48,6 @@ type DashboardSessionTitleTurn = {
   settled: Promise<void>;
 };
 
-export function scheduleChatDashboardSessionTitle(
-  params: DashboardSessionTitleRequest,
-  turn: DashboardSessionTitleTurn,
-): void {
-  scheduleDashboardSessionTitle(params, "session", turn);
-}
-
 export function scheduleCreatedDashboardSessionTitle(
   created: {
     key: string;
@@ -71,25 +63,19 @@ export function scheduleCreatedDashboardSessionTitle(
   if (!created.isNew || created.entry.incognito || !titleSource) {
     return;
   }
-  // Creation metadata must not hold the execution lease that cloud dispatch drains.
-  // The title writer still checks the exact session generation and existing name.
-  scheduleDashboardSessionTitle(
-    {
-      admittedSessionId: created.entry.sessionId,
-      agentId: created.agentId,
-      cfg,
-      context,
-      request: { rawMessage: titleSource, normalizedAttachments: [] },
-      sessionKey: created.key,
-      storePath: created.storePath,
-    },
-    "gateway",
-  );
+  scheduleChatDashboardSessionTitle({
+    admittedSessionId: created.entry.sessionId,
+    agentId: created.agentId,
+    cfg,
+    context,
+    request: { rawMessage: titleSource, normalizedAttachments: [] },
+    sessionKey: created.key,
+    storePath: created.storePath,
+  });
 }
 
-function scheduleDashboardSessionTitle(
+export function scheduleChatDashboardSessionTitle(
   params: DashboardSessionTitleRequest,
-  admissionScope: "session" | "gateway",
   turn?: DashboardSessionTitleTurn,
 ): void {
   const titleSource = buildDashboardSessionTitleSource({
@@ -102,45 +88,29 @@ function scheduleDashboardSessionTitle(
     return;
   }
   void runWithGatewayIndependentRootWorkContinuation(async () => {
-    // Reply progress must release the gate before a session lease exists:
-    // rollover drains that lease before the reply can make progress.
+    // Naming only patches metadata under the title writer's session identity check.
+    // It must not hold a turn admission while waiting on a model.
     const retryAfter = turn && (await turn.released) ? turn.settled : undefined;
-    const generateTitle = async () => {
-      const updated = await maybeGenerateDashboardSessionTitle({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        sessionId: params.admittedSessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-        currentUserMessage: params.request.rawMessage,
-        userMessage: titleSource,
-        ...(retryAfter ? { retryAfter } : {}),
-        onFallback: () =>
-          params.context.logGateway.warn(
-            "dashboard session title generation exhausted; using a crustacean fallback name",
-          ),
-      });
-      if (updated) {
-        emitSessionsChanged(params.context, {
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          reason: "chat.title",
-        });
-      }
-    };
-    if (admissionScope === "gateway") {
-      await generateTitle();
-      return;
-    }
-    const admission = await beginSessionWorkAdmission({
-      scope: params.storePath,
-      identities: [params.sessionKey, params.admittedSessionId],
-      assertAllowed: () => {},
+    const updated = await maybeGenerateDashboardSessionTitle({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionId: params.admittedSessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      currentUserMessage: params.request.rawMessage,
+      userMessage: titleSource,
+      ...(retryAfter ? { retryAfter } : {}),
+      onFallback: () =>
+        params.context.logGateway.warn(
+          "dashboard session title generation exhausted; using a crustacean fallback name",
+        ),
     });
-    try {
-      await admission.run(generateTitle);
-    } finally {
-      admission.release();
+    if (updated) {
+      emitSessionsChanged(params.context, {
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        reason: "chat.title",
+      });
     }
   }, "chat-send:background").catch((err: unknown) => {
     params.context.logGateway.warn(

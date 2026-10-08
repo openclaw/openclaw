@@ -29,6 +29,11 @@ export function renderWhatsAppCard(params: {
   const phoneNumber = rawPhoneNumber
     ? (formatInternationalPhoneNumberForDisplay(rawPhoneNumber, i18n.getLocale()) ?? rawPhoneNumber)
     : undefined;
+  const booleanFact = (field: "linked" | "running" | "connected") => ({
+    label: t(`common.${field}`),
+    value: whatsapp?.[field] ? t("common.yes") : t("common.no"),
+    kind: boolStatusKind(whatsapp?.[field]),
+  });
 
   return renderSettingsSection(
     {
@@ -43,11 +48,7 @@ export function renderWhatsAppCard(params: {
           value: formatNullableBoolean(configured),
           kind: boolStatusKind(configured),
         },
-        {
-          label: t("common.linked"),
-          value: whatsapp?.linked ? t("common.yes") : t("common.no"),
-          kind: boolStatusKind(whatsapp?.linked),
-        },
+        booleanFact("linked"),
         ...(phoneNumber
           ? [
               {
@@ -56,28 +57,17 @@ export function renderWhatsAppCard(params: {
               },
             ]
           : []),
-        {
-          label: t("common.running"),
-          value: whatsapp?.running ? t("common.yes") : t("common.no"),
-          kind: boolStatusKind(whatsapp?.running),
-        },
-        {
-          label: t("common.connected"),
-          value: whatsapp?.connected ? t("common.yes") : t("common.no"),
-          kind: boolStatusKind(whatsapp?.connected),
-        },
-        {
-          label: t("common.lastConnect"),
-          value: whatsapp?.lastConnectedAt
-            ? formatRelativeTimestamp(whatsapp.lastConnectedAt)
-            : t("common.na"),
-        },
-        {
-          label: t("common.lastMessage"),
-          value: whatsapp?.lastMessageAt
-            ? formatRelativeTimestamp(whatsapp.lastMessageAt)
-            : t("common.na"),
-        },
+        booleanFact("running"),
+        booleanFact("connected"),
+        ...(
+          [
+            ["lastConnect", "lastConnectedAt"],
+            ["lastMessage", "lastMessageAt"],
+          ] as const
+        ).map(([label, field]) => ({
+          label: t(`common.${label}`),
+          value: whatsapp?.[field] ? formatRelativeTimestamp(whatsapp[field]) : t("common.na"),
+        })),
         {
           label: t("common.authAge"),
           value:

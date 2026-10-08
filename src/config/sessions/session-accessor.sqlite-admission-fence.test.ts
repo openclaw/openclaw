@@ -1,9 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
@@ -16,7 +14,7 @@ import {
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-admission-fence-");
 describe("SQLite admitted input reset fence", () => {
   let scope: {
     agentId: string;
@@ -27,14 +25,10 @@ describe("SQLite admitted input reset fence", () => {
   beforeEach(() => {
     scope = {
       agentId: "main",
-      env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-fence-") },
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make() },
       sessionId: "admission-fence-test",
       sessionKey: "agent:main:admission-fence-test",
     };
-  });
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
   });
 
   it("rejects a retained completion source reset before admission", async () => {

@@ -141,12 +141,6 @@ function buildTrackerKey(params: PromptCacheIdentity): string {
   return params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId;
 }
 
-function setTracker(key: string, tracker: PromptCacheTracker): void {
-  trackers.delete(key);
-  pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
-  trackers.set(key, tracker);
-}
-
 function diffSnapshots(
   previous: PromptCacheSnapshot,
   next: PromptCacheSnapshot,
@@ -290,7 +284,7 @@ export function beginPromptCacheObservation(
   if (violation) {
     changes.push(violation);
   }
-  setTracker(key, {
+  const tracker: PromptCacheTracker = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey?.trim(),
     history,
@@ -298,7 +292,10 @@ export function beginPromptCacheObservation(
     lastCacheRead: previous?.lastCacheRead ?? null,
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
     pendingChanges: changes.length > 0 ? changes : null,
-  });
+  };
+  trackers.delete(key);
+  pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
+  trackers.set(key, tracker);
   if (violation) {
     if (process.env.OPENCLAW_PROMPT_CACHE_ASSERT === "1") {
       throw new Error(violation.detail);

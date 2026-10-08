@@ -41,6 +41,11 @@ type ServiceLifecycleOptions = DaemonLifecycleOptions & {
   restartIntent?: GatewayRestartIntent;
 };
 
+type ServiceTarget = {
+  serviceNoun: string;
+  service: GatewayService;
+};
+
 type StartPostCheckContext = Pick<
   ReturnType<typeof createDaemonActionContext>,
   "stdout" | "warnings" | "fail"
@@ -68,20 +73,6 @@ type ServiceStartRepairContext = ServiceRecoveryContext & {
   issues: GatewayServiceStartRepairIssue[];
 };
 
-async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
-  if (process.platform !== "linux") {
-    return hints;
-  }
-  const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
-  if (systemdAvailable) {
-    return hints;
-  }
-  return [
-    ...hints,
-    ...renderSystemdUnavailableHints({ wsl: await isWSL(), kind: "generic_unavailable" }),
-  ];
-}
-
 function mergeWarnings(
   captured: readonly string[],
   reported?: readonly string[],
@@ -90,25 +81,28 @@ function mergeWarnings(
   return combined.length > 0 ? combined : undefined;
 }
 
-async function failServiceNotLoaded(params: {
-  serviceNoun: string;
-  service: GatewayService;
-  renderStartHints: () => string[];
-  fail: ReturnType<typeof createDaemonActionContext>["fail"];
-}) {
-  const hints = filterContainerGenericHints(
-    await maybeAugmentSystemdHints(params.renderStartHints()),
+async function failServiceNotLoaded(
+  params: ServiceTarget & { renderStartHints: () => string[] },
+  fail: ReturnType<typeof createDaemonActionContext>["fail"],
+) {
+  let hints = params.renderStartHints();
+  if (process.platform === "linux" && !(await isSystemdUserServiceAvailable().catch(() => false))) {
+    hints = [
+      ...hints,
+      ...renderSystemdUnavailableHints({ wsl: await isWSL(), kind: "generic_unavailable" }),
+    ];
+  }
+  fail(
+    `${params.serviceNoun} service ${params.service.notLoadedText}.`,
+    filterContainerGenericHints(hints),
   );
-  params.fail(`${params.serviceNoun} service ${params.service.notLoadedText}.`, hints);
 }
 
-async function resolveServiceLoadedOrFail(params: {
-  serviceNoun: string;
-  service: GatewayService;
-  fail: ReturnType<typeof createDaemonActionContext>["fail"];
-  acceptInstalledDefinition?: boolean;
-  inspectionFailureMessage?: string;
-}): Promise<boolean | null> {
+async function resolveServiceLoadedOrFail(
+  params: ServiceTarget,
+  fail: ReturnType<typeof createDaemonActionContext>["fail"],
+  opts: { acceptInstalledDefinition?: boolean; inspectionFailureMessage?: string } = {},
+): Promise<boolean | null> {
   // Keep native scope discovery in the adapter and failure emission in the action context.
   const hasInstalledDefinition = async () =>
     params.service.hasInstalledDefinition
@@ -116,33 +110,15 @@ async function resolveServiceLoadedOrFail(params: {
       : Boolean(await params.service.readCommand(process.env).catch(() => null));
   const loadState = await readGatewayServiceLoadState(params.service, { env: process.env });
   if (loadState.status === "unknown") {
-    params.fail(
-      `${params.inspectionFailureMessage ?? `${params.serviceNoun} service check failed`}: ${loadState.detail}`,
+    fail(
+      `${opts.inspectionFailureMessage ?? `${params.serviceNoun} service check failed`}: ${loadState.detail}`,
     );
     return null;
   }
   return (
     loadState.status === "loaded" ||
-    (Boolean(params.acceptInstalledDefinition) && (await hasInstalledDefinition()))
+    (Boolean(opts.acceptInstalledDefinition) && (await hasInstalledDefinition()))
   );
-}
-
-async function blockInvalidServiceAction(
-  serviceNoun: string,
-  action: Parameters<typeof getServiceActionPreflightFailure>[0],
-  fail: ReturnType<typeof createDaemonActionContext>["fail"],
-): Promise<boolean> {
-  const preflight = await getServiceActionPreflightFailure(action);
-  if (!preflight) {
-    return false;
-  }
-  fail(
-    !preflight.hints && (action === "start" || action === "restart")
-      ? `${serviceNoun} aborted: config is invalid.\n${preflight.message}\n${formatInvalidConfigRecoveryHint()}`
-      : `${serviceNoun} ${action} blocked: ${preflight.message}`,
-    preflight.hints,
-  );
-  return true;
 }
 
 function warnServiceConfig(
@@ -178,10 +154,7 @@ export async function runServiceUninstall(params: {
     return;
   }
 
-  let loaded = await resolveServiceLoadedOrFail({
-    serviceNoun: params.serviceNoun,
-    service: params.service,
-    fail,
+  let loaded = await resolveServiceLoadedOrFail(params, fail, {
     inspectionFailureMessage: `${params.serviceNoun} uninstall aborted because service status is unknown; resolve the inspection error before retrying`,
   });
   if (loaded === null) {
@@ -200,10 +173,7 @@ export async function runServiceUninstall(params: {
     fail(`${params.serviceNoun} uninstall failed: ${String(err)}`);
     return;
   }
-  loaded = await resolveServiceLoadedOrFail({
-    serviceNoun: params.serviceNoun,
-    service: params.service,
-    fail,
+  loaded = await resolveServiceLoadedOrFail(params, fail, {
     inspectionFailureMessage: `${params.serviceNoun} uninstall verification failed because service status is unknown`,
   });
   if (loaded === null) {
@@ -255,17 +225,20 @@ export async function runServiceStart(params: {
       service: buildDaemonServiceSnapshot(params.service, result.loaded),
     });
   };
-  const loaded = await resolveServiceLoadedOrFail({
-    serviceNoun: params.serviceNoun,
-    service: params.service,
-    fail,
-  });
+  const loaded = await resolveServiceLoadedOrFail(params, fail);
 
   if (loaded === null) {
     return;
   }
   // Validate before both loaded and not-loaded start paths (#35862).
-  if (await blockInvalidServiceAction(params.serviceNoun, "start", fail)) {
+  const preflight = await getServiceActionPreflightFailure("start");
+  if (preflight) {
+    fail(
+      !preflight.hints
+        ? `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\n${formatInvalidConfigRecoveryHint()}`
+        : `${params.serviceNoun} start blocked: ${preflight.message}`,
+      preflight.hints,
+    );
     return;
   }
   if (!loaded) {
@@ -299,12 +272,7 @@ export async function runServiceStart(params: {
       params.expectedPort,
     );
     if (startResult.outcome === "missing-install") {
-      await failServiceNotLoaded({
-        serviceNoun: params.serviceNoun,
-        service: params.service,
-        renderStartHints: params.renderStartHints,
-        fail,
-      });
+      await failServiceNotLoaded(params, fail);
       return;
     }
     if (startResult.outcome === "already-running") {
@@ -383,11 +351,7 @@ export async function runServiceStop(params: {
     action: "stop",
   });
 
-  const loaded = await resolveServiceLoadedOrFail({
-    serviceNoun: params.serviceNoun,
-    service: params.service,
-    fail,
-  });
+  const loaded = await resolveServiceLoadedOrFail(params, fail);
   if (loaded === null) {
     return;
   }
@@ -431,10 +395,7 @@ export async function runServiceStop(params: {
   }
 
   const finalLoaded = loaded
-    ? await resolveServiceLoadedOrFail({
-        serviceNoun: params.serviceNoun,
-        service: params.service,
-        fail,
+    ? await resolveServiceLoadedOrFail(params, fail, {
         inspectionFailureMessage: `${params.serviceNoun} stop verification failed because service status is unknown`,
       })
     : false;
@@ -500,10 +461,7 @@ export async function runServiceRestart(params: {
     return true;
   };
 
-  const loaded = await resolveServiceLoadedOrFail({
-    serviceNoun: params.serviceNoun,
-    service: params.service,
-    fail,
+  const loaded = await resolveServiceLoadedOrFail(params, fail, {
     acceptInstalledDefinition: true,
   });
   if (loaded === null) {
@@ -537,12 +495,7 @@ export async function runServiceRestart(params: {
       return false;
     }
     if (!handledRecovery) {
-      await failServiceNotLoaded({
-        serviceNoun: params.serviceNoun,
-        service: params.service,
-        renderStartHints: params.renderStartHints,
-        fail,
-      });
+      await failServiceNotLoaded(params, fail);
       return false;
     }
     if (handledRecovery.warnings?.length) {

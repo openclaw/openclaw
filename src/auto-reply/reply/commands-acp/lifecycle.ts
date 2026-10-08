@@ -395,10 +395,9 @@ export async function handleAcpSteerAction(
             closeAdmittedRunDelegatedAuthority(admittedRunContext);
           }
           const steerOutput = output.trim();
-          if (!steerOutput) {
-            return commandReply(`✅ ACP steer sent to ${sessionKey}.`);
-          }
-          return commandReply(`✅ ACP steer sent to ${sessionKey}.\n${steerOutput}`);
+          return commandReply(
+            `✅ ACP steer sent to ${sessionKey}.${steerOutput ? `\n${steerOutput}` : ""}`,
+          );
         },
         fallbackMessage: "ACP steer failed before completion.",
       }),

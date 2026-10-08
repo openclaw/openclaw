@@ -796,13 +796,10 @@ export async function handleTelegramAction(
       iconCustomEmojiId,
     });
     if (result.chatId) {
-      const patch: { name?: string; iconCustomEmojiId?: string } = {};
-      if (name) {
-        patch.name = name;
-      }
-      if (iconCustomEmojiId) {
-        patch.iconCustomEmojiId = iconCustomEmojiId;
-      }
+      const patch = {
+        ...(name ? { name } : {}),
+        ...(iconCustomEmojiId ? { iconCustomEmojiId } : {}),
+      };
       if (Object.keys(patch).length > 0) {
         await updateTopicName(
           result.chatId,

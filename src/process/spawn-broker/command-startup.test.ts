@@ -5,8 +5,9 @@ import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { runCommandWithTimeout, runExec } from "../exec.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 describe.skipIf(skipBrokerTests)("command startup cancellation", () => {
   it.each([false, true])(

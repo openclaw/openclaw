@@ -352,6 +352,7 @@ describe("worker placement dispatch reclaim", () => {
         if (local.state !== "local") {
           throw new Error("move source did not return to local state");
         }
+        authorized = false;
         return local;
       },
       validateAbandonSource: vi.fn(),

@@ -21,16 +21,16 @@ export function resolveMessageToolAvailability(params: {
 }): boolean {
   const agentConfig = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
   const modelRef = resolveDoctorPrimaryModelRef(params.cfg, agentConfig?.model);
-  const providerPolicy = resolveProviderToolPolicy({
-    byProvider: params.globalTools?.byProvider,
-    modelProvider: modelRef.provider,
-    modelId: modelRef.model,
-  });
-  const agentProviderPolicy = resolveProviderToolPolicy({
-    byProvider: params.agentTools?.byProvider,
-    modelProvider: modelRef.provider,
-    modelId: modelRef.model,
-  });
+  const [providerPolicy, agentProviderPolicy] = [
+    params.globalTools?.byProvider,
+    params.agentTools?.byProvider,
+  ].map((byProvider) =>
+    resolveProviderToolPolicy({
+      byProvider,
+      modelProvider: modelRef.provider,
+      modelId: modelRef.model,
+    }),
+  );
   const profilePolicy = (global?: ToolPolicyConfig, agent?: ToolPolicyConfig) => {
     const alsoAllow = Array.isArray(agent?.alsoAllow)
       ? agent.alsoAllow

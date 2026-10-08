@@ -472,18 +472,12 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
       }
     }
 
-    if (shouldDelete) {
-      const deleted = await deleteManagedImageRecordArtifacts(
-        record,
-        stateDir,
-        entry.cleanupPending,
-      );
-      if (deleted.deletedRecord) {
-        deletedRecordCount += 1;
-        deletedFileCount += deleted.deletedFileCount;
-      } else {
-        retainedCount += 1;
-      }
+    const deleted = shouldDelete
+      ? await deleteManagedImageRecordArtifacts(record, stateDir, entry.cleanupPending)
+      : undefined;
+    if (deleted?.deletedRecord) {
+      deletedRecordCount += 1;
+      deletedFileCount += deleted.deletedFileCount;
     } else {
       retainedCount += 1;
     }
@@ -749,29 +743,21 @@ async function recordMatchesTranscriptMessage(
   type SessionEntry = ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
   let matched: { entry: NonNullable<SessionEntry>; storePath: string } | undefined;
   for (const target of discovery.targets) {
-    const exact = loadExactSessionEntryReadOnlyResult({
+    const readTarget = {
       agentId: ownerAgentId,
       clone: false,
       env,
       sessionKey,
       storePath: target.storePath,
-    });
+    };
+    const exact = loadExactSessionEntryReadOnlyResult(readTarget);
     if (!exact.found) {
       return "unavailable";
     }
     let targetEntry = exact.value?.entry;
     if (!targetEntry) {
       try {
-        targetEntry = resolveSessionEntry(
-          {
-            agentId: ownerAgentId,
-            clone: false,
-            env,
-            sessionKey,
-            storePath: target.storePath,
-          },
-          { readOnly: true },
-        ).existing;
+        targetEntry = resolveSessionEntry(readTarget, { readOnly: true }).existing;
       } catch {
         return "unavailable";
       }
@@ -1086,6 +1072,11 @@ export async function createManagedOutgoingMediaBlocks(params: {
     const context = captureManagedImageContext(stateDir);
     const limits = resolveManagedImageAttachmentLimits(params.limits);
     const blocks: ManagedMediaBlock[] = [];
+    const discardBlocks = () =>
+      removeManagedOutgoingMediaBlocks(
+        { blocks, messageId: params.messageId ?? null, stateDir },
+        context,
+      );
     let resolvedLocalRoots: readonly string[] | undefined;
     for (const [index, item] of items.entries()) {
       const mediaUrl = item.url;
@@ -1328,14 +1319,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
         try {
           params.assertCurrent?.();
         } catch (authorityError) {
-          await removeManagedOutgoingMediaBlocks(
-            {
-              blocks,
-              messageId: params.messageId ?? null,
-              stateDir,
-            },
-            context,
-          );
+          await discardBlocks();
           throw authorityError;
         }
         const sanitizedError = getSanitizedManagedImageAttachmentError(error, label, hintedKind);
@@ -1351,14 +1335,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
           params.onPrepareError?.(sanitizedError);
           continue;
         }
-        await removeManagedOutgoingMediaBlocks(
-          {
-            blocks,
-            messageId: params.messageId ?? null,
-            stateDir,
-          },
-          context,
-        );
+        await discardBlocks();
         throw sanitizedError;
       }
     }
@@ -1395,6 +1372,10 @@ export async function handleManagedOutgoingMediaHttpRequest(
     return false;
   }
 
+  const respondNotFound = () => {
+    sendStatus(res, 404, "not found");
+    return true;
+  };
   if (req.method !== "GET" && req.method !== "HEAD") {
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
@@ -1407,15 +1388,13 @@ export async function handleManagedOutgoingMediaHttpRequest(
     return false;
   }
   if (!MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(attachmentId)) {
-    sendStatus(res, 404, "not found");
-    return true;
+    return respondNotFound();
   }
   let sessionKey: string;
   try {
     sessionKey = decodeURIComponent(encodedSessionKey);
   } catch {
-    sendStatus(res, 404, "not found");
-    return true;
+    return respondNotFound();
   }
   const hasValidMediaTicket = verifyManagedOutgoingImageTicket({
     ticket: requestUrl.searchParams.get("mediaTicket"),
@@ -1467,7 +1446,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
         attachmentId,
       })
     ) {
-      sendStatus(res, 404, "not found");
+      respondNotFound();
       throw new Error("Managed media ticket expired during retrieval");
     }
   };
@@ -1476,8 +1455,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
     const record = await readManagedImageRecord(attachmentId, stateDir);
     assertCallerCurrent();
     if (!record || record.sessionKey !== sessionKey) {
-      sendStatus(res, 404, "not found");
-      return true;
+      return respondNotFound();
     }
     const handled = await withManagedOutgoingMediaRead(
       record,
@@ -1485,8 +1463,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
       async (assertCurrent) => {
         const mediaKind = resolveManagedMediaKind(record.original.contentType);
         if (!mediaKind) {
-          sendStatus(res, 404, "not found");
-          return true;
+          return respondNotFound();
         }
 
         let opened: Awaited<ReturnType<typeof openLocalFileSafely>>;
@@ -1495,10 +1472,8 @@ export async function handleManagedOutgoingMediaHttpRequest(
             filePath: resolveManagedImageOriginalPath(record),
           });
         } catch {
-          sendStatus(res, 404, "not found");
-          return true;
+          return respondNotFound();
         }
-        const respondNotFound = () => sendStatus(res, 404, "not found");
         const immutableCacheControl = hasValidMediaTicket
           ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
           : "private, max-age=31536000, immutable";
@@ -1605,7 +1580,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
     );
     if (handled === null) {
       assertCallerCurrent();
-      sendStatus(res, 404, "not found");
+      respondNotFound();
     }
   } catch (error) {
     if (!res.writableEnded && !res.destroyed) {

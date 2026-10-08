@@ -91,6 +91,7 @@ describe("same-root local mutation routing", () => {
   let claim: TestPortClaim;
   let owner: GatewayLockHandle | null;
   let service: ManagedWorktreeService;
+  let repoFingerprint: string;
   const maintenanceClock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(maintenanceClock.clock);
   let maintenance: ReturnType<typeof startWorktreeMaintenance>;
@@ -145,6 +146,7 @@ describe("same-root local mutation routing", () => {
     vi.stubEnv("USERPROFILE", root);
     const cfg = { worktreeRoot: path.join(root, "gateway-worktrees"), worktreeAcceleration: false };
     service = new ManagedWorktreeService({ env, getConfig: () => cfg });
+    repoFingerprint = (await service.resolveRepositoryIdentity(repo)).fingerprint;
     owner = await acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
     expect(owner).not.toBeNull();
     const handlers = createWorktreesHandlers(service);
@@ -432,12 +434,14 @@ describe("same-root local mutation routing", () => {
 
   async function prepareOperation(kind: Operation["kind"]) {
     const name = `mutation-${++sequence}`;
-    const record = await service.create({
+    const record = await materializeManagedWorktreeFixture({
+      env,
+      stateDir: env.OPENCLAW_STATE_DIR!,
       repoRoot: repo,
+      repoFingerprint,
       name,
-      baseRef: "HEAD",
+      now: Date.now(),
       ownerKind: kind === "gc" || kind === "gc-partial" ? "workboard" : "manual",
-      runSetupScript: false,
     });
     let args = ["remove", record.id];
     let cleanup = async () => {};

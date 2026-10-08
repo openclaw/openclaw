@@ -3081,6 +3081,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
+  it("retains indivisible-file costs when canonical measurements are stale-low", () => {
+    const target = "src/cli/local-state-owner.process.test.ts";
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
+      Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),
+    );
+    vi.spyOn(shardMetadata, "estimateVitestTestFileSeconds").mockImplementation((file) =>
+      file === target ? 200 : 3,
+    );
+    const plan = expectDefined(
+      createSelectedNodeTestShardBundles([target], { runnerBackend: "hybrid" }),
+      "selected process plan",
+    );
+    expect(
+      plan.flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? [])),
+    ).toEqual([target]);
+    expect(plan).toHaveLength(1);
+    expect(plan[0]!.predictedTestSeconds).toBeGreaterThanOrEqual(200);
+  });
+
   it("allocates sparse selections without reserving their full-suite rows", async () => {
     const heavyCli = "src/cli/gateway-backed-exit-health.process.test.ts";
     const targets = [

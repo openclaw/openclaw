@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   mergeRestartRecoveryTerminalRunIds,
   sameRestartRecoveryTerminalRunIds,
@@ -29,6 +30,7 @@ export function buildRestartRecoveryExpectedState(
     restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
     restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
     restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
+    restartRecoveryOperatorSource: entry.restartRecoveryOperatorSource,
     restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
     restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
@@ -76,6 +78,10 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
           expectedState.restartRecoveryRequesterSenderId &&
         selected.entry.restartRecoverySameChannelThreadRequired ===
           expectedState.restartRecoverySameChannelThreadRequired &&
+        isDeepStrictEqual(
+          selected.entry.restartRecoveryOperatorSource,
+          expectedState.restartRecoveryOperatorSource,
+        ) &&
         selected.entry.restartRecoverySourceIngress ===
           expectedState.restartRecoverySourceIngress &&
         selected.entry.restartRecoverySourceReplyDeliveryMode ===

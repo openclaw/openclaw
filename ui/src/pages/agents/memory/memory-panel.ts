@@ -56,27 +56,6 @@ function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): stri
   return formatTimeMs(nextRunAtMs, { hour: "numeric", minute: "2-digit" }, "") || null;
 }
 
-function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
-  const payload = asOptionalObjectRecord(value);
-  const content =
-    typeof payload?.content === "string" && payload.content.length > 0
-      ? payload.content
-      : t("dreaming.wiki.noContent");
-  const updatedAt = normalizeOptionalString(payload?.updatedAt);
-  const totalLines =
-    typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
-      ? Math.max(0, Math.floor(payload.totalLines))
-      : undefined;
-  return {
-    title: normalizeOptionalString(payload?.title) ?? lookup,
-    path: normalizeOptionalString(payload?.path) ?? lookup,
-    content,
-    ...(totalLines === undefined ? {} : { totalLines }),
-    ...(payload?.truncated === true ? { truncated: true } : {}),
-    ...(updatedAt ? { updatedAt } : {}),
-  };
-}
-
 class AgentMemoryPanel extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -329,7 +308,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     if (!scope || !client || !scope.state.connected || !agentId) {
       return null;
     }
-    const payload = await client.request("wiki.get", {
+    const response = await client.request("wiki.get", {
       lookup,
       fromLine: 1,
       lineCount: 5000,
@@ -338,7 +317,24 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     if (!this.isTaskScopeCurrent(scope) || scope.state.selectedAgentId !== agentId) {
       return null;
     }
-    return readWikiPagePreview(payload, lookup);
+    const payload = asOptionalObjectRecord(response);
+    const content =
+      typeof payload?.content === "string" && payload.content.length > 0
+        ? payload.content
+        : t("dreaming.wiki.noContent");
+    const updatedAt = normalizeOptionalString(payload?.updatedAt);
+    const totalLines =
+      typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
+        ? Math.max(0, Math.floor(payload.totalLines))
+        : undefined;
+    return {
+      title: normalizeOptionalString(payload?.title) ?? lookup,
+      path: normalizeOptionalString(payload?.path) ?? lookup,
+      content,
+      ...(totalLines === undefined ? {} : { totalLines }),
+      ...(payload?.truncated === true ? { truncated: true } : {}),
+      ...(updatedAt ? { updatedAt } : {}),
+    };
   }
 
   private async refreshWikiData(key: DreamingResourceKey) {

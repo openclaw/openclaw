@@ -37,6 +37,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
+import { withSessionTranscriptWriteAssertion } from "./transcript-write-context.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
@@ -120,57 +121,74 @@ describe("SQLite session handle lifecycle", () => {
     ]);
   });
 
-  it("reads complete mirror facts across key batches without per-message selections", async () => {
-    const messages = Array.from({ length: 901 }, (_, index) => ({
-      eventId: "event-" + index,
-      parentId: index === 0 ? null : "event-" + (index - 1),
-      message: { role: "user", content: "body " + index, idempotencyKey: "mirror-" + index },
-    }));
-    await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-    const generation = database.db
-      .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
-      .get(scope.sessionId)?.generation;
+  it.each(["native", "worker"] as const)(
+    "reads complete mirror facts across key batches (%s)",
+    async (route) => {
+      const messages = Array.from({ length: 901 }, (_, index) => ({
+        eventId: "event-" + index,
+        parentId: index === 0 ? null : "event-" + (index - 1),
+        message: { role: "user", content: "body " + index, idempotencyKey: "mirror-" + index },
+      }));
+      await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+      const generation = database.db
+        .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
+        .get(scope.sessionId)?.generation;
 
-    await withTranscriptWriteLock(scope, async (transcript) => {
-      const count = messages.length;
-      const keys = messages.map(({ message }) => message.idempotencyKey);
-      const counter = trackSqliteStatementExecutions(database.db, ["reads"], (query) =>
-        query.startsWith("select ") ? "reads" : null,
-      );
-      try {
-        const facts = await transcript.readMessageFacts({ idempotencyKeys: keys });
-        expect([...facts.existingIdempotencyKeys]).toEqual(keys);
-        expect([...facts.messagesByIdempotencyKey]).toEqual(
-          messages.map(({ message }) => [message.idempotencyKey, message]),
-        );
-        expect([...facts.anchorsByIdempotencyKey]).toEqual(
-          messages.map(({ eventId, parentId, message }, index) => [
-            message.idempotencyKey,
-            {
-              agentId: "main",
-              sessionId: scope.sessionId,
-              sessionKey: scope.sessionKey,
-              storePath: database.path,
-              generation,
-              entryId: eventId,
-              rawSeq: index + 1,
-              effectiveParentId: parentId,
-              activeMessagePosition: index,
-              idempotencyKey: message.idempotencyKey,
-            },
-          ]),
-        );
-        expect([...facts.anchorsByIdempotencyKey.values()].every(Object.isFrozen)).toBe(true);
-        expect.soft(counter.counts.reads, "selected " + count).toBeLessThanOrEqual(12);
-        expect.soft(counter.rowCounts.reads, "selected " + count).toBeLessThanOrEqual(count + 10);
-      } finally {
-        counter.restore();
+      const read = () =>
+        withTranscriptWriteLock(scope, async (transcript) => {
+          const count = messages.length;
+          const keys = messages.map(({ message }) => message.idempotencyKey);
+          const counter = trackSqliteStatementExecutions(database.db, ["reads"], (query) =>
+            query.startsWith("select ") ? "reads" : null,
+          );
+          try {
+            const facts = await transcript.readMessageFacts({ idempotencyKeys: keys });
+            expect([...facts.existingIdempotencyKeys]).toEqual(keys);
+            expect([...facts.messagesByIdempotencyKey]).toEqual(
+              messages.map(({ message }) => [message.idempotencyKey, message]),
+            );
+            expect([...facts.anchorsByIdempotencyKey]).toEqual(
+              messages.map(({ eventId, parentId, message }, index) => [
+                message.idempotencyKey,
+                {
+                  agentId: "main",
+                  sessionId: scope.sessionId,
+                  sessionKey: scope.sessionKey,
+                  storePath: database.path,
+                  generation,
+                  entryId: eventId,
+                  rawSeq: index + 1,
+                  effectiveParentId: parentId,
+                  activeMessagePosition: index,
+                  idempotencyKey: message.idempotencyKey,
+                },
+              ]),
+            );
+            expect([...facts.anchorsByIdempotencyKey.values()].every(Object.isFrozen)).toBe(true);
+            if (route === "worker") {
+              expect(counter.counts.reads).toBe(0);
+            } else {
+              expect.soft(counter.counts.reads, "selected " + count).toBeLessThanOrEqual(12);
+              expect
+                .soft(counter.rowCounts.reads, "selected " + count)
+                .toBeLessThanOrEqual(count + 10);
+            }
+          } finally {
+            counter.restore();
+          }
+        });
+      if (route === "native") {
+        // Released opaque guards retain the synchronous reader used by this batching proof.
+        await withSessionTranscriptWriteAssertion(scope, () => {}, read);
+      } else {
+        await read();
       }
-    });
-  });
+    },
+  );
   it.each([
     ["missing projection", "DELETE FROM session_transcript_index_state"],
+    ["ahead projection", "UPDATE session_transcript_index_state SET indexed_seq = 100"],
     [
       "unclassified projection",
       "UPDATE session_transcript_active_events SET context_eligible = NULL",

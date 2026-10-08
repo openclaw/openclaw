@@ -7,7 +7,7 @@ import {
   appendMatchMetadata,
   isRecord,
   readAccountStatusSnapshot,
-  resolveEnabledConfiguredAccountId,
+  collectIssuesForEnabledAccounts,
   type AccountStatusSnapshot,
 } from "openclaw/plugin-sdk/status-helpers";
 import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -97,101 +97,74 @@ function collectTelegramRuntimeIssues(params: {
   }
 }
 
-function readTelegramGroupMembershipAuditSummary(value: unknown) {
-  if (!isRecord(value)) {
-    return {};
-  }
-  const unresolvedGroups = asFiniteNumber(value.unresolvedGroups);
-  const hasWildcardUnmentionedGroups =
-    typeof value.hasWildcardUnmentionedGroups === "boolean"
-      ? value.hasWildcardUnmentionedGroups
-      : undefined;
-  const groupsRaw = value.groups;
-  const groups = Array.isArray(groupsRaw)
-    ? groupsRaw
-        .map((entry) => {
-          if (!isRecord(entry)) {
-            return null;
-          }
-          const chatId = normalizeOptionalString(entry.chatId);
-          if (!chatId) {
-            return null;
-          }
-          const ok = typeof entry.ok === "boolean" ? entry.ok : undefined;
-          const status = normalizeOptionalString(entry.status) ?? null;
-          const error = normalizeOptionalString(entry.error) ?? null;
-          const matchKey = normalizeOptionalString(entry.matchKey);
-          const matchSource = normalizeOptionalString(entry.matchSource);
-          return { chatId, ok, status, error, matchKey, matchSource };
-        })
-        .filter((entry) => entry !== null)
-    : undefined;
-  return { unresolvedGroups, hasWildcardUnmentionedGroups, groups };
-}
-
 export function collectTelegramStatusIssues(
   accounts: ChannelAccountSnapshot[],
 ): ChannelStatusIssue[] {
-  const issues: ChannelStatusIssue[] = [];
-  for (const entry of accounts) {
-    const account = readAccountStatusSnapshot(entry, TELEGRAM_ACCOUNT_STATUS_FIELDS);
-    if (!account) {
-      continue;
-    }
-    const accountId = resolveEnabledConfiguredAccountId(account);
-    if (!accountId) {
-      continue;
-    }
-    const now = Date.now();
-    const addIssue: AddTelegramStatusIssue = (kind, message, fix) => {
-      issues.push({ channel: "telegram", accountId, kind, message, fix });
-    };
-
-    collectTelegramRuntimeIssues({
-      account,
-      addIssue,
-      now,
-    });
-
-    if (account.allowUnmentionedGroups === true) {
-      addIssue(
-        "config",
-        "Config allows unmentioned group messages (requireMention=false). Telegram Bot API privacy mode will block most group messages unless disabled.",
-        "In BotFather run /setprivacy → Disable for this bot (then restart the gateway).",
-      );
-    }
-
-    const audit = readTelegramGroupMembershipAuditSummary(account.audit);
-    if (audit.hasWildcardUnmentionedGroups === true) {
-      addIssue(
-        "config",
-        'Telegram groups config uses "*" with requireMention=false; membership probing is not possible without explicit group IDs.',
-        "Add explicit numeric group ids under channels.telegram.groups (or per-account groups) to enable probing.",
-      );
-    }
-    if (audit.unresolvedGroups && audit.unresolvedGroups > 0) {
-      addIssue(
-        "config",
-        `Some configured Telegram groups are not numeric IDs (unresolvedGroups=${audit.unresolvedGroups}). Membership probe can only check numeric group IDs.`,
-        "Use numeric chat IDs (e.g. -100...) as keys in channels.telegram.groups for requireMention=false groups.",
-      );
-    }
-    for (const group of audit.groups ?? []) {
-      if (group.ok === true) {
-        continue;
+  return collectIssuesForEnabledAccounts({
+    accounts,
+    readAccount: (entry) => readAccountStatusSnapshot(entry, TELEGRAM_ACCOUNT_STATUS_FIELDS),
+    collectIssues: ({ account, accountId, issues }) => {
+      if (account.configured !== true) {
+        return;
       }
-      const status = group.status ? ` status=${group.status}` : "";
-      const err = group.error ? `: ${group.error}` : "";
-      const baseMessage = `Group ${group.chatId} not reachable by bot.${status}${err}`;
-      addIssue(
-        "runtime",
-        appendMatchMetadata(baseMessage, {
-          matchKey: group.matchKey,
-          matchSource: group.matchSource,
-        }),
-        "Invite the bot to the group, then DM the bot once (/start) and restart the gateway.",
-      );
-    }
-  }
-  return issues;
+      const now = Date.now();
+      const addIssue: AddTelegramStatusIssue = (kind, message, fix) => {
+        issues.push({ channel: "telegram", accountId, kind, message, fix });
+      };
+
+      collectTelegramRuntimeIssues({
+        account,
+        addIssue,
+        now,
+      });
+
+      if (account.allowUnmentionedGroups === true) {
+        addIssue(
+          "config",
+          "Config allows unmentioned group messages (requireMention=false). Telegram Bot API privacy mode will block most group messages unless disabled.",
+          "In BotFather run /setprivacy → Disable for this bot (then restart the gateway).",
+        );
+      }
+
+      const audit = account.audit;
+      if (!isRecord(audit)) {
+        return;
+      }
+      if (audit.hasWildcardUnmentionedGroups === true) {
+        addIssue(
+          "config",
+          'Telegram groups config uses "*" with requireMention=false; membership checking is not possible without explicit group IDs.',
+          "Add explicit numeric group ids under channels.telegram.groups (or per-account groups) to enable checking.",
+        );
+      }
+      const unresolvedGroups = asFiniteNumber(audit.unresolvedGroups);
+      if (unresolvedGroups && unresolvedGroups > 0) {
+        addIssue(
+          "config",
+          `Some configured Telegram groups are not numeric IDs (unresolvedGroups=${unresolvedGroups}). Membership checks require numeric group IDs.`,
+          "Use numeric chat IDs (e.g. -100...) as keys in channels.telegram.groups for requireMention=false groups.",
+        );
+      }
+      for (const group of Array.isArray(audit.groups) ? audit.groups : []) {
+        if (!isRecord(group)) {
+          continue;
+        }
+        const chatId = normalizeOptionalString(group.chatId);
+        if (!chatId || group.ok === true) {
+          continue;
+        }
+        const status = normalizeOptionalString(group.status);
+        const error = normalizeOptionalString(group.error);
+        const baseMessage = `Group ${chatId} not reachable by bot.${status ? ` status=${status}` : ""}${error ? `: ${error}` : ""}`;
+        addIssue(
+          "runtime",
+          appendMatchMetadata(baseMessage, {
+            matchKey: normalizeOptionalString(group.matchKey),
+            matchSource: normalizeOptionalString(group.matchSource),
+          }),
+          "Invite the bot to the group, then DM the bot once (/start) and restart the gateway.",
+        );
+      }
+    },
+  });
 }

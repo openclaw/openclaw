@@ -472,7 +472,7 @@ it.each([
   { mutation: "backdate", boundary: "before-authorization" },
   { mutation: "restore", boundary: "after-settlement" },
   { mutation: "backdate", boundary: "missing-after-settlement" },
-  { mutation: "backdate", boundary: "final-age-settlement" },
+  { mutation: "backdate", boundary: "age-settlement" },
 ] as const)(
   "keeps $mutation authority at $boundary across real Worker planning",
   async ({ mutation, boundary }) => {
@@ -545,7 +545,7 @@ it.each([
           }
           if (
             boundary !== "before-authorization" &&
-            boundary !== "final-age-settlement" &&
+            boundary !== "age-settlement" &&
             result.kind === "committed" &&
             !changed
           ) {
@@ -574,7 +574,7 @@ it.each([
           mutate();
         }
         if (
-          boundary === "final-age-settlement" &&
+          boundary === "age-settlement" &&
           params.plan.kind === "maintenance-age" &&
           result.kind === "maintenance-age" &&
           !changed
@@ -923,6 +923,8 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
     expect((await unchanged).archived).toBe(0);
     expect(await retainedDeadline).toBe(initialDeadline);
     expect(loadSessionEntry(foreignVictim)?.archivedAt).toBeUndefined();
+    expect(loadSessionEntry(managedVictim)?.archivedAt).toBeUndefined();
+    expect(loadSessionEntry(active)?.archivedAt).toBeUndefined();
     vi.restoreAllMocks();
 
     // Managed commit receipts must invalidate the retained Worker age fact even

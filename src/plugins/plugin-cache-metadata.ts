@@ -51,7 +51,6 @@ export type PluginCacheMetadata = {
     bundledProviderPolicySurfaces: Map<
       string,
       {
-        registry: object | null;
         version: number | undefined;
         selection: PluginCacheMetadata["metadata"]["bundledPluginsDir"];
         read: () => BundledProviderPolicySurface | null;

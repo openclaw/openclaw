@@ -6,7 +6,6 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 // Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayPendingRequests } from "../../packages/gateway-client/src/pending-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -29,6 +28,7 @@ import {
   createGatewayNormalCloseError,
   createGatewayTimeoutError,
   createLocalGatewayLockOptions,
+  settleGatewayAgentRequest,
 } from "./agent-via-gateway.test-support.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
@@ -1873,75 +1873,65 @@ describe("agentCliCommand", () => {
     }
   });
 
-  it("stays silent when the gateway returns an intentional empty reply", async () => {
-    await withTempStore(async () => {
-      callGateway.mockResolvedValue({
-        runId: "idem-1",
-        status: "ok",
-        summary: "completed",
-        result: {
-          payloads: [],
-          meta: { stub: true },
-        },
-      });
-
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
-
-      expect(runtime.log).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each(["timeout", "error"])(
-    "logs an empty-payload %s summary and marks the process unsuccessful",
-    async (status) => {
+  it.each([
+    { status: "ok", json: false, ok: true, withdrawn: false },
+    { status: "timeout", json: false, ok: true, withdrawn: false },
+    { status: "error", json: false, ok: true, withdrawn: false },
+    { status: "cancelled", json: true, ok: true, withdrawn: false },
+    { status: "timeout", json: true, ok: true, withdrawn: true },
+    { status: "timeout", json: false, ok: true, withdrawn: true },
+    { status: "timeout", json: true, ok: false, withdrawn: true },
+    { status: "timeout", json: false, ok: false, withdrawn: true },
+  ])(
+    "renders $status with json=$json, RPC ok=$ok, withdrawn=$withdrawn",
+    async ({ status, json, ok, withdrawn }) => {
       await withTempStore(async () => {
         const signals = createSignalProcess();
-        callGateway.mockResolvedValue({
+        const response = {
           runId: "idem-1",
           status,
-          summary: status,
+          summary: withdrawn ? "Input was not delivered. Raise --timeout and retry." : status,
+          ...(withdrawn
+            ? { reason: "input_withdrawn_before_turn", pendingInputId: "withdrawn-input" }
+            : {}),
           result: {
-            payloads: [],
+            payloads:
+              status === "cancelled" ? [{ text: "Agent did not complete", isError: true }] : [],
             meta: { stopReason: status },
           },
-        });
+        };
+        callGateway.mockImplementation(() =>
+          settleGatewayAgentRequest({
+            response: {
+              ok,
+              payload: response,
+              ...(ok ? {} : { error: { code: "UNAVAILABLE", message: "deadline elapsed" } }),
+            },
+          }),
+        );
 
-        await agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
+        await agentCliCommand({ message: "hi", to: "+1555", json }, jsonRuntime, {
           process: signals.processLike,
         });
 
-        expect(runtime.log).toHaveBeenCalledWith(status);
-        expect(runtime.exit).not.toHaveBeenCalled();
-        expect(signals.processLike.exitCode).toBe(1);
+        expect(signals.processLike.exitCode).toBe(status === "ok" ? 0 : 1);
+        expect(jsonRuntime.exit).not.toHaveBeenCalled();
+        expect(jsonRuntime.log).toHaveBeenCalledTimes(
+          !json && !withdrawn && status !== "ok" ? 1 : 0,
+        );
+        if (json) {
+          expect(jsonRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
+            { ...response, status: ok ? status : "cancelled" },
+            2,
+          );
+        } else if (status !== "ok") {
+          expect(withdrawn ? jsonRuntime.error : jsonRuntime.log).toHaveBeenCalledWith(
+            response.summary,
+          );
+        }
       });
     },
   );
-
-  it("writes a cancelled gateway result before exiting nonzero in JSON mode", async () => {
-    const status = "cancelled";
-
-    await withTempStore(async () => {
-      const signals = createSignalProcess();
-      const response = {
-        runId: "idem-1",
-        status,
-        summary: "failed",
-        result: {
-          payloads: [{ text: "Agent did not complete", isError: true }],
-          meta: { stopReason: status },
-        },
-      };
-      callGateway.mockResolvedValue(response);
-
-      await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime, {
-        process: signals.processLike,
-      });
-
-      expect(jsonRuntime.writeJson).toHaveBeenCalledWith(response, 2);
-      expect(jsonRuntime.exit).not.toHaveBeenCalled();
-      expect(signals.processLike.exitCode).toBe(1);
-    });
-  });
 
   it("surfaces duplicate in-flight gateway runs without pretending a reply arrived", async () => {
     await withTempStore(async () => {
@@ -2082,33 +2072,17 @@ describe("agentCliCommand", () => {
         });
         const signal = createSignalProcess();
         const humanBefore = formatCliFailureLines({ title: "failed", error, env: {} });
-        callGateway.mockImplementation(
-          async (request: { onAccepted?: (payload: unknown) => void }) => {
-            const pending = new GatewayPendingRequests({
-              createRequestId: () => "request",
-              nowMs: Date.now,
-              createRequestError: () => error,
-            });
-            const result = pending.request(
-              { send: () => {} },
-              "agent",
-              {},
-              { expectFinal: true, onAccepted: request.onAccepted },
-            );
-            if (accepted) {
-              pending.handleResponse({ type: "res", id: "1:request", ok: true, payload: accepted });
-            }
-            pending.handleResponse({
-              type: "res",
-              id: "1:request",
+        callGateway.mockImplementation((request: { onAccepted?: (payload: unknown) => void }) =>
+          settleGatewayAgentRequest({
+            accepted,
+            onAccepted: request.onAccepted,
+            requestError: error,
+            response: {
               ok: false,
               payload,
               error: { code: error.code, message: error.message },
-            });
-            // Bound the pre-fix negative-accepted regression without a wall-clock timeout.
-            pending.flush(error);
-            return await result;
-          },
+            },
+          }),
         );
         await expect(
           agentCliCommand(

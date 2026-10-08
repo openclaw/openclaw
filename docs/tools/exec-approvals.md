@@ -692,6 +692,11 @@ When a prompt is required, the gateway broadcasts
 app resolve it via `exec.approval.resolve`, then the gateway forwards the
 approved request to the node host.
 
+An approval accepted before its prompt deadline remains valid during the
+Gateway's live handoff window. Crossing the prompt deadline during dispatch
+does not undo that decision. Closed runs, expired handoff windows, and reused
+**Allow Once** approvals still reject execution.
+
 The macOS approval panel keeps ordinary commands compact, with the supplied agent
 and host in one summary. It shows the working directory beneath the full,
 wrapping command. Longer commands scroll. Expand **Details** to inspect the
