@@ -140,10 +140,9 @@ describe("main session recovery store", () => {
     return result.transition.reservation;
   }
 
-  it("admits work for a yielded session that keeps its continuation fence", async () => {
-    // `sessions_yield` ends the segment while retaining a nonterminal fence as durable
-    // child-continuation custody. That custody is not restart recovery, so admission must
-    // proceed without clearing it (#166771).
+  it("keeps fencing a yield-shaped fence with no current continuation owner", async () => {
+    // The persisted shape alone cannot prove custody is live: with no matching batch in the
+    // subagent registry this row is an orphaned fence, so admission must stay fenced (#166771).
     await write({
       sessionId: "session-1",
       updatedAt: 100,
@@ -155,7 +154,7 @@ describe("main session recovery store", () => {
       restartRecoveryTerminalRunIds: ["previous-terminal-run"],
     });
 
-    await expect(claimRecovery()).resolves.toMatchObject({ kind: "not_required" });
+    await expect(claimRecovery()).resolves.toMatchObject({ kind: "invalidated" });
     expect(read().restartRecoveryRuns).toEqual([{ runId: "yielded-run", lifecycleGeneration }]);
   });
 

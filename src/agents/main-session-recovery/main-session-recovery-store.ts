@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   hasMainSessionRecoveryClaim,
+  hasMainSessionRecoveryDebt,
   isMainRestartRecoveryCandidate,
-  isYieldedContinuationFence,
 } from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -19,6 +19,7 @@ import {
   type MainSessionRecoveryReservation,
   type MainSessionRecoveryTransitionResult,
 } from "./main-session-recovery-state.js";
+import { captureYieldedMainSessionContinuation } from "./main-session-restart-recovery-target.js";
 
 export type MainSessionRecoveryStoreTarget = {
   agentId?: string;
@@ -210,6 +211,31 @@ export async function refreshMainSessionRecoveryOwner(
     : undefined;
 }
 
+/**
+ * A yielded run keeps its own nonterminal fence as continuation custody, and nothing retires
+ * it: `claim_foreground` leaves a non-interrupted row unchanged and startup reconciliation
+ * skips it for the same reason. Admit such a row only while the subagent registry still shows
+ * that exact yielded batch as the current owner, so a rearmed, removed, or merely orphaned
+ * fence keeps fencing work instead of starting a turn against stale custody (#166771).
+ */
+function retainsCurrentYieldedContinuation(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  target: MainSessionRecoveryStoreTarget;
+}): boolean {
+  if (hasMainSessionRecoveryDebt(params.entry)) {
+    return false;
+  }
+  return (
+    captureYieldedMainSessionContinuation({
+      storeAgentId: params.target.agentId,
+      entry: params.entry,
+      sessionKey: params.sessionKey,
+      storePath: params.target.storePath,
+    })?.() === true
+  );
+}
+
 export async function claimMainSessionRecoveryOwner(params: {
   allowMissingSession?: boolean;
   lifecycleGeneration: string;
@@ -255,12 +281,14 @@ export async function claimMainSessionRecoveryOwner(params: {
   const healthyExpectedSession =
     claim.entry &&
     (claim.entry.abortedLastRun !== true || !hasMainSessionRecoveryClaim(claim.entry)) &&
-    // A yielded run keeps its own fence as continuation custody. Nothing clears it: the
-    // claim command leaves a non-interrupted row unchanged and startup reconciliation skips
-    // it, so demanding an absent fence here rejects every later wake and reply (#166771).
     ((claim.entry.restartRecoveryRuns === undefined &&
       claim.entry.mainRestartRecovery === undefined) ||
-      isYieldedContinuationFence(claim.entry)) &&
+      (claim.sessionKey !== undefined &&
+        retainsCurrentYieldedContinuation({
+          entry: claim.entry,
+          sessionKey: claim.sessionKey,
+          target: params.target,
+        }))) &&
     (claim.entry.sessionId === params.sessionId ||
       claim.entry.sessionId === params.replacementSessionId);
   if (

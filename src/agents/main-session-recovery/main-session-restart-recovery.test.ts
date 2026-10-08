@@ -809,6 +809,60 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
+  it("admits requester work while the yielded continuation is the current owner", async () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+      const storePath = path.join(tmpDir, "yield-admission", "sessions.json");
+      const target = { agentId: "main", sessionKey: "agent:main:main", storePath };
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      // The entry shape reported in #166771: the yielded run's fence is retained as custody.
+      await replaceSessionEntry(target, {
+        sessionId: "yielded-requester",
+        updatedAt: 100,
+        abortedLastRun: false,
+        endedAt: 1000,
+        activeWriterRunId: "yielded-run",
+        lifecycleRunId: "yielded-run",
+        restartRecoveryRuns: [{ runId: "yielded-run", lifecycleGeneration }],
+        restartRecoveryTerminalRunIds: ["previous-terminal-run"],
+      });
+      const child = createSubagentRunRecord({
+        runId: "yielded-admission-child",
+        childSessionKey: "agent:main:subagent:yielded-admission",
+        requesterSessionKey: "agent:main:main",
+        requesterAgentId: "main",
+        expectsCompletionMessage: true,
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          requesterYieldBatch: true,
+          rearmGeneration: 1,
+          batchRunIds: ["yielded-admission-child"],
+        },
+      });
+      subagentRuns.set(child.runId, child);
+      try {
+        const claim = () =>
+          claimMainSessionRecoveryOwner({
+            lifecycleGeneration,
+            sessionId: "yielded-requester",
+            target,
+          });
+
+        await expect(claim()).resolves.toMatchObject({ kind: "not_required" });
+        expect(sessionAccessor.loadSessionEntry(target)?.restartRecoveryRuns).toEqual([
+          { runId: "yielded-run", lifecycleGeneration },
+        ]);
+
+        // Once a requester turn adopts the continuation it is no longer unclaimed custody,
+        // so the same retained fence must fence admission again.
+        child.requesterTurnRunId = "adopting-turn";
+        await expect(claim()).resolves.toMatchObject({ kind: "invalidated" });
+      } finally {
+        subagentRuns.delete(child.runId);
+      }
+    });
+  });
+
   it.each(["templated", "shared-global"] as const)(
     "preserves startup recovery ownership for an actual ops row: %s",
     async (layout) => {
