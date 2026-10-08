@@ -273,6 +273,19 @@ transaction retains its fresh probe after `BEGIN`. Ordinary chat normalization
 remains synchronous; goal-start fingerprint preparation uses the asynchronous
 identity owner before admission.
 
+Idle maintenance retains its normal cadence while avoiding unrelated work.
+Setup-completion pruning does not read or republish paired-device authority,
+and uses its first expiry read to skip empty write transactions. Due deletions use
+the admitted handle and retain transaction and commit authorization; zero-row
+observations revalidate after the worker returns. Pairing notifications skip pairing snapshots when subscriptions and retained
+notification records are both empty. Outbound recovery reuses an empty queue fact
+only at the connection's current admitted read revision. Foreign commits, local mutations,
+and connection retirement invalidate these facts through their existing owners.
+Worker auto-suspension takes placement reporting snapshots only when its policy is
+enabled. Placement retirement reuses its own scan for the reporting before-snapshot
+and skips reporting when that scan is empty. These reporting facts do not grant
+mutation authority. Retention, retry timing, schemas, durability, and update behavior are unchanged.
+
 Sandbox reservation and removal-intent transactions run in the existing shared-state
 executor. Reservation selection and prune eligibility read authoritative rows inside
 the synchronous transaction. Removal retains its physical store through the provider

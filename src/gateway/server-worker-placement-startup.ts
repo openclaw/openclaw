@@ -325,6 +325,7 @@ export function createGatewayWorkerPlacementRuntime(
     placements: params.placements,
     environments: params.environments,
     dispatch: dispatchService,
+    reportChanges: publishPlacementChanges,
     getConfig: getRuntimeConfig,
     info: params.info ?? params.warn,
     warn: params.warn,
@@ -337,6 +338,7 @@ export function createGatewayWorkerPlacementRuntime(
     environments: params.environments,
     forceDestroyEnvironment: dispatchService.forceDestroyEnvironment,
     createSessionEvidenceResolver: createWorkerPlacementSessionEvidenceResolver,
+    reportChanges: publishPlacementChanges,
     warn: params.warn,
   });
   const admissionProvider = createWorkerSessionTurnPlacementProvider({
@@ -428,7 +430,7 @@ export function createGatewayWorkerPlacementRuntime(
         trackOperation(
           "reconcile",
           (async () => {
-            await publishPlacementChanges(() => sessionRetirement.reconcile());
+            await sessionRetirement.reconcile();
             await dispatchService.reconcileActive();
             await reconcilePublications();
             void nodeWorkspaceRetention.schedule();
@@ -455,7 +457,7 @@ export function createGatewayWorkerPlacementRuntime(
         // Each reclaim reserves its own session after the recovery pass.
         await trackOperation(
           "auto-suspend",
-          publishPlacementChanges(() => placementIdleSweep.sweep()),
+          placementIdleSweep.sweep(),
           "Worker placement auto-suspend sweep failed",
         );
       } catch {
@@ -554,7 +556,7 @@ export function createGatewayWorkerPlacementRuntime(
       }
       void trackOperation(
         "reconcile",
-        publishPlacementChanges(() => sessionRetirement.reconcile()),
+        sessionRetirement.reconcile(),
         "Worker placement reconcile sweep failed",
       );
       void sweepDiskSpace();
