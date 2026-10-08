@@ -343,14 +343,19 @@ it("preserves agent-run commentary attachments after their source files are remo
   });
 });
 
-it.each(["raw directive", "structured attachment"] as const)(
+it.each(["raw directive", "structured attachment", "separate text payload"] as const)(
   "owns the agent-run final %s before publishing completion",
   async (source) => {
     await withOpenClawTestState({ label: "agent-final-media" }, async (state) => {
       const imagePath = path.join(state.workspaceDir, "completed.png");
       await fs.mkdir(state.workspaceDir, { recursive: true });
       await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 24, g: 64, b: 128 }));
-      const text = source === "raw directive" ? `Completed\nMEDIA:${imagePath}` : "Completed";
+      const text =
+        source === "raw directive"
+          ? `Completed\nMEDIA:${imagePath}`
+          : source === "separate text payload"
+            ? `MEDIA:${imagePath}`
+            : "Completed";
       const authored = makeAgentAssistantMessage({
         content: [{ type: "text", text }],
         stopReason: "stop",
@@ -358,6 +363,7 @@ it.each(["raw directive", "structured attachment"] as const)(
       const { result, context, sessionKey, message, messageAtFinal, finalizationStatements } =
         await runMediaTurn(state, authored, {
           payloads: [
+            ...(source === "separate text payload" ? [{ text: "Completed" }] : []),
             {
               text,
               ...(source === "structured attachment"

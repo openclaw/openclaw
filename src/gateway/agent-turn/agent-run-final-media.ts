@@ -47,7 +47,7 @@ export async function finalizeAgentRunMedia(
     ),
   );
   const plan = candidates.filter((entry) => visible.has(entry.payload));
-  if (plan.length === 0) {
+  if (!plan.some(({ parts }) => parts.mediaUrls.length > 0)) {
     return;
   }
   const runId = params.getRunId();

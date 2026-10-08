@@ -27,9 +27,9 @@ export function createAgentRunMediaCustody(
       return;
     }
     const plan = createOutboundPayloadPlan(reply.payloads).filter(
-      ({ payload, parts }) => payload.sensitiveMedia !== true && parts.mediaUrls.length > 0,
+      ({ payload }) => payload.sensitiveMedia !== true,
     );
-    if (plan.length === 0) {
+    if (!plan.some(({ parts }) => parts.mediaUrls.length > 0)) {
       return;
     }
     const { finalizeAgentRunMedia } = await import("./agent-run-final-media.js");
