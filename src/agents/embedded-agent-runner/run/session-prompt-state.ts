@@ -18,6 +18,7 @@ import {
   buildContextEngineCompactionSessionTarget,
   prepareInitialSessionWriter,
 } from "./session-bootstrap.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const CONTINUATION_PROMPT =
   "Continue the current task from the existing transcript, preserving completed work. If an action was interrupted, inspect its state before deciding whether to retry it. Do not restart the task or repeat completed actions.";
@@ -68,6 +69,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
   let settleOwnedTranscriptProjection = false;
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
   let basePromptOverride: string | undefined;
+  let continuation: EmbeddedRunAttemptParams["continuation"];
   let compactionContinuationInstruction: string | undefined;
   const activePrompt: ActivePrompt = {
     get override() {
@@ -246,6 +248,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
     get activePrompt() {
       return activePrompt;
     },
+    get continuation() {
+      return continuation;
+    },
     get suppressNextUserMessagePersistence() {
       return suppressNextUserMessagePersistence;
     },
@@ -276,10 +281,19 @@ export async function createEmbeddedRunSessionPromptState(input: {
         await waitForSessionTranscriptProjection({ ...target, sessionId }, abortSignal);
       }
     },
-    continueFromCurrentTranscript: (options?: { includeToolFailureInstruction?: boolean }) => {
+    continueFromCurrentTranscript: (options?: {
+      includeToolFailureInstruction?: boolean;
+      messages?: NonNullable<EmbeddedRunAttemptParams["continuation"]>["messages"];
+    }) => {
       // Raw model runs load no transcript history; the original prompt is their only task context.
       if (params.modelRun === true || params.promptMode === "none") {
         return;
+      }
+      if (options?.messages) {
+        continuation = {
+          prompt: params.prompt,
+          messages: [...(continuation?.messages ?? []), ...options.messages],
+        };
       }
       const prompt = options?.includeToolFailureInstruction
         ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`

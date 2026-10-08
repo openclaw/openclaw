@@ -355,9 +355,11 @@ async function runDoctorFinishForStoppedUnit(
         assertCatalogUnchanged = () =>
           expect(fs.readFileSync(pathname).equals(beforeCatalog)).toBe(true);
         assertPreStopArtifactsUnchanged = () => expect(readArtifacts()).toEqual(beforeArtifacts);
-        // Ledger catalog admission refuses the malformed index; Doctor below
-        // must still reject a future version before touching the service.
-        expect(() => listUpdateRuns()).toThrow(/legacy-workshop-review-index.*doctor --fix/);
+        expect(() => listUpdateRuns()).toThrow(
+          legacyCatalog === "future-version"
+            ? /uses newer schema version/
+            : /legacy-workshop-review-index.*doctor --fix/,
+        );
         assertPreStopArtifactsUnchanged();
         if (lateRun) {
           activateCompetingUpdate = () => {

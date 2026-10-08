@@ -300,11 +300,13 @@ Code Mode, and do not send completion notifications.
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
 
-When an earlier async tool call in the same model response has results the model
-has not received yet, OpenClaw defers `sessions_yield` and keeps the turn active.
-Finish the model response so the next request can deliver those results, then
-yield only if external work still requires waiting. This applies even when the
-tool has already finished and its result appears in the transcript.
+With Astra async tools, `sessions_yield` stays a synchronous call, so the model
+response pauses at the yield. When an earlier async tool call in that response
+has results the model has not received yet, OpenClaw defers the yield and keeps
+the turn active. The next request delivers those results ahead of the deferred
+yield result; the model yields again only if external work still requires
+waiting. This applies even when the tool has already finished and its result
+appears in the transcript.
 
 Use the optional `message` field for private context that the resumed turn
 should receive. OpenClaw sends a default waiting reply when an interactive

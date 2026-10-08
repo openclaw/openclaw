@@ -1,8 +1,15 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadDotEnv } from "../infra/dotenv.js";
 import {
+  clearFsSafeEnvFallback,
+  fsSafeEnvInput,
+  normalizeFsSafeNativeEnv,
+} from "../infra/fs-safe-env.js";
+import {
   applyConfigEnvVars,
+  captureConfigReadEnvMutation,
+  cloneEnvWithPlatformSemantics,
   collectConfigRuntimeEnvOwnership,
   createConfigRuntimeEnv,
   getPublishedConfigRuntimeEnvState,
@@ -10,6 +17,8 @@ import {
   prepareConfigRuntimeEnv,
   prepareConfigRuntimeEnvLoad,
   resetPublishedConfigRuntimeEnv,
+  restoreEnvChangesIfUnchanged,
+  snapshotEnv,
 } from "./config-env-vars.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { assertGatewayConfigEnvSelectionUnchanged } from "./gateway-env-selection.js";
@@ -100,25 +109,6 @@ describe("config env vars", () => {
       env,
     );
     expect(env).toEqual({ VALID: "literal" });
-  });
-
-  it("applies config env above normalized lower-precedence aliases", () => {
-    const replaced = vi.fn();
-    const env = { ZAI_API_KEY: "shell-key" };
-    applyConfigEnvVars(config({ Z_AI_API_KEY: "config-key" }), env, {
-      lowerPrecedenceEnv: { ZAI_API_KEY: "shell-key" },
-      onLowerPrecedenceKeysReplaced: replaced,
-    });
-    expect(env).toEqual({ ZAI_API_KEY: "config-key", Z_AI_API_KEY: "config-key" });
-    expect(replaced).toHaveBeenCalledWith(["ZAI_API_KEY"]);
-  });
-
-  it("preserves a higher-precedence normalized alias", () => {
-    const env = { ZAI_API_KEY: "shell-key", Z_AI_API_KEY: "invocation-key" };
-    applyConfigEnvVars(config({ ZAI_API_KEY: "config-key" }), env, {
-      lowerPrecedenceEnv: { ZAI_API_KEY: "shell-key" },
-    });
-    expect(env).toEqual({ ZAI_API_KEY: "invocation-key", Z_AI_API_KEY: "invocation-key" });
   });
 
   it("prepares updates and removals without mutating the target or rescanning per key", () => {
@@ -446,5 +436,78 @@ describe("config env vars", () => {
         }),
       ).toEqual({ MY_KEY: "from-config", CUSTOM_KEY: "from-override" });
     });
+  });
+});
+
+describe("config-owned fs-safe mode migration", () => {
+  const nativeKey = "OPENCLAW_FS_SAFE_NATIVE_MODE";
+  const legacyKey = "FS_SAFE_PYTHON_MODE";
+
+  beforeEach(() => {
+    for (const name of [
+      nativeKey,
+      "FS_SAFE_NATIVE_MODE",
+      legacyKey,
+      "OPENCLAW_FS_SAFE_PYTHON_MODE",
+    ]) {
+      vi.stubEnv(name, undefined);
+    }
+    vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  });
+  afterEach(() => clearFsSafeEnvFallback(process.env));
+
+  it("restores legacy fallback after a rejected native publication without adopting it", () => {
+    const source = config({ [legacyKey]: "require" });
+    const before = snapshotEnv(process.env);
+    applyConfigEnvVars(source);
+    initializePublishedConfigRuntimeEnv(source, {
+      ownedEnv: collectConfigRuntimeEnvOwnership(source, before, process.env),
+    });
+    const replacement = prepareConfigRuntimeEnv({
+      previousConfig: source,
+      nextConfig: config({ [nativeKey]: "off" }),
+    }).publish();
+    expect(process.env[nativeKey]).toBe("off");
+    expect(process.env[legacyKey]).toBeUndefined();
+    replacement();
+    expect(process.env[nativeKey]).toBe("require");
+    expect(getPublishedConfigRuntimeEnvState().ownedEnv).toEqual({ [legacyKey]: "require" });
+    prepareConfigRuntimeEnv({ previousConfig: source, nextConfig: {} }).publish().commit();
+    expect(process.env[nativeKey]).toBeUndefined();
+  });
+
+  it("recomputes isolated candidates without changing their parent's legacy projection", () => {
+    const env: NodeJS.ProcessEnv = { [legacyKey]: "off" };
+    normalizeFsSafeNativeEnv(env);
+    const clone = cloneEnvWithPlatformSemantics(env);
+    applyConfigEnvVars(config({ [nativeKey]: "require" }), clone);
+    expect(clone[nativeKey]).toBe("require");
+    expect(env[nativeKey]).toBe("off");
+    expect(fsSafeEnvInput(env)[nativeKey]).toBeUndefined();
+  });
+
+  it("restores invalid native input after a rejected config read introduced legacy mode", () => {
+    const env: NodeJS.ProcessEnv = { [nativeKey]: "invalid" };
+    const before = snapshotEnv(env);
+    applyConfigEnvVars(config({ [legacyKey]: "require" }), env);
+    expect(env[nativeKey]).toBe("require");
+    restoreEnvChangesIfUnchanged({ env, before, after: snapshotEnv(env) });
+    expect(env).toEqual({ [nativeKey]: "invalid" });
+  });
+
+  it("compensates synchronous read mutations using source keys, preserving later operator changes", () => {
+    const env: NodeJS.ProcessEnv = {};
+    let restore: (() => void) | undefined;
+    captureConfigReadEnvMutation(
+      env,
+      () => applyConfigEnvVars(config({ [legacyKey]: "off" }), env),
+      (receipt) => {
+        restore = receipt;
+      },
+    );
+    expect(env[nativeKey]).toBe("off");
+    env.FS_SAFE_NATIVE_MODE = "require";
+    restore?.();
+    expect(env).toEqual({ FS_SAFE_NATIVE_MODE: "require" });
   });
 });
