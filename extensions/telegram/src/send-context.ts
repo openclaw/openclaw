@@ -1,7 +1,10 @@
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-flags";
-import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  formatUncaughtError,
+  PlatformMessageNotDispatchedError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -380,6 +383,16 @@ function resolveTelegramApiContext(opts: {
     accountId: opts.accountId,
   });
   const token = resolveToken(opts.token, account);
+  let ownerAgentId: string;
+  try {
+    ownerAgentId = resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId });
+  } catch (error) {
+    // Ownership is local preflight, before a transport lease or Bot API operation.
+    throw new PlatformMessageNotDispatchedError(formatErrorMessage(error), {
+      cause: error,
+      retryable: false,
+    });
+  }
   let api: TelegramApi;
   let clientOptionsLease: TelegramClientOptionsLease | undefined;
   if (opts.api) {
@@ -419,7 +432,7 @@ function resolveTelegramApiContext(opts: {
   return {
     cfg,
     account,
-    ownerAgentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
+    ownerAgentId,
     api,
     ...(clientOptionsLease ? { clientOptionsLease } : {}),
   };

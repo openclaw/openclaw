@@ -55,6 +55,31 @@ describe("Telegram registered adapter conformance over HTTP", () => {
   });
   afterEach(resetTelegramAccountThrottlersForTest);
 
+  it("rejects ambiguous account ownership before dispatch and sends with an explicit owner", async () => {
+    const ownerCfg: OpenClawConfig = {
+      ...cfg,
+      agents: { ownership: "explicit", entries: { main: {}, other: {} } },
+    };
+    const request = {
+      cfg: ownerCfg,
+      accountId: "default",
+      to: "123",
+      text: "Owner routing control",
+      payload: { text: "Owner routing control" },
+    };
+    await expect(telegramPlugin.message!.send!.payload!(request)).rejects.toMatchObject({
+      name: "PlatformMessageNotDispatchedError",
+      retryable: false,
+      message: expect.stringContaining("no explicit owner"),
+    });
+    expect(requests).toEqual([]);
+
+    ownerCfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }];
+    await telegramPlugin.message!.send!.payload!(request);
+    expect(requests.map(({ method }) => method)).toEqual(["sendMessage"]);
+    expect(requests[0]!.fields.text).toBe("Owner routing control");
+  });
+
   it.each([
     { name: "rich", richMessages: true, html: false },
     { name: "explicit HTML on rich", richMessages: true, html: true },
