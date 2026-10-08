@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { EventEmitter } from "node:events";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter, once } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
+import { Worker } from "node:worker_threads";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureSqliteWorkerOpen } from "./sqlite-worker-broker-admission.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
@@ -11,9 +16,18 @@ import {
   withSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
+import {
+  getTrackedWorkerLifecycleSnapshot,
+  trackNativeWorkerForCpu,
+  type WorkerRetirementReason,
+} from "./worker-cpu.js";
 
 const createCpuTrackedWorker = vi.hoisted(() => vi.fn());
-vi.mock("./worker-cpu.js", () => ({ createCpuTrackedWorker }));
+vi.mock("./worker-cpu.js", async (importOriginal) => ({
+  // Only worker construction is faked; retirement counting stays the real registry.
+  ...(await importOriginal<typeof import("./worker-cpu.js")>()),
+  createCpuTrackedWorker,
+}));
 vi.mock("./bun-sqlite-library.js", () => ({
   ensureSqliteLibrarySelected: () => {},
 }));
@@ -21,6 +35,23 @@ vi.mock("./bun-sqlite-library.js", () => ({
 beforeEach(() => {
   createCpuTrackedWorker.mockReset();
 });
+
+afterEach(async () => {
+  await flushLogger();
+  resetLogger();
+});
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// The registry labels workers by script basename, so this carrier has to be a real file URL.
+const STORE_WORKER_URL = new URL("./sqlite-store.worker.ts", import.meta.url);
+const idleSource = 'require("node:worker_threads").parentPort.on("message", () => {});';
+
+function retirementCount(reason: WorkerRetirementReason): number {
+  const entry = getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
+    (worker) => worker.script === "sqlite-store.worker.js",
+  );
+  return entry?.retired.find((retired) => retired.reason === reason)?.count ?? 0;
+}
 
 describe("SQLite worker slots", () => {
   it.each([
@@ -236,4 +267,89 @@ describe("SQLite worker slots", () => {
       expect(actors.size).toBe(0);
     },
   );
+
+  it("attributes a broker-requested retirement instead of an unattributed exit", async () => {
+    const worker = new Worker(idleSource, { eval: true, execArgv: [] });
+    try {
+      await once(worker, "online");
+      // The real registry must see the label the broker's carrier owns, in production order.
+      trackNativeWorkerForCpu(worker, STORE_WORKER_URL);
+      createCpuTrackedWorker.mockReturnValueOnce(worker);
+      const lifecycle = createSqliteWorkerLifecycle({
+        explicitSqliteCloseReleasesNativeResources: true,
+        actors: new Map(),
+        slots: new Set(),
+        stores: new Map(),
+        enqueueClose: vi.fn(),
+        fail: vi.fn(),
+      });
+      const slot = lifecycle.createSlot(
+        {
+          carrierUrl: STORE_WORKER_URL,
+          moduleUrl: new URL("file:///openclaw/src/infra/device-auth-store.sqlite.ts"),
+          databasePath: "/state/openclaw.sqlite",
+          input: Buffer.alloc(0),
+          existingOnly: false,
+        },
+        false,
+        () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() }),
+      );
+      const closedBefore = retirementCount("closed");
+      const exitBefore = retirementCount("exit");
+
+      await lifecycle.retire(slot);
+
+      expect(retirementCount("closed")).toBe(closedBefore + 1);
+      expect(retirementCount("exit")).toBe(exitBefore);
+    } finally {
+      await worker.terminate();
+    }
+  });
+
+  it("reports a worker that leaves on its own once, naming its cause", async () => {
+    const logFile = path.join(tempDirs.make("openclaw-sqlite-worker-departure-"), "openclaw.log");
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logFile });
+    const worker = new Worker('throw new Error("sqlite carrier lost");', {
+      eval: true,
+      execArgv: [],
+    });
+    // The registry attaches its exit listener at construction, so it forgets the worker
+    // before this owner reacts; only a mark made on the error event can label the retirement.
+    trackNativeWorkerForCpu(worker, STORE_WORKER_URL);
+    createCpuTrackedWorker.mockReturnValueOnce(worker);
+    const lifecycle = createSqliteWorkerLifecycle({
+      explicitSqliteCloseReleasesNativeResources: true,
+      actors: new Map(),
+      slots: new Set(),
+      stores: new Map(),
+      enqueueClose: vi.fn(),
+      fail: vi.fn(),
+    });
+    const slot = lifecycle.createSlot(
+      {
+        carrierUrl: STORE_WORKER_URL,
+        moduleUrl: new URL("file:///openclaw/src/infra/device-auth-store.sqlite.ts"),
+        databasePath: "/state/openclaw.sqlite",
+        input: Buffer.alloc(0),
+        existingOnly: false,
+      },
+      false,
+      () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() }),
+    );
+    const failureBefore = retirementCount("failure");
+    const exitBefore = retirementCount("exit");
+
+    // The owner's exit handler resolves this only after it has reported the departure.
+    await slot.exit;
+    await flushLogger();
+
+    expect(retirementCount("failure")).toBe(failureBefore + 1);
+    expect(retirementCount("exit")).toBe(exitBefore);
+    const warnings = fs
+      .readFileSync(logFile, "utf8")
+      .split("\n")
+      .filter((line) => line.includes("left without a retirement request"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("sqlite carrier lost");
+  });
 });
