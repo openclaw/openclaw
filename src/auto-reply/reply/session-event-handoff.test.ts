@@ -69,7 +69,7 @@ vi.mock("../dispatch.js", () => ({
   dispatchInboundMessageWithRoutedChannelDispatcher: dispatch,
 }));
 
-const continuation = vi.spyOn(gatewayWork, "runWithGatewayIndependentRootWorkContinuation");
+const continuation = vi.spyOn(gatewayWork, "runWithGatewayDetachedWorkContinuation");
 const sessionKey = "agent:main:event-origin";
 const route = {
   channel: "telegram",

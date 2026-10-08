@@ -33,6 +33,7 @@ import {
 } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
 
 type CapturedEventSource = {
@@ -202,6 +203,8 @@ export async function captureSessionEventTargetForHost(
       lifecycleRevision: entry?.lifecycleRevision,
       generation,
       deliveryContext: structuredClone(deliveryContextFromSession(entry)),
+      chatType: resolveEffectiveReplyRoute({ ctx: { InternalTurnSource: "event" }, entry })
+        .chatType,
       settings: structuredClone(
         producerSettings
           ? narrowSessionEventSettings(producerSettings, destinationSettings)

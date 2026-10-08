@@ -369,11 +369,11 @@ it("isolates process lists and polling by scopeKey", async () => {
 
 describe("background completion notifications", () => {
   let state: OpenClawTestState;
-  let continuation: MockInstance<typeof gatewayWork.runWithGatewayIndependentRootWorkContinuation>;
+  let continuation: MockInstance<typeof gatewayWork.runWithGatewayDetachedWorkContinuation>;
   let receipts: SessionEventReceipt[];
   beforeEach(async () => {
     receipts = [];
-    continuation = vi.spyOn(gatewayWork, "runWithGatewayIndependentRootWorkContinuation");
+    continuation = vi.spyOn(gatewayWork, "runWithGatewayDetachedWorkContinuation");
     const enqueue = sessionEvents.enqueueSessionEventForHost;
     vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation(
       (eventText, options) => {

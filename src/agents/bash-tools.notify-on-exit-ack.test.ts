@@ -91,9 +91,9 @@ async function finishNotifyRun(process: Awaited<ReturnType<typeof startDeferredN
 }
 
 let state: OpenClawTestState;
-let continuation: MockInstance<typeof gatewayWork.runWithGatewayIndependentRootWorkContinuation>;
+let continuation: MockInstance<typeof gatewayWork.runWithGatewayDetachedWorkContinuation>;
 beforeEach(async () => {
-  continuation = vi.spyOn(gatewayWork, "runWithGatewayIndependentRootWorkContinuation");
+  continuation = vi.spyOn(gatewayWork, "runWithGatewayDetachedWorkContinuation");
   state = await createOpenClawTestState({ layout: "state-only", prefix: "exec-occurrence-" });
   setRuntimeConfigSnapshot({ agents: { entries: { main: {}, research: {} } } });
   openOpenClawStateDatabase({ env: state.env });

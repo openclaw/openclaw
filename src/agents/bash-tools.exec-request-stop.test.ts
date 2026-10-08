@@ -150,7 +150,10 @@ test.for([
           await params.onExecutionStarted?.();
           await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
           if (params.prompt.includes("Later human request")) {
-            return { payloads: [{ text: "Later human request succeeded" }], meta: {} };
+            return {
+              payloads: [{ text: "Later human request succeeded" }],
+              meta: { durationMs: 0 },
+            };
           }
           if (params.prompt.includes("ROUTED_REQUEST_COMPLETE")) {
             continuationRuns += 1;
@@ -192,7 +195,7 @@ test.for([
                   : "NO_REPLY",
               },
             ],
-            meta: {},
+            meta: { durationMs: 0 },
           };
         });
         let predecessor: ReturnType<typeof enqueue> | undefined;

@@ -44,6 +44,7 @@ export type SessionEventTarget = {
   lifecycleRevision?: string;
   generation: string;
   deliveryContext?: DeliveryContext;
+  chatType?: SessionEntry["chatType"];
   settings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">> | undefined;
   toolsAllow?: string[];
   agentId?: string;

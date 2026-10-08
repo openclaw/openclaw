@@ -24,7 +24,8 @@ import {
   type SystemEvent,
 } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
+import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
@@ -382,11 +383,11 @@ export function enqueueSessionEventForHost(
     }
   };
   signal.addEventListener("abort", onAbort, { once: true });
-  // Completion outlives the producer's root and transcript writer. Keep its
-  // independent root through settlement: queued dispatch returns before the
-  // eventual execution and delivery finish.
+  // Completion outlives the producer's request scope and transcript writer.
+  // Keep detached work through settlement; explicit request/Stop signals above
+  // still cancel the occurrence and join its native execution owner.
   void runWithoutOwnedSessionTranscriptWrites(() =>
-    runWithGatewayIndependentRootWorkContinuation(async () => {
+    runWithGatewayDetachedWorkContinuation(async () => {
       admissionStarted = true;
       assertOwnerCurrent();
       ({ replyRunRegistry } = await import("./reply-run-registry.js"));
@@ -425,6 +426,9 @@ export function enqueueSessionEventForHost(
           RawBody: "",
           CommandAuthorized: false,
           InputProvenance: { kind: "internal_system", sourceTool: options.source },
+          ChatType: channelRouteTargetsMatchExact({ left: route, right: target.deliveryContext })
+            ? target.chatType
+            : undefined,
           Surface: route?.channel ?? INTERNAL_MESSAGE_CHANNEL,
           Provider: route?.channel ?? INTERNAL_MESSAGE_CHANNEL,
           OriginatingChannel: route?.channel,

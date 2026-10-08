@@ -832,6 +832,13 @@ describe("createOpenClawCodingTools", () => {
       expect(observedIdentity).toEqual({
         agentId: "main",
         assertToolAllowed: expect.any(Function),
+        personalToolIdentityScoped: undefined,
+        personalToolParticipants: undefined,
+        personalToolSelection: undefined,
+        personalToolUser: undefined,
+        sessionEventDelivery: undefined,
+        sessionEventSettings: { permissionMode: undefined },
+        sessionEventToolsAllow: ["file_fetch"],
         sessionKey: "agent:main:telegram:direct:alice",
         turnSourceChannel: "discord",
         turnSourceTo: "channel:123",
