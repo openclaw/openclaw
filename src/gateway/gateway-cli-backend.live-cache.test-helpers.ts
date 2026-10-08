@@ -287,8 +287,8 @@ export async function verifyCliBackendAnnounceOrdering({
         "Run this exact OpenClaw CLI-backed completion announcement scenario. Use tool calls, not prose.",
         `Call sessions_spawn exactly once with taskName=cli_announce_${announceNonce.toLowerCase()} and task=${JSON.stringify(`Reply exactly ${announceChildToken} and nothing else.`)}.`,
         `After sessions_spawn returns status=accepted, call ${CLI_ANNOUNCE_BARRIER_TOOL_NAME} exactly once with no arguments.`,
-        `After that tool returns, reply exactly ${announceParentToken}.`,
-        `When the child's completion is delivered in a later turn, include its exact result ${announceChildToken} in your user-facing update.`,
+        `After that tool returns, your entire reply must be exactly ${announceParentToken}, with no other text. Do not include or predict the child result in this reply.`,
+        "Only after a separate child-completion event arrives in a later turn, report the result from that event in your user-facing update.",
       ].join("\n"),
     },
     { expectFinal: true, timeoutMs: requestTimeoutMs },
@@ -324,7 +324,7 @@ export async function verifyCliBackendAnnounceOrdering({
   announceBarrier.release();
   const announceParent = await announceRequest;
   announceParentObservedAt ??= Date.now();
-  expect(extractPayloadText(announceParent.result)).toContain(announceParentToken);
+  expect(extractPayloadText(announceParent.result).trim()).toBe(announceParentToken);
 
   const deliveredAnnounceChild = await waitFor(() =>
     listSubagentRunsForRequester(announceSessionKey).find(
