@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
@@ -20,7 +20,15 @@ import {
 } from "./update-candidate-plugin-tree.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 8,
+}));
+
 const directories = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => {
+  vi.spyOn(process, "availableMemory").mockReturnValue(4 * 1024 ** 3);
+});
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -74,8 +82,12 @@ it.each(["auto", "off"] as const)(
     vi.stubEnv("FS_SAFE_NATIVE_MODE", nativeMode);
     const dispatch = vi.spyOn(WorkerTaskPool.prototype, "run");
     const f = await fixture(1032);
-    expect(dispatch).toHaveBeenCalledTimes(9);
-    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "snapshot-hash" }), {});
+    if (process.versions.bun && process.platform === "linux") {
+      expect(dispatch).not.toHaveBeenCalled();
+    } else {
+      expect(dispatch).toHaveBeenCalledTimes(9);
+      expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "snapshot-hash" }), {});
+    }
     await copyUpdateCandidatePluginTrees(f.plan, {
       targetStateDir: f.privateRoot,
       candidateRoot: f.candidateRoot,

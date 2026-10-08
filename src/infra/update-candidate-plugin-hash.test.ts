@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -12,6 +12,10 @@ const transport = vi.hoisted(() => ({
   construct: vi.fn<(options: unknown) => void>(),
   run: vi.fn<(input: UpdateCandidatePluginHashRequest, options: unknown) => Promise<unknown>>(),
   close: vi.fn<() => Promise<void>>(),
+}));
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 8,
 }));
 vi.mock("./worker-task-pool.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./worker-task-pool.js")>()),
@@ -33,7 +37,15 @@ vi.mock("./runtime-process-url.js", () => ({
 }));
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+const originalVersions = process.versions;
+beforeEach(() => {
+  // These gates exercise admitted-worker custody; resource refusal has a separate suite.
+  Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: undefined } });
+  vi.spyOn(process, "availableMemory").mockReturnValue(4 * 1024 ** 3);
+});
 afterEach(() => {
+  Object.defineProperty(process, "versions", { value: originalVersions });
+  vi.restoreAllMocks();
   transport.construct.mockReset();
   transport.run.mockReset();
   transport.close.mockReset();
