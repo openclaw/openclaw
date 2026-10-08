@@ -1778,7 +1778,15 @@ describe("channel progress presentation through an isolated Gateway", () => {
       expect(progressText).toContain(HEADLINE);
       const slackCard = channel === "slack" && !native && !compact;
       const expectedToolRow = slackCard ? slackCardToolRow : toolRow;
-      if (!tools) {
+      if (!tools && channel === "discord") {
+        // Quiet progress retains bounded operation status without command details.
+        const updates = progressWrites.map(({ body }) => body.content);
+        const running = `${HEADLINE}\n\nExec: running`;
+        expect(updates).toContain(running);
+        for (const update of updates) {
+          expect([HEADLINE, running, `${HEADLINE}\n\nLast activity: Exec`]).toContain(update);
+        }
+      } else if (!tools) {
         expect(progressText).not.toMatch(expectedToolRow);
       } else if (channel !== "slack" || !native) {
         expect(progressText).toMatch(expectedToolRow);

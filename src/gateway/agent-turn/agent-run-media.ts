@@ -3,8 +3,8 @@ import { resolveChatSendCallerContext } from "../server-methods/gateway-client-i
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 
-/** Bind progress media to the agent command, before dispatch releases its run owner. */
-export function dispatchAgentRunWithCommentaryMedia(
+/** Bind assistant media to the agent command before dispatch releases its run owner. */
+export function dispatchAgentRunWithMedia(
   dispatch: Parameters<typeof dispatchAgentRunFromGateway>[0],
   params: Pick<StartAgentRunExecutionParams, "cfg" | "client" | "activeSessionAgentId">,
 ) {
@@ -18,10 +18,11 @@ export function dispatchAgentRunWithCommentaryMedia(
     : undefined;
   const runContext = ingressOpts.runContext;
   // Preserve the dispatch object's execution-identity binding.
-  dispatch.loadCommentaryMedia = async () => {
-    const { createAssistantCommentaryMediaCustody } =
-      await import("../server-methods/chat-send-commentary-media.js");
-    return createAssistantCommentaryMediaCustody({
+  dispatch.loadMedia = async () => {
+    const { createAgentRunMediaCustody } = await import("./agent-run-media-custody.js");
+    return createAgentRunMediaCustody({
+      options: ingressOpts,
+      incognito: dispatch.isIncognito === true,
       session: {
         agentId: params.activeSessionAgentId,
         cfg: dispatch.commandRuntimeContext?.config ?? params.cfg,

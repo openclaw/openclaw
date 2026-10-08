@@ -123,7 +123,12 @@ Workers may inherit completed native SQLite capability checks and canonical sche
 comparison definitions through the existing worker launcher. Runtime facts remain
 bound to the originating process, executable, runtime, and selected library;
 comparison definitions also bind their canonical source and format. Missing or
-mismatched facts use the original admission path. Each worker still validates its
+mismatched facts use the original admission path. A SQLite writer returns its
+completed native capability fact with an existing successful reply, so later
+sibling workers can inherit it without another probe. The native runtime owner
+checks the same process and library identity and current WAL safety floor before
+forwarding it; invalid hints leave both write settlement and normal admission
+unchanged. Each worker still validates its
 actual database and current caller authority. Registry admission likewise reuses
 exact canonical audit definitions from admitted schema facts, retaining structural
 validation for other supported shapes. Schemas, stored bytes, retention, and update
@@ -298,6 +303,20 @@ bytes, retention, SDK signatures, and update behavior are unchanged.
 
 ## Keep one store owner
 
+Manual `sessions.compact` trimming with `maxLines` runs on the existing agent
+writer. The worker plans retained transcript rows before its synchronous write
+transaction, then compares the complete transcript bytes and selected entry before
+rewriting history and clearing stale token and harness-binding metadata together.
+Host authority stays live through transaction and commit grants; foreign source
+predicates are checked again after those grants. Confirmed receipts publish entry
+facts and schedule deferred projection reconciliation on the host. Incognito and
+released opaque synchronous guards retain the same native transaction kernel.
+Final host authority reads remain synchronous where raw SDK or foreign-process
+writers can revoke authority without complete owner publication. Retire those
+guards at the next Plugin SDK major when raw synchronous writers are removed and
+revocation publications cover every writer.
+Schema, retained-history policy, durability, and update behavior are unchanged.
+
 Live Gateway clients, call authentication, public-share codecs, goal receipts,
 APNs consumers, probes, and monitor reconciliation prepare device identity through
 the existing shared-state worker. Read-only discovery never creates identity state.
@@ -318,6 +337,19 @@ The next unpinned read still observes foreign commits, and a new snapshot
 transaction retains its fresh probe after `BEGIN`. Ordinary chat normalization
 remains synchronous; goal-start fingerprint preparation uses the asynchronous
 identity owner before admission.
+
+Idle maintenance retains its normal cadence while avoiding unrelated work.
+Setup-completion pruning does not read or republish paired-device authority,
+and uses its first expiry read to skip empty write transactions. Due deletions use
+the admitted handle and retain transaction and commit authorization; zero-row
+observations revalidate after the worker returns. Pairing notifications skip pairing snapshots when subscriptions and retained
+notification records are both empty. Outbound recovery reuses an empty queue fact
+only at the connection's current admitted read revision. Foreign commits, local mutations,
+and connection retirement invalidate these facts through their existing owners.
+Worker auto-suspension takes placement reporting snapshots only when its policy is
+enabled. Placement retirement reuses its own scan for the reporting before-snapshot
+and skips reporting when that scan is empty. These reporting facts do not grant
+mutation authority. Retention, retry timing, schemas, durability, and update behavior are unchanged.
 
 Sandbox reservation and removal-intent transactions run in the existing shared-state
 executor. Reservation selection and prune eligibility read authoritative rows inside
@@ -1724,8 +1756,19 @@ Forget's corpus discovery requests read-only metadata without unused transcript
 revisions. Durable session summaries use the existing retained history worker,
 preserving captured store selection and classification without writable bootstrap.
 Synchronous corpus callers and process-held transcripts keep their existing owners.
-Session policy metadata reads and cold bootstrap remain separate. Schemas, stored
-formats, and update behavior are unchanged.
+Cold bootstrap retains its existing owner. Schemas, stored formats, and update
+behavior are unchanged.
+
+Memory dreaming and backfill retain the selected physical corpus file across
+filesystem discovery in the existing history reader. Their final ingestion-policy
+decision remains a synchronous, bounded batch of exact source metadata after the
+existing corpus and tombstone preparation. Forgotten sources and disabled policies
+require no metadata read. Raw synchronous SDK and foreign-process writers do not
+publish complete revocation facts, so prepared metadata cannot replace this final
+guard. Retire the native guard at the next Plugin SDK major once raw writers are
+removed and owner publications cover every revocation. Exact agent/store scope,
+missing-store behavior, schemas, stored bytes, retention, and update behavior are
+unchanged.
 
 Generated embedding-cache publication uses the existing memory publication worker
 and the captured published database, including during a shadow rebuild. Its native
@@ -1796,7 +1839,11 @@ library writes publish that revision before observers and preserve it on rollbac
 Copied durable session pins retain their existing revision access. The released
 synchronous skill-command and harness tool-surface SDKs retain their native
 metadata reader; Gateway status, embedded skill preparation, and sandbox
-synchronization use prepared reads. Import, upload, and mutations use typed
+synchronization use prepared reads. Awaited harness tool construction also prepares
+immutable library entries through that reader and passes them directly to resource
+discovery. Cache eviction cannot route this path through the synchronous SDK
+adapter; run authority, database admission, and physical source identity are checked
+before publishing the tools. Import, upload, and mutations use typed
 shared-state writer commands. Files publish before their SQL references; failed
 SQL retains immutable unreferenced revision files, as before. Transactions reread
 revision CAS, quota, expiry, and profile ownership, with live host grants at
@@ -1822,9 +1869,18 @@ message authority checks after preparation. The reader preserves account
 normalization and entry order, propagates admission failures, and joins accepted
 read cleanup before its transport closes. Missing state grants no permission and
 does not initialize a database; boot and Doctor retain initialization. The
-released synchronous SDK reader and pairing request/approval mutations retain
-their native paths, so their shared SQL sites remain T1. No schema, retention,
-durability, or update migration changes.
+released synchronous SDK reader retains only its native allowlist query.
+Channel request, pruning, approval, dismissal, and allowlist mutations use the
+existing shared-state writer and capture the physical store before yielding.
+Approval adapters prepare the selected row outside the write transaction; the
+worker rereads the exact current selection before consuming the request and
+adding an approval. Preparation uses the existing read-only admission, and the
+transaction reads both row families in one statement. Missing requests that need
+no pruning still check native write ownership and host authority before returning.
+Host authority is checked after preparation and at transaction
+and commit admission. Writes preserve account normalization and update only
+changed rows instead of replacing the whole channel snapshot. No schema,
+retention, durability, permission, or update migration changes.
 
 Durable transcript write locks retain the canonical agent writer for reads and
 callback settlement. Reads carry exact stored bytes and row sequences;

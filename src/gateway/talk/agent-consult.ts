@@ -59,6 +59,10 @@ export async function startTalkRealtimeAgentConsult(
     request.client?.connect?.scopes,
     request.client,
   );
+  const unavailable = (errorMessage: string) => ({
+    ok: false as const,
+    error: errorShape(ErrorCodes.UNAVAILABLE, errorMessage),
+  });
   return await new Promise<
     { ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }
   >((resolve) => {
@@ -125,13 +129,7 @@ export async function startTalkRealtimeAgentConsult(
           resolve(
             runId
               ? { ok: true, runId, idempotencyKey }
-              : {
-                  ok: false,
-                  error: errorShape(
-                    ErrorCodes.UNAVAILABLE,
-                    "chat.send did not acknowledge an active run",
-                  ),
-                },
+              : unavailable("chat.send did not acknowledge an active run"),
           );
         } catch (registrationError) {
           abortChatRunById(request.context, {
@@ -139,10 +137,7 @@ export async function startTalkRealtimeAgentConsult(
             sessionKey: params.sessionTarget.canonicalKey,
             stopReason: "voice session binding failed",
           });
-          resolve({
-            ok: false,
-            error: errorShape(ErrorCodes.UNAVAILABLE, formatForLog(registrationError)),
-          });
+          resolve(unavailable(formatForLog(registrationError)));
         }
       },
     } satisfies GatewayRequestHandlerOptions;
@@ -155,13 +150,7 @@ export async function startTalkRealtimeAgentConsult(
     void Promise.resolve(chatSendResult).then(
       () => {
         if (!acknowledged) {
-          resolve({
-            ok: false,
-            error: errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "chat.send did not return a realtime tool result",
-            ),
-          });
+          resolve(unavailable("chat.send did not return a realtime tool result"));
         }
       },
       (error: unknown) => {
@@ -171,10 +160,7 @@ export async function startTalkRealtimeAgentConsult(
           );
           return;
         }
-        resolve({
-          ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)),
-        });
+        resolve(unavailable(formatForLog(error)));
       },
     );
   });

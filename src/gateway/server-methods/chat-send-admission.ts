@@ -79,7 +79,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
   const {
     clientRunId,
-    pendingChatSendKey,
     storePath,
     entry,
     sessionKey,
@@ -103,8 +102,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   const pendingReservation = createPendingChatSendReservationAccess({
     context,
     client,
-    key: pendingChatSendKey,
-    runId: clientRunId,
     attemptId: pendingAttemptId,
     request,
     session,

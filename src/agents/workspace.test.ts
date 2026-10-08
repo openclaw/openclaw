@@ -264,7 +264,7 @@ describe("ensureAgentWorkspace", () => {
     const marker = `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n${new Date().toISOString()}\n`;
     await fs.writeFile(attestationPath, marker);
 
-    await expect(ensureWorkspace()).rejects.toThrow(/run openclaw doctor --fix/u);
+    await expect(ensureWorkspace()).rejects.toThrow(/Run openclaw doctor --fix/u);
 
     expect(await fs.readFile(attestationPath, "utf-8")).toBe(marker);
     expect((await readWorkspaceStateSnapshot(tempDir)).setupExists).toBe(true);
