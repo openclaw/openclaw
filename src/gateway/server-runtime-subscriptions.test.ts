@@ -35,6 +35,7 @@ import {
 import { abortChatRunById, removeChatAbortControllerEntry } from "./chat-abort.js";
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
+import { GatewayConnectionWork } from "./server-connection-work.js";
 import { registerActivitySummaryPublicationTests } from "./server-runtime-subscriptions.activity-summary.test-support.js";
 import {
   createSubscriptionTestFixture,
@@ -219,6 +220,40 @@ describe("startGatewayEventSubscriptions", () => {
     resetAgentEventsForTest();
     configureExecutionIdentityAdmissionSink(() => false)();
   });
+
+  it.each(["before startup", "during close"] as const)(
+    "stops observer events %s while chat events continue draining",
+    async (phase) => {
+      const connectionWork = new GatewayConnectionWork();
+      const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
+      agentEventHandlerMocks.create.mockReturnValue(handler);
+      if (phase === "before startup") {
+        connectionWork.beginClose();
+      }
+      unsubs = startGatewayEventSubscriptions({
+        ...createParams(),
+        signal: connectionWork.signal,
+      });
+      const observe = vi.spyOn(unsubs.sessionObserver, "handleEventAsync");
+      const emit = () =>
+        emitAgentEvent({ runId: "closing-observer", stream: "assistant", data: { text: "late" } });
+      if (phase === "during close") {
+        emit();
+        connectionWork.beginClose();
+      }
+      for (let index = 0; index < 9; index++) {
+        emit();
+      }
+      await unsubs.agentUnsub();
+
+      expect(warn).not.toHaveBeenCalled();
+      expect(observe).toHaveBeenCalledTimes(phase === "during close" ? 1 : 0);
+      expect(handler).toHaveBeenCalledTimes(phase === "during close" ? 10 : 9);
+      emit();
+      expect(handler).toHaveBeenCalledTimes(phase === "during close" ? 10 : 9);
+      observe.mockRestore();
+    },
+  );
 
   it.each(["same-id reset", "missing row", "missing row without ID", "missing projection"])(
     "does not attach a successor row after a queued %s",
