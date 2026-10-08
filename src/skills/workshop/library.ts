@@ -565,7 +565,13 @@ export async function removeWorkshopSkillFile(
 
 export async function archiveWorkshopSkill(
   ctx: WorkshopMutationContext,
-  params: { name: string; absorbedInto?: string; reason?: string },
+  params: {
+    name: string;
+    absorbedInto?: string;
+    reason?: string;
+    /** Revalidates under the skill lock with current file activity, before any archive write. */
+    assertEligible?: (updatedAtMs: number) => Promise<void>;
+  },
 ): Promise<WorkshopChange> {
   const absorbedInto =
     params.absorbedInto === undefined
@@ -586,6 +592,9 @@ export async function archiveWorkshopSkill(
         throw new WorkshopWriteError(
           `absorbed_into must name another live workshop skill; "${params.absorbedInto}" is not one.`,
         );
+      }
+      if (params.assertEligible) {
+        await params.assertEligible((await listSkillFiles(paths.skillDir)).updatedAtMs);
       }
       const versionId = await snapshotSkill(paths, "archive");
       // One fenced rename takes the skill out of service, so a refusal leaves it whole.

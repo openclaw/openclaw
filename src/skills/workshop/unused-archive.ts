@@ -98,6 +98,7 @@ export async function archiveUnusedWorkshopSkills(
   }
   const cutoffMs = nowMs - UNUSED_ARCHIVE_MS;
   const archived: WorkshopChange[] = [];
+  const noLongerUnused = new Error("Skill activity changed before archive acquired its lock.");
   // The pass was admitted under the turn's config; the operator may switch Learning Off since.
   const learningOn = () =>
     resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode === "auto";
@@ -124,10 +125,37 @@ export async function archiveUnusedWorkshopSkills(
       archived.push(
         await archiveWorkshopSkill(
           { config, agentId, actor: "curator", assertLive },
-          { name: skill.name, reason: UNUSED_ARCHIVE_REASON },
+          {
+            name: skill.name,
+            reason: UNUSED_ARCHIVE_REASON,
+            assertEligible: async (updatedAtMs) => {
+              // The scan is only a candidate filter. A patch may have held the skill lock,
+              // or a use may have committed after the scan read its activity snapshot.
+              const [currentStat, currentUsage, currentChanges] = await Promise.all([
+                fs.stat(skillFile).catch(() => undefined),
+                readSkillUsage({}, [skillFile]),
+                listWorkshopChanges(agentId, { limit: CHANGE_FEED_LIMIT }),
+              ]);
+              const currentChange = currentChanges.find(
+                (change) => change.skillName === skill.name,
+              );
+              const currentActivityMs = Math.max(
+                updatedAtMs,
+                currentStat ? Math.max(currentStat.mtimeMs, currentStat.ctimeMs) : nowMs,
+                currentUsage.get(skillFile)?.lastUsedAtMs ?? 0,
+                currentChange?.createdAtMs ?? 0,
+              );
+              if (currentActivityMs > cutoffMs) {
+                throw noLongerUnused;
+              }
+            },
+          },
         ),
       );
     } catch (error) {
+      if (error === noLongerUnused) {
+        continue;
+      }
       log.warn(`unused skill archive failed: skill=${skill.name} ${formatErrorMessage(error)}`);
     }
   }
