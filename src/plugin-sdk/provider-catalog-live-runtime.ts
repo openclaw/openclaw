@@ -20,7 +20,6 @@ import {
 } from "./provider-catalog-live-outcome.internal.js";
 import {
   buildSingleProviderApiKeyCatalog,
-  getCachedLiveCatalogValue,
   type ManifestProviderCatalogEntry,
 } from "./provider-catalog-shared.js";
 import {
@@ -74,7 +73,10 @@ export type BuildLiveModelProviderConfigParams<T extends ModelDefinitionConfig> 
     models: readonly T[];
     ttlMs?: number;
     cacheKeyParts?: readonly unknown[];
-    /** Provider-owned projection for catalogs that publish richer metadata than model ids. */
+    /**
+     * Provider-owned projection for catalogs that publish richer metadata than model ids.
+     * Defaults to the shared chat classifier, which keeps unfamiliar listed chat models.
+     */
     projectRows?: LiveModelRowProjection<T>;
     /** Retry a rejected authenticated catalog request against the provider's public catalog. */
     fallbackToAnonymousOnUnauthorized?: boolean;
@@ -178,7 +180,7 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
     params.discoveryMode === "strict"
       ? [
           params.providerId,
-          params.projectRows ? "model-rows" : "models",
+          "model-rows",
           params.endpoint,
           liveModelCatalogAuthCacheKey(params),
           "strict",
@@ -186,34 +188,16 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
         ]
       : params.cacheKeyParts;
   try {
-    if (params.projectRows) {
-      const models = await projectCachedLiveModelRows({
-        ...params,
-        cacheKeyParts,
-        fallback,
-        projectRows: params.projectRows,
-      });
-      if (models.length > 0 || params.discoveryMode === "strict") {
-        return { ...fallback, models: [...models] };
-      }
-      return fallback;
-    }
-    const liveModelIds = await getCachedLiveCatalogValue({
-      keyParts: cacheKeyParts ?? [
-        params.providerId,
-        "models",
-        params.endpoint,
-        liveModelCatalogAuthCacheKey(params),
-      ],
-      ttlMs: params.ttlMs,
-      signal: params.signal,
-      load: async (signal) => await fetchLiveProviderModelIds({ ...params, signal }),
-      shouldCache: (modelIds) => modelIds.length > 0 || params.discoveryMode === "strict",
+    // The authenticated listing owns model existence; static rows only enrich
+    // listed ids, so unfamiliar chat models appear without a release.
+    const models = await projectCachedLiveModelRows<ModelDefinitionConfig>({
+      ...params,
+      cacheKeyParts,
+      fallback,
+      projectRows: params.projectRows ?? buildOpenAICompatibleLiveModels,
     });
-    const liveModelIdSet = new Set(liveModelIds);
-    const models = params.models.filter((model) => liveModelIdSet.has(model.id));
     if (models.length > 0 || params.discoveryMode === "strict") {
-      return { ...fallback, models };
+      return { ...fallback, models: [...models] };
     }
   } catch (error) {
     if (params.discoveryMode === "strict") {

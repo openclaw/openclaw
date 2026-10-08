@@ -436,10 +436,22 @@ describe("provider-catalog-live-runtime", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("caches live provider configs and falls back to static rows on failure", async () => {
+  it("shows every listed chat model, excludes non-chat rows and keeps static rows on failure", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard([
+      { id: "model-a", object: "model", output_modalities: ["image"] },
       { id: "model-b", object: "model" },
       { id: "unknown-model", object: "model" },
+      { id: "sunsetting-chat", object: "model", shutdown_date: "2999-01-01" },
+      { id: "vision-chat", object: "model", pipeline_tag: "image-text-to-text" },
+      ...[
+        "gpt-realtime-2",
+        "gpt-audio-mini",
+        "grok-2-image",
+        "grok-imagine-video",
+        "babbage-002",
+        "gpt-3.5-turbo-instruct",
+      ].map((id) => ({ id, object: "model" })),
+      { id: "retired-chat", object: "model", shutdown_date: "2000-01-01" },
     ]);
     const providerConfig = {
       api: "openai-completions" as const,
@@ -470,8 +482,13 @@ describe("provider-catalog-live-runtime", () => {
 
     expect(fetchGuardMock).toHaveBeenCalledTimes(1);
     expect(first.apiKey).toBe("PROVIDER_API_KEY");
-    expect(first.models.map((model) => model.id)).toEqual(["model-b"]);
-    expect(second.models.map((model) => model.id)).toEqual(["model-b"]);
+    expect(first.models).toEqual([
+      models[1],
+      expect.objectContaining({ id: "sunsetting-chat" }),
+      expect.objectContaining({ id: "unknown-model", input: ["text"], contextWindow: 128_000 }),
+      expect.objectContaining({ id: "vision-chat" }),
+    ]);
+    expect(second.models).toEqual(first.models);
 
     clearLiveCatalogCacheForTests();
     fetchGuardMock.mockRejectedValueOnce(new Error("network unavailable"));
