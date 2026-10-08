@@ -119,6 +119,20 @@ function buildCliMcpBashElevated(
   };
 }
 
+/**
+ * The context budget the loopback tool surface sizes its model-facing projections
+ * by. Preparation owns the finalized value (`contextWindowInfo.tokens`: per-model
+ * minimum, the session-selected catalog option, configured limits and the
+ * alias-aware upper bound); the grant only carries it, never recomputes it from
+ * the raw catalog inputs. Absent when preparation resolved nothing usable, so the
+ * tools keep their conservative default instead of a guessed window.
+ */
+function normalizeGrantModelContextWindowTokens(candidate: number | undefined): number | undefined {
+  return typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0
+    ? Math.floor(candidate)
+    : undefined;
+}
+
 function buildCliMcpChannelContext(
   channelContext: RunCliAgentParams["channelContext"],
   senderId?: string | null,
@@ -157,6 +171,8 @@ export function buildCliMcpGrantContext(params: {
   runtimePolicyAgentId?: string;
   modelProvider: string;
   modelId: string;
+  /** Preparation's finalized context budget (`contextWindowInfo.tokens`). */
+  modelContextWindowTokens?: number;
   toolsAllow?: string[];
 }): McpLoopbackRequestContext {
   const sessionKey = resolveCliMcpSessionKey(params.run, params.config, params.agentId);
@@ -171,6 +187,9 @@ export function buildCliMcpGrantContext(params: {
   );
   const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
   const bashElevated = buildCliMcpBashElevated(params.run.bashElevated);
+  const modelContextWindowTokens = normalizeGrantModelContextWindowTokens(
+    params.modelContextWindowTokens,
+  );
   const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
   const senderName = normalizeOptionalString(params.run.senderName ?? undefined);
   const senderUsername = normalizeOptionalString(params.run.senderUsername ?? undefined);
@@ -236,6 +255,7 @@ export function buildCliMcpGrantContext(params: {
         }
       : {}),
     modelHasVision: params.run.modelHasVision,
+    ...(modelContextWindowTokens !== undefined ? { modelContextWindowTokens } : {}),
     messageProvider,
     clientCaps: clientCaps.length > 0 ? clientCaps : undefined,
     gatewayUiCommandTarget: params.run.gatewayUiCommandTarget,

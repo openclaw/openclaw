@@ -598,6 +598,43 @@ describe("prepareCliRunContext", () => {
     );
   });
 
+  it("carries the finalized session-capped budget into the loopback grant", async () => {
+    // The grant must size loopback tool projections by the same number the run
+    // compacts on: a 200k session selection on a 1M catalog model, not the raw
+    // catalog window the run owner passed in.
+    const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+    setCliBackendForPrepareTest({ bundleMcp: true });
+    setCliRunnerPrepareTestDeps({
+      loadManifestModelCatalog: vi.fn(() => [
+        {
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "anthropic",
+          contextWindow: 1_000_000,
+          contextWindows: [
+            { id: "200k", label: "200K", contextWindow: 200_000 },
+            { id: "1m", label: "1M", contextWindow: 1_000_000 },
+          ],
+          contextWindowDefault: "1m",
+        },
+      ]),
+      getActiveMcpLoopbackRuntime: vi.fn(createLoopbackRuntime),
+      mintMcpLoopbackClientGrant,
+    });
+
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      model: "claude-fable-5",
+      modelContextWindow: 1_000_000,
+      contextWindow: "200k",
+      config: {},
+    });
+
+    expect(context.contextWindowInfo?.tokens).toBe(200_000);
+    const grantContext = mintMcpLoopbackClientGrant.mock.calls.at(-1)?.[0]?.context;
+    expect(grantContext?.modelContextWindowTokens).toBe(200_000);
+  });
+
   beforeEach(() => {
     // Install narrow test doubles for external runtime seams so preparation
     // remains about data flow, not bundled plugin or loopback startup cost.
@@ -2835,6 +2872,10 @@ describe("prepareCliRunContext", () => {
         workspaceDir: context.workspaceDir,
         modelProvider: "anthropic",
         modelId: "test-model",
+        // Preparation's finalized budget rides on every grant so loopback
+        // tools never fall back to their 8k default; no catalog entry here,
+        // so it is the runner default (DEFAULT_CONTEXT_TOKENS).
+        modelContextWindowTokens: 200_000,
         messageProvider: "telegram",
         clientCaps: ["tool-events", "inline-widgets"],
         pinnedWidgetAuthoring: true,

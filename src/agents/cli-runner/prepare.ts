@@ -815,6 +815,7 @@ async function prepareCliRunContextWithinReadFence(
           runtimePolicyAgentId: params.runtimePolicySessionKey ? policyAgentId : undefined,
           modelProvider,
           modelId,
+          modelContextWindowTokens: contextWindowInfo.tokens,
         })
       : undefined;
   const mcpToolAuthAgentDir = mcpContextBase
