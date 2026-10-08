@@ -1,3 +1,4 @@
+import type { ModelCatalogProviderOutcome } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
@@ -25,12 +26,25 @@ function formatContextLabel(row: ModelRow): string {
 export function printModelTable(
   rows: ModelRow[],
   runtime: RuntimeEnv,
-  opts: { json?: boolean; plain?: boolean } = {},
+  opts: {
+    json?: boolean;
+    plain?: boolean;
+    providerOutcomes?: ModelCatalogProviderOutcome[];
+  } = {},
 ) {
   if (opts.json) {
     writeRuntimeJson(runtime, {
       count: rows.length,
       models: rows,
+      ...(opts.providerOutcomes?.length
+        ? {
+            providerOutcomes: opts.providerOutcomes.map(({ provider, profileId, status }) => ({
+              provider,
+              ...(profileId ? { profileId } : {}),
+              status,
+            })),
+          }
+        : {}),
     });
     return;
   }
