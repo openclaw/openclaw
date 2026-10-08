@@ -3,7 +3,7 @@ import type {
   UnifiedModelCatalogKind,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import type { ModelProviderConfig } from "../config/types.js";
+import type { ModelProviderDeclarationConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderCatalogOutcome } from "./provider-catalog-outcome.js";
 
@@ -46,11 +46,11 @@ export type ProviderCatalogContext = {
 
 export type ProviderCatalogResult =
   | {
-      provider: ModelProviderConfig;
+      provider: ModelProviderDeclarationConfig;
       outcomes?: readonly ProviderCatalogOutcome[];
     }
   | {
-      providers: Record<string, ModelProviderConfig>;
+      providers: Record<string, ModelProviderDeclarationConfig>;
       outcomes?: readonly ProviderCatalogOutcome[];
     }
   | null
