@@ -12,7 +12,10 @@ import type {
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
-import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
+import {
+  buildTelegramInboundDebounceConversationKey,
+  buildTelegramInboundDebounceKey,
+} from "./bot-handlers.debounce-key.js";
 import {
   createTelegramInboundBuffers,
   type TelegramDebounceEntry,
@@ -42,7 +45,6 @@ import {
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import {
   buildTelegramThreadParams,
-  buildTelegramGroupPeerId,
   getTelegramTextParts,
   type TelegramThreadSpec,
   resolveTelegramPrimaryMedia,
@@ -251,7 +253,7 @@ export function createTelegramInboundProcessing({
         : [];
       return { kind: "ready", allMedia };
     };
-    const conversationKey = buildTelegramGroupPeerId(chatId, threadSpec);
+    const conversationKey = buildTelegramInboundDebounceConversationKey({ chatId, threadSpec });
     const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceSenderId = senderId || (msg.from?.id != null ? String(msg.from.id) : "");
     const debounceKey = debounceSenderId

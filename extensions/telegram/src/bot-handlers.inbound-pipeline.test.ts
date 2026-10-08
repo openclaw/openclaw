@@ -1,7 +1,9 @@
 // Telegram tests cover inbound buffering identity.
 import { describe, expect, it } from "vitest";
-import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
-import { buildTelegramGroupPeerId } from "./bot/helpers.js";
+import {
+  buildTelegramInboundDebounceConversationKey,
+  buildTelegramInboundDebounceKey,
+} from "./bot-handlers.debounce-key.js";
 
 describe("buildTelegramInboundDebounceKey", () => {
   it("isolates accounts and senders while normalizing the absent account", () => {
@@ -19,31 +21,45 @@ describe("buildTelegramInboundDebounceKey", () => {
     );
   });
 
-  it("keeps scoped topic thread ids in the conversation key", () => {
-    const topic100 = buildTelegramGroupPeerId(7, { id: 100, scope: "forum" });
-    const topic200 = buildTelegramGroupPeerId(7, { id: 200, scope: "forum" });
+  it.each(["forum", "dm"] as const)(
+    "keeps %s topic thread ids in the conversation key",
+    (scope) => {
+      const topic100 = buildTelegramInboundDebounceConversationKey({
+        chatId: 7,
+        threadSpec: { id: 100, scope },
+      });
+      const topic200 = buildTelegramInboundDebounceConversationKey({
+        chatId: 7,
+        threadSpec: { id: 200, scope },
+      });
 
-    expect(topic100).toBe("7:topic:100");
-    expect(topic200).toBe("7:topic:200");
-    expect(buildTelegramGroupPeerId(7, { id: 100, scope: "direct-messages" })).toBe(
-      "7:direct-topic:100",
-    );
-    expect(
-      buildTelegramInboundDebounceKey({
-        accountId: "default",
-        conversationKey: topic100,
-        senderId: "42",
-      }),
-    ).not.toBe(
-      buildTelegramInboundDebounceKey({
-        accountId: "default",
-        conversationKey: topic200,
-        senderId: "42",
-      }),
-    );
-  });
+      expect(topic100).toBe(scope === "dm" ? "7:dm-topic:100" : "7:topic:100");
+      expect(topic200).toBe(scope === "dm" ? "7:dm-topic:200" : "7:topic:200");
+      expect(
+        buildTelegramInboundDebounceConversationKey({
+          chatId: 7,
+          threadSpec: { id: 100, scope: "direct-messages" },
+        }),
+      ).toBe("7:direct-topic:100");
+      expect(
+        buildTelegramInboundDebounceKey({
+          accountId: "default",
+          conversationKey: topic100,
+          senderId: "42",
+        }),
+      ).not.toBe(
+        buildTelegramInboundDebounceKey({
+          accountId: "default",
+          conversationKey: topic200,
+          senderId: "42",
+        }),
+      );
+    },
+  );
 
-  it("uses the chat id as the conversation key when no thread is present", () => {
-    expect(buildTelegramGroupPeerId(7, { scope: "none" })).toBe("7");
+  it.each(["none", "dm"] as const)("uses the chat id for unthreaded %s messages", (scope) => {
+    expect(buildTelegramInboundDebounceConversationKey({ chatId: 7, threadSpec: { scope } })).toBe(
+      "7",
+    );
   });
 });

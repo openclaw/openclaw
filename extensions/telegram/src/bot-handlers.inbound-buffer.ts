@@ -8,7 +8,10 @@ import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-de
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
+import {
+  buildTelegramInboundDebounceConversationKey,
+  buildTelegramInboundDebounceKey,
+} from "./bot-handlers.debounce-key.js";
 import {
   buildSyntheticContext,
   buildSyntheticTextMessage,
@@ -30,7 +33,6 @@ import type {
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import {
   buildTelegramThreadParams,
-  buildTelegramGroupPeerId,
   getTelegramTextParts,
   joinTelegramTextParts,
   resolveTelegramPrimaryMedia,
@@ -308,7 +310,7 @@ export function createTelegramInboundBuffers({
     if (!senderId) {
       return;
     }
-    const conversationKey = buildTelegramGroupPeerId(chatId, threadSpec);
+    const conversationKey = buildTelegramInboundDebounceConversationKey({ chatId, threadSpec });
     inboundDebouncer.cancelKey(
       buildTelegramInboundDebounceKey({ accountId, conversationKey, senderId }),
     );
