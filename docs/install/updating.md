@@ -750,8 +750,8 @@ existing allowed users are not automatically promoted.
 Chat updates retain the original authorization source across managed handoffs,
 repair workers, and Doctor runs. Each worker checks the original installation's
 current policy and profile state before acting. A repair worker's inference turn
-checks them immediately before the turn starts and again before it reports a
-result; within the turn, every step rechecks update ownership, the updater
+checks them before each model attempt and tool call and before it reports a
+result; its other in-turn checks verify update ownership, the updater
 connection, and cancellation. Reassigning a channel account to
 another administrator does not transfer an update already in progress; a current
 owner must start a new update. Older updater handoffs without a captured profile
