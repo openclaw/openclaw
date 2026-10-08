@@ -525,7 +525,7 @@ async function downloadOutputFile(
       {
         maxBytes,
         chunkTimeoutMs: params.timeoutMs,
-        onOverflow: ({ maxBytes }) => new Error(`${downloadLabel} exceeds ${maxBytes} bytes`),
+        onOverflow: ({ maxBytes: limit }) => new Error(`${downloadLabel} exceeds ${limit} bytes`),
         onIdleTimeout: ({ chunkTimeoutMs }) =>
           new Error(`${downloadLabel} stalled after ${chunkTimeoutMs}ms`),
       },
