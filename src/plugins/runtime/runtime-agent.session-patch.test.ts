@@ -1,9 +1,32 @@
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 
 describe("plugin runtime session patches", () => {
+  it("refreshes asynchronous descriptive reads after a native session replacement", async () => {
+    await withOpenClawTestState({ label: "plugin-runtime-async-session-read" }, async () => {
+      const runtime = createRuntimeAgent();
+      const scope = { agentId: "main", sessionKey: "agent:main:clickclack:channel:discussion" };
+      const read = runtime.session.getSessionEntryAsync;
+      if (!read) {
+        throw new Error("Expected the current runtime's asynchronous session reader");
+      }
+      const initial = { sessionId: "original", updatedAt: 100, displayName: "Original title" };
+      await runtime.session.upsertSessionEntry({ ...scope, entry: initial });
+      expect(await read({ ...scope, readConsistency: "latest" })).toMatchObject(initial);
+
+      const replacement = {
+        ...initial,
+        sessionId: "replacement",
+        displayName: "Replacement title",
+      };
+      replaceSessionEntrySync(scope, replacement);
+      expect(await read({ ...scope, readConsistency: "latest" })).toMatchObject(replacement);
+    });
+  });
+
   it("rejects a patch whose owner closes during asynchronous preparation", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-patch-owner" }, async () => {
       const runtime = createRuntimeAgent();

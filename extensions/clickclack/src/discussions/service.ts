@@ -129,7 +129,7 @@ export class ClickClackDiscussionService {
     this.#unsubscribeSessionsChanged = gatewayEvents?.onSessionsChanged((event) => {
       void this.#withOperation(async () => {
         if (
-          this.#store.get(event.sessionKey) ||
+          (await this.#store.getAsync(event.sessionKey)) ||
           (await listPendingDiscussionOpens(this.#runtime)).some(
             (pending) => pending.sessionKey === event.sessionKey,
           )
@@ -160,11 +160,12 @@ export class ClickClackDiscussionService {
   async info(sessionKey: string): Promise<SessionDiscussionInfo> {
     return await this.#withOperation(() =>
       this.#sessionQueue.enqueue(sessionKey, async () => {
+        await this.#store.prepare();
         const accounts = discussionAccounts(this.#currentConfig());
         if (accounts.length !== 1) {
           return { state: "none" };
         }
-        const existing = this.#store.get(sessionKey);
+        const existing = await this.#store.getAsync(sessionKey);
         if (existing) {
           const resolved = await this.#resolveBindingForUse(existing);
           if (resolved.state === "retargeted") {
@@ -180,7 +181,7 @@ export class ClickClackDiscussionService {
           }
           await this.#finalizePendingBinding(sessionKey, existing);
           await this.#reconcileBinding(sessionKey, existing, resolved.account);
-          const current = this.#store.get(sessionKey);
+          const current = await this.#store.getAsync(sessionKey);
           if (!current) {
             return { state: this.hasEnabledAccount() ? "available" : "none" };
           }
@@ -193,7 +194,10 @@ export class ClickClackDiscussionService {
 
   async open(sessionKey: string): Promise<SessionDiscussionInfo> {
     return await this.#withOperation(() =>
-      this.#sessionQueue.enqueue(sessionKey, () => this.#open(sessionKey)),
+      this.#sessionQueue.enqueue(sessionKey, async () => {
+        await this.#store.prepare();
+        return await this.#open(sessionKey);
+      }),
     );
   }
 
@@ -207,7 +211,7 @@ export class ClickClackDiscussionService {
     if (!account) {
       return { state: "none" };
     }
-    const existing = this.#store.get(sessionKey);
+    const existing = await this.#store.getAsync(sessionKey);
     if (existing) {
       const resolved = await this.#resolveBindingForUse(existing);
       if (resolved.state === "retargeted") {
@@ -217,7 +221,7 @@ export class ClickClackDiscussionService {
       } else if (resolved.state === "active") {
         await this.#finalizePendingBinding(sessionKey, existing);
         await this.#reconcileBinding(sessionKey, existing, resolved.account);
-        const current = this.#store.get(sessionKey);
+        const current = await this.#store.getAsync(sessionKey);
         if (current) {
           return discussionInfoForBinding(current, resolved.account);
         }
@@ -258,7 +262,8 @@ export class ClickClackDiscussionService {
   async #reconcile(sessionKey: string): Promise<void> {
     try {
       await this.#sessionQueue.enqueue(sessionKey, async () => {
-        const binding = this.#store.get(sessionKey);
+        await this.#store.prepare();
+        const binding = await this.#store.getAsync(sessionKey);
         if (binding) {
           await this.#reconcileBinding(sessionKey, binding);
         }
@@ -306,7 +311,8 @@ export class ClickClackDiscussionService {
   ): Promise<{ binding?: ClickClackDiscussionBinding; text: string }> {
     return await this.#withOperation(() =>
       this.#sessionQueue.enqueue(sessionKey, async () => {
-        const binding = this.#store.get(sessionKey);
+        await this.#store.prepare();
+        const binding = await this.#store.getAsync(sessionKey);
         if (!binding) {
           return { text: "No discussion is bound to this session." };
         }
@@ -370,6 +376,7 @@ export class ClickClackDiscussionService {
       this.#store.delete(sessionKey);
       return;
     }
+    // This read also guards the immediately following detached-retention mutation.
     const entry = this.#runtime.agent.session.getSessionEntry({
       sessionKey,
       readConsistency: "latest",
@@ -405,6 +412,7 @@ export class ClickClackDiscussionService {
     if (entry.archivedAt !== undefined) {
       return;
     }
+    const bindings = await this.#store.entries();
     const attached = this.#refreshSessionAttachment(sessionKey, activeBinding);
     if (!attached) {
       return;
@@ -429,14 +437,12 @@ export class ClickClackDiscussionService {
     } = {};
     const labelChanged = label !== currentBinding.label;
     const desiredDisplayTitle = label === fallback ? "" : truncateDiscussionDisplayTitle(label);
-    const serverSupportsDisplayTitle = this.#store
-      .entries()
-      .some(
-        ({ binding: candidate }) =>
-          candidate.displayTitle !== undefined &&
-          candidate.serverBaseUrl === currentBinding.serverBaseUrl &&
-          candidate.accountId === currentBinding.accountId,
-      );
+    const serverSupportsDisplayTitle = bindings.some(
+      ({ binding: candidate }) =>
+        candidate.displayTitle !== undefined &&
+        candidate.serverBaseUrl === currentBinding.serverBaseUrl &&
+        candidate.accountId === currentBinding.accountId,
+    );
     const shouldBackfillDisplayTitle =
       desiredDisplayTitle !== "" &&
       currentBinding.displayTitle !== desiredDisplayTitle &&
@@ -597,7 +603,7 @@ export class ClickClackDiscussionService {
     // Without a gateway-event subscription (no broadcaster in this process),
     // bindings fall back to the interval poll or renames would never reconcile.
     const needsBindingPoll =
-      this.#unsubscribeSessionsChanged === undefined && this.#store.count() > 0;
+      this.#unsubscribeSessionsChanged === undefined && (await this.#store.countAsync()) > 0;
     if (this.#closed || (!hasPendingOpens && !needsBindingPoll)) {
       if (this.#timer) {
         this.#timer.cancel();
@@ -624,7 +630,7 @@ export class ClickClackDiscussionService {
 
   async #listReconcileSessionKeys(): Promise<Set<string>> {
     return new Set([
-      ...this.#store.entries().map(({ sessionKey }) => sessionKey),
+      ...(await this.#store.entries()).map(({ sessionKey }) => sessionKey),
       ...(await listPendingDiscussionOpens(this.#runtime)).map(({ sessionKey }) => sessionKey),
     ]);
   }

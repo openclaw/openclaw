@@ -16,6 +16,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import type { WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
+import { WorktreeRemovalLockError } from "./removal-errors.js";
 import { IDLE_GC_MS } from "./service.js";
 import type { ManagedWorktreeOwnerKind } from "./types.js";
 
@@ -23,12 +24,10 @@ export function createManagedWorktreeOwnerPolicy(
   cfg: OpenClawConfig,
   now: () => number = Date.now,
 ): Required<
-  Pick<
-    WorktreeCleanupOwnerPolicy,
-    "prepareOwners" | "shouldProtectOwner" | "shouldRemoveOwner" | "withOwnerCleanup"
-  >
+  Pick<WorktreeCleanupOwnerPolicy, "prepareOwners" | "readOwnerState" | "withOwnerCleanup">
 > {
   const placementChecks = new Map<string, { sessionId?: string; assertCurrent: () => void }>();
+  let preparedOwners = new Map<string, ResolvedSessionEntryAccessTarget>();
   const cleanupOwner = new AsyncLocalStorage<{
     ownerId: string;
     scope: string;
@@ -114,6 +113,7 @@ export function createManagedWorktreeOwnerPolicy(
   // Census facts live for one pass; synchronous mutation guards always reread the narrow row.
   return {
     prepareOwners: async (records) => {
+      preparedOwners = new Map();
       const ownerIds = [
         ...new Set(
           records.flatMap((record) =>
@@ -129,29 +129,35 @@ export function createManagedWorktreeOwnerPolicy(
           { cfg, sessionKeys: ownerIds },
           "worktree",
         );
+        preparedOwners = targets;
         for (const id of ownerIds) {
-          states.set(id, state("session", id, targets.get(id)));
+          const target = targets.get(id);
+          if (target) {
+            states.set(id, state("session", id, target));
+          }
         }
       } catch {
         // A failed census supplies no authority to remove a session-owned checkout.
       }
       return {
-        shouldProtectOwner: (kind, id) =>
-          kind === "session" && (states.get(id) ?? "active") === "active",
-        shouldRemoveOwner: (kind, id) => kind === "session" && states.get(id) === "retired",
+        readOwnerState: (kind, id) => (kind === "session" ? (states.get(id) ?? "active") : "other"),
       };
     },
-    shouldProtectOwner: (kind, id) => state(kind, id) === "active",
-    shouldRemoveOwner: (kind, id) => state(kind, id) === "retired",
+    readOwnerState: (kind, id) => state(kind, id),
     withOwnerCleanup: async (record, run, signal) => {
       if (record.ownerKind !== "session" || !record.ownerId) {
         return await run((mutation) => mutation());
       }
       const ownerId = record.ownerId;
-      const target = resolveSessionEntryAccessTarget(
-        { cfg, sessionKey: ownerId },
-        { projection: "worktree" },
-      );
+      const target =
+        preparedOwners.get(ownerId) ??
+        (await readResolvedSessionEntriesInWorker({ cfg, sessionKeys: [ownerId] }, "worktree")).get(
+          ownerId,
+        );
+      signal?.throwIfAborted();
+      if (!target) {
+        throw new WorktreeRemovalLockError("busy", "worktree owner could not be read for cleanup");
+      }
       const scope = resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId });
       const entry = target.entry;
       const owner = {

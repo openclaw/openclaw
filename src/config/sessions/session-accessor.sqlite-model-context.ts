@@ -31,8 +31,19 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import {
+  createTranscriptEntryAnchor,
+  readActiveTranscriptEntryAnchorInTransaction,
+  selectActiveTranscriptEntryAnchor,
+} from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  assertCanonicalSqliteSessionKeysCurrent,
+  canonicalSessionValidationQuery,
+  readWithCanonicalSessionAdmission,
+} from "./session-canonical-key.js";
+import { validateCanonicalSessionRowEntry } from "./session-canonical-row.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import type {
   SessionModelContextLimits,
@@ -55,6 +66,7 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
+import type { InternalSessionEntry } from "./types.js";
 
 type ContextEntry = SessionTreeEntry & { seq: number };
 export type { SessionModelContextLimits } from "./session-history-read.types.js";
@@ -80,6 +92,7 @@ function assertContextAnchor(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>,
   through: TranscriptEntryAnchor,
+  expectedAuthority?: Pick<InternalSessionEntry, "permissionMode">,
 ): void {
   if (
     resolved.agentId !== through.agentId ||
@@ -91,11 +104,36 @@ function assertContextAnchor(
       "Completed-turn anchor belongs to another transcript",
     );
   }
-  const current = readActiveTranscriptEntryAnchorInTransaction({
+  const params = {
     database,
     resolved: { ...resolved, sessionKey: through.sessionKey },
     entryId: through.entryId,
-  });
+  };
+  let current: TranscriptEntryAnchor | undefined;
+  if (expectedAuthority) {
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      selectActiveTranscriptEntryAnchor(params)
+        .innerJoin(
+          canonicalSessionValidationQuery(database, { metadata: true })
+            .where("session_nodes.session_key", "=", through.sessionKey)
+            .as("authority"),
+          "authority.current_session_id",
+          "identity.session_id",
+        )
+        .selectAll("authority"),
+    );
+    const entry =
+      row && validateCanonicalSessionRowEntry(row, parseSessionEntryJson(row, "list"), "read");
+    if (!entry || entry.permissionMode !== expectedAuthority.permissionMode) {
+      throw new SessionTranscriptReadFenceError(
+        "Session transcript source was deleted, replaced, or changed permissions.",
+      );
+    }
+    current = createTranscriptEntryAnchor({ ...params, row });
+  } else {
+    current = readActiveTranscriptEntryAnchorInTransaction(params);
+  }
   if (
     !current ||
     (["generation", "rawSeq", "effectiveParentId", "activeMessagePosition"] as const).some(
@@ -110,15 +148,9 @@ function assertContextAnchor(
 export function validateSessionTranscriptContextAnchor(
   scope: SessionTranscriptReadScope,
   through: TranscriptEntryAnchor,
+  expectedAuthority?: Pick<InternalSessionEntry, "permissionMode">,
 ): void {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => assertContextAnchor(database, resolved, through),
-    toDatabaseOptions(resolved),
-  );
-  if (!result.found) {
-    throw new SessionTranscriptReadFenceError("Completed-turn transcript no longer exists");
-  }
+  validateDetachedSessionTranscriptContext(scope, { through, expectedAuthority });
 }
 
 /** Unadmitted context retains the prefix captured by its original read snapshot. */
@@ -126,17 +158,7 @@ export function validateSessionTranscriptContextVersion(
   scope: SessionTranscriptReadScope,
   version: SessionTranscriptContextVersion | undefined,
 ): void {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      runSqliteDeferredTransactionSync(database.db, () =>
-        validateContextVersion(database, resolved.sessionId, version, "prefix"),
-      ),
-    toDatabaseOptions(resolved),
-  );
-  if (!result.found && version !== undefined) {
-    throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
-  }
+  validateDetachedSessionTranscriptContext(scope, { version });
 }
 
 function validateContextVersion(
@@ -206,16 +228,42 @@ export function validateSessionTranscriptContextAdmission(
   if (!admission) {
     return;
   }
+  validateDetachedSessionTranscriptContext(scope, { admission });
+}
+
+type TranscriptContextValidation = {
+  version?: SessionTranscriptContextVersion;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+  through?: TranscriptEntryAnchor;
+  expectedAuthority?: Pick<InternalSessionEntry, "permissionMode">;
+};
+
+/** Released validators share admission; only multi-statement version reads need a snapshot. */
+function validateDetachedSessionTranscriptContext(
+  scope: SessionTranscriptReadScope,
+  validation: TranscriptContextValidation,
+): void {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const result = runWithSessionTranscriptReadFence(admission, () =>
-    withOpenClawAgentDatabaseReadOnly(
-      (database) => resolveSqliteSessionTranscriptReadFence({ database, ...resolved }),
-      toDatabaseOptions(resolved),
-    ),
-  );
-  if (!result.found || !result.value) {
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const validate = () => {
+      if (validation.expectedAuthority) {
+        assertCanonicalSqliteSessionKeysCurrent(database);
+      }
+      validateSessionTranscriptContextInDatabase(database, resolved, validation, "prefix");
+    };
+    return validation.through
+      ? readWithCanonicalSessionAdmission(database, validate)
+      : validation.admission
+        ? validate()
+        : runSqliteDeferredTransactionSync(database.db, validate);
+  }, toDatabaseOptions(resolved));
+  if (!result.found && (validation.through || validation.admission || validation.version)) {
     throw new SessionTranscriptReadFenceError(
-      "Current-turn transcript admission is no longer readable",
+      validation.admission
+        ? "Current-turn transcript admission is no longer readable"
+        : validation.through
+          ? "Completed-turn transcript no longer exists"
+          : "Session transcript changed during context read",
     );
   }
 }
@@ -224,11 +272,7 @@ export function validateSessionTranscriptContextAdmission(
 export function validateSessionTranscriptContextInDatabase(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>,
-  validation: {
-    version?: SessionTranscriptContextVersion;
-    admission?: UserTurnTranscriptAdmissionReceipt;
-    through?: TranscriptEntryAnchor;
-  },
+  validation: TranscriptContextValidation,
   consistency: "exact" | "prefix" = "exact",
 ): void {
   const { version, admission, through } = validation;
@@ -246,7 +290,7 @@ export function validateSessionTranscriptContextInDatabase(
     validateContextVersion(database, resolved.sessionId, version, consistency);
   }
   if (through) {
-    assertContextAnchor(database, resolved, through);
+    assertContextAnchor(database, resolved, through, validation.expectedAuthority);
   }
 }
 

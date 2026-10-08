@@ -344,7 +344,17 @@ describe("experience review maintenance", () => {
         }
         await Promise.resolve();
         if (change === "append") {
-          retainedAssertion();
+          const hostSql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+          try {
+            retainedAssertion();
+            expect(
+              hostSql.queries.filter((query) =>
+                /\b(?:session_nodes|transcript_event_identities)\b/i.test(query),
+              ),
+            ).toHaveLength(1);
+          } finally {
+            hostSql.restore();
+          }
         } else {
           expect(retainedAssertion).toThrow("no longer active");
         }
@@ -403,46 +413,80 @@ describe("experience review maintenance", () => {
     }
   });
 
-  it("refuses a prepared file write after its completed-turn source is rewritten", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-experience-write-fence-");
-    const config = { skills: { workshop: { autonomous: { mode: "auto" as const } } } };
-    const candidate = await captureReviewFixture(reviewFixture(workspaceDir, config));
-    const target = path.join(workspaceDir, "SKILL.md");
-    const original = "# Existing procedure\n";
-    await fs.writeFile(target, original);
-    const open = fs.open.bind(fs);
-    const openFile = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await open(...args);
-      if (args[0] === target) {
-        SessionManager.open(candidate.source).removeTrailingEntries(
-          (entry) => entry.type === "message",
+  it.each(["rewritten", "permission-revoked", "replaced"])(
+    "refuses a prepared file write after its completed-turn source is %s",
+    async (change) => {
+      const workspaceDir = await tempDirs.make("openclaw-experience-write-fence-");
+      const config = { skills: { workshop: { autonomous: { mode: "auto" as const } } } };
+      const candidate = await captureReviewFixture(reviewFixture(workspaceDir, config));
+      const target = path.join(workspaceDir, "SKILL.md");
+      const original = "# Existing procedure\n";
+      await fs.writeFile(target, original);
+      const open = fs.open.bind(fs);
+      const openFile = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (args[0] === target) {
+          if (change === "rewritten") {
+            SessionManager.open(candidate.source).removeTrailingEntries(
+              (entry) => entry.type === "message",
+            );
+          } else {
+            // A foreign writer bypasses host publications during fs-safe's awaited preparation.
+            const { DatabaseSync } = requireNodeSqlite();
+            const writer = new DatabaseSync(candidate.source.storePath);
+            try {
+              if (change === "permission-revoked") {
+                writer
+                  .prepare(
+                    "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.permissionMode', 'read-only') WHERE session_key = ?",
+                  )
+                  .run(candidate.source.sessionKey);
+              } else {
+                const replacement = `${candidate.source.sessionId}:replacement`;
+                writer.exec("BEGIN IMMEDIATE");
+                writer
+                  .prepare(
+                    "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) SELECT ?, session_key, session_scope, created_at, updated_at FROM session_windows WHERE session_id = ?",
+                  )
+                  .run(replacement, candidate.source.sessionId);
+                writer
+                  .prepare(
+                    "UPDATE session_nodes SET current_session_id = ?, entry_json = json_set(entry_json, '$.sessionId', ?) WHERE session_key = ?",
+                  )
+                  .run(replacement, replacement, candidate.source.sessionKey);
+                writer.exec("COMMIT");
+              }
+            } finally {
+              writer.close();
+            }
+          }
+        }
+        return handle;
+      });
+      runEmbeddedAgent.mockImplementation(async (params: RunEmbeddedAgentParams) => {
+        const admitted = await params.preparedRunAdmission!.admit("embedded");
+        const receiptAuthority = resolveAdmittedRunActiveAssertion(admitted, params.abortSignal);
+        expect(receiptAuthority).toBeDefined();
+        await withGatewayToolCallerIdentity(
+          { agentId: "main", sessionKey: params.sessionKey!, receiptAuthority },
+          async () => {
+            await expect(writeHostFile(target, "# Replaced procedure\n")).rejects.toThrow(
+              "no longer active",
+            );
+          },
         );
+        return { meta: { durationMs: 1 } };
+      });
+      try {
+        await expect(runCapturedExperienceReview(candidate)).rejects.toThrow(
+          "source execution authority is no longer active",
+        );
+        await expect(fs.readFile(target, "utf8")).resolves.toBe(original);
+      } finally {
+        openFile.mockRestore();
       }
-      return handle;
-    });
-    runEmbeddedAgent.mockImplementation(async (params: RunEmbeddedAgentParams) => {
-      const admitted = await params.preparedRunAdmission!.admit("embedded");
-      const receiptAuthority = resolveAdmittedRunActiveAssertion(admitted, params.abortSignal);
-      expect(receiptAuthority).toBeDefined();
-      await withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey: params.sessionKey!, receiptAuthority },
-        async () => {
-          await expect(writeHostFile(target, "# Replaced procedure\n")).rejects.toThrow(
-            "no longer active",
-          );
-        },
-      );
-      return { meta: { durationMs: 1 } };
-    });
-    try {
-      await expect(runCapturedExperienceReview(candidate)).rejects.toThrow(
-        "source execution authority is no longer active",
-      );
-      await expect(fs.readFile(target, "utf8")).resolves.toBe(original);
-    } finally {
-      openFile.mockRestore();
-    }
-  });
+    },
+  );
 
   it("does not occupy the foreground session lane", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-session-lane-");

@@ -1,3 +1,6 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { ClickClackHttpError, type ClickClackClient } from "../http-client.js";
 import type { ClickClackChannel } from "../types.js";
@@ -21,6 +24,48 @@ function legacyCreateResponse(
 }
 
 describe("ClickClack discussion service", () => {
+  it("keeps accepted same-session operations in order while initial hydration settles", async () => {
+    const harness = createHarness({ label: "Hydration ordering" });
+    const entered = createDeferred<void>();
+    const snapshot = createDeferred<PluginStateEntry<never>[]>();
+    const openStore = harness.runtime.state.openKeyedStore;
+    harness.runtime.state.openKeyedStore = <T>(
+      options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
+    ) => {
+      const store = openStore<T>(options);
+      if (options.namespace !== "discussion-bindings") {
+        return store;
+      }
+      return {
+        ...store,
+        entries: vi
+          .fn<() => Promise<PluginStateEntry<T>[]>>()
+          .mockImplementationOnce(() => {
+            entered.resolve();
+            return snapshot.promise;
+          })
+          .mockImplementation(() => store.entries()),
+      };
+    };
+    const sessionKey = "agent:main:hydration-ordering";
+    const opening = harness.service.open(sessionKey);
+    await entered.promise;
+    // Another callback submits work as the worker reply passes through promise continuations.
+    const info = snapshot.promise.then(() =>
+      Promise.resolve().then(() => harness.service.info(sessionKey)),
+    );
+    try {
+      snapshot.resolve([]);
+      await expect(opening).resolves.toMatchObject({ state: "open" });
+      await expect(info).resolves.toMatchObject({ state: "open" });
+      expect(harness.createChannel).toHaveBeenCalledOnce();
+    } finally {
+      snapshot.resolve([]);
+      await Promise.allSettled([opening, info]);
+      await harness.service.cleanup();
+    }
+  });
+
   it("opens a managed channel once and returns stable info URLs", async () => {
     const harness = createHarness({ label: "Release Planning", category: "Projects" });
     harness.config.channels!.clickclack!.apiBaseUrl = "http://127.0.0.1:8484";
@@ -314,6 +359,23 @@ describe("ClickClack discussion service", () => {
       label: "Current reset race",
       section: "Current sessions",
     });
+  });
+
+  it("rechecks the attachment incarnation after a prepared session read returns", async () => {
+    const harness = createHarness({ sessionId: "session-old", label: "Prepared attachment" });
+    const sessionKey = "agent:main:prepared-attachment";
+    let reads = 0;
+    harness.runtime.agent.session.getSessionEntryAsync = async (params) => {
+      const prepared = harness.runtime.agent.session.getSessionEntry(params);
+      if (++reads === 2) {
+        harness.setSessionEntry({ sessionId: "session-new", label: "Prepared attachment" });
+      }
+      return prepared;
+    };
+
+    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
+    expect(harness.store.lookup(sessionKey)).toMatchObject({ sessionId: "session-new" });
+    expect(harness.createChannel).toHaveBeenCalledOnce();
   });
 
   it("falls back after exhausting desired-name suffixes through 20", async () => {

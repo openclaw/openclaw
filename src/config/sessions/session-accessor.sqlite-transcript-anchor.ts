@@ -20,10 +20,21 @@ export function readActiveTranscriptEntryAnchorInTransaction(params: {
   entryId: string;
   message?: unknown;
 }): TranscriptEntryAnchor | undefined {
-  const db = getSessionKysely(params.database.db);
   const row = executeSqliteQueryTakeFirstSync(
     params.database.db,
-    db
+    selectActiveTranscriptEntryAnchor(params),
+  );
+  return createTranscriptEntryAnchor({ ...params, row });
+}
+
+/** Compose final authority predicates into the anchor's single-statement snapshot. */
+export function selectActiveTranscriptEntryAnchor(params: {
+  database: Pick<OpenClawAgentDatabase, "db">;
+  resolved: ResolvedTranscriptScope;
+  entryId: string;
+}) {
+  return (
+    getSessionKysely(params.database.db)
       .selectFrom("transcript_event_identities as identity")
       .innerJoin("session_transcript_active_events as active", (join) =>
         join
@@ -58,9 +69,8 @@ export function readActiveTranscriptEntryAnchorInTransaction(params: {
           ),
         ),
       )
-      .limit(1),
+      .limit(1)
   );
-  return createTranscriptEntryAnchor({ ...params, row });
 }
 
 /** Projects anchor fields after the caller verifies readiness in the same snapshot. */
