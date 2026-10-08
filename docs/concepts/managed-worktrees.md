@@ -207,7 +207,7 @@ Git worktree registration, ordinary checkout removal, and source materialization
 
 Background Git maintenance and pack-index repair use only locally available objects. They never fetch missing objects from a partial clone's promisor remote; explicit fetching remains responsible for downloading those objects.
 
-Local agent shells, including native harness shells, disable Git's automatic maintenance and legacy auto-GC through their prepared environment. This also covers Git child processes such as promisor fetches and applies to the next run in existing worktrees after an update. Repository configuration and interactive operator shells are unchanged. The Gateway cleanup owner remains responsible for managed-repository maintenance; explicit maintenance commands remain available. Sandboxes that explicitly share the managed GitHub identity inherit these defaults; other sandbox and remote environments keep their own policy.
+Local agent shells, including worker-local execution and Codex shells in app-server processes started by OpenClaw on the Gateway host, disable Git's automatic maintenance and legacy auto-GC. Execution adapters append these settings to the effective Git parameters, preserving unrelated author and transport settings. This also covers Git child processes such as promisor fetches and applies to the next run in existing worktrees after an update. Repository configuration and interactive operator shells are unchanged. The Gateway cleanup owner remains responsible for managed-repository maintenance; explicit maintenance commands remain available. Sandboxes, node transports, and externally started app-server peers keep their own policy.
 
 ## Capacity and disk space
 

@@ -16,7 +16,12 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../secrets/store/secret-store.js")>()),
   readSecretStoreExecEnvironment: storeMocks.readSecretStoreExecEnvironment,
 }));
-const snapshot = captureEnv(["GH_TOKEN", "GITHUB_TOKEN", "PREVIEW_SERVICE_TOKEN"]);
+const snapshot = captureEnv([
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "PREVIEW_SERVICE_TOKEN",
+  "GIT_CONFIG_PARAMETERS",
+]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const execFileAsync = promisify(execFile);
 afterEach(() => {
@@ -57,6 +62,7 @@ function prepare(
       : undefined,
     credentialScrubEnv: prepared.credentialScrubEnv,
     localIdentityEnv: prepared.localIdentityEnv,
+    localGitConfigParameters: prepared.localGitConfigParameters,
     managedLocalIdentity: prepared.managedLocalIdentity,
     warnings: [],
   });
@@ -98,6 +104,10 @@ describe("exec GitHub identity", () => {
     const configBefore = await fs.readFile(configPath, "utf8");
     const missing = await git(worktree, ["rev-list", "--objects", "--missing=print", "HEAD"]);
     expect(missing.stdout).toContain(`?${blob}`);
+    setTestEnvValue(
+      "GIT_CONFIG_PARAMETERS",
+      "'user.name=Inherited Author' 'user.email=inherited@example.invalid' 'http.version=HTTP/1.1'",
+    );
 
     for (const managed of [false, true]) {
       const prepared = prepareGitHubToolEnvironment({
@@ -114,8 +124,8 @@ describe("exec GitHub identity", () => {
         agentId: "main",
       });
       const tracePath = path.join(root, `trace-${managed}.jsonl`);
-      const { env: childEnv } = prepare("gateway", prepared, false);
-      // Real Git consumes the exec overlay; native harnesses consume the same prepared overlay.
+      const { env: childEnv, requestedEnv } = prepare("gateway", prepared, false);
+      // Real Git consumes the composed exec environment, including inherited parameters.
       const overlay = { ...childEnv, ...env, GIT_TRACE2_EVENT: tracePath };
       await git(worktree, ["fetch", "origin", blob], overlay);
       expect((await git(worktree, ["cat-file", "blob", blob], overlay)).stdout).toBe(
@@ -124,8 +134,12 @@ describe("exec GitHub identity", () => {
       expect((await git(worktree, ["var", "GIT_AUTHOR_IDENT"], overlay)).stdout).toContain(
         managed
           ? "Agent Author <agent@example.invalid>"
-          : "Fixture Author <fixture@example.invalid>",
+          : "Inherited Author <inherited@example.invalid>",
       );
+      expect(
+        (await git(worktree, ["config", "--get", "http.version"], overlay)).stdout.trim(),
+      ).toBe("HTTP/1.1");
+      expect(requestedEnv?.GIT_CONFIG_PARAMETERS).toBeUndefined();
       const trace = (await fs.readFile(tracePath, "utf8"))
         .trim()
         .split("\n")
