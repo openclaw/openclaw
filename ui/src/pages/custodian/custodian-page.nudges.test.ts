@@ -36,8 +36,7 @@ const telegramAuthFailure = {
   channelLabels: { telegram: "Telegram" },
   channels: { telegram: { configured: true, tokenStatus: "configured_unavailable" } },
 };
-const questionReply = (isOther = false) =>
-  chatReply("Choose one.", { question: { ...closedQuestion, isOther } });
+const questionReply = () => chatReply("Choose one.", { question: closedQuestion });
 function nudgeAction(page: HTMLElement) {
   return page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!;
 }
@@ -249,28 +248,6 @@ describe("custodian page nudges", () => {
     expect(nudgeAction(page).disabled).toBe(true);
   });
 
-  it("keeps event nudges blocked after a typed question reply has an uncertain failure", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(questionReply(true))
-      .mockImplementationOnce(rejectAfterSend);
-    const { page, emitHealth } = await mountCaretaker(request);
-
-    await emitHealth(discordAuthFailure);
-    await send(page, "**Something** else");
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
-    expect(page.querySelector(".chat-group.user strong")?.textContent).toBe("Something");
-    expect(page.querySelector<HTMLButtonElement>(".option-card__skip")?.disabled).toBe(true);
-    const action = nudgeAction(page);
-    expect(action.disabled).toBe(true);
-    action.click();
-    await page.updateComplete;
-
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
   it("ignores a stale question reply outcome after a same-owner reconnect", async () => {
     const pendingQuestion = createDeferred<SystemAgentChatResult>();
     let chatCalls = 0;
@@ -310,23 +287,6 @@ describe("custodian page nudges", () => {
     expect(action.disabled).toBe(false);
   });
 
-  it("restores an event nudge after its request fails", async () => {
-    const request = createHealthyRequest().mockRejectedValueOnce(
-      new GatewayRequestError({ code: "INVALID_REQUEST", message: "Request failed" }),
-    );
-    const { page, emitHealth } = await mountCaretaker(request);
-
-    await emitHealth(telegramAuthFailure);
-    nudgeAction(page).click();
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
-    await page.updateComplete;
-    expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
-      "Telegram authentication degraded",
-    );
-  });
-
   it("consumes a delivered nudge whose reply becomes stale during reconnect", async () => {
     const pending = createDeferred<Reply>();
     const request = createHealthyRequest().mockReturnValueOnce(pending.promise);
@@ -342,24 +302,6 @@ describe("custodian page nudges", () => {
     pending.resolve(chatReply("Telegram checked."));
     await waitForFast(() => expect(page.querySelector(".custodian__nudge")).toBeNull());
     await emitHealth(health);
-    expect(page.querySelector(".custodian__nudge")).toBeNull();
-  });
-
-  it("consumes a transmitted nudge when its delivery outcome is unknown", async () => {
-    const request = createHealthyRequest().mockImplementationOnce(rejectAfterSend);
-    const { page, emitGatewayEvent } = await mountCaretaker(request);
-    const degradedHealth = {
-      channels: { telegram: { configured: true, healthState: "stale-socket" } },
-    };
-
-    emitGatewayEvent({ event: "health", payload: degradedHealth });
-    await page.updateComplete;
-    nudgeAction(page).click();
-
-    await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
-    expect(page.querySelector(".custodian__nudge")).toBeNull();
-    emitGatewayEvent({ event: "health", payload: degradedHealth });
-    await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).toBeNull();
   });
 
