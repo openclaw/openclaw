@@ -4,6 +4,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
+  type ErrorShape,
   errorShape,
   validateModelsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -186,26 +187,22 @@ export const modelsHandlers: GatewayRequestHandlers = {
       }
     },
     (error, { respond }) => {
+      let failure: ErrorShape;
       if (error instanceof UnknownModelCatalogProviderError) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-        return;
-      }
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        respond(false, undefined, error.error);
-        return;
-      }
-      if (error instanceof PreparedModelRuntimePublicationSupersededError) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true, retryAfterMs: 0 }),
-        );
-        return;
-      }
-      if (!(error instanceof ModelAccountConnectAuthorityError)) {
+        failure = errorShape(ErrorCodes.INVALID_REQUEST, error.message);
+      } else if (error instanceof SessionMutationAuthorizationChangedError) {
+        failure = error.error;
+      } else if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+        failure = errorShape(ErrorCodes.UNAVAILABLE, error.message, {
+          retryable: true,
+          retryAfterMs: 0,
+        });
+      } else if (error instanceof ModelAccountConnectAuthorityError) {
+        failure = errorShape(ErrorCodes.FORBIDDEN, error.message);
+      } else {
         throw error;
       }
-      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+      respond(false, undefined, failure);
     },
   ),
 };

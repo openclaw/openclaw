@@ -51,6 +51,17 @@ export type ConfigSetCurrentExpectation = { kind: "absent" } | { kind: "json"; v
 
 const CONFIG_MUTATION_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
+export function decodeConfigMutationInput(
+  bytes: Uint8Array,
+  sourceLabel: "--batch-file" | "--file" | "--stdin",
+): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch (error) {
+    throw new Error(`${sourceLabel} must be valid UTF-8.`, { cause: error });
+  }
+}
+
 export function readConfigMutationFileSync(
   filePath: string,
   sourceLabel: "--batch-file" | "--file",
@@ -78,7 +89,10 @@ export function readConfigMutationFileSync(
       );
     }
     try {
-      return readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES).toString("utf8");
+      return decodeConfigMutationInput(
+        readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES),
+        sourceLabel,
+      );
     } catch (error) {
       if (error instanceof RangeError) {
         throw new RangeError(

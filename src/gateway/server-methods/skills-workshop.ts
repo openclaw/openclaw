@@ -54,6 +54,18 @@ function defineWorkshopHandler<TParams>(
   };
 }
 
+function workshopWriteContext(
+  resolved: ResolvedSkillsWorkspace,
+  invocation: GatewayRequestHandlerOptions,
+) {
+  return {
+    config: resolved.cfg,
+    agentId: resolved.agentId,
+    actor: "user" as const,
+    assertLive: readGatewayRequestMutationAuthority(invocation).assertCurrent,
+  };
+}
+
 export const skillsWorkshopHandlers: GatewayRequestHandlers = {
   "skills.workshop.list": defineWorkshopHandler(
     "skills.workshop.list",
@@ -88,36 +100,20 @@ export const skillsWorkshopHandlers: GatewayRequestHandlers = {
     validateSkillsWorkshopArchiveParams,
     // Captured at admission; the library rechecks it before each final file effect.
     async (params, resolved, invocation) => ({
-      change: await archiveWorkshopSkill(
-        {
-          config: resolved.cfg,
-          agentId: resolved.agentId,
-          actor: "user",
-          assertLive: readGatewayRequestMutationAuthority(invocation).assertCurrent,
-        },
-        {
-          name: params.name,
-          reason: params.reason,
-        },
-      ),
+      change: await archiveWorkshopSkill(workshopWriteContext(resolved, invocation), {
+        name: params.name,
+        reason: params.reason,
+      }),
     }),
   ),
   "skills.workshop.restore": defineWorkshopHandler(
     "skills.workshop.restore",
     validateSkillsWorkshopRestoreParams,
     async (params, resolved, invocation) => ({
-      change: await restoreWorkshopSkill(
-        {
-          config: resolved.cfg,
-          agentId: resolved.agentId,
-          actor: "user",
-          assertLive: readGatewayRequestMutationAuthority(invocation).assertCurrent,
-        },
-        {
-          name: params.name,
-          versionId: params.versionId,
-        },
-      ),
+      change: await restoreWorkshopSkill(workshopWriteContext(resolved, invocation), {
+        name: params.name,
+        versionId: params.versionId,
+      }),
     }),
   ),
 };

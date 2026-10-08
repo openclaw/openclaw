@@ -17,7 +17,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   reserveAgentTerminalEvent,
   getAgentEventLifecycleGeneration,
-  type AgentEventPayload,
 } from "../infra/agent-events.js";
 import {
   releaseAgentRunDelegatedAuthority,
@@ -28,14 +27,10 @@ import type { ChatAbortDiagnosticReason } from "./chat-abort-diagnostics.js";
 import { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { appendChatCanvasBlocksToMessage } from "./chat-display-projection.canvas.js";
+import { projectInFlightRunSnapshot, type InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
-import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
-import {
-  createChatAbortMarker,
-  type ChatRunPlanSnapshot,
-  type ChatRunState,
-} from "./server-chat-state.js";
+import { createChatAbortMarker, type ChatRunState } from "./server-chat-state.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   resolveSessionSubscriptionKey,
@@ -54,44 +49,6 @@ export type RestartRecoveryCandidate = {
   sessionId: string;
   observedAt?: number;
 };
-
-export type InFlightRunSnapshot = {
-  runId: string;
-  text: string;
-  startedAt?: number;
-  /**
-   * True when the in-flight run is owned by the embedded-run registry and can
-   * only be cancelled through the session-owned abort path (sessions.abort),
-   * never through run-specific chat.abort. Control UI uses this to keep Stop
-   * routing session-scoped for recovered embedded runs.
-   */
-  sessionAbortable?: boolean;
-  plan?: ChatRunPlanSnapshot;
-  events?: AgentEventPayload[];
-};
-
-export function projectInFlightRunSnapshot(params: {
-  chatRunState: Pick<ChatRunState, "resolveBuffer" | "runs">;
-  runId: string;
-  startedAtMs?: number;
-  sessionAbortable?: boolean;
-}): InFlightRunSnapshot {
-  const run = params.chatRunState.runs.get(params.runId);
-  const projected = projectLiveAssistantBufferedText(
-    params.chatRunState.resolveBuffer(params.runId).text,
-    { suppressLeadFragments: true },
-  );
-  const plan = run?.planSnapshot;
-  const events = run?.progressSnapshot?.events;
-  return {
-    runId: params.runId,
-    text: projected.suppress ? "" : projected.text,
-    ...(params.startedAtMs === undefined ? {} : { startedAt: params.startedAtMs }),
-    ...(params.sessionAbortable ? { sessionAbortable: true } : {}),
-    ...(plan ? { plan } : {}),
-    ...(events?.length ? { events } : {}),
-  };
-}
 
 type RegisteredChatAbortController = {
   controller: AbortController;

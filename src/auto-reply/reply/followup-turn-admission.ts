@@ -17,6 +17,7 @@ import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
 import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
+  resolveFollowupCurrentMessageId,
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
 } from "./agent-runner-utils.js";
@@ -82,13 +83,6 @@ type FollowupAdmissionResult =
       reason: "aborted" | "lifecycle-invalidated";
       operation?: ReplyOperation;
     };
-
-function resolveFollowupCurrentMessageId(queued: FollowupRun): string | undefined {
-  return queued.run.inputProvenance?.kind === "internal_system" &&
-    queued.run.inputProvenance.sourceTool === "restart-sentinel"
-    ? queued.originatingReplyToId
-    : queued.messageId;
-}
 
 function isSameSessionGeneration(
   left: SessionEntry | undefined,

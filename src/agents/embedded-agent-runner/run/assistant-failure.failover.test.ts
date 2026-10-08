@@ -85,7 +85,6 @@ function makeInput(
       resolveAuthProfileFailureReason: vi.fn(() => null),
       maybeMarkAuthProfileFailure: vi.fn(async () => {}),
       advanceAuthProfile: vi.fn(async () => false),
-      advanceRateLimitAuthProfile: vi.fn(async () => false),
       transientRetryCount: 0,
       overloadProfileRotationLimit: 3,
     },
@@ -125,7 +124,7 @@ describe("assistant failure recovery", () => {
       releaseMark = resolve;
     });
     input.failover.resolveAuthProfileFailureReason = () => "rate_limit";
-    input.failover.advanceRateLimitAuthProfile = vi.fn(async () => {
+    input.failover.advanceAuthProfile = vi.fn(async () => {
       events.push("advance");
       return true;
     });
@@ -152,10 +151,14 @@ describe("assistant failure recovery", () => {
   it("rotates after transient recovery is exhausted", async () => {
     const input = makeInput("429 rate_limit_exceeded: too many requests per minute");
     input.failover = { ...input.failover, transientRetryCount: 8 };
-    input.failover.advanceRateLimitAuthProfile = vi.fn(async () => true);
+    input.failover.advanceAuthProfile = vi.fn(async () => true);
     const outcome = await handleEmbeddedAssistantFailure(input);
     expect(outcome.action).toBe("retry");
-    expect(input.failover.advanceRateLimitAuthProfile).toHaveBeenCalledOnce();
+    expect(input.failover.advanceAuthProfile).toHaveBeenCalledExactlyOnceWith("rate_limit", {
+      failoverProvider: "anthropic",
+      failoverModel: "test-model",
+      logFallbackDecision: expect.any(Function),
+    });
     expect(input.traceAttempts[0]?.result).toBe("rotate_profile");
   });
 
@@ -232,7 +235,7 @@ describe("assistant failure recovery", () => {
     const input = makeInput("rate limit exceeded");
     const error = new FailoverError("Rate-limit rotation exhausted", { reason: "rate_limit" });
     input.failover.resolveAuthProfileFailureReason = () => "rate_limit";
-    input.failover.advanceRateLimitAuthProfile = vi.fn(async () => {
+    input.failover.advanceAuthProfile = vi.fn(async () => {
       throw error;
     });
     await expect(handleEmbeddedAssistantFailure(input)).rejects.toBe(error);

@@ -130,7 +130,7 @@ export { createOwnedStdioProcess, closeOwnedStdioProcess } from "../process/owne
 export { explainShellCommand } from "../infra/command-explainer/extract.js";
 export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
-export { updateExecApprovalsSync, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
+export { updateExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 export { readSecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
@@ -220,15 +220,15 @@ const entry = process.argv[1];
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
 const {
   commitExecAuthorizationLocked,
-  updateExecApprovalsSync,
+  updateExecApprovals,
   readExecApprovalsSnapshot,
   readSecretStoreExecEnvironment,
   closeOpenClawStateDatabaseAsync,
 } = await import(pathToFileURL(entry).href);
 const match = { id: "portable-exec", pattern: process.execPath };
 const command = "portable exec authorization";
-updateExecApprovalsSync({ update: () => ({ version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } }) });
 try {
+  await updateExecApprovals({ update: { kind: "replace", file: { version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } } } });
   assert.deepEqual(await readSecretStoreExecEnvironment({ includeSecretSentinels: false }), {});
   const assertCurrent = await commitExecAuthorizationLocked({
     agentId: "main", matches: [match], command, resolvedPath: process.execPath,

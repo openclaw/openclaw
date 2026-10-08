@@ -823,12 +823,12 @@ extension OpenClawChatView {
                 self.hoveredMessageID = nil
             }
         }
-        row.contextMenu { self.messageMenuActions(for: msg) }
+        row.contextMenu { ChatDeferredContent { self.messageMenuActions(for: msg) } }
     }
 
     private func messageActionsMenu(for message: OpenClawChatMessage) -> some View {
         Menu {
-            self.messageMenuActions(for: message)
+            ChatDeferredContent { self.messageMenuActions(for: message) }
         } label: {
             Label("Message Actions", systemImage: "ellipsis")
         }

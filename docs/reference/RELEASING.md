@@ -266,6 +266,13 @@ runbook. Former section links below lead to their corresponding procedures.
 
 [Stable main closeout](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/stable-main-closeout.md).
 
+After every stable release, regenerate the committed shipped Plugin SDK surface
+on `main` with `pnpm plugin-sdk:shipped-surface:gen -- --release <stable tag>`,
+then run `pnpm plugin-sdk:surface:check`. Commit the generated
+`scripts/lib/plugin-sdk-shipped-surface.json` as part of stable closeout; do not
+edit it by hand. The inventory records the stable tag's typed public declarations
+so later export-budget reductions cannot authorize their removal.
+
 <a id="post-release-documentation-publication" />
 
 [Post-release documentation publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-changelog-update/SKILL.md#post-release-docs-mirrors).

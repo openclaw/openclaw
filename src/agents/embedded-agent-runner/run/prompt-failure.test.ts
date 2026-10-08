@@ -81,7 +81,6 @@ function makeParams(overrides: FixtureOptions = {}): Params {
         () => "rate_limit",
       ),
       advanceAuthProfile: vi.fn(async () => true),
-      advanceRateLimitAuthProfile: vi.fn(async () => true),
       maybeMarkAuthProfileFailure: vi.fn(async () => {}),
       transientRetryCount: 0,
       ...overrides.failover,
@@ -149,7 +148,6 @@ describe("handleEmbeddedPromptFailure", () => {
       expect(params.preparedRuntime.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
       expect(params.runInput.suspendForFailure).not.toHaveBeenCalled();
       expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(params.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
       expect(params.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
       expect(params.preparedRuntime.attemptedThinking).toEqual(new Set());
       expect(params.traceAttempts).toEqual([]);
@@ -298,7 +296,6 @@ describe("handleEmbeddedPromptFailure", () => {
         params.runInput.suspendForFailure,
         params.failover.resolveAuthProfileFailureReason,
         params.failover.advanceAuthProfile,
-        params.failover.advanceRateLimitAuthProfile,
         params.failover.maybeMarkAuthProfileFailure,
       ]) {
         expect(callback).not.toHaveBeenCalled();
@@ -368,7 +365,6 @@ describe("handleEmbeddedPromptFailure", () => {
     for (const callback of [
       params.preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
       params.failover.advanceAuthProfile,
-      params.failover.advanceRateLimitAuthProfile,
     ]) {
       expect(callback).not.toHaveBeenCalled();
     }
@@ -393,7 +389,7 @@ describe("handleEmbeddedPromptFailure", () => {
       const outcome = await handleEmbeddedPromptFailure(
         makeParams({
           failover: {
-            advanceRateLimitAuthProfile: vi.fn(async () => {
+            advanceAuthProfile: vi.fn(async () => {
               events.push("advance");
               return true;
             }),

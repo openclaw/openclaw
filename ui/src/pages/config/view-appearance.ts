@@ -36,6 +36,7 @@ import {
   serverUiPrefProvenanceHint,
   renderSidebarPreferencesSection,
 } from "./view-appearance-preferences.ts";
+import { renderTabIconSection } from "./view-tab-icon.ts";
 import type { ConfigProps } from "./view-types.ts";
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
@@ -566,7 +567,7 @@ export function renderAppearanceSection(props: ConfigProps) {
         </p>
       </section>
 
-      ${renderTypography(props, presentedTheme)}
+      ${renderTypography(props, presentedTheme)} ${renderTabIconSection(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
         <div class="settings-section__header">

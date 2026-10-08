@@ -331,6 +331,11 @@ export async function prepareEmbeddedInjectionAuthority(
   };
 }
 
+type EmbeddedMessageInjection = Pick<
+  EmbeddedAgentQueueHandle,
+  "queueMessage" | "claimPendingUserInputAnswer" | "cancelPendingUserInput"
+> & { prepareQueueMessage?: () => Promise<void> };
+
 function bindEmbeddedMessageInjection(
   sessionId: string,
   handle: EmbeddedAgentQueueHandle,
@@ -338,12 +343,7 @@ function bindEmbeddedMessageInjection(
   sourceCanInject?: () => boolean,
   preparation?: EmbeddedInjectionPreparation,
   options?: ReplyMessageInjectionOptions,
-):
-  | (Pick<
-      EmbeddedAgentQueueHandle,
-      "queueMessage" | "claimPendingUserInputAnswer" | "cancelPendingUserInput"
-    > & { prepareQueueMessage?: () => Promise<void> })
-  | undefined {
+): EmbeddedMessageInjection | undefined {
   const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   const ownedOperation =
@@ -435,12 +435,7 @@ export function resolveEmbeddedInjection(
   sourceCanInject?: () => boolean,
   preparation?: EmbeddedInjectionPreparation,
   injectionOptions?: ReplyMessageInjectionOptions,
-):
-  | (Pick<
-      EmbeddedAgentQueueHandle,
-      "queueMessage" | "claimPendingUserInputAnswer" | "cancelPendingUserInput"
-    > & { prepareQueueMessage?: () => Promise<void> })
-  | undefined {
+): EmbeddedMessageInjection | undefined {
   try {
     const guarded = handle.messageInjectionV2;
     if (guarded?.version === 2) {

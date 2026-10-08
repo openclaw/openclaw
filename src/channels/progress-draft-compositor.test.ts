@@ -463,6 +463,50 @@ describe("channel progress draft compositor", () => {
     expect(progress.getSnapshot().diffStat).toBeUndefined();
   });
 
+  it.each([
+    { action: "react", status: "completed", hidden: true },
+    { action: "react", status: "failed", hidden: false },
+    { action: "react", status: "blocked", hidden: false },
+    { action: "react", status: "unknown", hidden: false },
+    { action: "send", status: "completed", hidden: false },
+  ] as const)("projects message $action/$status progress", async ({ action, status, hidden }) => {
+    const { progress } = createProgress({ toolProgress: true }, { preparedItems: true });
+    await progress.start();
+    await progress.pushItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "message-1",
+        name: "message",
+        phase: "start",
+        args: { action, channel: "slack", target: "C000000001" },
+      }),
+    );
+    expect(progress.getSnapshot().lines).toEqual(
+      action === "react" ? [] : [expect.objectContaining({ toolName: "message" })],
+    );
+    await progress.pushItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "message-1",
+        name: "message",
+        phase: "result",
+        args: { action, channel: "slack", target: "C000000001" },
+        status,
+      }),
+    );
+    await progress.pushItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "read-1",
+        name: "read",
+        phase: "result",
+        args: { path: "README.md" },
+        status: "completed",
+      }),
+    );
+    expect(progress.getSnapshot().lines).toEqual([
+      ...(hidden ? [] : [expect.objectContaining({ id: "tool:message-1", toolName: "message" })]),
+      expect.objectContaining({ id: "tool:read-1", toolName: "read", status: "completed" }),
+    ]);
+  });
+
   it("retains completed edits when clearing a quiet plan", async () => {
     const { progress, update } = createProgress(
       { toolProgress: false, label: false },

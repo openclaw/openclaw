@@ -36,18 +36,13 @@ export function deliveryKindForPayload(
 
 export function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
   const text = typeof payload.text === "string" ? payload.text : "";
-  if (!text.trim()) {
-    if (!hasReplyPayloadContent({ ...payload, text }, { extraContent: payload.location != null })) {
-      return null;
-    }
-    if (text) {
-      return copyReplyPayloadMetadata(payload, {
-        ...payload,
-        text: "",
-      });
-    }
+  if (text.trim()) {
+    return payload;
   }
-  return payload;
+  if (!hasReplyPayloadContent({ ...payload, text }, { extraContent: payload.location != null })) {
+    return null;
+  }
+  return text ? copyReplyPayloadMetadata(payload, { ...payload, text: "" }) : payload;
 }
 
 export function normalizeTransformedPayloadForDelivery(
@@ -72,25 +67,23 @@ export function normalizePayloadsForChannelDelivery(
   const normalizedPayloads: NormalizedPayloadForChannelDelivery[] = [];
   for (const entry of plan) {
     let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(entry.payload);
-    if (!handler.preserveMarkdownDetails && sanitizedPayload.text) {
-      const text = flattenMarkdownDetails(sanitizedPayload.text);
+    const replaceText = (text: string): void => {
       if (text !== sanitizedPayload.text) {
         sanitizedPayload = copyMetadata(sanitizedPayload, {
           ...sanitizedPayload,
           text,
         });
       }
+    };
+    if (!handler.preserveMarkdownDetails && sanitizedPayload.text) {
+      replaceText(flattenMarkdownDetails(sanitizedPayload.text));
     }
-    if (handler.sanitizeText && sanitizedPayload.text) {
-      if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
-        const text = handler.sanitizeText(sanitizedPayload);
-        if (text !== sanitizedPayload.text) {
-          sanitizedPayload = copyMetadata(sanitizedPayload, {
-            ...sanitizedPayload,
-            text,
-          });
-        }
-      }
+    if (
+      handler.sanitizeText &&
+      sanitizedPayload.text &&
+      !handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)
+    ) {
+      replaceText(handler.sanitizeText(sanitizedPayload));
     }
     const normalized = normalizeTransformedPayloadForDelivery(
       sanitizedPayload,
@@ -249,21 +242,19 @@ export async function maybePinDeliveredMessage(params: {
   if (!pin) {
     return;
   }
-  if (!params.messageId) {
+  if (!params.messageId || !params.handler.pinDeliveredMessage) {
+    const missingMessageId = !params.messageId;
+    const message = missingMessageId
+      ? "Delivery pin requested, but no delivered message id was returned."
+      : "Delivery pin requested, but channel does not support pinning delivered messages.";
     if (pin.required) {
-      throw new Error("Delivery pin requested, but no delivered message id was returned.");
+      throw new Error(
+        missingMessageId
+          ? message
+          : `Delivery pin is not supported by channel: ${params.target.channel}`,
+      );
     }
-    log.warn("Delivery pin requested, but no delivered message id was returned.", {
-      channel: params.target.channel,
-      to: params.target.to,
-    });
-    return;
-  }
-  if (!params.handler.pinDeliveredMessage) {
-    if (pin.required) {
-      throw new Error(`Delivery pin is not supported by channel: ${params.target.channel}`);
-    }
-    log.warn("Delivery pin requested, but channel does not support pinning delivered messages.", {
+    log.warn(message, {
       channel: params.target.channel,
       to: params.target.to,
     });

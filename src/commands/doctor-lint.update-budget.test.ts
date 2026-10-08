@@ -156,7 +156,7 @@ it.each([3, 480])(
     expect(result.exitCode, result.stdout).toBe(0);
     expect(report).toMatchObject({ ok: true, findings: [] });
     expect(result.elapsedMs).toBeLessThan(298_000);
-    expect(report.checksRun).toBe(agentCount === 3 ? 1 : 0);
+    expect(report.checksRun).toBe(agentCount === 3 ? 2 : 0);
     expect(report.warnings).toEqual([
       agentCount === 3
         ? {
@@ -284,7 +284,7 @@ it.each(["rehearsal", "standalone", "selected", "required-error", "plugin-error"
         : [],
     );
     if (deferred) {
-      expect(report.checksRun).toBe(required.length + 1);
+      expect(report.checksRun).toBe(required.length + 2);
       expect(JSON.parse(result.stdout).checksSkipped).toBe(optional.length);
       expect(result.elapsedMs).toBeLessThan(72_000);
     }

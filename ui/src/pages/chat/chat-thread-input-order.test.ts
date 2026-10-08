@@ -74,6 +74,39 @@ beforeEach(() => resetChatThreadState("input-order"));
 afterEach(() => resetChatThreadState("input-order"));
 
 describe("transcript input order", () => {
+  it("moves durable steers below their run's output without reordering other history", () => {
+    const messages = [
+      { role: "user", content: "Original", __openclaw: { idempotencyKey: "run:user", seq: 1 } },
+      { role: "assistant", content: "Before", __openclaw: { runId: "run", seq: 2 } },
+      { role: "user", content: "Steer one", __openclaw: { steerTargetRunId: "run", seq: 3 } },
+      { role: "assistant", content: "After", __openclaw: { runId: "run", seq: 4 } },
+      { role: "user", content: "Steer two", __openclaw: { steerTargetRunId: "run", seq: 5 } },
+      { role: "assistant", content: "Final", __openclaw: { runId: "run", seq: 6 } },
+      { role: "user", content: "Next", __openclaw: { idempotencyKey: "next:user", seq: 7 } },
+      { role: "assistant", content: "Other run", __openclaw: { runId: "next", seq: 8 } },
+    ];
+    expect(visibleRows({ messages })).toEqual([
+      "Original",
+      "Before",
+      "After",
+      "Final",
+      "Steer one",
+      "Steer two",
+      "Next",
+      "Other run",
+    ]);
+    expect(messages.map((message) => message.content)).toEqual([
+      "Original",
+      "Before",
+      "Steer one",
+      "After",
+      "Steer two",
+      "Final",
+      "Next",
+      "Other run",
+    ]);
+  });
+
   it.each(["steer", "interrupt"] as const)(
     "keeps consecutive sends in submission order while a %s ACK is pending",
     (queueMode) => {

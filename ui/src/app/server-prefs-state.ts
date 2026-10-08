@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
@@ -28,7 +29,9 @@ type SyncedPrefSpec<T> = {
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
 
-const optionalPrefSpec = <K extends "accent" | "fontUi" | "fontChat" | "chatFollowUpMode">(
+const optionalPrefSpec = <
+  K extends "accent" | "fontUi" | "fontChat" | "tabIcon" | "chatFollowUpMode",
+>(
   key: K,
   normalize: (value: unknown) => UiSettings[K],
   configSync = true,
@@ -61,6 +64,7 @@ export const SYNCED_PREFS = {
   accent: optionalPrefSpec("accent", normalizeAccentColor),
   fontUi: optionalPrefSpec("fontUi", normalizeTypefaceOverride, false),
   fontChat: optionalPrefSpec("fontChat", normalizeTypefaceOverride, false),
+  tabIcon: optionalPrefSpec("tabIcon", normalizeTabIconPreference, false),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
     local: (settings) => settings.locale,
@@ -98,6 +102,7 @@ export type ResettableServerUiPrefKey =
   | "accent"
   | "fontUi"
   | "fontChat"
+  | "tabIcon"
   | "locale"
   | "chatSendShortcut"
   | "chatFollowUpMode";

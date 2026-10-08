@@ -499,9 +499,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   );
   const promptHistoryChanged = promptToolResultTruncation.messages !== sessionMessages;
   const { aggregatePressureEngaged } = promptToolResultTruncation;
-  if (promptHistoryChanged) {
-    sessionMessages = promptToolResultTruncation.messages;
-  }
+  sessionMessages = promptToolResultTruncation.messages;
   if (promptHistoryChanged || aggregatePressureEngaged) {
     const sessionLogKey = attempt.sessionKey ?? attempt.sessionId ?? "unknown";
     const truncationLog =

@@ -119,17 +119,24 @@ function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
   return normalized ? normalized.startsWith("claude") : false;
 }
 
+function matchesFoundryOpenAIFamily(
+  normalized: string | undefined,
+  gptPrefix: "gpt-" | "gpt-5",
+): boolean {
+  return (
+    normalized !== undefined &&
+    (normalized.startsWith(gptPrefix) ||
+      normalized.startsWith("o1") ||
+      normalized.startsWith("o3") ||
+      normalized.startsWith("o4"))
+  );
+}
+
 export function usesFoundryResponsesByDefault(value?: string | null): boolean {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return false;
-  }
   return (
-    normalized.startsWith("gpt-") ||
-    normalized.startsWith("o1") ||
-    normalized.startsWith("o3") ||
-    normalized.startsWith("o4") ||
-    normalized.startsWith("deepseek-v4") ||
+    matchesFoundryOpenAIFamily(normalized, "gpt-") ||
+    normalized?.startsWith("deepseek-v4") === true ||
     normalized === "computer-use-preview"
   );
 }
@@ -155,15 +162,9 @@ function supportsFoundryReasoningContent(value?: string | null): boolean {
 
 function supportsFoundryImageInput(value?: string | null): boolean {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return false;
-  }
   return (
     isAnthropicFoundryDeployment(normalized) ||
-    normalized.startsWith("gpt-") ||
-    normalized.startsWith("o1") ||
-    normalized.startsWith("o3") ||
-    normalized.startsWith("o4") ||
+    matchesFoundryOpenAIFamily(normalized, "gpt-") ||
     normalized === "computer-use-preview"
   );
 }
@@ -242,16 +243,7 @@ function resolveFoundryModelTokenLimits(value?: string | null): {
 }
 
 export function requiresFoundryMaxCompletionTokens(value?: string | null): boolean {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return false;
-  }
-  return (
-    normalized.startsWith("gpt-5") ||
-    normalized.startsWith("o1") ||
-    normalized.startsWith("o3") ||
-    normalized.startsWith("o4")
-  );
+  return matchesFoundryOpenAIFamily(normalizeOptionalLowercaseString(value), "gpt-5");
 }
 
 function supportsFoundryReasoningEffort(value?: string | null): boolean {

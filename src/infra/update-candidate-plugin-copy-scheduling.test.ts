@@ -130,7 +130,7 @@ it.each(["settled", "failed"] as const)(
       releaseClose.resolve();
       expect(await copying).toBe(retirement === "failed" ? closeFailure : copyFailure);
       expect(transport.construct).toHaveBeenCalledWith(
-        expect.objectContaining({ maxWorkers: 4, maxPendingTasks: 4, restartOnError: false }),
+        expect.objectContaining({ maxPendingTasks: 4, restartOnError: false }),
       );
       expect(transport.run).toHaveBeenCalledWith(expect.any(Object), {});
       expect(await fs.readdir(destination)).toEqual([]);

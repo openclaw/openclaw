@@ -119,10 +119,8 @@ async function handleChatSendWithOptions(
   } = admission;
   const phase = diagnostics.scope("attachments");
   const preparedAttachments = await prepareChatSendAttachments({
+    ...setup,
     client,
-    request,
-    session,
-    admission,
     respond,
     context,
   });
@@ -133,14 +131,18 @@ async function handleChatSendWithOptions(
     admission,
     attachments: preparedAttachments.value,
   });
-  if (activeRunAbort.controller.signal.aborted) {
-    finishAbortedChatSend();
-    return;
-  }
-  // Attachment preparation can suspend. Recheck immediately before the
-  // synchronous ACK path so aborts and hot routing reloads cannot cross it.
-  if (sessionRoutingChanged(context.getRuntimeConfig())) {
-    admission.rejectSessionRoutingChanged();
+  const settleInterruptedPreparation = () => {
+    if (activeRunAbort.controller.signal.aborted) {
+      finishAbortedChatSend();
+    } else if (sessionRoutingChanged(context.getRuntimeConfig())) {
+      admission.rejectSessionRoutingChanged();
+    } else {
+      return false;
+    }
+    return true;
+  };
+  // Attachment preparation can suspend; settle cancellation before the synchronous ACK path.
+  if (settleInterruptedPreparation()) {
     return;
   }
   const { imageOrder, prepareAttachmentsMs } = preparedAttachments.value;
@@ -241,10 +243,8 @@ async function handleChatSendWithOptions(
         })
       : undefined;
     const userTurn = createGatewayChatUserTurnController({
-      admission,
+      ...setup,
       client,
-      request,
-      session,
       transcript: options?.transcript,
       isDirectExternalUser,
       startedAt: admissionStartedAt,
@@ -268,9 +268,7 @@ async function handleChatSendWithOptions(
     bindPreparedMediaRecorder(userTurnRecorder);
     phase?.mark("preparation");
     const preparedUserTurn = prepareChatSendUserTurn({
-      request,
-      session,
-      admission,
+      ...setup,
       attachments: preparedAttachments.value,
       client,
       logGateway: context.logGateway,
@@ -510,11 +508,8 @@ async function handleChatSendWithOptions(
               return { status: "failed" as const };
             })
         : undefined;
-    if (activeRunAbort.controller.signal.aborted) {
-      return finishAbortedChatSend();
-    }
-    if (sessionRoutingChanged(context.getRuntimeConfig())) {
-      return admission.rejectSessionRoutingChanged();
+    if (settleInterruptedPreparation()) {
+      return;
     }
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       operatorAuthority: admission.operatorAuthority,
@@ -542,11 +537,8 @@ async function handleChatSendWithOptions(
     phase?.mark("replyContext");
     if (preAckReplyContextPromise) {
       applyChatSendReplyContextFields(ctx, await preAckReplyContextPromise);
-      if (activeRunAbort.controller.signal.aborted) {
-        return finishAbortedChatSend();
-      }
-      if (sessionRoutingChanged(context.getRuntimeConfig())) {
-        return admission.rejectSessionRoutingChanged();
+      if (settleInterruptedPreparation()) {
+        return;
       }
     }
     assertInputAdmissionCurrent();
@@ -605,10 +597,10 @@ async function handleChatSendWithOptions(
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     startChatDispatch({
+      ...setup,
       replyAdmissionTicket,
       diagnostics,
       admissionStartedAt,
-      admission,
       attachments: preparedAttachments.value,
       client,
       context,
@@ -639,8 +631,6 @@ async function handleChatSendWithOptions(
         preAckReplyContextPromise,
         replyContextFieldsPromise,
       },
-      request,
-      session,
       terminalizeRestartSafeAdmission,
       timing: {
         chatSendAckedAtMs,

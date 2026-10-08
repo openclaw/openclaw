@@ -812,24 +812,29 @@ export async function runDevicesJoinCodeCommand(opts: DevicesRpcOpts): Promise<v
   defaultRuntime.log(command);
 }
 
-export async function runDevicesRemoveCommand(
-  deviceId: string,
+export async function runDevicesDeleteCommand(
+  operation: "remove" | "reject",
+  id: string,
   opts: DevicesRpcOpts,
 ): Promise<void> {
-  const trimmed = deviceId.trim();
+  const trimmed = operation === "remove" ? id.trim() : normalizeOptionalString(id);
+  const field = operation === "remove" ? "deviceId" : "requestId";
   if (!trimmed) {
     defaultRuntime.error(
-      `deviceId is required. Run ${formatCliCommand("openclaw devices list")} to choose a paired device.`,
+      `${field} is required. Run ${formatCliCommand("openclaw devices list")} to choose a ${operation === "remove" ? "paired device" : "pending request"}.`,
     );
     defaultRuntime.exit(1);
     return;
   }
-  const result = await callGatewayCli("device.pair.remove", opts, { deviceId: trimmed });
+  const result = await callGatewayCli(`device.pair.${operation}`, opts, { [field]: trimmed });
   if (opts.json) {
     defaultRuntime.writeJson(result);
     return;
   }
-  defaultRuntime.log(`${theme.warn("Removed")} ${theme.command(trimmed)}`);
+  const deviceId = operation === "remove" ? trimmed : (result as { deviceId?: string })?.deviceId;
+  defaultRuntime.log(
+    `${theme.warn(operation === "remove" ? "Removed" : "Rejected")} ${theme.command(deviceId ?? "ok")}`,
+  );
 }
 
 export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void> {
@@ -985,29 +990,6 @@ export async function runDevicesApproveCommand(
   );
 }
 
-export async function runDevicesRejectCommand(
-  requestId: string,
-  opts: DevicesRpcOpts,
-): Promise<void> {
-  const normalizedRequestId = normalizeOptionalString(requestId);
-  if (!normalizedRequestId) {
-    defaultRuntime.error(
-      `requestId is required. Run ${formatCliCommand("openclaw devices list")} to choose a pending request.`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
-  const result = await callGatewayCli("device.pair.reject", opts, {
-    requestId: normalizedRequestId,
-  });
-  if (opts.json) {
-    defaultRuntime.writeJson(result);
-    return;
-  }
-  const deviceId = (result as { deviceId?: string })?.deviceId;
-  defaultRuntime.log(`${theme.warn("Rejected")} ${theme.command(deviceId ?? "ok")}`);
-}
-
 export async function runDevicesRenameCommand(opts: DevicesRpcOpts): Promise<void> {
   const deviceId = normalizeStringifiedOptionalString(opts.device) ?? "";
   const label = normalizeStringifiedOptionalString(opts.name) ?? "";
@@ -1028,24 +1010,19 @@ export async function runDevicesRenameCommand(opts: DevicesRpcOpts): Promise<voi
   );
 }
 
-export async function runDevicesRotateCommand(opts: DevicesRpcOpts): Promise<void> {
+export async function runDevicesTokenCommand(
+  operation: "rotate" | "revoke",
+  opts: DevicesRpcOpts,
+): Promise<void> {
   const required = resolveRequiredDeviceRole(opts);
   if (!required) {
     return;
   }
-  const params = { ...required, scopes: opts.scopes === false ? [] : opts.scope };
-  const scopes = await resolveTokenManagementScopes(opts, required, params.scopes);
-  const result = await callGatewayCli("device.token.rotate", opts, params, { scopes });
-  defaultRuntime.writeJson(result);
-}
-
-export async function runDevicesRevokeCommand(opts: DevicesRpcOpts): Promise<void> {
-  const required = resolveRequiredDeviceRole(opts);
-  if (!required) {
-    return;
-  }
-  const scopes = await resolveTokenManagementScopes(opts, required);
-  const result = await callGatewayCli("device.token.revoke", opts, required, { scopes });
+  const requestedScopes =
+    operation === "rotate" ? (opts.scopes === false ? [] : opts.scope) : undefined;
+  const params = operation === "rotate" ? { ...required, scopes: requestedScopes } : required;
+  const scopes = await resolveTokenManagementScopes(opts, required, requestedScopes);
+  const result = await callGatewayCli(`device.token.${operation}`, opts, params, { scopes });
   defaultRuntime.writeJson(result);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

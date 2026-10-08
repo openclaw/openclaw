@@ -31,7 +31,6 @@ import type {
 export type { SkillArchiveInstallFailureKind } from "./workspace-types.js";
 
 const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
-/** Accepted root marker names for ClawHub skill archive uploads. */
 export const CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS = [
   "SKILL.md",
   "skill.md",

@@ -1231,6 +1231,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       dir: "",
       targets: [
         "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+        "src/cli/admin-state-owner.process.test.ts",
         "src/infra/update-managed-service-handoff-reclamation.test.ts",
         "src/infra/worker-cpu.test.ts",
       ],

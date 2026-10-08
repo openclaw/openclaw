@@ -8,19 +8,14 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { clearAllCliSessions } from "./cli-session-binding.js";
 import type {
   SessionTranscriptAccessScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import {
-  assertLifecycleTargetSnapshotUnchanged,
-  type SqliteLifecycleTargetSnapshot,
-} from "./session-accessor.sqlite-entry-equality.js";
+import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import {
   readSessionEntryRow,
   readSessionEntrySelectionSnapshot,
-  readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
@@ -28,10 +23,7 @@ import {
   ensureSessionEntryInTransaction,
   ensureSessionEntrySync,
 } from "./session-accessor.sqlite-initial-entry.js";
-import {
-  assertSqliteTranscriptSnapshotUnchanged,
-  readTranscriptEventRows,
-} from "./session-accessor.sqlite-read.js";
+import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
@@ -43,7 +35,6 @@ import {
   readNextTranscriptSeq,
   readTranscriptContextVersionInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
   assertLockedTranscriptWriteAllowed,
   resolveTranscriptAppendRefusal,
@@ -53,16 +44,13 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionTranscriptWriteScope,
 } from "./session-accessor.types.js";
-import {
-  COMPACTION_RUN_USAGE_CLEAR_PATCH,
-  projectCompactionAccountingPatch,
-} from "./session-entry-projection.js";
+import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
 import type {
   CompactionBoundaryOperations,
   InitialSessionEntryCommit,
 } from "./session-manager-write-contract.js";
+import { applyManualCompactInTransaction } from "./session-manual-compact.kernel.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
-import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import {
   assertOwnedTranscriptWriteCommit,
   getOwnedSessionTranscriptInitialWriter,
@@ -272,44 +260,18 @@ export async function trimTranscriptForManualCompact(
       const publish = runOpenClawAgentWriteTransaction(
         (writeDatabase) => {
           options.preparation?.assertCommitCurrent();
-          assertSqliteTranscriptSnapshotUnchanged(writeDatabase, resolved.sessionId, snapshotRows);
-          const freshSessionSnapshot = readSessionEntrySelectionSnapshot(
-            writeDatabase,
-            resolved.sessionKey,
-            true,
-          );
-          assertLifecycleTargetSnapshotUnchanged(
-            sessionSnapshot,
-            freshSessionSnapshot,
-            "session.transcript.manual-compact",
-          );
-          const freshEntry = freshSessionSnapshot[0]?.entry;
-          if (!freshEntry || freshEntry.sessionId !== resolved.sessionId) {
-            throw new Error(`SQLite session changed before compacting ${resolved.sessionId}`);
-          }
-          const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
-          const previousIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
-          replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, retainedEvents);
-          const nextEntry = structuredClone(freshEntry);
-          delete nextEntry.contextBudgetStatus;
-          Object.assign(nextEntry, COMPACTION_RUN_USAGE_CLEAR_PATCH);
-          delete nextEntry.totalTokens;
-          delete nextEntry.totalTokensFresh;
-          delete nextEntry.totalTokensVersion;
-          clearAllCliSessions(nextEntry);
-          nextEntry.updatedAt = options.nowMs ?? Date.now();
-          // The transcript rewrite, binding clear, and token invalidation describe one generation.
-          // Keep them in this transaction so either both become visible or neither does.
-          writeSessionEntry(writeDatabase, resolved.sessionKey, nextEntry, {
-            previousEntry: freshEntry,
+          const identity = applyManualCompactInTransaction(writeDatabase, resolved, {
+            rows: snapshotRows,
+            entries: sessionSnapshot,
+            events: retainedEvents,
+            nowMs: options.nowMs,
           });
-          const currentIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
           options.preparation?.assertCommitCurrent();
           return prepareSessionIdentityPublication(
             writeDatabase,
             resolved.agentId,
-            previousIdentity,
-            currentIdentity,
+            identity.previous,
+            identity.current,
           );
         },
         toDatabaseOptions(resolved),

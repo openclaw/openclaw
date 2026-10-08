@@ -12,7 +12,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
-import type { SubagentRowContext } from "./chat-spawned-subagent.ts";
+import type { SubagentRoster, SubagentRowContext } from "./chat-spawned-subagent.ts";
 import "./components/chat-child-attention.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
@@ -34,7 +34,8 @@ type ChatViewNoticesProps = {
 };
 
 type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps &
-  SubagentRowContext & {
+  SubagentRowContext &
+  Pick<SubagentRoster, "subagentSessionsRead"> & {
     sessionKey?: string;
     onSessionSelect?: (key: string) => void;
     connected?: boolean;
@@ -199,7 +200,8 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
     : nothing;
   return html`
     ${
-      props.subagentParentKey
+      // Seeded rows can name children the gateway no longer links; wait for its child read.
+      props.subagentParentKey && props.subagentSessionsRead
         ? html`<openclaw-chat-child-attention
             .sessionKey=${props.subagentParentKey}
             .sessions=${props.subagentSessions ?? []}

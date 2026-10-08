@@ -24,10 +24,10 @@ import {
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import {
-  getOpenClawStateRuntimeSchema,
   isOpenClawStateStartupRepairableSchemaIssue,
-  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export function needsOpenClawStateDatabaseSchemaRepair(
   pathname: string,
@@ -66,8 +66,8 @@ export function assertCurrentStateRuntimeSchema(
   assertSqliteSchemaContains(
     database,
     pathname,
-    getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
-    STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+    OPENCLAW_STATE_SCHEMA_SQL,
+    STATE_RUNTIME_SCHEMA_COMPATIBILITY,
     readTable,
   );
 }
@@ -107,8 +107,8 @@ export function isOpenClawStateSchemaFastPathEligible(
       assertCurrentStateRuntimeSchema(database, pathname, readTable);
       const startupRepairRequired = collectSqliteSchemaIssues(
         database,
-        getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
-        STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+        OPENCLAW_STATE_SCHEMA_SQL,
+        STATE_RUNTIME_SCHEMA_COMPATIBILITY,
         readTable,
       ).some(isOpenClawStateStartupRepairableSchemaIssue);
       if (startupRepairRequired) {
