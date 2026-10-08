@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { normalizeAgentIdStrict, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import type { BrowserSessionTabRecord } from "./session-tab-store.js";
 
 export function resolveBrowserSessionKey(
   sessionKey: string | undefined,
@@ -42,8 +41,10 @@ export function browserSessionTabStorageKey(record: {
     .digest("hex")}`;
 }
 
-export function browserSessionTabNativeIdentity(
-  record: Pick<BrowserSessionTabRecord, "sessionKey" | "profile" | "nativeTargetId">,
-): string {
+export function browserSessionTabNativeIdentity(record: {
+  sessionKey: string;
+  profile: string;
+  nativeTargetId: string;
+}): string {
   return `${record.sessionKey}\u0000${record.profile}\u0000${record.nativeTargetId}`;
 }
