@@ -25,7 +25,6 @@ import {
   type ContextEngineLogicalTurnLease,
 } from "../harness/context-engine-logical-turn.js";
 import {
-  discardContextEngineTurnAttemptIntent,
   finalizeAcceptedContextEngineTurn,
   type ContextEngineTurnAttemptFacts,
 } from "../harness/context-engine-turn-attempt.js";
@@ -247,11 +246,6 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     config: params.selection.cfg,
   });
   let failed = true;
-  let unsettledContextEngineTurnAttempt: ContextEngineTurnAttemptFacts | undefined;
-  const discardTurnAttempt = async (facts: ContextEngineTurnAttemptFacts) => {
-    await discardContextEngineTurnAttemptIntent({ facts, lease: contextEngineLogicalTurnLease });
-    unsettledContextEngineTurnAttempt = undefined;
-  };
   let candidateIndex = 0;
   const committedSideEffect =
     params.behavior.kind === "command-rpc" ? params.behavior.hasCommittedSideEffect : undefined;
@@ -466,7 +460,6 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
               contextEngineLogicalTurnLease,
               onContextEngineTurnCandidate: (facts) => {
                 contextEngineTurnCandidate = facts;
-                unsettledContextEngineTurnAttempt = facts;
               },
             });
             return {
@@ -526,9 +519,6 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           result: { ...originalFallbackResult.result, turnAttempt: undefined },
         };
       };
-      if (originalFallbackResult.result.turnAttempt) {
-        await discardTurnAttempt(originalFallbackResult.result.turnAttempt);
-      }
       try {
         const targetFallbackResult = await runFallbackSearch(
           {
@@ -570,9 +560,6 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
             ],
           };
         } else {
-          if (targetFallbackResult.result.turnAttempt) {
-            await discardTurnAttempt(targetFallbackResult.result.turnAttempt);
-          }
           restoreOriginalRefusal();
         }
       } catch (error) {
@@ -659,17 +646,12 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       ? await params.onAcceptedTerminal?.()
       : undefined;
     try {
-      if (fallbackResult.result.turnAttempt) {
-        if (acceptedTerminal) {
-          await finalizeAcceptedContextEngineTurn({
-            config: params.selection.cfg,
-            facts: fallbackResult.result.turnAttempt,
-            lease: contextEngineLogicalTurnLease,
-          });
-          unsettledContextEngineTurnAttempt = undefined;
-        } else {
-          await discardTurnAttempt(fallbackResult.result.turnAttempt);
-        }
+      if (acceptedTerminal && fallbackResult.result.turnAttempt) {
+        await finalizeAcceptedContextEngineTurn({
+          config: params.selection.cfg,
+          facts: fallbackResult.result.turnAttempt,
+          lease: contextEngineLogicalTurnLease,
+        });
       }
     } finally {
       if (typeof releaseAcceptedTerminalWork === "function") {
@@ -696,9 +678,6 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     return { ...fallbackResult, result, terminal, settleSessionOverride };
   } finally {
     forgetPromptBuildDrainCacheForRun(params.identity.runId);
-    if (unsettledContextEngineTurnAttempt) {
-      await discardTurnAttempt(unsettledContextEngineTurnAttempt);
-    }
     try {
       await assistantErrorTranscript.settle(failed && !params.abortSignal?.aborted);
     } finally {
