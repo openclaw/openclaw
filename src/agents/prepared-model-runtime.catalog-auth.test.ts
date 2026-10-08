@@ -34,38 +34,30 @@ const catalogAuth = (
 });
 
 describe("replacePreparedModelCatalogAuth", () => {
-  it("retains a scoped provider's auth entries when the partial refresh omits them", () => {
-    const previous = {
-      ...catalogAuth(["claude-cli", "other"]),
-      providerAuthLabels: new Map(),
-    };
-    // A passive partial refresh scoped to claude-cli that re-discovered nothing
-    // for it carries no claude-cli entries at all.
-    const next = {
-      ...catalogAuth([]),
-      providerAuthLabels: new Map(),
-    };
-
-    const merged = replacePreparedModelCatalogAuth(
-      previous,
-      next,
-      (provider) => provider === "claude-cli",
-    );
-
-    expect(merged.authModes["claude-cli"]).toBe("oauth");
-    expect(merged.credentials?.["claude-cli"]).toEqual(previous.credentials?.["claude-cli"]);
-    expect(Object.keys(merged.authStore.profiles)).toContain("claude-cli-profile");
-    // Providers outside the refresh scope are untouched.
-    expect(merged.authModes["other"]).toBe("oauth");
-  });
-
   it("still replaces a scoped provider's entries when the refresh re-discovered them", () => {
     const previous = {
       ...catalogAuth(["claude-cli"]),
       providerAuthLabels: new Map(),
     };
+    // The refresh re-discovered claude-cli with rotated credentials; the merge
+    // must replace the prior entries, not merely retain them, so the rotated
+    // values must differ from the previous ones.
+    const rotatedCredential = {
+      type: "oauth" as const,
+      access: "rotated-access",
+      refresh: "rotated-refresh",
+      expires: 0,
+    };
     const next = {
       ...catalogAuth(["claude-cli"]),
+      authStore: authStore({
+        "claude-cli-profile": {
+          ...oauthProfile("claude-cli"),
+          access: "rotated-access",
+          refresh: "rotated-refresh",
+        },
+      }),
+      credentials: { "claude-cli": rotatedCredential },
       providerAuthLabels: new Map(),
     };
 
@@ -75,16 +67,19 @@ describe("replacePreparedModelCatalogAuth", () => {
       (provider) => provider === "claude-cli",
     );
 
-    expect(merged.credentials?.["claude-cli"]).toEqual(next.credentials?.["claude-cli"]);
+    expect(merged.credentials?.["claude-cli"]).toEqual(rotatedCredential);
+    expect(merged.authStore.profiles["claude-cli-profile"]).toMatchObject({
+      access: "rotated-access",
+    });
     expect(merged.authModes["claude-cli"]).toBe("oauth");
   });
 
-  it("drops a scoped provider's prior entries when an observed refresh omits them", () => {
+  it("drops a scoped provider's prior entries when the refresh omits them", () => {
     const previous = {
       ...catalogAuth(["claude-cli", "other"]),
       providerAuthLabels: new Map(),
     };
-    // An explicit auth refresh observes each scoped provider's source, so the
+    // A scoped refresh observes each provider's credential source, so the
     // absent claude-cli entries are a removal, not a passive pass-over.
     const next = {
       ...catalogAuth([]),
@@ -95,7 +90,6 @@ describe("replacePreparedModelCatalogAuth", () => {
       previous,
       next,
       (provider) => provider === "claude-cli",
-      { observeScopedRemovals: true },
     );
 
     expect(merged.authModes["claude-cli"]).toBeUndefined();
@@ -130,7 +124,6 @@ describe("replacePreparedModelCatalogAuth", () => {
       previous,
       next,
       (provider) => provider !== "other",
-      { observeScopedRemovals: true },
     );
 
     expect(merged.providerAuthLabels.get("claude-cli")).toBeUndefined();

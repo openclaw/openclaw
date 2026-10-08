@@ -318,30 +318,17 @@ export function replacePreparedModelCatalogAuth(
   next: Partial<PreparedModelCatalogAuth> &
     Pick<PreparedModelCatalogAuth, "authStore" | "authModes">,
   includesProvider: (provider: string) => boolean,
-  options: {
-    observeScopedRemovals?: boolean;
-    /** Providers whose omitted auth was observed removed; defaults to every scoped provider. */
-    observedRemovals?: (provider: string) => boolean;
-  } = {},
 ): PreparedModelCatalogAuth {
   const take = ([provider]: readonly [string, unknown]) => includesProvider(provider);
   const rediscoveredProviders = new Set(
     Object.values(next.authStore.profiles).map((profile) => profile.provider),
   );
-  // A partial refresh is authoritative only for the providers it actually
-  // re-discovered; a scoped-but-absent entry keeps the prior value so a
-  // passive read cannot blank out still-valid auth (e.g. cli backends).
-  // A refresh that observes a scoped provider's credential source turns its
-  // omission into a removal: prior entries must not survive it, or a
-  // logged-out provider stays published as available.
-  const observedRemoval = (provider: string) =>
-    options.observedRemovals
-      ? options.observedRemovals(provider)
-      : options.observeScopedRemovals === true;
-  const keepsPriorEntry = (provider: string) =>
-    includesProvider(provider)
-      ? !observedRemoval(provider) && !rediscoveredProviders.has(provider)
-      : true;
+  // Every caller reads each scoped provider's credential source, so a scoped
+  // entry the refresh omits was observed removed, not passed over: prior
+  // entries must not survive it, or a logged-out provider stays published as
+  // available. Scoped facts are taken from the refresh alone; out-of-scope
+  // providers keep their prior entries.
+  const keepsPriorEntry = (provider: string) => !includesProvider(provider);
   const replace = <T>(
     before: Readonly<Record<string, T>> | undefined,
     after: Readonly<Record<string, T>> | undefined,
@@ -408,8 +395,7 @@ export function replacePreparedModelCatalogAuth(
                 // observed removed loses the prior label; a rediscovered
                 // provider keeps it so an unobserved label omission cannot
                 // churn the publication.
-                (!next.providerAuthLabels?.has(provider) &&
-                  (!observedRemoval(provider) || rediscoveredProviders.has(provider))),
+                (!next.providerAuthLabels?.has(provider) && rediscoveredProviders.has(provider)),
             )
             .concat([...next.providerAuthLabels].filter(take)),
         )
@@ -494,11 +480,7 @@ async function refreshScopedModelCatalogAuth(
   const scope = preparedSyntheticAuthProviderScope(providerIds.map(owner.normalizeProvider));
   const includesProvider = (provider: string) => scope.has(owner.normalizeProvider(provider));
   owner.accountCatalog.reconcileAuth(refreshed.authStore, includesProvider, profileIds);
-  // An auth refresh reads each scoped provider's credential source, so a
-  // scoped provider its result omits was observed removed, not passed over.
-  return replacePreparedModelCatalogAuth(owner.readAuth(), refreshed, includesProvider, {
-    observeScopedRemovals: true,
-  });
+  return replacePreparedModelCatalogAuth(owner.readAuth(), refreshed, includesProvider);
 }
 
 /** Refreshes scoped auth and merges it over the owner's current catalog auth. */
@@ -565,9 +547,6 @@ export function createNativeLoginRecheck(
             authModes: resolveUsableAgentCredentialModes(credentials),
           },
           (provider) => providerIds.includes(owner.normalizeProvider(provider)),
-          // The recheck probes each eligible provider's native login, so an
-          // omitted provider was observed removed, not passed over.
-          { observeScopedRemovals: true },
         );
         owner.assertCurrent();
         if (!isDeepStrictEqual(current.authModes, auth.authModes)) {

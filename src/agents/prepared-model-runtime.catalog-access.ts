@@ -365,11 +365,8 @@ export async function createFullModelCatalogAccess(
       // tracks the credential-read scope itself, including providers whose
       // discovery emitted no outcome at all.
       const auth = providerIds
-        ? replacePreparedModelCatalogAuth(
-            retainedAuth,
-            discoveredAuth,
-            (provider) => scope.has(normalizeProvider(provider)),
-            { observeScopedRemovals: true },
+        ? replacePreparedModelCatalogAuth(retainedAuth, discoveredAuth, (provider) =>
+            scope.has(normalizeProvider(provider)),
           )
         : discoveredAuth;
       const { legacyRows, ...publication } = prepareModelCatalogPublication(
@@ -510,11 +507,8 @@ export async function createFullModelCatalogAccess(
       // not passed over: prior auth must not survive the merge, or a logged-out
       // provider stays published as available.
       const catalogAuth = nativeAuth
-        ? replacePreparedModelCatalogAuth(
-            auth,
-            nativeAuth,
-            (provider) => nativeScope.has(normalizeProvider(provider)),
-            { observeScopedRemovals: true },
+        ? replacePreparedModelCatalogAuth(auth, nativeAuth, (provider) =>
+            nativeScope.has(normalizeProvider(provider)),
           )
         : auth;
       const acquiredNative =
