@@ -216,28 +216,8 @@
   gap: min(4px, var(--chat-composer-chip-gap));
 }
 
-.agent-chat__composer-run-status {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: max-content;
-  max-width: 100%;
-  pointer-events: none;
-}
-
 .agent-chat__composer-controls .chat-composer-model-control {
   order: 3;
-}
-
-.agent-chat__composer-run-status .agent-chat__run-status {
-  width: max-content;
-  max-width: 100%;
-  overflow: visible;
-}
-
-.agent-chat__composer-run-status .agent-chat__run-status-label {
-  overflow: visible;
-  text-overflow: clip;
 }
 
 .chat-composer-model-control {
@@ -1191,17 +1171,6 @@
     width: auto;
     margin-left: 0;
     gap: 0;
-  }
-
-  .agent-chat__input .agent-chat__composer-run-status {
-    flex: 1 1 auto;
-    min-width: 23px;
-    overflow: hidden;
-  }
-
-  .agent-chat__input .agent-chat__composer-run-status .agent-chat__run-status {
-    min-width: 0;
-    flex-shrink: 1;
   }
 
   /* The borderless trigger is 30px on desktop; keep a >=44px touch target

@@ -5,6 +5,10 @@ import {
   readExecRequestOwners,
   type ExecRequestIdentity,
 } from "../infra/exec-request-context.js";
+import {
+  consumeSelectedSystemEventEntries,
+  peekExecRequestSystemEventEntries,
+} from "../infra/system-events.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   removeNotifyOnExit,
@@ -51,12 +55,16 @@ export function captureExecRequestCancellation(
   target: ExecRequestIdentity,
   accept: (identity: ExecRequestIdentity) => boolean = () => true,
 ) {
+  const queued = peekExecRequestSystemEventEntries(target);
   const initialSessions = listExecSessionsForCancellation();
-  const residualOwners = initialSessions
-    .flatMap((session) =>
+  const residualOwners = [
+    ...initialSessions.flatMap((session) =>
       !session.exited || session.finalizing ? (readExecRequestOwners(session) ?? []) : [],
-    )
-    .filter((owner) => execRequestMatches(owner, target) && accept(owner.identity));
+    ),
+    ...queued.flatMap(({ events }) =>
+      events.flatMap((event) => readExecRequestOwners(event) ?? []),
+    ),
+  ].filter((owner) => execRequestMatches(owner, target) && accept(owner.identity));
   const owners = new Set([...activeExecRequestOwners(target, accept), ...residualOwners]);
   const matching = (session: ProcessSession) =>
     readExecRequestOwners(session)?.some((owner) => owners.has(owner)) === true;
@@ -64,6 +72,8 @@ export function captureExecRequestCancellation(
   let cancelled = false;
   return {
     owners: [...owners],
+    // Ancestry selects descendants without rewriting completed model receipts.
+    requestRunIds: [...new Set([...owners].flatMap((owner) => Array.from(owner.turnRunIds)))],
     cancel() {
       if (cancelled || owners.size === 0) {
         return false;
@@ -72,6 +82,14 @@ export function captureExecRequestCancellation(
       cancelExecRequestOwners([...owners]);
       for (const session of listExecSessionsForCancellation().filter(matching)) {
         removeNotifyOnExit(session);
+      }
+      for (const { sessionKey, events } of queued) {
+        consumeSelectedSystemEventEntries(
+          sessionKey,
+          events.filter((event) =>
+            readExecRequestOwners(event)?.some((owner) => owners.has(owner)),
+          ),
+        );
       }
       return true;
     },

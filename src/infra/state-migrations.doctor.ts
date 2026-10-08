@@ -1369,7 +1369,6 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
         message: "Channel pairing account discovery is deferred to plugin validation.",
       }
     : undefined;
-  let unavailableWorkshopWorkspaces: ReadonlyMap<string, string> | undefined;
   const finalSteps: LegacyStateMigrationStep[] = [
     {
       ...ownerStep("workspace-state", detected.workspace, async (options) => {
@@ -1378,9 +1377,7 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
         if (isDoctor) {
           await params.beforeWorkspaceStateMigration?.(params.sessionConfig ?? params.config);
         }
-        const result = await migrateLegacyWorkspaceState(options);
-        unavailableWorkshopWorkspaces = result.unavailableWorkshopWorkspaces;
-        return result;
+        return await migrateLegacyWorkspaceState(options);
       }),
       runWithoutFileDetection: isDoctor && params.beforeWorkspaceStateMigration !== undefined,
     },
@@ -1388,14 +1385,12 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
     ...(isDoctor
       ? [
           {
-            // Workspace attestations must settle before Workshop relocation can retire them.
             ...finalStep("skill-workshop", async () => {
-              const { migrateLegacySkillWorkshopProposals } =
-                await import("../commands/doctor-skill-workshop-sqlite.js");
-              return migrateLegacySkillWorkshopProposals({
+              const { retireSkillWorkshopProposals } =
+                await import("../commands/doctor-skill-workshop-retire-proposals.js");
+              return retireSkillWorkshopProposals({
                 config: params.sessionConfig ?? params.config,
                 env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-                unavailableWorkspaceDirs: unavailableWorkshopWorkspaces,
               });
             }),
             runWithoutFileDetection: true,
@@ -1874,11 +1869,11 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   });
   for (const step of remainingMainSteps) {
     if (step.id === "skill-workshop") {
-      // Recorded legacy targets can name workspaces outside copied state.
+      // Draft exports target agent directories that can lie outside copied state.
       // Keep the owner visible without inspecting or granting those paths.
       step.refusal = {
         code: "skill-workshop-planning-deferred",
-        message: "Skill Workshop relocation requires separately bound workspace and skill targets.",
+        message: "Skill Workshop proposal export requires separately bound agent directories.",
       };
     }
   }

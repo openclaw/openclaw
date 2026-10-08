@@ -17,6 +17,7 @@ export type ExecRequestIdentity = {
 /** Process-local ownership of ordinary commands, independent of a disposable tool call. */
 export type ExecRequestOwner = {
   identity: Readonly<ExecRequestIdentity>;
+  readonly turnRunIds: Set<string>;
   readonly controller: AbortController;
   readonly signal: AbortSignal;
   readonly pendingProcesses: Set<Promise<void>>;
@@ -39,6 +40,7 @@ function createExecRequestOwner(identity: ExecRequestIdentity): ExecRequestOwner
   const controller = new AbortController();
   return {
     identity: Object.freeze({ ...identity }),
+    turnRunIds: new Set(identity.runId ? [identity.runId] : []),
     controller,
     signal: controller.signal,
     pendingProcesses: new Set(),
@@ -57,7 +59,7 @@ export function cancelExecRequestOwners(owners: readonly ExecRequestOwner[]): vo
 
 export function execRequestMatches(owner: ExecRequestOwner, target: ExecRequestIdentity): boolean {
   return (
-    (target.runId === undefined || owner.identity.runId === target.runId) &&
+    (target.runId === undefined || owner.turnRunIds.has(target.runId)) &&
     (target.sessionKey === undefined || owner.identity.sessionKey === target.sessionKey) &&
     (target.sessionId === undefined || owner.identity.sessionId === target.sessionId) &&
     (target.agentId === undefined || owner.identity.agentId === target.agentId)
@@ -87,11 +89,19 @@ export function activeExecRequestOwners(
           (target.runId === undefined || identity.runId === target.runId) &&
           (target.sessionKey === undefined || identity.sessionKey === target.sessionKey) &&
           (target.sessionId === undefined || identity.sessionId === target.sessionId) &&
-          (target.agentId === undefined || identity.agentId === target.agentId) &&
-          accept(identity);
-        return active
-          ? owners
-          : owners.filter((owner) => execRequestMatches(owner, target) && accept(owner.identity));
+          (target.agentId === undefined || identity.agentId === target.agentId);
+        const hasBoundActor = Boolean(
+          identity.ownerConnId?.trim() || identity.ownerDeviceId?.trim(),
+        );
+        return owners.filter((owner) => {
+          // An admitted current actor may stop its continuation. An unbound wake
+          // inherits the request's actor and protections at its current location.
+          const current = hasBoundActor ? identity : { ...owner.identity, ...identity };
+          return (
+            (active && accept(current)) ||
+            (execRequestMatches(owner, target) && accept(owner.identity))
+          );
+        });
       }),
     ),
   );
@@ -145,7 +155,7 @@ export function retainExecRequestProcess(
   void settlement.then(release, release);
 }
 
-/** Nested execution retains its request; a different human turn starts fresh. */
+/** A continuation inherits only its selected events; ordinary human turns start fresh. */
 export async function withExecRequestTurn<T>(
   params: {
     identity: ExecRequestIdentity;
@@ -165,6 +175,9 @@ export async function withExecRequestTurn<T>(
   const owners = inherited?.length ? inherited : [createExecRequestOwner(identity)];
   for (const owner of owners) {
     owner.signal.throwIfAborted();
+    if (params.identity.runId) {
+      owner.turnRunIds.add(params.identity.runId);
+    }
   }
   const turn = { identity, owners };
   const stop = () => {

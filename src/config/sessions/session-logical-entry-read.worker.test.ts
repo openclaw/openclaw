@@ -11,6 +11,7 @@ import { resolveHeartbeatSession } from "../../infra/heartbeat-runner-session.js
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import * as registryListing from "../../state/openclaw-agent-db-registry-listing.js";
 import {
   registerOpenClawAgentDatabase,
@@ -39,11 +40,12 @@ import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-ad
 import {
   loadSessionEntry,
   patchSessionEntryCore,
+  patchSessionEntryTarget,
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import { loadExactSessionEntryReadOnly } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import type { SessionAccessScope } from "./session-accessor.types.js";
+import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import {
   readSessionEntryInWorker,
   readSessionEntryReadOnlyInWorker,
@@ -851,6 +853,7 @@ function holdCohortReply() {
 
 it("refreshes admitted cohorts after a known write and a foreign membership commit between phases", async () => {
   const { scope, database } = createCohortFixture("fresh-phases");
+  const identity = readOpenClawAgentDatabaseIdentity(database);
   addSessionMember(scope, { identityId: "original-member", addedBy: "owner", addedAt: 1 });
   const { claim, reader } = await admitCohort(scope);
   const request = { sessionKeys: [scope.sessionKey], includeMembers: true, snapshotFields: [] };
@@ -873,6 +876,28 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
     );
     expect(observer.counts).toEqual(emptySqliteCounts());
     expect(escaped).toThrow("consumption has ended");
+    let readTarget: SessionEntryTargetPatchScope | undefined;
+    const recordReadTarget = (target: SessionEntryTargetPatchScope) => {
+      readTarget = target;
+    };
+    await expect(
+      readSessionEntryInWorker(scope, () => {}, undefined, recordReadTarget, reader),
+    ).resolves.toMatchObject({ sessionId: "fresh-phases", lifecycleRevision: "original" });
+    if (!readTarget) {
+      throw new Error("Writable cohort read omitted its physical target");
+    }
+    expect(readTarget).toMatchObject({
+      agentId: scope.agentId,
+      storePath: database.path,
+      readSource: {
+        agentId: database.agentId,
+        path: database.path,
+        databaseIdentity: identity.identity,
+        databaseBirthtime: identity.birthtime,
+      },
+      target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+    });
+    expect(observer.counts).toEqual(emptySqliteCounts());
     following = external.promise.then(() =>
       reader.withRead(
         request,
@@ -886,7 +911,9 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
       ),
     );
     // Completing the writer before releasing the external wait proves no FIFO is held between phases.
-    await patchSessionEntryCore(scope, () => ({ label: "known write" }), { skipMaintenance: true });
+    await patchSessionEntryTarget(readTarget, () => ({ label: "known write" }), {
+      skipMaintenance: true,
+    });
     peer.prepare("DELETE FROM session_members WHERE session_key = ?").run(scope.sessionKey);
     peer
       .prepare(`INSERT INTO session_members (session_key, identity_id, added_by, added_at)
@@ -903,6 +930,12 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
         async () => undefined,
       ),
     ).rejects.toThrow("consumers must remain synchronous");
+    await claim.release();
+    readTarget = undefined;
+    await expect(
+      readSessionEntryInWorker(scope, () => {}, undefined, recordReadTarget, reader),
+    ).rejects.toThrow(/released|closed|revoked/iu);
+    expect(readTarget).toBeUndefined();
   } finally {
     observer.restore();
     external.resolve();

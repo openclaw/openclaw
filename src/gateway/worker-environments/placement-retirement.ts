@@ -40,6 +40,6 @@ export function retireWorkerSessionPlacement(
     }
     throw new Error(`Worker session placement ${sessionId} changed before retirement`);
   }
-  publishPlacementTurnClaimCleared(db, sessionId, input.expectedState);
+  publishPlacementTurnClaimCleared(db, sessionId, input.expectedState, true);
   return true;
 }

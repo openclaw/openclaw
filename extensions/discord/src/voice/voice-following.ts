@@ -73,7 +73,7 @@ function cyclicId(ids: string[], index: number, label: string): string {
 export class DiscordVoiceFollowing {
   private readonly followUserIds: Set<string>;
   readonly followedUserChannels = new Map<string, VoiceChannelResidency>();
-  readonly followedVoiceGuilds = new Set<string>();
+  private readonly followedVoiceGuilds = new Set<string>();
   private readonly scheduler: PluginServiceSchedulerV1;
   private followUsersReconcileTask: Promise<void> | null = null;
   private followUsersReconcileGuildCursor = 0;
@@ -270,7 +270,8 @@ export class DiscordVoiceFollowing {
     );
   }
 
-  deleteFollowedUserChannelsForGuild(guildId: string): void {
+  clearFollowedGuild(guildId: string): void {
+    this.followedVoiceGuilds.delete(guildId);
     for (const [key, entry] of this.followedUserChannels.entries()) {
       if (entry.guildId === guildId) {
         this.followedUserChannels.delete(key);
@@ -279,21 +280,19 @@ export class DiscordVoiceFollowing {
   }
 
   private resolveFollowGuildIds(): string[] {
-    const guildIds = new Set<string>();
-    for (const guildId of Object.keys(this.params.discordConfig.guilds ?? {})) {
-      const normalized = guildId.trim();
-      if (normalized) {
-        guildIds.add(normalized);
+    const guildIds = new Set(
+      Object.keys(this.params.discordConfig.guilds ?? {})
+        .map((guildId) => guildId.trim())
+        .filter(Boolean),
+    );
+    for (const entries of [
+      this.params.autoJoinChannels,
+      this.params.allowedChannels ?? [],
+      this.params.listSessions(),
+    ]) {
+      for (const entry of entries) {
+        guildIds.add(entry.guildId);
       }
-    }
-    for (const entry of this.params.autoJoinChannels) {
-      guildIds.add(entry.guildId);
-    }
-    for (const entry of this.params.allowedChannels ?? []) {
-      guildIds.add(entry.guildId);
-    }
-    for (const entry of this.params.listSessions()) {
-      guildIds.add(entry.guildId);
     }
     return Array.from(guildIds);
   }
@@ -485,8 +484,7 @@ export class DiscordVoiceFollowing {
         logger.warn(
           `discord voice: failed to hand off followed user session guild=${params.guildId} channel=${target.channelId}: ${result.message}`,
         );
-        this.followedVoiceGuilds.delete(params.guildId);
-        this.deleteFollowedUserChannelsForGuild(params.guildId);
+        this.clearFollowedGuild(params.guildId);
         await this.params.leave({ guildId: params.guildId });
       }
       return;

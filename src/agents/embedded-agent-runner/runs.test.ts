@@ -6,6 +6,10 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import {
   onDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
@@ -20,9 +24,11 @@ import {
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { prepareEmbeddedRunPermissionChange } from "./run-permissions.js";
 import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
+import { prepareEmbeddedAgentRunAbort } from "./runs.abort-target.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
@@ -277,6 +283,7 @@ describe("embedded run ownership", () => {
     const first = { ...createRunHandle({ runId: "first", abort: firstAbort }), startedAtMs: 123 };
     setActiveEmbeddedRun(sessionId, first, sessionKey);
     const identity = resolveActiveEmbeddedRunOwnerByRunId("first");
+    const prepared = prepareEmbeddedAgentRunAbort(sessionId);
     const expected = { runId: "first", sessionId, sessionKey, startedAtMs: 123 };
     expect(identity).toMatchObject(expected);
     expect(resolveActiveEmbeddedRunOwner(sessionId)).toMatchObject(expected);
@@ -286,9 +293,72 @@ describe("embedded run ownership", () => {
       sessionKey,
     );
     expect(identity?.abort()).toBe(false);
+    expect(prepared()).toMatchObject({ active: false, aborted: false });
     expect(firstAbort).not.toHaveBeenCalled();
     expect(secondAbort).not.toHaveBeenCalled();
   });
+
+  it("stops captured manual compaction without a run ID", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun(sessionId, createRunHandle({ isCompacting: true, abort }), sessionKey);
+    const prepared = prepareEmbeddedAgentRunAbort(sessionId);
+    expect(prepared()).toMatchObject({ active: true, aborted: true, sessionId });
+    expect(abort).toHaveBeenCalledOnce();
+  });
+
+  it.each(["retry", "compaction", "replacement", "new-claim", "retired", "agent", "key"] as const)(
+    "keeps prepared Stop with its admitted request across %s",
+    async (transition) => {
+      const instance = createOperationalRunInstanceRef("native-retry");
+      const authority = claimAgentRunDelegatedAuthority(instance);
+      const authorities = [authority];
+      const firstAbort = vi.fn();
+      const nextAbort = vi.fn();
+      const first = createRunHandle({ runId: instance.runId, abort: firstAbort });
+      try {
+        await withGatewayToolCallerIdentity(
+          { agentId: "main", sessionKey, operationalRunInstance: instance },
+          () => setActiveEmbeddedRun(sessionId, first, sessionKey, undefined, "main"),
+        );
+        const stop = prepareEmbeddedAgentRunAbort(sessionId);
+        const nextInstance =
+          transition === "replacement" ? createOperationalRunInstanceRef(instance.runId) : instance;
+        if (transition === "replacement" || transition === "new-claim") {
+          releaseAgentRunDelegatedAuthority(authority);
+          authorities.push(claimAgentRunDelegatedAuthority(nextInstance));
+        }
+        const nextSessionId = transition === "compaction" ? "compacted-session" : sessionId;
+        const nextAgentId = transition === "agent" ? "other" : "main";
+        const nextKey = transition === "key" ? "agent:main:another" : sessionKey;
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: nextAgentId,
+            sessionKey: nextKey,
+            operationalRunInstance: nextInstance,
+          },
+          () =>
+            setActiveEmbeddedRun(
+              nextSessionId,
+              createRunHandle({ runId: instance.runId, abort: nextAbort }),
+              nextKey,
+              undefined,
+              nextAgentId,
+            ),
+        );
+        if (transition === "retired") {
+          releaseAgentRunDelegatedAuthority(authority);
+        }
+        const sameRequest = transition === "retry" || transition === "compaction";
+        expect(stop()).toMatchObject({ active: sameRequest, aborted: sameRequest });
+        expect(firstAbort).not.toHaveBeenCalled();
+        expect(nextAbort).toHaveBeenCalledTimes(sameRequest ? 1 : 0);
+      } finally {
+        for (const retained of authorities) {
+          releaseAgentRunDelegatedAuthority(retained);
+        }
+      }
+    },
+  );
 
   it("clears steering backlog when the run ends", () => {
     setDiagnosticsEnabledForProcess(true);

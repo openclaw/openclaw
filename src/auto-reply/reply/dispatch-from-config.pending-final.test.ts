@@ -1,8 +1,11 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -229,13 +232,22 @@ describe("pending final delivery restart proof", () => {
       },
     );
 
+    let target: SessionEntryTargetPatchScope | undefined;
+    await readSessionEntryInWorker(
+      { agentId: "main", storePath, sessionKey },
+      () => {},
+      undefined,
+      (prepared) => {
+        target = prepared;
+      },
+    );
+    assert(target);
     await expect(
       retireTerminalRestartRecoverySourceClaim({
-        agentId: "main",
+        target,
+        assertCurrent: () => {},
         sessionId: "session",
-        sessionKey,
         sourceTurnId: "source-1",
-        storePath,
       }),
     ).resolves.toBeUndefined();
 

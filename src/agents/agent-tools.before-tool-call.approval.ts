@@ -4,7 +4,6 @@
  * timeout classification, and owner-provided approval outcomes.
  */
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
-import { getRuntimeConfig } from "../config/config.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { sanitizeApprovalScope } from "../infra/approval-scope.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
@@ -26,7 +25,6 @@ import {
   type PluginApprovalResolution,
   type PluginHookBeforeToolCallResult,
 } from "../plugins/types.js";
-import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
 import { isPlainObject } from "../utils.js";
 import { resolveToolErrorDiagnostic } from "./agent-tools.before-tool-call.diagnostics.js";
 import type {
@@ -504,34 +502,5 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     signal: params.signal,
     baseParams: baseParamsSnapshot,
     overrideParams: overrideParamsSnapshot,
-  });
-}
-
-export async function resolveSkillWorkshopApprovalForFinalParams(params: {
-  toolName: string;
-  params: unknown;
-  approvalMode?: "request" | "report" | "deny" | "defer";
-  toolCallId?: string;
-  ctx?: HookContext;
-  signal?: AbortSignal;
-}): Promise<HookOutcome | undefined> {
-  if (params.toolName !== "skill_workshop") {
-    return undefined;
-  }
-  const result = await resolveSkillWorkshopToolApproval({
-    toolName: params.toolName,
-    toolParams: isPlainObject(params.params) ? params.params : {},
-    config: params.ctx?.config ?? getRuntimeConfig(),
-    ...(params.ctx?.agentId ? { agentId: params.ctx.agentId } : {}),
-    ...(params.ctx?.workspaceDir ? { workspaceDir: params.ctx.workspaceDir } : {}),
-  });
-  return await resolveBeforeToolCallApprovalOutcome({
-    result,
-    approvalMode: params.approvalMode,
-    toolName: params.toolName,
-    ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
-    ...(params.ctx ? { ctx: params.ctx } : {}),
-    signal: params.signal,
-    baseParams: params.params,
   });
 }

@@ -259,9 +259,7 @@ export async function waitForWhatsAppLoginResult(params: {
   const wait = params.waitForConnection ?? waitForWaConnection;
   const createSocket = params.createSocket ?? createWaSocket;
   let currentSock = params.sock;
-  let postPairingRestarted = false;
-  let timeoutRestarted = false;
-  let loggedOutRestarted = false;
+  const restartedStatuses = new Set<number>();
 
   const replaceLoginSocket = async (
     opts: { closeCurrent?: boolean } = {},
@@ -317,29 +315,19 @@ export async function waitForWhatsAppLoginResult(params: {
       }
       return {
         outcome: "connected",
-        restarted: postPairingRestarted || timeoutRestarted || loggedOutRestarted,
+        restarted: restartedStatuses.size > 0,
         sock: currentSock,
       };
     } catch (err) {
       const statusCode = getStatusCode(err);
-      const restartKind =
-        statusCode === POST_PAIRING_RESTART_STATUS
-          ? "post-pairing"
-          : statusCode === TIMED_OUT_STATUS
-            ? "timeout"
-            : null;
-      const canRestart =
-        (restartKind === "post-pairing" && !postPairingRestarted) ||
-        (restartKind === "timeout" && !timeoutRestarted);
-      if (restartKind && canRestart) {
-        if (restartKind === "post-pairing") {
-          postPairingRestarted = true;
-        } else {
-          timeoutRestarted = true;
-        }
+      if (
+        (statusCode === POST_PAIRING_RESTART_STATUS || statusCode === TIMED_OUT_STATUS) &&
+        !restartedStatuses.has(statusCode)
+      ) {
+        restartedStatuses.add(statusCode);
         params.runtime.log(
           info(
-            restartKind === "timeout"
+            statusCode === TIMED_OUT_STATUS
               ? WHATSAPP_LOGIN_TIMEOUT_RESTART_MESSAGE
               : WHATSAPP_LOGIN_RESTART_MESSAGE,
           ),
@@ -352,7 +340,7 @@ export async function waitForWhatsAppLoginResult(params: {
       }
 
       if (statusCode === LOGGED_OUT_STATUS) {
-        if (loggedOutRestarted) {
+        if (restartedStatuses.has(LOGGED_OUT_STATUS)) {
           return {
             outcome: "logged-out",
             message: WHATSAPP_LOGGED_OUT_RELINK_MESSAGE,
@@ -384,7 +372,7 @@ export async function waitForWhatsAppLoginResult(params: {
             };
           }
         }
-        loggedOutRestarted = true;
+        restartedStatuses.add(LOGGED_OUT_STATUS);
         const replacementFailure = await replaceLoginSocket({ closeCurrent: false });
         if (replacementFailure) {
           return replacementFailure;

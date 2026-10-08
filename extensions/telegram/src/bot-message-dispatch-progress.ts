@@ -72,6 +72,7 @@ export function createProgressState(
 ): TelegramProgressStateSlice {
   const progressCompositor = createChannelProgressDraftCompositor({
     preparedItems: true,
+    showWorkStatus: true,
     entry: config.telegramCfg,
     mode: config.streamMode,
     active: Boolean(draftState.answerLane.stream),
@@ -222,6 +223,7 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
   };
   const compositor = createChannelProgressDraftCompositor({
     preparedItems: true,
+    showWorkStatus: true,
     entry: turn.telegramCfg,
     mode: "progress",
     active: true,

@@ -1,6 +1,10 @@
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import {
+  readExecRequestOwners,
+  withExecRequestOwners,
+} from "../../../infra/exec-request-context.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { recordSessionCreated } from "../../../sessions/session-created.js";
@@ -513,6 +517,7 @@ export async function spawnSubagentDirect(
       },
     };
     const pipelineResult = await runSpawnPipeline({
+      ...withExecRequestOwners({}, readExecRequestOwners(ctx)),
       adapter,
       assertActive,
       admissionReservation,

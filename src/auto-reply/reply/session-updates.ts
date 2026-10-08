@@ -265,6 +265,7 @@ export async function ensureSkillSnapshot(params: {
           { agentId, storePath, sessionKey, env },
           assertCurrent,
           undefined,
+          undefined,
           params.reader,
         )
       : sessionEntryHandle

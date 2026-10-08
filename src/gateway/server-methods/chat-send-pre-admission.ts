@@ -23,10 +23,8 @@ import {
   readPreRegisteredRun,
   resolveChatAbortRequester,
 } from "./chat-abort-authorization.js";
-import {
-  abortChatRunsForSessionKeyWithPartials,
-  descendantAbortError,
-} from "./chat-abort-runtime.js";
+import { descendantAbortError } from "./chat-abort-descendants.js";
+import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
 import {
   abortedPartialPersistenceError,
   withAbortedPartialPersistenceWarning,

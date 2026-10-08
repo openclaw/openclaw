@@ -1,6 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { clearAgentSkillFilter } from "./skills.ts";
+import { clearAgentSkillFilter, nextAgentSkillAllowlist } from "./skills.ts";
+
+describe("nextAgentSkillAllowlist", () => {
+  it("snapshots reported skills without learned Workshop skills on the first toggle", () => {
+    const report = {
+      agentId: "main",
+      skills: [
+        { name: "github", source: "openclaw-bundled" },
+        { name: "weather", source: "openclaw-managed" },
+        { name: "actual-budget-operations", source: "openclaw-workshop" },
+      ] as SkillStatusEntry[],
+    } as SkillStatusReport;
+
+    expect(
+      nextAgentSkillAllowlist({
+        configured: undefined,
+        report,
+        skillName: "weather",
+        enabled: false,
+      }),
+    ).toEqual(["github"]);
+  });
+});
 
 describe("clearAgentSkillFilter", () => {
   it("deletes the authored allowlist through an explicit config patch", async () => {
