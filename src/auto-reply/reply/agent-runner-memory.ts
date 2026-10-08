@@ -97,6 +97,7 @@ import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { acknowledgeReplySessionTransition } from "./reply-run-registry.state.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 const MAX_FLUSH_FAILURES = 3;
@@ -298,6 +299,7 @@ async function estimatePromptTokensFromSessionTranscript({
 
 /** Compacts session context before a reply or after a completed direct command. */
 export async function runSessionCompactionIfNeeded(params: {
+  replyOperation?: ReplyOperation;
   pendingUserEntryId?: string;
   compactionRequestBudget?: CompactionRequestBudget;
   cfg: OpenClawConfig;
@@ -576,6 +578,7 @@ export async function runSessionCompactionIfNeeded(params: {
   };
   // Provider work can outlive the caller; never account against a replacement session row.
   let expectedSession = entry;
+  let admissionTransition: AcceptedCompactionSuccessor["admissionTransition"];
   let hostAccountingCommitted = false;
   const recordCompactionAccounting = async (
     acceptedEntry: SessionEntry,
@@ -726,6 +729,7 @@ export async function runSessionCompactionIfNeeded(params: {
           hostAccountingCommitted = true;
         },
         onCommitted: (accepted) => {
+          admissionTransition = accepted.admissionTransition;
           expectedSession = accepted.entry;
           entry = accepted.entry;
           compactionStore[compactionSessionKey] = accepted.entry;
@@ -748,6 +752,10 @@ export async function runSessionCompactionIfNeeded(params: {
       throw createPreflightCompactionError(reason, isCodexRuntime);
     }
 
+    if (params.replyOperation && admissionTransition) {
+      await acknowledgeReplySessionTransition(params.replyOperation, admissionTransition);
+      assertActive();
+    }
     if (!hostAccountingCommitted) {
       await recordCompactionAccounting(
         expectedSession,

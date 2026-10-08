@@ -46,22 +46,6 @@ export class ExecApprovalsMutationFencedError extends Error {
   }
 }
 
-export function assertExecApprovalsMutationAuthority(
-  db: DatabaseSync,
-  authority: ExecApprovalsMutationAuthority,
-): void {
-  const journal = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<ExecApprovalsDatabase>(db)
-      .selectFrom("agent_deletion_journal")
-      .select("operation_id")
-      .where("agent_id", "=", normalizeAgentId(authority.agentId)),
-  );
-  if (journal?.operation_id !== authority.operationId) {
-    throw new ExecApprovalsMutationFencedError();
-  }
-}
-
 export function assertExecApprovalsMutationAllowed(params: {
   db: DatabaseSync;
   current: ExecApprovalsFile;
@@ -70,36 +54,43 @@ export function assertExecApprovalsMutationAllowed(params: {
 }): void {
   const current = normalizeExecApprovalsInternal(params.current);
   const next = normalizeExecApprovalsInternal(params.next);
-  const agentIds = new Set([
-    ...Object.keys(current.agents ?? {}),
-    ...Object.keys(next.agents ?? {}),
-  ]);
-  const state = getNodeSqliteKysely<ExecApprovalsDatabase>(params.db);
-  for (const agentId of agentIds) {
+  const changed = [
+    ...new Set([...Object.keys(current.agents ?? {}), ...Object.keys(next.agents ?? {})]),
+  ].filter((agentId) => !isDeepStrictEqual(current.agents?.[agentId], next.agents?.[agentId]));
+  const authority = params.authority;
+  const agentIds = new Set(changed.map(normalizeAgentId));
+  if (authority) {
+    // Removal with no policy entries still requires the exact current deletion operation.
+    agentIds.add(authority.agentId);
+  }
+  if (agentIds.size === 0) {
+    return;
+  }
+  const journals = new Map(
+    executeSqliteQuerySync(
+      params.db,
+      getNodeSqliteKysely<ExecApprovalsDatabase>(params.db)
+        .selectFrom("agent_deletion_journal")
+        .select(["agent_id", "operation_id"])
+        .where("agent_id", "in", [...agentIds]),
+    ).rows.map((row) => [row.agent_id, row.operation_id]),
+  );
+  if (authority && journals.get(authority.agentId) !== authority.operationId) {
+    throw new ExecApprovalsMutationFencedError();
+  }
+  for (const agentId of changed) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    const operationId = journals.get(normalizedAgentId);
+    if (operationId === undefined) {
+      continue;
+    }
     const currentPolicy = current.agents?.[agentId];
     const nextPolicy = next.agents?.[agentId];
-    if (isDeepStrictEqual(currentPolicy, nextPolicy)) {
-      continue;
-    }
-    const normalizedAgentId = normalizeAgentId(agentId);
-    const journal = executeSqliteQueryTakeFirstSync(
-      params.db,
-      state
-        .selectFrom("agent_deletion_journal")
-        .select("operation_id")
-        .where("agent_id", "=", normalizedAgentId),
-    );
-    if (!journal) {
-      continue;
-    }
-    const authority = params.authority;
-    const authorizedRemoval = currentPolicy !== undefined && nextPolicy === undefined;
-    const authorizedRestore = currentPolicy === undefined && nextPolicy !== undefined;
     if (
       authority?.agentId === normalizedAgentId &&
-      authority.operationId === journal.operation_id &&
-      ((authority.action === "remove" && authorizedRemoval) ||
-        (authority.action === "restore" && authorizedRestore))
+      authority.operationId === operationId &&
+      ((authority.action === "remove" && currentPolicy !== undefined && nextPolicy === undefined) ||
+        (authority.action === "restore" && currentPolicy === undefined && nextPolicy !== undefined))
     ) {
       continue;
     }

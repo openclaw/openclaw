@@ -388,6 +388,7 @@ function createMinimalRun(params?: {
   bindActiveAuthority?: boolean;
   attachSteerBackend?: boolean;
   activeBackendRunId?: string;
+  runtimePolicySessionKey?: string;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -521,6 +522,7 @@ function createMinimalRun(params?: {
         sessionEntry: params?.sessionEntry,
         sessionStore: params?.sessionStore,
         sessionKey,
+        runtimePolicySessionKey: params?.runtimePolicySessionKey,
         storePath: params?.storePath,
         sessionCtx,
         defaultModel: "anthropic/claude-opus-4-6",

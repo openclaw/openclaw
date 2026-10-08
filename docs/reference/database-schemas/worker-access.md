@@ -16,6 +16,33 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Exec policy edits, usage recording, socket initialization, and agent policy
+removal and restoration use the existing shared-state writer. Typed edits retain
+their physical source before yielding, and each transaction reads the current
+policy and deletion journal under live host admission. A policy edit ends the
+preceding authorization batch; later authorizations cannot join it. Cron policy
+uses are fenced before the commit grant, including uses prepared while that
+grant awaits settlement. Failed or uncertain writes cannot revive revoked uses.
+
+The final pre-spawn policy authority read remains synchronous and T1. It observes
+direct native and foreign-connection policy changes after preparation and before
+each launch or retry; published or cached policy facts cannot replace it.
+Preparation admits a live read-only connection through the existing reader pool.
+The final guard uses one indexed policy-row SELECT on that handle, without a
+freshness/schema PRAGMA or transaction envelope: it consumes current rows, not
+cached facts. Physical identity, source lifetime, integrity, and transaction
+exclusion are still checked. A retired reader requires new preparation.
+The released v2026.9.8 `prepareExecAuthorization` contract returns a synchronous
+guard for immediate use before spawn, and `plugin-sdk/exec-approvals-runtime`
+exports synchronous policy readers. Retirement requires the next Plugin SDK
+major, removal of raw synchronous writers, and complete revocation publications
+for launch adapters, preserving foreign-write freshness and unknown-launch
+settlement. Doctor retains its native migration adapter. Approval resolution with
+the released opaque SDK
+commit guard still reaches the shared MCP grant kernels, so their policy write
+and deletion-fence query remain T1. These changes introduce no schema, stored
+data, retention, durability, permission, or update migration.
+
 Gateway deleted-agent checks batch ACP metadata candidates through the shared-state
 reader only for free ACP keys whose agent is absent. When a foreign commit requires
 the content-version marker to be refreshed, the reader fetches that marker and the
@@ -327,6 +354,18 @@ awaited preparation is limited to a single message without transaction predicate
 compound turns retain their existing synchronous preparation contract. Released
 synchronous preparation retains native callback ordering until the next Plugin SDK
 major. Schemas, stored bytes, retention, and update behavior are unchanged.
+
+Admitted reply phases borrow the canonical agent executor for bounded session-entry,
+membership, participant, lifecycle, header, and anchor facts. Each unpinned phase
+probes the original connection again and consumes its result synchronously under
+the existing foreground FIFO and native-mutation witness. The borrow keeps the
+selected physical file, aliases, native incarnation, and session lifecycle; reset,
+replacement, and release revoke it. An acknowledged initialization may transfer
+admission to the new lifecycle on that same native generation, joining the old
+borrow before returning. Read-only and pre-admission discovery keep their existing
+owners and do not create storage. Reply settlement and database close join accepted
+phases, including those still waiting for foreground admission. Schemas, stored
+bytes, retention, SDK signatures, and update behavior are unchanged.
 
 ## Keep one store owner
 
@@ -1151,6 +1190,34 @@ Production acquisition remains host-owned, and every native selection arm stays
 in place until the atomic activation. These conditional compositions add no
 schema, persistent cache, worker service, retention, durability, permission,
 configuration, or update change and retire no T1 sites.
+
+### Incognito retained source authority (P01, inactive)
+
+Following the inactive P7k–P7n compositions, explicitly bound actors now retain
+sharing and harness-completion source authority through their consumers. Gateway
+sharing uses the same actor's current sharing and membership facts. Approval account
+selectors consume only committed session identity and delivery facts. Transaction
+guards use their admitted preimage; exact completion guards use the worker's
+transaction and precommit predicates. Pending or lost publication grants no new
+authority, and synchronous guards never request actor work or enter host SQL.
+
+Each completion source registers its own exact transcript admission. A later human
+input outside that read fence does not invalidate the admitted view; an unfenced
+later input does. The source follows the existing reset, branch, and rewrite
+predicates, rather than an actor-wide revision. CLI and context-engine preparation
+carry the exact fence through source acquisition and release, propagate authority
+failures, and join consumers before releasing custody. Accepted terminal writes
+settle before command cleanup releases its retained completion source. If release
+also fails, cleanup preserves the primary failure as the aggregate error's cause.
+
+Explicit private-store locators retain their physical root, including keyless
+targets. A conflicting explicit environment or enclosing actor is refused instead
+of selecting another root. Missing reads create no actor or durable discovery.
+Production acquisition remains host-owned until P12: an unbound caller continues
+using the native owner, while a retained ended actor cannot adopt a replacement.
+This prerequisite retires no incognito T1 sites, breaks no supported SDK contract,
+and changes no schema, durability, retention, permissions, configuration, or update
+behavior.
 
 ### Existing worker flows
 
@@ -2568,6 +2635,15 @@ resident inventory. Missing databases are prepared by the same worker owner. Inc
 stores, already executing workers, Doctor maintenance,
 and prepared native deletion rollback closures retain their synchronous kernels.
 Schemas, retained bytes, configuration, and update behavior are unchanged.
+
+Writer-held target discovery uses a separate, single-worker read lane under the
+existing session database lifecycle owner. Target reads and their awaited native
+cleanup cannot queue behind history searches that need the same database writer
+for index status. Exact-store FIFO admission, captured physical identity, live
+authority checks, and lexical reader custody remain unchanged. The additional
+worker starts on demand and participates in database close, idle retirement, and
+critical-memory-pressure cleanup. Read-only projection and maintenance callers
+retain their selected lanes. No schema, stored data, or update behavior changes.
 
 Durable trajectory preparation reads the exact target mapping through the session
 reader and constructs its sink while retaining the writer FIFO and native mutation

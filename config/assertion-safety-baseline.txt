@@ -1327,7 +1327,7 @@ src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts	2
 src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts	3
 src/agents/embedded-agent-runner/run/message-transform-stream-wrapper.ts	3
 src/agents/embedded-agent-runner/run/recovery-message-action-capability.ts	1
-src/agents/embedded-agent-runner/run/session-bootstrap.ts	2
+src/agents/embedded-agent-runner/run/session-bootstrap.ts	1
 src/agents/embedded-agent-runner/run/session-prompt-state.ts	1
 src/agents/embedded-agent-runner/run/stream-wrapper.ts	1
 src/agents/embedded-agent-runner/run/terminal-preparation.ts	1
@@ -1908,7 +1908,6 @@ src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
 src/config/sessions/transcript.ts	13
 src/config/sessions/types.ts	1
-src/config/talk.ts	1
 src/config/validation-channel-rules.ts	1
 src/config/validation-core.ts	1
 src/config/validation-plugin-config.ts	2

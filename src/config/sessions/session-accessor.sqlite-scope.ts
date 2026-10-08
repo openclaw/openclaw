@@ -23,6 +23,7 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
 import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
@@ -263,11 +264,23 @@ function resolveSqliteDatabaseScopeIdentity(scope: SqliteScopeInput) {
   const incognitoAgentId = isIncognitoSessionKey(scope.sessionKey)
     ? resolveAgentIdFromSessionKey(scope.sessionKey)
     : undefined;
+  const explicitIncognito = resolveExplicitIncognitoAgentSqliteTarget(scope.storePath, {
+    agentId: incognitoAgentId ?? scopedAgentId,
+    env: scope.env,
+  });
+  if (explicitIncognito) {
+    return {
+      effectiveAgentId: explicitIncognito.agentId,
+      effectiveStorePath: explicitIncognito.path,
+      effectiveEnv: explicitIncognito.env,
+      explicitIncognito,
+    };
+  }
   const effectiveStorePath = incognitoAgentId
     ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId, env: scope.env })
     : scope.storePath;
   const effectiveAgentId = incognitoAgentId ?? scopedAgentId;
-  return { effectiveAgentId, effectiveStorePath };
+  return { effectiveAgentId, effectiveStorePath, effectiveEnv: scope.env };
 }
 
 function resolveSqliteDatabaseScope(
@@ -275,15 +288,17 @@ function resolveSqliteDatabaseScope(
   targetCache?: SessionSqliteTargetResolutionCache,
   preparedStoreTarget?: ResolvedSqliteStoreTarget,
 ) {
-  const { effectiveAgentId, effectiveStorePath } = resolveSqliteDatabaseScopeIdentity(scope);
-  const storeTarget =
+  const { effectiveAgentId, effectiveStorePath, effectiveEnv, explicitIncognito } =
+    resolveSqliteDatabaseScopeIdentity(scope);
+  const storeTarget: ResolvedSqliteStoreTarget | undefined =
+    explicitIncognito ??
     preparedStoreTarget ??
     (effectiveStorePath
       ? resolveCachedSqliteStoreTarget(
           {
             agentId: effectiveAgentId,
             defaultAgentId: scope.defaultAgentId,
-            env: scope.env,
+            env: effectiveEnv,
             storePath: effectiveStorePath,
           },
           targetCache,
@@ -298,7 +313,7 @@ function resolveSqliteDatabaseScope(
   return {
     agentId,
     ...(storeTarget?.shared && storeTarget.agentId ? { databaseAgentId: storeTarget.agentId } : {}),
-    ...(scope.env ? { env: scope.env } : {}),
+    ...(effectiveEnv ? { env: effectiveEnv } : {}),
     ...(effectiveStorePath ? { ownerStorePath: effectiveStorePath } : {}),
     ...(storeTarget ? { path: storeTarget.path } : {}),
   };
@@ -458,9 +473,10 @@ export async function prepareSqliteTranscriptReadScope(
 export function resolveSqliteWriteAdmissionScope(
   scope: SqliteScopeInput & { sessionKey: string },
 ): ResolvedSqliteReadScope | undefined {
-  const { effectiveAgentId, effectiveStorePath } = resolveSqliteDatabaseScopeIdentity(scope);
-  const target = effectiveStorePath
-    ? resolveUnsuffixedSqliteTargetFromSessionStorePath(effectiveStorePath)
+  const { effectiveAgentId, effectiveStorePath, effectiveEnv, explicitIncognito } =
+    resolveSqliteDatabaseScopeIdentity(scope);
+  const target: ResolvedSqliteStoreTarget | undefined = effectiveStorePath
+    ? (explicitIncognito ?? resolveUnsuffixedSqliteTargetFromSessionStorePath(effectiveStorePath))
     : undefined;
   // Custom logical stores may select a persisted suffix; do not reserve the wrong file.
   if (target && !target.agentId && !target.shared) {
@@ -471,8 +487,8 @@ export function resolveSqliteWriteAdmissionScope(
   const agentId = effectiveAgentId ?? target?.agentId ?? normalizeAgentId(scope.defaultAgentId);
   return {
     agentId,
-    env: scope.env,
-    path: target?.path ?? resolveOpenClawAgentSqlitePath({ agentId, env: scope.env }),
+    env: effectiveEnv,
+    path: target?.path ?? resolveOpenClawAgentSqlitePath({ agentId, env: effectiveEnv }),
   };
 }
 
@@ -484,10 +500,14 @@ export async function prepareSqliteScope(
 }
 
 async function prepareSqliteScopeTarget(scope: SqliteScopeInput, signal?: AbortSignal) {
+  const { effectiveAgentId, effectiveStorePath, explicitIncognito } =
+    resolveSqliteDatabaseScopeIdentity(scope);
+  if (explicitIncognito) {
+    return explicitIncognito;
+  }
   if (isIncognitoSessionKey(scope.sessionKey)) {
     return undefined;
   }
-  const { effectiveAgentId, effectiveStorePath } = resolveSqliteDatabaseScopeIdentity(scope);
   return effectiveStorePath
     ? await prepareSqliteTargetFromSessionStorePath(
         effectiveStorePath,

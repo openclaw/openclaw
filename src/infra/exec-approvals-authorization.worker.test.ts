@@ -1,10 +1,12 @@
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
+import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import { commitExecAuthorizationsInWorker } from "./exec-approvals-authorization.worker.js";
 import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
+import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -13,6 +15,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+// Transport admission is covered by the real worker store suite; these cases own the reducer transaction.
+beforeEach(() => {
+  vi.spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission").mockImplementation(() => {});
+});
 const entry = { id: "echo", pattern: "/usr/bin/echo" };
 const input: ExecAuthorizationCommitInput = {
   agentId: "main",
@@ -36,19 +42,29 @@ function fixture() {
     db: database.db,
     file: { version: 1, agents: { main: { allowlist: [entry] } } },
   });
-  return { options, database };
+  const context: WorkerWriteOperationContext = {
+    open: () => database,
+    stateOptions: () => options,
+    write: (operation, transactionOptions) =>
+      stateDatabase.runOpenClawStateWriteTransaction(
+        operation,
+        { ...options, database },
+        transactionOptions,
+      ),
+  };
+  return { context, database };
 }
 
 it("does not acquire writer admission for an unchanged authorization batch", () => {
-  const { options } = fixture();
+  const { context } = fixture();
   const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
-  const outcomes = commitExecAuthorizationsInWorker({ items: [input, input] }, options);
+  const outcomes = commitExecAuthorizationsInWorker({ items: [input, input] }, context);
   expect(outcomes.map((outcome) => outcome.ok)).toEqual([true, true]);
   expect(writes).not.toHaveBeenCalled();
 });
 
 it("coalesces usage writes and rereads policy after writer admission", () => {
-  const { options, database } = fixture();
+  const { context, database } = fixture();
   const write = stateDatabase.runOpenClawStateWriteTransaction;
   const writes = vi
     .spyOn(stateDatabase, "runOpenClawStateWriteTransaction")
@@ -66,7 +82,7 @@ it("coalesces usage writes and rereads policy after writer admission", () => {
         { ...input, matches: [entry], command: "echo last" },
       ],
     },
-    options,
+    context,
   );
   expect(writes).toHaveBeenCalledTimes(1);
   expect(outcomes).toEqual([
@@ -76,7 +92,7 @@ it("coalesces usage writes and rereads policy after writer admission", () => {
 });
 
 it("commits accepted usage once and preserves the agent deletion fence", () => {
-  const { options, database } = fixture();
+  const { context, database } = fixture();
   writeExecApprovalsConfigRow({
     db: database.db,
     file: { version: 1, agents: { main: { allowlist: [entry] }, deleted: { allowlist: [entry] } } },
@@ -95,7 +111,7 @@ it("commits accepted usage once and preserves the agent deletion fence", () => {
         { ...input, matches: [entry], command: "echo last" },
       ],
     },
-    options,
+    context,
   );
   expect(writes).toHaveBeenCalledTimes(1);
   expect(outcomes.map((outcome) => outcome.ok)).toEqual([true, false, true]);
