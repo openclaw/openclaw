@@ -41,13 +41,14 @@ import {
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
-  createLazyPromise,
   createLazyPromiseLoader,
+  createLazyRuntimeModule,
   createLazyRuntimeSurface,
 } from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import {
   bindChatAbortTerminalDispatch,
+  captureChatAbortRegistrationGuard,
   isCurrentChatAbortTerminalDispatch,
   markChatAbortTerminalPersistenceError,
   markChatAbortTerminalOutcome,
@@ -311,9 +312,7 @@ export function startGatewayEventSubscriptions(params: {
     }
     return tracked;
   };
-  const getSessionKeyModule = createLazyPromise(() => import("./server-session-key.js"), {
-    cacheRejections: true,
-  });
+  const getSessionKeyModule = createLazyRuntimeModule(() => import("./server-session-key.js"));
   const agentEventHandlerLoader = createLazyPromiseLoader(
     () => {
       // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
@@ -408,11 +407,9 @@ export function startGatewayEventSubscriptions(params: {
     },
     { cacheRejections: true },
   );
-  const getAgentEventHandler = agentEventHandlerLoader.load;
-
-  const getSessionEventsModule = createLazyPromise(() => import("./server-session-events.js"), {
-    cacheRejections: true,
-  });
+  const getSessionEventsModule = createLazyRuntimeModule(
+    () => import("./server-session-events.js"),
+  );
 
   const getTranscriptUpdateHandler = createLazyRuntimeSurface(
     getSessionEventsModule,
@@ -423,7 +420,7 @@ export function startGatewayEventSubscriptions(params: {
     ({ createLifecycleEventBroadcastHandler }) => createLifecycleEventBroadcastHandler(params),
   );
 
-  const unsubscribeAgentEvents = onAgentRuntimeEvent((evt) => {
+  const handleAgentEvent = (evt: AgentEventRuntimePayload, isDeliveryCurrent = () => true) => {
     if (evt.stream === "lifecycle") {
       const projection = params.getSessionRowProjection?.();
       if (projection) {
@@ -458,6 +455,7 @@ export function startGatewayEventSubscriptions(params: {
         ? evt.data.phase
         : undefined;
     if (lifecyclePhase === "start" || lifecyclePhase === "end" || lifecyclePhase === "error") {
+      const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
       const terminal = lifecyclePhase !== "start";
       const definitiveTerminal =
         terminal && isDefinitiveRunLifecycle({ phase: lifecyclePhase, data: evt.data });
@@ -478,7 +476,6 @@ export function startGatewayEventSubscriptions(params: {
         : undefined;
       for (const candidateRunId of candidateRunIds) {
         const entry = params.chatAbortControllers.get(candidateRunId);
-        const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
         if (
           entry &&
           (!eventLifecycleGeneration ||
@@ -510,7 +507,6 @@ export function startGatewayEventSubscriptions(params: {
           evt.sessionKey ??
           trackedEntry?.sessionKey ??
           runContext?.sessionKey;
-        const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
         const terminalAuthority =
           evt.contextClaimId && eventLifecycleGeneration
             ? {
@@ -579,7 +575,7 @@ export function startGatewayEventSubscriptions(params: {
                 agentId: sessionAgentId,
                 projection: params.getSessionRowProjection?.(),
               });
-              if (selected) {
+              if (selected && isDeliveryCurrent()) {
                 await prepareTerminalPersistence(selected.sessionKey, selected.agentId);
               }
             });
@@ -588,17 +584,17 @@ export function startGatewayEventSubscriptions(params: {
         }
       }
     }
-    const dispatchPreparation = terminalPreparation;
     const terminalDispatch: Pick<ChatAbortTerminalDispatch, "failure"> | undefined = terminalEntries
       ? {}
       : undefined;
     const dispatch = dispatchEventHandler<AgentEventRuntimePayload>({
-      loadHandler: dispatchPreparation
-        ? async () => {
-            await dispatchPreparation;
-            return getAgentEventHandler();
-          }
-        : getAgentEventHandler,
+      loadHandler: async () => {
+        if (terminalPreparation) {
+          await terminalPreparation;
+        }
+        const handler = await agentEventHandlerLoader.load();
+        return (event) => (isDeliveryCurrent() ? handler(event) : undefined);
+      },
       event: evt,
       log: params.log,
       failureMessage: "Agent event dispatch failed",
@@ -628,6 +624,22 @@ export function startGatewayEventSubscriptions(params: {
     );
     agentEventDispatches.add(dispatch);
     void dispatch.then(() => agentEventDispatches.delete(dispatch));
+  };
+  const unsubscribeAgentEvents = onAgentRuntimeEvent(handleAgentEvent, (evt) => {
+    if (evt.stream !== "lifecycle") {
+      return () => true;
+    }
+    const runId = evt.runId;
+    const chatLink = params.chatRunState.registry.peek(runId);
+    const isRegistrationCurrent = captureChatAbortRegistrationGuard(
+      params.chatAbortControllers,
+      trackedRunIds(runId, chatLink?.clientRunId ?? runId),
+    );
+    return () =>
+      evt.runId === runId &&
+      (!params.chatRunState.registry.peek(runId) ||
+        params.chatRunState.registry.peek(runId) === chatLink) &&
+      isRegistrationCurrent();
   });
   const agentUnsub = async () => {
     auditPolicyClosed = true;

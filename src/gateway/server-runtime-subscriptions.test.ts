@@ -8,7 +8,6 @@ import {
   emitAgentEvent,
   emitAgentEventForOwner,
   getAgentEventLifecycleGeneration,
-  onAgentRuntimeEvent,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
 import {
@@ -42,6 +41,7 @@ import {
   lifecycleState,
   readLifecycleState,
   registerSubscriptionChatRun,
+  registerSubscriptionRegistrationTests,
   registerAuditSubscriptionTests,
 } from "./server-runtime-subscriptions.test-support.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -416,41 +416,9 @@ describe("startGatewayEventSubscriptions", () => {
     expect(handler.dispose).toHaveBeenCalledOnce();
   });
 
-  it("does not mark a reentrant replacement terminal from the previous claim", () => {
-    const params = createParams();
-    const runId = "replaced-terminal-claim";
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const identity = {
-      sessionKey: "agent:main:replaced",
-      sessionId: "replaced-session",
-      lifecycleGeneration,
-    };
-    let registration = registerSubscriptionChatRun(params, { runId, ...identity });
-    const ownership = { exclusive: true, ownsContext: true, trackOwner: true };
-    const originalClaim = claimAgentRunContext(runId, identity, ownership);
-    if (!originalClaim) {
-      throw new Error("Missing original claim");
-    }
-    let replacementClaim: string | undefined;
-    const removeListener = onAgentRuntimeEvent((event) => {
-      if (event.runId !== runId) {
-        return;
-      }
-      releaseAgentRunContext(runId, originalClaim);
-      registration.cleanup();
-      registration = registerSubscriptionChatRun(params, { runId, ...identity });
-      replacementClaim = claimAgentRunContext(runId, identity, ownership);
-    });
+  registerSubscriptionRegistrationTests((params) => {
     unsubs = startGatewayEventSubscriptions(params);
-    try {
-      emitAgentEventForOwner({ runId, stream: "lifecycle", data: { phase: "end" } }, originalClaim);
-      expect(replacementClaim).toBeTruthy();
-      expect(registration.entry.terminalOutcomeObserved).toBeUndefined();
-    } finally {
-      removeListener();
-      registration.cleanup();
-      releaseAgentRunContext(runId, replacementClaim ?? originalClaim);
-    }
+    return unsubs;
   });
 
   it("drives a registered chat run through the terminal persistence transition table", async () => {
@@ -599,6 +567,12 @@ describe("startGatewayEventSubscriptions", () => {
             return { ok: false as const, error };
           },
         );
+        await awaitGateBeforeSettlement(
+          firstDispatchEntered.promise,
+          firstDrain,
+          "Terminal ownership settled before its held dispatch was released",
+        );
+        expect(firstSettled).toBe(false);
         const recovery = {
           runId,
           sessionKey,
@@ -626,12 +600,6 @@ describe("startGatewayEventSubscriptions", () => {
           );
         }
         const currentState = readLifecycleState(current);
-        await awaitGateBeforeSettlement(
-          firstDispatchEntered.promise,
-          firstDrain,
-          "Terminal ownership settled before its held dispatch was released",
-        );
-        expect(firstSettled).toBe(false);
         if (change !== "removed") {
           await successorDispatchEntered.promise;
         }
