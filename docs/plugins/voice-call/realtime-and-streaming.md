@@ -245,7 +245,9 @@ Only one native consult runs at a time per call. Replaying the same provider
 invocation within the active voice session shares its pending result. A new
 invocation receives a busy error with `started: false` and `retryable: true`,
 even when its arguments match. The realtime model should wait for the active
-consult's result before retrying, rather than polling while it runs.
+consult's result before retrying, rather than polling while it runs. A native
+request also receives busy while an unrelated host-forced consult runs; only a
+matching forced question can share that result.
 
 An overlapping invocation cannot replace the pending consult's caller context.
 Completing the active consult consumes only the speech it used; rejected caller
