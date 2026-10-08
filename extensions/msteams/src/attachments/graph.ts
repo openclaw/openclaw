@@ -197,7 +197,8 @@ async function downloadGraphHostedContent(
     // Graph's list API returns metadata only; hosted bytes live at `$value`.
     // Keep the JSON cap independent from the configured binary media limit.
     try {
-      const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(item.id)}/$value`;
+      const sourceId = item.id;
+      const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(sourceId)}/$value`;
       await withGraphMediaResponse(params, valueUrl, "hostedContent.value", async (valRes) => {
         if (!valRes.ok) {
           out.push(createGraphHostedContentFact(item));
@@ -213,7 +214,7 @@ async function downloadGraphHostedContent(
           path: saved.path,
           contentType: saved.contentType,
           kind: resolveMSTeamsMediaKind({ contentType: saved.contentType }),
-          sourceId: item.id,
+          sourceId,
         });
       });
     } catch (err) {
