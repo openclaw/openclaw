@@ -474,7 +474,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
 
     const completeOutboundBridgeMessage = async (
       result: { messageId: string },
-      chatGuid: string,
+      targetChatGuid: string,
       details?: Record<string, unknown>,
     ) => {
       const messageId = normalizeIMessageMessageId(result.messageId);
@@ -482,7 +482,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         await rememberIMessageReplyCache({
           accountId: account.accountId,
           messageId,
-          chatGuid,
+          chatGuid: targetChatGuid,
           timestamp: Date.now(),
           isFromMe: true,
         });

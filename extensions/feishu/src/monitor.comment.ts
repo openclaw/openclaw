@@ -1070,12 +1070,12 @@ export function parseFeishuDriveCommentNoticeEventPayload(
     return null;
   }
   const noticeMeta = value.notice_meta;
-  const readUserId = (value: unknown): FeishuDriveCommentUserId | undefined =>
-    isRecord(value)
+  const readUserId = (userIdValue: unknown): FeishuDriveCommentUserId | undefined =>
+    isRecord(userIdValue)
       ? {
-          open_id: readString(value.open_id),
-          user_id: readString(value.user_id),
-          union_id: readString(value.union_id),
+          open_id: readString(userIdValue.open_id),
+          user_id: readString(userIdValue.user_id),
+          union_id: readString(userIdValue.union_id),
         }
       : undefined;
   return {

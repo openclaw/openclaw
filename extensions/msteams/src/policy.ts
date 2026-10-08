@@ -93,9 +93,9 @@ export function resolveMSTeamsGroupToolPolicy(
   const channel = team && selectMSTeamsPolicyEntry(team.channels ?? {}, params.groupId);
   // Only selected nodes participate in policy resolution; fixed local keys avoid
   // materializing the whole config tree or encoding user-provided scope names.
-  const resolve = (team?: MSTeamsTeamConfig, channel?: MSTeamsChannelConfig) =>
+  const resolve = (selectedTeam?: MSTeamsTeamConfig, selectedChannel?: MSTeamsChannelConfig) =>
     resolveScopeToolsPolicy({
-      tree: { scopes: { team: team ?? {}, channel: channel ?? {} } },
+      tree: { scopes: { team: selectedTeam ?? {}, channel: selectedChannel ?? {} } },
       path: ["team", "channel"],
       // No messageProvider: channel-prefixed sender keys were historically dead here.
       senderPolicyMode: params.senderPolicyMode,
