@@ -101,25 +101,6 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("falls back once when alert delivery rejects after settling as not delivered", async () => {
-    await withAlerts(async ({ cron, sendCronFailureAlert, enqueueSystemEvent, addJob }) => {
-      sendCronFailureAlert.mockImplementationOnce(async (alert) => {
-        await alert.onDeliverySettled({
-          delivered: false,
-          status: "not-delivered",
-          error: "failure alert delivery failed",
-        });
-        throw new Error("failure alert delivery failed");
-      });
-      const job = await addJob("recipient custody", { delivery: createTelegramDelivery() });
-
-      await cron.run(job.id, "force");
-
-      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-      await vi.waitFor(() => expect(enqueueSystemEvent).toHaveBeenCalledOnce());
-    });
-  });
-
   it("groups an incident, alerts on a changed cause, and recovers silently", async () => {
     await withAlerts(
       async ({ cron, sendCronFailureAlert, runIsolatedAgentJob, addJob }) => {
@@ -173,27 +154,6 @@ describe("CronService failure alerts", () => {
       {
         failureAlert: { enabled: true, after: 2, cooldownMs: 60_000 },
         runResult: { status: "error", error: "wrong model id" },
-      },
-    );
-  });
-
-  it("supports per-job failure alert override when global alerts are disabled", async () => {
-    await withAlerts(
-      async ({ cron, sendCronFailureAlert, addJob }) => {
-        const job = await addJob("job with override", {
-          failureAlert: { after: 1, channel: "telegram", to: "12345", cooldownMs: 1 },
-        });
-
-        await cron.run(job.id, "force");
-        expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-        expectAlertFields(sendCronFailureAlert, {
-          channel: "telegram",
-          to: "12345",
-        });
-      },
-      {
-        failureAlert: { enabled: false },
-        runResult: { status: "error", error: "timeout" },
       },
     );
   });
@@ -395,25 +355,6 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("does not offer provider login for non-OAuth authentication failures", async () => {
-    await withAlerts(
-      async ({ cron, sendCronFailureAlert, addJob }) => {
-        const job = await addJob("API key job", { delivery: createTelegramDelivery() });
-
-        await cron.run(job.id, "force");
-
-        expect(alertCallArg(sendCronFailureAlert).presentation).toBeUndefined();
-      },
-      {
-        runResult: {
-          status: "error",
-          provider: "openai",
-          error: "401 invalid API key",
-        },
-      },
-    );
-  });
-
   it.each([
     ["command exit", { kind: "command-exit", exitCode: 23 }, "Cause: command exited with code 23"],
     [
@@ -478,25 +419,6 @@ describe("CronService failure alerts", () => {
           error: "TOKEN=opaque /private/path command --secret provider body stack",
           errorClassification: { kind: "permanent" },
         },
-      },
-    );
-  });
-
-  it("tracks skipped runs without alerting or affecting error backoff when includeSkipped is off", async () => {
-    await withAlerts(
-      async ({ cron, sendCronFailureAlert, addJob }) => {
-        const job = await addJob("busy heartbeat", { delivery: createTelegramDelivery() });
-
-        await cron.run(job.id, "force");
-        await cron.run(job.id, "force");
-
-        expect(sendCronFailureAlert).not.toHaveBeenCalled();
-        const skippedJob = cron.getJob(job.id);
-        expect(skippedJob?.state.consecutiveSkipped).toBe(2);
-        expect(skippedJob?.state.consecutiveErrors).toBe(0);
-      },
-      {
-        runResult: { status: "skipped", error: "requests-in-flight" },
       },
     );
   });

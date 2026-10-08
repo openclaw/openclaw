@@ -1,8 +1,4 @@
-import type {
-  WorkboardCard,
-  WorkboardExecutionStatus,
-  WorkboardStatus,
-} from "@openclaw/workboard-contract";
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
@@ -37,16 +33,11 @@ const workboardLifecycleGatewayState = resolveGlobalSingleton<{
   },
 );
 
-type WorkboardLifecycleState = "running" | "succeeded" | "failed" | "idle" | "stale";
-
-type WorkboardLifecycleObservation = {
-  state: WorkboardLifecycleState;
-  sourceUpdatedAt?: number;
-  stale?: {
-    detectedAt: number;
-    lastSessionUpdatedAt: number;
-    reason: string;
-  };
+type WorkboardLifecycleSync = Parameters<WorkboardStore["syncLifecycle"]>[1];
+type WorkboardLifecycleObservation = Partial<
+  Pick<WorkboardLifecycleSync, "sourceUpdatedAt" | "stale">
+> & {
+  state: keyof typeof LIFECYCLE_TARGETS;
 };
 
 type WorkboardLifecycleSession = {
@@ -104,39 +95,15 @@ function needsWorkboardLifecycleReconciliation(card: WorkboardCard): boolean {
 }
 
 const LIFECYCLE_TARGETS = {
-  running: { card: "running", execution: "running" },
-  succeeded: { card: "review", execution: "review" },
-  failed: { card: "blocked", execution: "blocked" },
-  idle: { execution: "idle" },
-  stale: { card: "running", execution: "running" },
+  running: { targetStatus: "running", executionStatus: "running" },
+  succeeded: { targetStatus: "review", executionStatus: "review" },
+  failed: { targetStatus: "blocked", executionStatus: "blocked" },
+  idle: { targetStatus: undefined, executionStatus: "idle" },
+  stale: { targetStatus: "running", executionStatus: "running" },
 } as const satisfies Record<
-  WorkboardLifecycleState,
-  { card?: WorkboardStatus; execution?: WorkboardExecutionStatus }
+  string,
+  Pick<WorkboardLifecycleSync, "targetStatus" | "executionStatus">
 >;
-
-async function syncWorkboardCardLifecycle(params: {
-  store: WorkboardStore;
-  cardId: string;
-  observation: WorkboardLifecycleObservation;
-  now: number;
-  association?: {
-    expectedSessionKey?: string;
-    expectedRunId?: string;
-    sessionKey: string;
-    runId?: string;
-    acceptedAt?: number;
-  };
-}): Promise<boolean> {
-  const target = LIFECYCLE_TARGETS[params.observation.state];
-  return await params.store.syncLifecycle(params.cardId, {
-    targetStatus: "card" in target ? target.card : undefined,
-    executionStatus: "execution" in target ? target.execution : undefined,
-    sourceUpdatedAt: params.observation.sourceUpdatedAt,
-    stale: params.observation.stale,
-    now: params.now,
-    ...(params.association ? { association: params.association } : {}),
-  });
-}
 
 async function syncWorkboardLifecycleEvent(params: {
   store: WorkboardStore;
@@ -151,9 +118,11 @@ async function syncWorkboardLifecycleEvent(params: {
   const updates = Promise.all(
     cards.map(
       async (card) =>
-        await syncWorkboardCardLifecycle({
-          ...params,
-          cardId: card.id,
+        await params.store.syncLifecycle(card.id, {
+          ...LIFECYCLE_TARGETS[params.observation.state],
+          sourceUpdatedAt: params.observation.sourceUpdatedAt,
+          stale: params.observation.stale,
+          now: params.now,
           ...(params.source.sessionKey
             ? {
                 association: {
@@ -353,10 +322,10 @@ async function syncWorkboardLifecycleSessions(params: {
     }
     const observation = lifecycleFromSession(session, now);
     if (
-      await syncWorkboardCardLifecycle({
-        store: params.store,
-        cardId: card.id,
-        observation,
+      await params.store.syncLifecycle(card.id, {
+        ...LIFECYCLE_TARGETS[observation.state],
+        sourceUpdatedAt: observation.sourceUpdatedAt,
+        stale: observation.stale,
         now,
         association: {
           ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
@@ -442,7 +411,6 @@ export function createWorkboardLifecycleService(params: {
   readSessions: (
     options: WorkboardLifecycleSessionReadOptions,
   ) => Promise<WorkboardLifecycleSessionSnapshot>;
-  onSweep?: () => void;
   now?: () => number;
 }): WorkboardLifecycleService {
   let generation = 0;
@@ -511,9 +479,6 @@ export function createWorkboardLifecycleService(params: {
       const reconcile = async () => {
         try {
           await params.store.runOperation(async () => {
-            if (generation === owner) {
-              params.onSweep?.();
-            }
             let cards = await params.store.list();
             if (generation !== owner) {
               return;

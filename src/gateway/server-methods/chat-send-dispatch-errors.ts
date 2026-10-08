@@ -8,6 +8,7 @@ import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { chatAbortMarkerTimestampMs, type ChatAbortMarker } from "../server-chat-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
@@ -15,7 +16,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-mutation-au
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
-import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
+import { broadcastChatError } from "./chat-broadcast.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import {
@@ -135,13 +136,12 @@ export async function handleChatSendSetupError(params: {
         ? errorShape(ErrorCodes.INVALID_REQUEST, params.error.message, {
             details: { code: "GOAL_OPERATION_REJECTED", reason: params.error.code },
           })
-        : errorShape(
-            ErrorCodes.UNAVAILABLE,
-            errorMessage,
-            failureDisposition === "client-retry"
+        : errorShapeFromError(ErrorCodes.UNAVAILABLE, params.error, {
+            message: errorMessage,
+            ...(failureDisposition === "client-retry"
               ? { retryable: true, retryAfterMs: 250 }
-              : undefined,
-          );
+              : {}),
+          });
   const payload = { runId: clientRunId, status: "error" as const, summary: errorMessage };
   if (params.cacheResult !== false && failureDisposition !== "client-retry") {
     setGatewayDedupeEntry({
@@ -170,7 +170,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
   context: GatewayRequestContext;
   isAgentRunStarted: () => boolean;
   isQueuedFollowupEnqueued: () => boolean;
-  isQueuedFollowupCompleted?: () => boolean;
   classifyFailure?: (error: unknown) => AcceptedChatSendFailureDisposition;
   isReplyDispatchRun?: () => boolean;
   persistUserTurnTranscript: () => Promise<unknown>;
@@ -215,27 +214,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
       context.logGateway.warn(
         `webchat dispatch failed after followup queue admission: ${formatForLog(err)}`,
       );
-      if (!context.chatRunState.hasAbortMarker(clientRunId)) {
-        setGatewayDedupeEntry({
-          dedupe: context.dedupe,
-          key: `chat:${clientRunId}`,
-          session: captureAgentJobSession(jobSessionBinding),
-          entry: {
-            ts: Date.now(),
-            ok: true,
-            payload: {
-              runId: clientRunId,
-              status: params.isQueuedFollowupCompleted?.() ? "completed" : "ok",
-            },
-          },
-        });
-        broadcastChatFinal({
-          context,
-          runId: clientRunId,
-          sessionKey,
-          agentId,
-        });
-      }
       return;
     }
 
@@ -327,7 +305,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
       // Native lifecycle owns its replay result; dispatched runtimes leave
       // failure projection to this owner, including transcript-write failures.
       const publish = () => {
-        const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
+        const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err, { message: errorMessage });
         setGatewayDedupeEntry({
           dedupe: context.dedupe,
           key: `chat:${clientRunId}`,
@@ -369,7 +347,10 @@ export function createChatSendDispatchErrorLifecycle(params: {
     // Commands and reply-dispatch runtimes have already published their terminal.
     // Native agent events keep ownership until their own terminal delivery completes.
     const clearRun = () => {
-      if (!params.isAgentRunStarted() || params.isReplyDispatchRun?.()) {
+      if (
+        !isQueuedFollowupEnqueued() &&
+        (!params.isAgentRunStarted() || params.isReplyDispatchRun?.())
+      ) {
         context.chatRunState.clearRun(clientRunId);
         context.agentRunSeq.delete(clientRunId);
       }

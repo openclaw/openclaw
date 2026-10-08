@@ -52,14 +52,11 @@ it.each([
       ...(await prepare(opts)),
       requestedChannel: normalizeUpdateChannel(opts.channel),
     }));
-    vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockImplementation(
-      async ({ target }) => ({
-        ...targetMetadata,
-        target,
-        version,
-        nodeEngine: ">=24.16.0",
-      }),
-    );
+    vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockImplementation(async () => ({
+      ...targetMetadata,
+      version,
+      nodeEngine: ">=24.16.0",
+    }));
     vi.mocked(updateCheck.resolveNpmChannelTag).mockResolvedValue({ tag: channel, version });
     vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version });
     const runtime = vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo");

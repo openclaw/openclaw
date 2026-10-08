@@ -46,7 +46,11 @@ describe("queued image snippets", () => {
 
   function draw(queue: ChatQueueItem[], editingId?: string) {
     render(
-      renderChatQueue({ queue, editingId, onQueueRemove: vi.fn(), onQueueEdit: vi.fn() }),
+      renderChatQueue({
+        queue,
+        queuedEdit: { editingId: editingId ?? null, onCancel: vi.fn(), onEdit: vi.fn() },
+        onQueueRemove: vi.fn(),
+      }),
       container,
     );
   }

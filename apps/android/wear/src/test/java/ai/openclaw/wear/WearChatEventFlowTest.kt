@@ -2744,7 +2744,7 @@ class WearChatEventFlowTest {
     val abortRuns = mutableListOf<String?>()
     private var replyObserver: ActivityController<out ComponentActivity>? = null
     private val client =
-      WearProxyClient.createForTests(
+      WearProxyClient(
         nodeResolver = WearNodeResolver { "phone-a" },
         transport = WearMessageTransport { _, _, bytes -> respond(bytes) },
       )
@@ -2768,7 +2768,7 @@ class WearChatEventFlowTest {
     fun idle() = shadowOf(Looper.getMainLooper()).idle()
 
     fun observeReplyCompletion() {
-      val sessionKey = state.selectedSession?.key
+      val sessionKey = checkNotNull(state.selectedSession).key
       val expectedRunId = state.pendingReply?.runId ?: state.replyTerminal?.runId
       val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
       replyObserver = controller
@@ -2778,8 +2778,7 @@ class WearChatEventFlowTest {
         WearReplyCompletionEffect(
           state = current,
           snapshot = current.toConversationSnapshot(),
-          awaitingReply = awaiting,
-          awaitingReplySessionId = sessionKey,
+          awaitingReplySessionId = sessionKey.takeIf { awaiting },
           expectedAssistantKey = null,
           awaitingReplyRunId = expectedRunId,
         ) { reply ->

@@ -1,10 +1,18 @@
+// Shared authoring text for every Workshop writer: the tool description, reviews, and /learn.
 export const SKILL_AUTHORING_STANDARDS_PROMPT = [
-  "Skill authoring standards:",
-  "- Size: SKILL.md stays under 10,000 characters. A skill is the shortest procedure that reproduces the result; long reference, examples, and per-branch detail go into a bundled file, pointed to from the step that needs it.",
-  "- Procedures, not records: a skill holds the steps the agent performs. Logs, histories, data tables, personal facts, and task outputs belong in memory or files.",
-  "- Description: leading words first — the situations and phrases that should trigger the skill, one trigger per distinct branch, within the first 60 characters; then what the skill produces.",
-  "- Name: the class of work, 2–4 words.",
-  "- Steps: ordered actions, each ending on a completion criterion the agent can check. Steps come before reference; reference appears only where a step consults it.",
-  '- Language: positive imperatives ("run X, then verify Y"); one source per meaning; every sentence changes behavior versus the default. Sentences that restate defaults, duplicate another line, or describe a one-off are deleted.',
-  "- Evidence: every step comes from the observed trajectory or the existing skill; never invent flags, commands, paths, APIs, tool behavior, or requirements. Capture the recovery that worked, never the failed attempts.",
+  "Skill authoring standard:",
+  "- A skill is the method for one class of task for this user: ordered steps, each with the exact commands, tools, paths, and the check that shows it worked, then the user's standing preferences for the result.",
+  "- Each rule is an imperative plus one clause of why, attached to the step it affects, stated as the behavior to produce. One rule per lesson; a repeated lesson sharpens the existing rule.",
+  "- Fix the misleading sentence in place so the skill reads as current truth; leave out update notes, dates, ticket or PR ids, incident stories, and quoted user text.",
+  "- Write plain instructions: every sentence should change what the agent does, so drop emphasis and praise.",
+  "- description (aim for ≤160 bytes; keep existing triggers when editing): open with the trigger situations, one phrase per distinct case, then what the skill produces. Name the class of work, not today's task.",
+  "- Keep in SKILL.md what every run needs; move what only some runs need into references/, templates/, or scripts/ and point to it from the step that needs it.",
+].join("\n");
+
+export const SKILL_DO_NOT_CAPTURE_PROMPT = [
+  "Do not capture:",
+  "- environment-specific or transient failures (missing binaries, unset credentials, flaky network); capture the fix only when it is durable;",
+  '- negative claims about tools or features ("X does not work"); they harden into refusals after the cause is fixed;',
+  "- unresolved failures or guesses: only a method that visibly worked;",
+  "- one-off tasks, personal facts, secrets, or generic advice without concrete commands, paths, or ids.",
 ].join("\n");

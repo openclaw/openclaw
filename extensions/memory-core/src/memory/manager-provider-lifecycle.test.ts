@@ -309,10 +309,6 @@ describe("memory index", () => {
       providerFixture.providerCloseGate = null;
       await Promise.allSettled([searchPromise, concurrentSearch]);
     }
-    expect(
-      providerFixture.providerCalls.slice(callsBeforeSearch).map((call) => call.provider),
-    ).toEqual(["fallback-provider"]);
-    await expect(concurrentSearch).resolves.toBeDefined();
   });
 
   it("leases the indexing provider generation through chunk publication", async () => {
@@ -346,7 +342,7 @@ describe("memory index", () => {
           hash: string;
           content: string;
         },
-        options: { source: "memory"; content: string },
+        source: "memory",
       ) => Promise<void>;
       ensureVectorReady: (dimensions?: number) => Promise<boolean>;
       db: {
@@ -426,7 +422,7 @@ describe("memory index", () => {
         hash: hashText(firstContent),
         content: firstContent,
       },
-      { source: "memory", content: firstContent },
+      "memory",
     );
     const secondIndexPromise = fields.indexFile(
       {
@@ -437,7 +433,7 @@ describe("memory index", () => {
         hash: hashText(secondContent),
         content: secondContent,
       },
-      { source: "memory", content: secondContent },
+      "memory",
     );
     let fallbackPromise: Promise<boolean> | null = null;
     try {

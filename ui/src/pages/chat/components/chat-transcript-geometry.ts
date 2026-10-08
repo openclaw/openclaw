@@ -89,20 +89,16 @@ export function resolvePositionRailReaderViewport(
   return { state, scheduleLayout };
 }
 
-function transcriptScrollMargin(element: Element | null): number {
-  if (!(element instanceof HTMLElement) || typeof getComputedStyle !== "function") {
-    return 0;
-  }
-  const margin = Number.parseFloat(getComputedStyle(element).paddingTop);
-  return Number.isFinite(margin) ? margin : 0;
-}
-
 /** Row offsets start below the scroll padding plus the in-flow history header. */
 export function resolveTranscriptScrollMargin(
   scrollElement: Element | null,
   headerHeight: number,
 ): number {
-  return transcriptScrollMargin(scrollElement) + headerHeight;
+  const margin =
+    scrollElement instanceof HTMLElement && typeof getComputedStyle === "function"
+      ? Number.parseFloat(getComputedStyle(scrollElement).paddingTop)
+      : 0;
+  return (Number.isFinite(margin) ? margin : 0) + headerHeight;
 }
 
 export function syncScrollMargin(
@@ -163,27 +159,21 @@ export function measureTranscriptRow(
   entry: ResizeObserverEntry | undefined,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): number {
-  if (!entry && virtualizer.targetWindow?.ResizeObserver) {
-    // Registration happens during Lit commit; the observer supplies real sizes
-    // after layout, including the first measurement of a newly mounted row.
-    const index = virtualizer.indexFromElement(element);
-    return (
-      virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??
-      virtualizer.options.estimateSize(index)
-    );
+  if (entry || !virtualizer.targetWindow?.ResizeObserver) {
+    // Rounded row heights accumulate when skipped overscan uses those measurements.
+    const size =
+      entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
+    if (size !== 0 || virtualizer.scrollElement?.clientHeight !== 0) {
+      return size;
+    }
   }
-  // Rounded row heights accumulate when skipped overscan uses those measurements.
-  const size = entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
-  if (size === 0 && virtualizer.scrollElement?.clientHeight === 0) {
-    // A hidden panel has no row geometry. Retain the last measurement instead
-    // of replacing it with zero and moving the restored viewport.
-    const index = virtualizer.indexFromElement(element);
-    return (
-      virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??
-      virtualizer.options.estimateSize(index)
-    );
-  }
-  return size;
+  // Lit registration waits for the observer's first layout; hidden panels retain
+  // their last measurement instead of replacing it with zero and moving the viewport.
+  const index = virtualizer.indexFromElement(element);
+  return (
+    virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??
+    virtualizer.options.estimateSize(index)
+  );
 }
 
 export function maxTranscriptScrollOffset(element: HTMLElement | null): number | null {

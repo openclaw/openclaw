@@ -116,7 +116,7 @@ describe("manual root catalog authorship", () => {
     for (let pass = 0; pass < 3; pass++) {
       // Each pass starts from the prior planned generation, installed only by this fixture.
       await fs.writeFile(rootPath, rootContents);
-      replacePersistedPluginModelCatalogs({
+      await replacePersistedPluginModelCatalogs({
         agentDir: state.agentDir(),
         pluginCatalogWrites: { "plugins/catalog-owner/catalog.json": pluginContents },
       });

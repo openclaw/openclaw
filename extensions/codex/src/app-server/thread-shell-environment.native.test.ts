@@ -9,12 +9,12 @@ import { readCodexEffectiveConfig } from "./config-layer-policy.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
-import { buildThreadResumeParams, buildThreadStartParams } from "./thread-lifecycle.js";
 import {
   createAppServerOptions,
   createParams,
   resetThreadLifecycleTestFixtures,
 } from "./thread-lifecycle.test-fixtures.js";
+import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
 import { mergeCodexNativeShellEnvironment } from "./thread-shell-environment.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 

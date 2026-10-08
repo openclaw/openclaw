@@ -174,6 +174,7 @@ export function renderSessionWorkspaceRail(
                 onOpen,
                 active: isSessionWorkspaceFileSelected(
                   sessionWorkspace.activeId,
+                  sessionWorkspace.sessionKey,
                   sessionWorkspace.list?.root,
                   file.path,
                   file.workspacePath,
@@ -242,6 +243,7 @@ export function renderSessionWorkspaceRail(
           directory,
           active: isSessionWorkspaceFileSelected(
             sessionWorkspace.activeId,
+            sessionWorkspace.sessionKey,
             sessionWorkspace.list?.root,
             entry.path,
             entry.path,

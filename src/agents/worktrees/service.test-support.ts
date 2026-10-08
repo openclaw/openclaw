@@ -5,7 +5,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { insertRegistryWorktree } from "./registry.js";
 import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
 
@@ -81,6 +80,7 @@ type ManagedWorktreeFixtureParams = {
   ownerKind?: ManagedWorktreeOwnerKind;
   ownerId?: string;
   provisionedPaths?: readonly string[];
+  repoFingerprint?: string;
   repoRoot: string;
   stateDir: string;
 };
@@ -88,12 +88,13 @@ type ManagedWorktreeFixtureParams = {
 export async function materializeManagedWorktreeFixtures(
   params: Omit<ManagedWorktreeFixtureParams, "name"> & { names: string[] },
 ): Promise<ManagedWorktreeRecord[]> {
+  const repoFingerprint = params.repoFingerprint ?? "downstream-fixture";
   const records = params.names.map((name): ManagedWorktreeRecord => ({
     id: `fixture-${name}`,
     name,
-    repoFingerprint: "downstream-fixture",
+    repoFingerprint,
     repoRoot: params.repoRoot,
-    path: path.join(params.stateDir, "worktrees", "downstream-fixture", name),
+    path: path.join(params.stateDir, "worktrees", repoFingerprint, name),
     branch: `openclaw/${name}`,
     baseRef: "HEAD",
     ownerKind: params.ownerKind ?? "manual",
@@ -141,16 +142,8 @@ export async function materializeManagedWorktreeFixtures(
       provisionedPaths,
     });
   }
-  const register = () => {
-    for (const record of records) {
-      insertRegistryWorktree(params.env, record, { provisionedPaths });
-    }
-  };
-  if (records.length > 1) {
-    // All asynchronous setup is complete before committing the fixture rows together.
-    runOpenClawStateWriteTransaction(register, { env: params.env });
-  } else {
-    register();
+  for (const record of records) {
+    await insertRegistryWorktree(params.env, record, { provisionedPaths });
   }
   return records;
 }

@@ -12,15 +12,12 @@ import {
   readRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
-import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
-import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
 import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
 import {
   buildAgentRunTerminalOutcomeFromAttempt,
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
-import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import { withRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
@@ -40,7 +37,7 @@ import { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
 import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import {
   cleanupEmbeddedAttemptSessionPhase,
-  type EmbeddedAttemptSessionResources,
+  createEmbeddedAttemptSessionResources,
 } from "./attempt-session-settle.js";
 import {
   queueSessionsYieldInterruptMessage,
@@ -117,7 +114,6 @@ async function runEmbeddedAttemptOwned(
     emitCorePluginToolStageSummary,
     prepStages,
     sandbox,
-    sandboxSessionKey,
     sessionAgentId,
   } = setup;
 
@@ -130,41 +126,32 @@ async function runEmbeddedAttemptOwned(
     trajectoryEndRecorded: false,
   };
   let emitDiagnosticRunCompleted: EmitDiagnosticRunCompleted | undefined;
-  let bundleMcpRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
-  let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
+  const bundleRuntimes: Pick<
+    Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>,
+    "bundleMcpRuntime" | "bundleLspRuntime"
+  > = { bundleMcpRuntime: undefined, bundleLspRuntime: undefined };
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
-  let runCleanups: Array<(reason: string) => Promise<void>> = [];
-  const resources: EmbeddedAttemptSessionResources = {
-    trajectoryRecorder: null,
-    buildAbortSettlePromise: () => null,
-  };
+  let releasePreparedTools: ((reason: string) => Promise<void>) | undefined;
+  const sessionResources = createEmbeddedAttemptSessionResources(
+    params.config,
+    runAbortController.signal,
+  );
   const cleanupStep = (step: string, cleanup: () => Promise<void>) =>
     runOwnedAgentCleanup({ ...params, step, cleanup, log });
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {
     if (toolSearchCatalogApplied) {
-      clearToolSearchCatalog({
-        sessionId: params.sessionId,
-        sessionKey: sandboxSessionKey,
-        agentId: sessionAgentId,
-        runId: params.runId,
-        catalogRef: toolSearchCatalogRef,
-      });
+      clearToolSearchCatalog({ catalogRef: toolSearchCatalogRef });
       toolSearchCatalogApplied = false;
     }
-    try {
-      await bundleMcpRuntime?.dispose();
-    } catch {
-      recordAgentCleanupFailure();
-    } finally {
-      bundleMcpRuntime = undefined;
-    }
-    try {
-      await bundleLspRuntime?.dispose();
-    } catch {
-      recordAgentCleanupFailure();
-    } finally {
-      bundleLspRuntime = undefined;
+    for (const key of ["bundleMcpRuntime", "bundleLspRuntime"] as const) {
+      try {
+        await bundleRuntimes[key]?.dispose();
+      } catch {
+        recordAgentCleanupFailure();
+      } finally {
+        bundleRuntimes[key] = undefined;
+      }
     }
   };
   const externalAbortController = createEmbeddedAttemptExternalAbortController({
@@ -240,6 +227,15 @@ async function runEmbeddedAttemptOwned(
     emitDiagnosticRunCompleted = emitCompleted;
     const corePluginToolStages = createStageTimingTracker(Date.now);
     let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
+    const executeCatalogTool = (
+      toolParams: Parameters<ToolSearchCatalogToolExecutor>[0],
+      surface: "Tool Search" | "Code Mode",
+    ) => {
+      if (!toolSearchCatalogExecutor) {
+        throw new Error(`${surface} catalog executor is unavailable for this run.`);
+      }
+      return toolSearchCatalogExecutor(toolParams);
+    };
     const preparedToolBase = await prepare("attempt.tool-base", () =>
       prepareEmbeddedAttemptToolBase({
         agentDir,
@@ -262,41 +258,19 @@ async function runEmbeddedAttemptOwned(
         skillsSnapshot: skillsSnapshotForRun,
         codeModeSkills,
         installedSkills,
-        reviewTranscript: () => {
-          if (!resources.session || runAbortController.signal.aborted) {
-            return undefined;
-          }
-          return buildExecAutoReviewTranscript({
-            config: params.config,
-            messages: resources.session.messages,
-            userTurnOrigins: new Map(
-              resources
-                .getUserTranscriptContexts?.()
-                ?.map(({ runtimeMessage, transcriptMessage }) => [
-                  runtimeMessage,
-                  transcriptMessage,
-                ]),
-            ),
-          });
-        },
-        toolSearchCatalogExecutor: (toolParams) => {
-          if (!toolSearchCatalogExecutor) {
-            throw new Error("Tool Search catalog executor is unavailable for this run.");
-          }
-          return toolSearchCatalogExecutor(toolParams);
-        },
+        reviewTranscript: sessionResources.reviewTranscript,
+        toolSearchCatalogExecutor: (toolParams) => executeCatalogTool(toolParams, "Tool Search"),
       }),
     );
     toolSearchCatalogRef = preparedToolBase.toolSearchCatalogRef;
     const {
       codeModeControlsEnabledForRun,
-      runCleanups: preparedRunCleanups,
       toolSearchControlsEnabledForRun,
       toolSearchRuntimeConfig,
       toolsEnabled,
       toolsRaw,
     } = preparedToolBase;
-    runCleanups = preparedRunCleanups;
+    releasePreparedTools = preparedToolBase.releaseTools;
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
     const preparedBootstrap = await prepare("attempt.bootstrap", () =>
@@ -326,8 +300,8 @@ async function runEmbeddedAttemptOwned(
         }),
       ),
     );
-    bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
-    bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
+    bundleRuntimes.bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
+    bundleRuntimes.bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
     const { clientTools, uncompactedEffectiveTools } = preparedBundleTools;
     // Catalog preparation registers global run state before tool projection and
     // diagnostics, so arm cleanup before either can fail and leak the catalog.
@@ -340,12 +314,7 @@ async function runEmbeddedAttemptOwned(
           preparedToolBase,
           bundleTools: { clientTools, uncompactedEffectiveTools },
           abortSignal: runAbortController.signal,
-          executeCodeModeTool: (toolParams) => {
-            if (!toolSearchCatalogExecutor) {
-              throw new Error("Code Mode catalog executor is unavailable for this run.");
-            }
-            return toolSearchCatalogExecutor(toolParams);
-          },
+          executeCodeModeTool: (toolParams) => executeCatalogTool(toolParams, "Code Mode"),
         }),
       ),
     );
@@ -366,6 +335,7 @@ async function runEmbeddedAttemptOwned(
         modelToolsEnabled: toolsEnabled,
         skillsPrompt,
         codeModeActive: codeModeControlsEnabledForRun,
+        webSearchUnconfigured: () => preparedToolBase.webSearchUnconfigured,
         toolSearchCatalogRef,
         toolSearchDirectoryEnabled: toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
         toolSearchRuntimeConfig,
@@ -394,7 +364,7 @@ async function runEmbeddedAttemptOwned(
           sessionLock,
           runAbortSignal: runAbortController.signal,
           externalAbortController,
-          resources,
+          resources: sessionResources.resources,
           onSessionYieldReady: ({ abortActiveSession, activeSession }) => {
             abortSessionForYield = () => {
               yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
@@ -448,8 +418,8 @@ async function runEmbeddedAttemptOwned(
         state: executionState,
         lifecycle: {
           applyPermissionMode: (mode, revokeApprovals) =>
-            withRuntimeToolSchemaQuarantine((recordQuarantine) => {
-              preparedToolBase.refreshPermissionMode(mode, revokeApprovals);
+            withRuntimeToolSchemaQuarantine(async (recordQuarantine) => {
+              await preparedToolBase.refreshPermissionMode(mode, revokeApprovals);
               preparedBundleTools.refreshTools(recordQuarantine);
               preparedToolCatalog.refreshTools(recordQuarantine);
               preparedSessionRuntime.agentSession.refreshTools();
@@ -499,26 +469,20 @@ async function runEmbeddedAttemptOwned(
       };
     } finally {
       // Retained review callbacks must lose the live transcript before cleanup awaits.
-      const sessionResources = { ...resources };
-      resources.session = undefined;
-      resources.getUserTranscriptContexts = undefined;
+      sessionResources.releaseReview();
       // Transfer resources to the session cleanup owner before awaiting it. A
       // bounded timeout must not let outer early-exit cleanup dispose them twice.
-      const sessionMcpRuntime = bundleMcpRuntime;
-      const sessionLspRuntime = bundleLspRuntime;
-      bundleMcpRuntime = undefined;
-      bundleLspRuntime = undefined;
+      const sessionBundleRuntimes = { ...bundleRuntimes };
+      bundleRuntimes.bundleMcpRuntime = undefined;
+      bundleRuntimes.bundleLspRuntime = undefined;
       toolSearchCatalogApplied = false;
       await cleanupStep("embedded-session", () =>
         cleanupEmbeddedAttemptSessionPhase({
           attempt: params,
-          ...sessionResources,
+          ...sessionResources.resources,
           transcriptLifecycle: sessionLock.transcriptLifecycle,
-          bundleMcpRuntime: sessionMcpRuntime,
-          bundleLspRuntime: sessionLspRuntime,
+          ...sessionBundleRuntimes,
           toolSearchCatalogRef,
-          sandboxSessionKey,
-          sessionAgentId,
           trajectoryEndRecorded: executionState.trajectoryEndRecorded,
           deferredLifecycleOwner: executionState.deferredLifecycleOwner,
           emitDiagnosticRunCompleted,
@@ -555,15 +519,13 @@ async function runEmbeddedAttemptOwned(
             ? "error"
             : "completion";
     };
-    const cleanups = runCleanups.splice(0);
     const releaseTools = async () => {
       const cleanupReason = resolveCleanupReason();
       try {
         await cleanupStep("embedded-registered-resources", async () => {
-          const settled = await Promise.allSettled(
-            cleanups.map(async (cleanup) => await cleanup(cleanupReason)),
-          );
-          if (settled.some((result) => result.status === "rejected")) {
+          try {
+            await releasePreparedTools?.(cleanupReason);
+          } catch {
             recordAgentCleanupFailure();
           }
         });

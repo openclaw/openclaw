@@ -28,7 +28,7 @@ import {
   workerBootstrapOperationTimeoutMs,
 } from "./bootstrap-timeouts.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
-import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact.js";
+import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact-contract.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import type { WorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 

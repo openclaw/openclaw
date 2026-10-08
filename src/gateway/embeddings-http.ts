@@ -1,5 +1,3 @@
-// OpenAI-compatible embeddings HTTP endpoint.
-// Bridges /v1/embeddings requests to configured OpenClaw memory providers.
 import { Buffer } from "node:buffer";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
@@ -36,13 +34,9 @@ import {
   isOpenClawAgentModelId,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
-  resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 
-// OpenAI-compatible `/v1/embeddings` bridge. It maps OpenClaw agent/model
-// routing onto configured memory embedding providers while preserving the
-// response shape expected by OpenAI SDK clients.
 type OpenAiEmbeddingsHttpOptions = GatewayHttpRequestAuthOptions & {
   maxBodyBytes?: number;
 };
@@ -60,7 +54,6 @@ const MAX_EMBEDDING_INPUTS = 128;
 const MAX_EMBEDDING_INPUT_CHARS = 8_192;
 const MAX_EMBEDDING_TOTAL_CHARS = 65_536;
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
-type EmbeddingProviderRequest = string;
 type MemorySearchEmbeddingConfig = Pick<
   NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
   "local" | "remote" | "inputType" | "queryInputType" | "documentInputType"
@@ -94,29 +87,15 @@ function validateInputTexts(texts: string[]): string | undefined {
   return undefined;
 }
 
-function resolveEmbeddingProviderRemoteConfig(remote: MemorySearchEmbeddingConfig["remote"]) {
-  return remote
-    ? {
-        baseUrl: remote.baseUrl,
-        apiKey: remote.apiKey,
-        headers: remote.headers,
-      }
-    : undefined;
-}
-
-function isLocalEmbeddingProvider(params: {
-  cfg: OpenClawConfig;
-  provider: EmbeddingProviderRequest;
-}): boolean {
-  const providerId =
-    params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
-  return getMemoryEmbeddingProvider(providerId, params.cfg)?.transport === "local";
+function isLocalEmbeddingProvider(cfg: OpenClawConfig, provider: string): boolean {
+  const providerId = provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : provider;
+  return getMemoryEmbeddingProvider(providerId, cfg)?.transport === "local";
 }
 
 async function createConfiguredEmbeddingProvider(params: {
   cfg: OpenClawConfig;
   agentDir: string;
-  provider: EmbeddingProviderRequest;
+  provider: string;
   model: string;
   dimensions?: number;
   memorySearch?: MemorySearchEmbeddingConfig;
@@ -128,13 +107,16 @@ async function createConfiguredEmbeddingProvider(params: {
   if (!adapter) {
     throw new Error(`Unknown memory embedding provider: ${providerId}`);
   }
+  const remote = params.memorySearch?.remote;
   const createOptions = {
     config: params.cfg,
     agentDir: params.agentDir,
     provider: providerId,
     model: params.model || adapter.defaultModel || "",
     local: params.memorySearch?.local,
-    remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
+    remote: remote
+      ? { baseUrl: remote.baseUrl, apiKey: remote.apiKey, headers: remote.headers }
+      : undefined,
     inputType: params.memorySearch?.inputType,
     queryInputType: params.memorySearch?.queryInputType,
     documentInputType: params.memorySearch?.documentInputType,
@@ -153,8 +135,8 @@ async function createConfiguredEmbeddingProvider(params: {
 // a gateway client cannot select an arbitrary embedding provider by model name.
 function resolveEmbeddingsTarget(params: {
   requestModel: string;
-  configuredProvider: EmbeddingProviderRequest;
-}): { provider: EmbeddingProviderRequest; model: string } | { errorMessage: string } {
+  configuredProvider: string;
+}): { provider: string; model: string } | { errorMessage: string } {
   const configuredProvider =
     params.configuredProvider === "auto"
       ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
@@ -190,7 +172,6 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     ...opts,
     pathname: "/v1/embeddings",
     requiredOperatorMethod: "chat.send",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes: opts.maxBodyBytes ?? DEFAULT_EMBEDDINGS_BODY_BYTES,
   });
   if (handled === false) {
@@ -258,10 +239,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
   const providerScopeKey = JSON.stringify([agentId, target.provider]);
-  const requestedProviderNeedsCleanup = isLocalEmbeddingProvider({
-    cfg,
-    provider: target.provider,
-  });
+  const requestedProviderNeedsCleanup = isLocalEmbeddingProvider(cfg, target.provider);
   if (req.socket.destroyed || res.destroyed || res.socket?.destroyed) {
     return true;
   }
@@ -283,8 +261,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
           memorySearch: memorySearch ?? undefined,
         }),
       (createdProvider) =>
-        requestedProviderNeedsCleanup ||
-        isLocalEmbeddingProvider({ cfg, provider: createdProvider.id }),
+        requestedProviderNeedsCleanup || isLocalEmbeddingProvider(cfg, createdProvider.id),
     );
     try {
       if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {

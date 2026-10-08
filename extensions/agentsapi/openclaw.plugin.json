@@ -52,6 +52,11 @@
         "default": "openai_hosted",
         "description": "Execution environment for new sessions. Self-hosted uses the prepared OpenClaw workspace and requires an externally connected executor. Reset existing sessions after changing this setting."
       },
+      "executorController": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Plugin ID that owns this self-hosted executor controller. Omit for an externally connected executor. Enable the selected plugin and reset existing sessions before changing controllers."
+      },
       "openai_host": {
         "type": "object",
         "additionalProperties": false,

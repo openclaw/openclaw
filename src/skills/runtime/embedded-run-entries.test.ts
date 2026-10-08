@@ -17,6 +17,7 @@ import {
 } from "../types.js";
 import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
+import { recordSkillRootsExecutionFileHost } from "./skill-snapshot-provenance.js";
 
 describe("resolveEmbeddedRunSkillEntries", () => {
   const prepareWorkspaceSkillsSpy = vi.spyOn(skillsLoaderModule, "prepareWorkspaceSkills");
@@ -27,177 +28,95 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     prepareWorkspaceSkillsSpy.mockResolvedValue([]);
   });
 
-  it("threads agentId through live skill loading", async () => {
-    await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config: {},
-      agentId: "writer",
-      skillsSnapshot: {
-        prompt: "skills prompt",
+  it.each(["canonical", "materialized", "legacy"] as const)(
+    "loads %s roots with agent and eligibility context",
+    async (mode) => {
+      const workspaceDir = path.resolve("/synthetic/materialized");
+      const executionWorkspaceDir = path.resolve("/synthetic/canonical");
+      const agentWorkspaceDir = path.resolve("/synthetic/agent");
+      const workspaceOnly = mode === "materialized";
+      const eligibility = {
+        remote: {
+          platforms: ["linux"],
+          hasBin: () => false,
+          hasAnyBin: () => true,
+          note: "sandbox",
+        },
+      };
+      const skillsSnapshot: SkillSnapshot = {
+        prompt: "Hydrate selected skills",
         skills: [],
-      },
-    });
-
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith(
-      "/tmp/workspace",
-      {
+        promptFormatVersion: mode === "legacy" ? 6 : WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+        skillRoots:
+          mode === "legacy"
+            ? {
+                agentWorkspaceDir: path.resolve("/synthetic/stale-agent"),
+                executionWorkspaceDir: path.resolve("/synthetic/stale-canonical"),
+              }
+            : recordSkillRootsExecutionFileHost(
+                { agentWorkspaceDir, executionWorkspaceDir },
+                "gateway",
+              ),
+      };
+      const serializedSnapshot = JSON.stringify(skillsSnapshot);
+      const hydratedSnapshot: SkillSnapshot = JSON.parse(serializedSnapshot);
+      await resolveEmbeddedRunSkillEntries({
+        workspaceDir,
+        workspaceOnly,
         config: {},
         agentId: "writer",
-      },
-      undefined,
-    );
-  });
-
-  it("can constrain live loading to materialized workspace skills", async () => {
-    const eligibility = {
-      remote: {
-        platforms: ["linux"],
-        hasBin: () => false,
-        hasAnyBin: () => true,
-        note: "sandbox",
-      },
-    };
-
-    await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace/.openclaw/sandbox-skills",
-      config: {},
-      eligibility,
-      skillsSnapshot: {
-        prompt: "skills prompt",
-        skills: [],
-      },
-      workspaceOnly: true,
-    });
-
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith(
-      "/tmp/workspace/.openclaw/sandbox-skills",
-      {
-        config: {},
         eligibility,
-        workspaceOnly: true,
-      },
-      undefined,
-    );
-  });
+        ...(mode === "legacy"
+          ? ({ executionWorkspaceDir, executionWorkspaceFileHost: "gateway" } as const)
+          : {}),
+        skillsSnapshot: hydratedSnapshot,
+      });
+      expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith(
+        mode === "canonical" ? agentWorkspaceDir : workspaceDir,
+        {
+          config: {},
+          agentId: "writer",
+          eligibility,
+          executionWorkspaceDir: workspaceOnly ? undefined : executionWorkspaceDir,
+          executionWorkspaceFileHost: workspaceOnly ? undefined : "gateway",
+          ...(workspaceOnly ? { workspaceOnly: true } : {}),
+        },
+        undefined,
+      );
+    },
+  );
 
-  it("prefers the active runtime snapshot when caller config still contains SecretRefs", async () => {
-    const sourceConfig: OpenClawConfig = {
-      skills: {
-        entries: {
-          diffs: {
-            apiKey: {
-              source: "file",
-              provider: "default",
-              id: "/skills/entries/diffs/apiKey",
+  it.each([false, true])(
+    "prefers resolved skill secrets when runtime contains raw refs: %s",
+    async (rawRuntime) => {
+      const sourceConfig: OpenClawConfig = {
+        skills: {
+          entries: {
+            diffs: {
+              apiKey: { source: "file", provider: "default", id: "/skills/entries/diffs/apiKey" },
             },
           },
         },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      skills: {
-        entries: {
-          diffs: {
-            apiKey: "resolved-key",
-          },
-        },
-      },
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-
-    await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config: sourceConfig,
-      skillsSnapshot: {
-        prompt: "skills prompt",
-        skills: [],
-      },
-    });
-
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith(
-      "/tmp/workspace",
-      {
-        config: runtimeConfig,
-      },
-      undefined,
-    );
-  });
-
-  it("prefers caller config when the active runtime snapshot still contains raw skill SecretRefs", async () => {
-    const sourceConfig: OpenClawConfig = {
-      skills: {
-        entries: {
-          diffs: {
-            apiKey: {
-              source: "file",
-              provider: "default",
-              id: "/skills/entries/diffs/apiKey",
-            },
-          },
-        },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = structuredClone(sourceConfig);
-    const callerConfig: OpenClawConfig = {
-      skills: {
-        entries: {
-          diffs: {
-            apiKey: "resolved-key",
-          },
-        },
-      },
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-
-    await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config: callerConfig,
-      skillsSnapshot: {
-        prompt: "skills prompt",
-        skills: [],
-      },
-    });
-
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith(
-      "/tmp/workspace",
-      {
-        config: callerConfig,
-      },
-      undefined,
-    );
-  });
-
-  it("exposes a cached lazy loader without eagerly loading a modern snapshot", async () => {
-    const loadedEntries: SkillEntry[] = [
-      {
-        skill: createCanonicalFixtureSkill({
-          name: "healthy",
-          description: "healthy",
-          filePath: "/tmp/workspace/skills/healthy/SKILL.md",
-          baseDir: "/tmp/workspace/skills/healthy",
-          source: "test",
-        }),
-        frontmatter: {},
-      },
-    ];
-    prepareWorkspaceSkillsSpy.mockResolvedValue(loadedEntries);
-    const result = await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config: {},
-      skillsSnapshot: {
-        prompt: "skills prompt",
-        skills: [{ name: "healthy", skillKey: "healthy" }],
-        resolvedSkills: [],
-      },
-    });
-
-    expect(result.shouldLoadSkillEntries).toBe(false);
-    expect(result.skillEntries).toEqual([]);
-    expect(prepareWorkspaceSkillsSpy).not.toHaveBeenCalled();
-    expect(await result.loadSkillEntries()).toBe(loadedEntries);
-    expect(await result.loadSkillEntries()).toBe(loadedEntries);
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledOnce();
-  });
+      };
+      const resolvedConfig: OpenClawConfig = {
+        skills: { entries: { diffs: { apiKey: "resolved-key" } } },
+      };
+      setRuntimeConfigSnapshot(
+        rawRuntime ? structuredClone(sourceConfig) : resolvedConfig,
+        sourceConfig,
+      );
+      await resolveEmbeddedRunSkillEntries({
+        workspaceDir: "/tmp/workspace",
+        config: rawRuntime ? resolvedConfig : sourceConfig,
+        skillsSnapshot: { prompt: "skills prompt", skills: [] },
+      });
+      expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith(
+        "/tmp/workspace",
+        { config: resolvedConfig },
+        undefined,
+      );
+    },
+  );
 });
 
 describe("embedded library cache publication", () => {
@@ -369,8 +288,12 @@ describe("embedded library cache publication", () => {
 
   it("excludes pinned libraries from workspace-only loads and retains workspace array identity", async () => {
     const result = await resolve({ workspaceOnly: true });
+    expect(result.shouldLoadSkillEntries).toBe(false);
+    expect(result.skillEntries).toEqual([]);
+    expect(workspace).not.toHaveBeenCalled();
     expect(await result.loadSkillEntries()).toBe(workspaceEntries);
     expect(await result.loadSkillEntries()).toBe(workspaceEntries);
     expect(library).not.toHaveBeenCalled();
+    expect(workspace).toHaveBeenCalledOnce();
   });
 });

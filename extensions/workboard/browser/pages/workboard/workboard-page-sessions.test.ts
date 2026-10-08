@@ -72,7 +72,8 @@ function sessionsPage(options: { boardId?: string; gatewayId?: string; profileId
         reason: "Reviewed",
       },
     ],
-    warning: "Utility model temporarily unavailable",
+    warning:
+      "Session facts are unavailable for 2 sessions: Gateway disconnected. Showing the last known placement.",
   };
   const page = mountPage({ boardId: board.id });
   const request = expectDefined(page.request.getMockImplementation(), "request");
@@ -252,34 +253,54 @@ it("restores the destination board's saved people filter when boards change whil
   page.dispose();
 });
 
-it("ignores a stale view response and keeps filtering when browser storage is unavailable", async () => {
-  const page = sessionsPage();
-  const unavailable = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-    throw new Error("Storage unavailable");
-  });
-  await page.connect();
-  unavailable.mockRestore();
-  const pending = createDeferred<WorkboardSessionsBoardRead>();
-  const request = expectDefined(page.request.getMockImplementation(), "request");
-  page.request.mockImplementation((method, params) =>
-    method === "workboard.sessionsBoard.read" &&
-    (params as { view?: { involvingMe?: boolean } }).view?.involvingMe
-      ? pending.promise
-      : request(method, params),
-  );
-  const blockedWrite = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-    throw new Error("Storage unavailable");
-  });
-  peoplePicker(page).onSelect("me");
-  await vi.advanceTimersByTimeAsync(0);
-  peoplePicker(page).onSelect("profile:ada");
-  await vi.advanceTimersByTimeAsync(0);
-  pending.resolve({ ...page.result, sessions: [] });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(peoplePicker(page).value).toBe("profile:ada");
-  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
-  blockedWrite.mockRestore();
-});
+it.each(["people", "cards"] as const)(
+  "discards a stale sessions read after switching %s",
+  async (destination) => {
+    const page = sessionsPage();
+    const pending = createDeferred<WorkboardSessionsBoardRead>();
+    const request = expectDefined(page.request.getMockImplementation(), "request");
+    const unavailable =
+      destination === "people"
+        ? vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+            throw new Error("Storage unavailable");
+          })
+        : undefined;
+    page.request.mockImplementation((method, params) =>
+      method === "workboard.sessionsBoard.read" &&
+      (destination === "cards" ||
+        (params as { view?: { involvingMe?: boolean } }).view?.involvingMe)
+        ? pending.promise
+        : request(method, params),
+    );
+    await page.connect();
+    unavailable?.mockRestore();
+    const blockedWrite =
+      destination === "people"
+        ? vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+            throw new Error("Storage unavailable");
+          })
+        : undefined;
+    if (destination === "people") {
+      peoplePicker(page).onSelect("me");
+      await vi.advanceTimersByTimeAsync(0);
+      peoplePicker(page).onSelect("profile:ada");
+    } else {
+      page.navigate("default");
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    pending.resolve(destination === "people" ? { ...page.result, sessions: [] } : page.result);
+    await vi.advanceTimersByTimeAsync(0);
+    if (destination === "people") {
+      expect(peoplePicker(page).value).toBe("profile:ada");
+      expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+    } else {
+      expect(page.container.querySelector(".workboard-sessions")).toBeNull();
+      expect(page.container.textContent).not.toContain("Fix retries");
+      expect(page.container.querySelector(".workboard-create")).not.toBeNull();
+    }
+    blockedWrite?.mockRestore();
+  },
+);
 
 function button(page: ReturnType<typeof mountPage>, label: string) {
   return expectDefined(
@@ -289,6 +310,132 @@ function button(page: ReturnType<typeof mountPage>, label: string) {
     label,
   );
 }
+
+it("recovers empty-board facts through one plugin refresh of the selected people view", async () => {
+  const page = sessionsPage();
+  const sessions = page.result.sessions.splice(0);
+  await page.connect();
+  const statuses = () =>
+    [...page.container.querySelectorAll('[role="status"]')].map((entry) =>
+      entry.textContent?.trim(),
+    );
+  expect(statuses()).toContain(page.result.warning);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(0);
+
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
+  page.request.mockClear();
+  page.result.sessions.push(...sessions);
+  page.result.sessions[0]!.observerDigest!.headline = "New canonical headline";
+  delete page.result.warning;
+  page.fixture.emit("session.observer", { sessionKey: "agent:main:working", revision: 1 });
+  page.fixture.emit("plugin.workboard.changed", { epoch: "facts", revision: 1 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(statuses()).toEqual([]);
+  expect(page.reads()).toBe(1);
+  expect(page.container.textContent).toContain("New canonical headline");
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(page.reads()).toBe(1);
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true, involvingMe: true },
+  });
+});
+
+it("skips unchanged board events, preserves tiles on conditional reads and rereads after reconnect", async () => {
+  const page = sessionsPage();
+  const revision = { epoch: "sessions", revision: 1, boardId: "sessions", scope: "everyone" };
+  Object.assign(page.result, { revision });
+  await page.connect();
+  const request = expectDefined(page.request.getMockImplementation(), "request");
+  page.request.mockImplementation(async (method, params) =>
+    method === "workboard.sessionsBoard.read" &&
+    (params as { sinceRevision?: unknown }).sinceRevision
+      ? { unchanged: true, revision }
+      : request(method, params),
+  );
+  page.request.mockClear();
+  page.fixture.emit("plugin.workboard.changed", {
+    epoch: "sessions",
+    revision: 2,
+    cardsRevision: 2,
+    sessionsRevision: 1,
+  });
+  page.fixture.emit("sessions.changed", { reason: "category", sessionKey: "agent:main:working" });
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(page.reads()).toBe(0);
+  page.fixture.emit("plugin.workboard.changed", { epoch: "sessions", revision: 3 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true },
+    sinceRevision: revision,
+  });
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(page.container.textContent).toContain("Checking reconnects");
+
+  page.fixture.connection.connected = false;
+  page.fixture.notify();
+  await page.connect();
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true },
+  });
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true, involvingMe: true },
+  });
+});
+
+it("fences an older conditional read when a session moves", async () => {
+  const page = sessionsPage();
+  const revision = { epoch: "sessions", revision: 1, boardId: "sessions", scope: "everyone" };
+  Object.assign(page.result, { revision });
+  await page.connect();
+  const pending = createDeferred<unknown>();
+  const request = expectDefined(page.request.getMockImplementation(), "request");
+  page.request.mockImplementation(async (method, params) => {
+    if (
+      method === "workboard.sessionsBoard.read" &&
+      (params as { sinceRevision?: unknown }).sinceRevision
+    ) {
+      return pending.promise;
+    }
+    if (method === "workboard.sessionsBoard.move") {
+      page.result.sessions[0]!.columnId = "done";
+    }
+    return request(method, params);
+  });
+  page.fixture.emit("plugin.workboard.changed", {
+    epoch: "sessions",
+    revision: 2,
+    sessionsRevision: 2,
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const tile = expectDefined(page.container.querySelector("[data-session-key]"), "session tile");
+  tile.dispatchEvent(new Event("dragstart", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expectDefined(
+    page.container.querySelector('[data-session-column="done"]'),
+    "destination",
+  ).dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(
+    page.container.querySelector('[data-session-column="done"]')?.getAttribute("aria-label"),
+  ).toBe("Done, 2");
+  pending.resolve({ unchanged: true, revision });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(
+    page.container.querySelector('[data-session-column="done"]')?.getAttribute("aria-label"),
+  ).toBe("Done, 2");
+  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true },
+  });
+});
 
 it("renders session columns, owner avatars and canonical facts without card controls or an unavailable dock", async () => {
   const page = sessionsPage();
@@ -307,7 +454,7 @@ it("renders session columns, owner avatars and canonical facts without card cont
     page.container.querySelector('[data-session-key="agent:writer:done"]')?.getAttribute("title"),
   ).toContain("pinned");
   expect(page.container.querySelector('[role="status"]')?.textContent).toContain(
-    "Utility model temporarily unavailable",
+    "Gateway disconnected",
   );
   expect(page.fixture.host.components.mountAgentAvatar).toHaveBeenCalledWith(
     expect.any(HTMLElement),
@@ -315,7 +462,7 @@ it("renders session columns, owner avatars and canonical facts without card cont
   );
   expect(
     page.container.querySelector(
-      ".workboard-create, .workboard-dispatch, .workboard-card, .workboard-status-tabs, .workboard-board-agent",
+      ".workboard-create, .workboard-dispatch, .workboard-card, .workboard-status-tabs, .workboard-board-agent, .workboard-refresh",
     ),
   ).toBeNull();
   expectDefined(
@@ -338,7 +485,7 @@ it("renders session columns, owner avatars and canonical facts without card cont
   expect(page.container.textContent).not.toContain("Fix retries");
 });
 
-it("moves a dragged session through the placement RPC and refreshes through the board classifier", async () => {
+it("pins a dragged session and rereads the selected people view", async () => {
   const page = sessionsPage();
   await page.connect();
   peoplePicker(page).onSelect("me");
@@ -356,11 +503,6 @@ it("moves a dragged session through the placement RPC and refreshes through the 
     sessionKey: "agent:main:working",
     columnId: "done",
   });
-  button(page, "Refresh").click();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.refresh", {
-    boardId: "sessions",
-  });
   expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
     boardId: "sessions",
     view: { includePeople: true, involvingMe: true },
@@ -368,84 +510,138 @@ it("moves a dragged session through the placement RPC and refreshes through the 
   expect(page.request.mock.calls.some(([method]) => method === "workboard.cards.move")).toBe(false);
 });
 
-it("coalesces observer events for visible sessions and rereads canonical placements on board changes", async () => {
+it("links up to four pull requests by state without opening or dragging the session", async () => {
   const page = sessionsPage();
+  page.result.sessions[0]!.pullRequests = [
+    { number: 10, state: "closed" },
+    { number: 11, state: "merged" },
+    { number: 12, state: "draft" },
+    {
+      number: 13,
+      state: "open",
+      url: "https://github.com/example/project/pull/13",
+      title: "Fix session retries",
+    },
+    { number: 14, state: "closed" },
+    { number: 15, state: "closed" },
+  ];
   await page.connect();
-  peoplePicker(page).onSelect("me");
-  await vi.advanceTimersByTimeAsync(0);
-  page.request.mockClear();
-  page.fixture.emit("session.observer", { sessionKey: "agent:other:unseen" });
-  await vi.advanceTimersByTimeAsync(1000);
-  expect(page.reads()).toBe(0);
-  page.result.sessions[0]!.observerDigest!.headline = "New canonical headline";
-  for (let revision = 1; revision <= 3; revision += 1) {
-    page.fixture.emit("session.observer", { sessionKey: "agent:main:working", revision });
-  }
-  await vi.advanceTimersByTimeAsync(999);
-  expect(page.reads()).toBe(0);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(page.reads()).toBe(1);
-  expect(page.container.textContent).toContain("New canonical headline");
-  page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(page.reads()).toBe(2);
-  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
-    boardId: "sessions",
-    view: { includePeople: true, involvingMe: true },
-  });
-});
+  const tile = expectDefined(
+    page.container.querySelector<HTMLElement>('[data-session-key="agent:main:working"]'),
+    "session tile",
+  );
+  const pullRequests = [...tile.querySelectorAll<HTMLElement>(".workboard-session-pr")];
+  expect(pullRequests.map((entry) => entry.textContent?.trim())).toEqual([
+    "#13 · Open",
+    "#12 · Draft",
+    "#11 · Merged",
+    "#10 · Closed",
+  ]);
+  expect(tile.querySelector(".workboard-session-tile__prs")?.textContent).toContain("+2");
+  const link = expectDefined(tile.querySelector<HTMLAnchorElement>("a"), "pull-request link");
+  expect(link.href).toBe("https://github.com/example/project/pull/13");
+  expect(link.target).toBe("_blank");
+  expect(link.rel).toBe("noreferrer");
+  expect(link.title).toBe("Fix session retries");
+  expect(link.closest("button")).toBeNull();
+  expect(pullRequests.slice(1).every((entry) => entry.tagName === "SPAN")).toBe(true);
 
-it("discards a sessions read completed after navigating to a card board", async () => {
-  const page = sessionsPage();
-  const pending = createDeferred<WorkboardSessionsBoardRead>();
-  const request = expectDefined(page.request.getMockImplementation(), "request");
-  page.request.mockImplementation((method, params) =>
-    method === "workboard.sessionsBoard.read" ? pending.promise : request(method, params),
-  );
-  await page.connect();
-  page.navigate("default");
-  await vi.advanceTimersByTimeAsync(0);
-  pending.resolve(page.result);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(page.container.querySelector(".workboard-sessions")).toBeNull();
-  expect(page.container.textContent).not.toContain("Fix retries");
-  expect(page.container.querySelector(".workboard-create")).not.toBeNull();
-});
-
-it("creates a sessions board from the default Cards kind without submitting client-owned default columns", async () => {
-  const page = sessionsPage();
-  await page.connect();
-  button(page, "New board").click();
-  await vi.advanceTimersByTimeAsync(0);
-  const form = expectDefined(
-    page.container.querySelector<HTMLFormElement>(".workboard-board-draft"),
-    "new board",
-  );
-  expect(form.querySelector<HTMLInputElement>('input[value="cards"]')?.checked).toBe(true);
-  const name = expectDefined(
-    form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
-    "board name",
-  );
-  name.value = "My sessions";
-  name.dispatchEvent(new Event("input", { bubbles: true }));
+  const icon = expectDefined(link.querySelector("svg"), "pull-request state icon");
+  const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+  icon.dispatchEvent(click);
+  expect(click.defaultPrevented).toBe(false);
+  expect(page.fixture.host.sessions.open).not.toHaveBeenCalled();
+  link.dispatchEvent(new Event("dragstart", { bubbles: true, cancelable: true }));
   expectDefined(
-    form.querySelector<HTMLInputElement>('input[value="sessions"]'),
-    "Sessions kind",
-  ).click();
-  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    page.container.querySelector('[data-session-column="done"]'),
+    "destination",
+  ).dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(0);
-  expect(page.request).toHaveBeenCalledWith("workboard.boards.upsert", {
-    id: expect.stringMatching(/^board-/),
-    name: "My sessions",
-    kind: "sessions",
-  });
   expect(
-    page.request.mock.calls.some(([method]) => method === "workboard.sessionsBoard.update"),
+    page.request.mock.calls.some(([method]) => method === "workboard.sessionsBoard.move"),
   ).toBe(false);
+  expectDefined(tile.querySelector<HTMLButtonElement>("button"), "session title").click();
+  expect(page.fixture.host.sessions.open).toHaveBeenCalledExactlyOnceWith({
+    sessionKey: "agent:main:working",
+    agentId: "main",
+  });
 });
+
+it.each(["cards", "sessions"] as const)(
+  "registers and pins a created %s board before its catalog refresh completes",
+  async (kind) => {
+    const page = sessionsPage();
+    await page.connect();
+    const savedBoard = {
+      id: `created-${kind}`,
+      name: "My board",
+      kind,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const refreshed = createDeferred<unknown>();
+    const request = expectDefined(page.request.getMockImplementation(), "request");
+    let created = false;
+    page.request.mockImplementation(async (method, params) => {
+      if (method === "workboard.boards.upsert") {
+        created = true;
+        return { board: savedBoard };
+      }
+      if (method === "workboard.cards.list" && created) {
+        return refreshed.promise;
+      }
+      return request(method, params);
+    });
+    button(page, "New board").click();
+    await vi.advanceTimersByTimeAsync(0);
+    const form = expectDefined(
+      page.container.querySelector<HTMLFormElement>(".workboard-board-draft"),
+      "new board",
+    );
+    expect(form.querySelector<HTMLInputElement>('input[value="cards"]')?.checked).toBe(true);
+    const name = expectDefined(
+      form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
+      "board name",
+    );
+    name.value = "My board";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    expectDefined(
+      form.querySelector<HTMLInputElement>(`input[value="${kind}"]`),
+      "board kind",
+    ).click();
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.request).toHaveBeenCalledWith("workboard.boards.upsert", {
+      id: expect.stringMatching(/^board-/),
+      name: "My board",
+      ...(kind === "sessions" ? { kind } : {}),
+    });
+    expect(
+      page.request.mock.calls.some(([method]) => method === "workboard.sessionsBoard.update"),
+    ).toBe(false);
+    expect(page.registerBoardNavigation).toHaveBeenCalledExactlyOnceWith(savedBoard);
+    expect(page.fixture.host.ui.pinNavigation).toHaveBeenCalledExactlyOnceWith(
+      `board-created-${kind}`,
+    );
+    expect(page.registerBoardNavigation.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(page.fixture.host.ui.pinNavigation).mock.invocationCallOrder[0]!,
+    );
+    expect(page.fixture.host.navigation.openPage).not.toHaveBeenCalled();
+    refreshed.resolve({ cards: [], boards: [page.board] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.fixture.host.navigation.openPage).toHaveBeenCalledWith(
+      { id: "workboard", path: [savedBoard.id] },
+      { replace: true, preserveSearch: true },
+    );
+  },
+);
 
 it("validates session columns inline and preserves their ids and rules when labels change", async () => {
   const page = sessionsPage();
+  expectDefined(page.board.sessions.columns[0], "working column").match = [
+    { run: ["active"] },
+    { health: ["on-track"] },
+  ];
   await page.connect();
   button(page, "Edit board").click();
   await vi.advanceTimersByTimeAsync(0);
@@ -467,12 +663,6 @@ it("validates session columns inline and preserves their ids and rules when labe
   );
   label.value = "Building";
   label.dispatchEvent(new Event("input", { bubbles: true }));
-  const instructions = expectDefined(
-    form.querySelector<HTMLTextAreaElement>('textarea[aria-label="Classification instructions"]'),
-    "instructions",
-  );
-  instructions.value = "Keep docs in review until checked";
-  instructions.dispatchEvent(new Event("input", { bubbles: true }));
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(0);
   expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.update", {
@@ -482,49 +672,92 @@ it("validates session columns inline and preserves their ids and rules when labe
         { ...page.board.sessions.columns[0], label: "Building" },
         page.board.sessions.columns[1],
       ],
-      instructions: "Keep docs in review until checked",
     },
   });
 });
 
-it("creates and saves one board conversation before opening the optional dock, reusing it after a failed save", async () => {
+it.each([undefined, "agent:main:legacy-board-conversation"])(
+  "creates one dock conversation for %s and reuses it after a failed save",
+  async (previousSessionKey) => {
+    const page = sessionsPage();
+    page.board.sessions.agentSessionKey = previousSessionKey;
+    const openSession = vi.fn();
+    Object.assign(page.fixture.host, {
+      dock: { openSession, close: vi.fn(), openSessionKey: null },
+    });
+    vi.mocked(page.fixture.host.sessions.create).mockResolvedValue("agent:main:board-conversation");
+    const request = expectDefined(page.request.getMockImplementation(), "request");
+    let rejectSave = true;
+    page.request.mockImplementation(async (method, params) => {
+      if (method === "sessions.describe") {
+        return { session: { key: previousSessionKey, agentId: "main", isDock: false } };
+      }
+      if (method === "workboard.sessionsBoard.update") {
+        if (rejectSave) {
+          throw new Error("Save unavailable");
+        }
+        page.board.sessions.agentSessionKey = "agent:main:board-conversation";
+        return { board: page.board };
+      }
+      return request(method, params);
+    });
+    await page.connect();
+    peoplePicker(page).onSelect("me");
+    await vi.advanceTimersByTimeAsync(0);
+    button(page, "Board agent").click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.container.textContent).toContain("Save unavailable");
+    expect(openSession).not.toHaveBeenCalled();
+    expect(page.board.sessions.agentSessionKey).toBe(previousSessionKey);
+    rejectSave = false;
+    button(page, "Board agent").click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.fixture.host.sessions.create).toHaveBeenCalledExactlyOnceWith({
+      agentId: "main",
+      displayName: "Sessions board · Team sessions",
+      surface: "plugin-dock",
+    });
+    if (previousSessionKey) {
+      expect(page.request).toHaveBeenCalledWith("sessions.describe", { key: previousSessionKey });
+    }
+    expect(page.fixture.host.sessions.patch).not.toHaveBeenCalled();
+    expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.update", {
+      boardId: "sessions",
+      patch: { agentSessionKey: "agent:main:board-conversation" },
+    });
+    expect(openSession).toHaveBeenCalledExactlyOnceWith({
+      sessionKey: "agent:main:board-conversation",
+      agentId: "main",
+      label: "Sessions board · Team sessions",
+      context: { page: "workboard", detail: { boardId: "sessions" } },
+    });
+  },
+);
+
+it("reopens the saved dock conversation by exact read when it is absent from the session roster", async () => {
   const page = sessionsPage();
+  const sessionKey = "agent:writer:board-conversation";
+  page.board.sessions.agentSessionKey = sessionKey;
   const openSession = vi.fn();
   Object.assign(page.fixture.host, { dock: { openSession, close: vi.fn(), openSessionKey: null } });
-  vi.mocked(page.fixture.host.sessions.create).mockResolvedValue("agent:main:board-conversation");
   const request = expectDefined(page.request.getMockImplementation(), "request");
-  let rejectSave = true;
-  page.request.mockImplementation(async (method, params) => {
-    if (method === "workboard.sessionsBoard.update") {
-      if (rejectSave) {
-        throw new Error("Save unavailable");
-      }
-      page.board.sessions.agentSessionKey = "agent:main:board-conversation";
-      return { board: page.board };
-    }
-    return request(method, params);
-  });
+  page.request.mockImplementation(async (method, params) =>
+    method === "sessions.describe"
+      ? { session: { key: sessionKey, agentId: "writer", isDock: true } }
+      : request(method, params),
+  );
   await page.connect();
-  peoplePicker(page).onSelect("me");
-  await vi.advanceTimersByTimeAsync(0);
+  expect(page.fixture.host.sessions.rows).toEqual([]);
   button(page, "Board agent").click();
   await vi.advanceTimersByTimeAsync(0);
-  expect(page.container.textContent).toContain("Save unavailable");
-  expect(openSession).not.toHaveBeenCalled();
-  rejectSave = false;
-  button(page, "Board agent").click();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(page.fixture.host.sessions.create).toHaveBeenCalledExactlyOnceWith({
-    agentId: "main",
-    label: "Sessions board · Team sessions",
-  });
-  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.update", {
-    boardId: "sessions",
-    patch: { agentSessionKey: "agent:main:board-conversation" },
-  });
+  expect(page.request).toHaveBeenCalledWith("sessions.describe", { key: sessionKey });
+  expect(page.fixture.host.sessions.create).not.toHaveBeenCalled();
+  expect(
+    page.request.mock.calls.some(([method]) => method === "workboard.sessionsBoard.update"),
+  ).toBe(false);
   expect(openSession).toHaveBeenCalledExactlyOnceWith({
-    sessionKey: "agent:main:board-conversation",
-    agentId: "main",
+    sessionKey,
+    agentId: "writer",
     label: "Sessions board · Team sessions",
     context: { page: "workboard", detail: { boardId: "sessions" } },
   });

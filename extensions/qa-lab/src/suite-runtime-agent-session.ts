@@ -50,25 +50,8 @@ const MAX_COMPACTION_SUMMARIES = 16;
 const MAX_SUCCESSFUL_TOOL_CALL_EVENTS = 64;
 const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
 
-type QaSessionTranscriptSummary = {
-  assistantMirrors?: Array<{ identity: string; text: string }>;
+type QaSessionTranscriptSummary = ReturnType<typeof summarizeSessionTranscriptEvents> & {
   assistantReplyStartLine?: number;
-  assistantToolCallCounts: Record<string, number>;
-  compactionSummaries: string[];
-  completedToolCallCounts: Record<string, number>;
-  currentSourceToolDeliveries?: Array<{ toolName: string; threadId?: string }>;
-  eventCursor: number;
-  hasPendingCodeModeWait?: boolean;
-  userMessageCount: number;
-  successfulToolCallCounts: Record<string, number>;
-  successfulToolCallEvents?: Array<{ name: string; timestamp: number; toolCallId: string }>;
-  finalText: string;
-  hasDirectReplySelfMessage: boolean;
-  lastAssistantContentTypes?: string[];
-  lastAssistantErrorMessage?: string;
-  lastAssistantStopReason?: string;
-  lastAssistantToolNames?: string[];
-  lastMessageRole?: string;
   resetRecallCutoffLine?: number;
   probeTextEndLine?: number;
 };
@@ -135,11 +118,10 @@ function readWaitingCodeModeRunId(message: Record<string, unknown>) {
 
 function summarizeSessionTranscriptEvents(
   events: unknown[],
-  sessionKey: string,
   eventCursor = events.length,
   pendingCodeModeExecNeedle?: string,
   includeCodeModeControl = false,
-): QaSessionTranscriptSummary {
+) {
   const scanner = createDirectReplyTranscriptSentinelScanner();
   const assistantMirrors: Array<{ identity: string; text: string }> = [];
   const assistantToolCallCounts: Record<string, number> = {};
@@ -147,9 +129,8 @@ function summarizeSessionTranscriptEvents(
   const compactionSummaries: string[] = [];
   const currentSourceToolDeliveries: Array<{ toolName: string; threadId?: string }> = [];
   const successfulToolCallCounts: Record<string, number> = {};
-  const successfulToolCallEvents: NonNullable<
-    QaSessionTranscriptSummary["successfulToolCallEvents"]
-  > = [];
+  const successfulToolCallEvents: Array<{ name: string; timestamp: number; toolCallId: string }> =
+    [];
   const codeModeExecCallIds = new Set<string>();
   const codeModeRunIds = new Set<string>();
   const completedToolCallIds = new Set<string>();
@@ -286,10 +267,6 @@ function summarizeSessionTranscriptEvents(
     });
   }
 
-  if (events.length === 0) {
-    throw new Error(`session transcript is empty for ${sessionKey}`);
-  }
-
   return {
     ...(assistantMirrors.length > 0 ? { assistantMirrors } : {}),
     assistantToolCallCounts,
@@ -315,23 +292,6 @@ function summarizeSessionTranscriptEvents(
     ...(lastAssistantStopReason ? { lastAssistantStopReason } : {}),
     ...(lastAssistantToolNames.length > 0 ? { lastAssistantToolNames } : {}),
     ...(lastMessageRole ? { lastMessageRole } : {}),
-  };
-}
-
-function emptySessionTranscriptSummary(
-  eventCursor: number,
-  pendingCodeModeExecNeedle?: string,
-): QaSessionTranscriptSummary {
-  return {
-    assistantToolCallCounts: {},
-    compactionSummaries: [],
-    completedToolCallCounts: {},
-    eventCursor,
-    ...(pendingCodeModeExecNeedle ? { hasPendingCodeModeWait: false } : {}),
-    userMessageCount: 0,
-    successfulToolCallCounts: {},
-    finalText: "",
-    hasDirectReplySelfMessage: false,
   };
 }
 
@@ -552,16 +512,18 @@ async function readSessionTranscriptSummary(
   const { normalizedSessionKey, events, selectedEvents, sessionId } =
     await readQaSessionTranscriptEvents(env, sessionKey, options);
   const pendingCodeModeExecNeedle = options.pendingCodeModeExecNeedle?.trim();
-  if (selectedEvents.length === 0 && options.allowEmpty === true) {
-    return emptySessionTranscriptSummary(events.length, pendingCodeModeExecNeedle);
+  if (selectedEvents.length === 0 && options.allowEmpty !== true) {
+    throw new Error(`session transcript is empty for ${normalizedSessionKey}`);
   }
   const summary = summarizeSessionTranscriptEvents(
     selectedEvents,
-    normalizedSessionKey,
     events.length,
     pendingCodeModeExecNeedle,
     options.includeCodeModeControl,
   );
+  if (selectedEvents.length === 0) {
+    return summary;
+  }
   const probeText = options.probeText?.trim();
   let cutoff: unknown;
   if (probeText && sessionId) {

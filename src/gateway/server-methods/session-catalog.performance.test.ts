@@ -68,17 +68,18 @@ it("measures 100 composed catalog lists against real session and plugin stores",
       try {
         counters.begin();
         fixture = await createComposedCatalogFixture(state, counters);
+        await fixture.setupList();
         const catalogNamespace = await counters.catalogPersisted;
-        const first = await fixture.list();
+        const first = await fixture.setupList();
         expect(first.sessions.length).toBeGreaterThan(0);
         const sourceHomeId = first.sessions[0]?.sourceHomeId;
         if (!sourceHomeId) {
           throw new Error("Native catalog did not expose its source home identity");
         }
-        let page = await fixture.list();
+        let page = await fixture.setupList();
         let visibleCount = page.sessions.length;
         while (page.nextCursor) {
-          page = await fixture.list({ cursors: { [page.hostId]: page.nextCursor } });
+          page = await fixture.setupList({ cursors: { [page.hostId]: page.nextCursor } });
           visibleCount += page.sessions.length;
         }
         expect(visibleCount).toBe(3_000);
@@ -110,9 +111,9 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         do {
           await fixture.projection.ensureMaterialized();
         } while (fixture.projection.needsMaterialization);
-        const head = await fixture.list();
+        const head = await fixture.setupList();
         expect(head.sessions.filter((session) => session.sessionKey)).toHaveLength(3);
-        const search = await fixture.list({ search: "Project 7", limitPerHost: 32 });
+        const search = await fixture.setupList({ search: "Project 7", limitPerHost: 32 });
         if (!head.nextCursor || !search.nextCursor) {
           throw new Error("Expected native continuation fixtures");
         }
@@ -129,7 +130,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         const warmResponses: SessionCatalogHost[] = [];
         for (const query of variants) {
           for (let warm = 0; warm < 3; warm++) {
-            const result = await fixture.list(query);
+            const result = await fixture.setupList(query);
             if (warm === 2) {
               warmResponses.push(result);
             }
@@ -139,7 +140,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
           await fixture.projection.ensureMaterialized();
         } while (fixture.projection.needsMaterialization);
         const cpuReferenceP50Ms = measureHostCpuReference();
-        expect(fixture.setupMaintenance).toEqual({ started: 3, completed: 3 });
+        expect(fixture.setupMaintenance).toEqual({ completed: 3 });
         counters.begin();
         const durations: number[] = [];
         const workPerList = [];
@@ -179,7 +180,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         durations.sort((a, b) => a - b);
 
         const inspector = new InspectorSession();
-        expect(fixture.setupMaintenance).toEqual({ started: 3, completed: 3 });
+        expect(fixture.setupMaintenance).toEqual({ completed: 3 });
         inspector.connect();
         let sampledAllocationBytes: number;
         let cpuSamples: ReturnType<typeof observedCpuSamples>;

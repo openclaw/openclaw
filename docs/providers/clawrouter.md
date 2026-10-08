@@ -146,7 +146,7 @@ curl -fsS http://127.0.0.1:18789/readyz
 # Credential-scoped catalog discovery.
 openclaw models list --all --provider clawrouter --json
 
-# Minimal real inference probe through the configured ClawRouter provider.
+# Minimal real inference test through the configured ClawRouter provider.
 openclaw models status --probe --probe-provider clawrouter --probe-max-tokens 8 --json
 
 # Workload canary using an exact granted model ref.
@@ -159,7 +159,7 @@ openclaw agent --agent main \
 Use a model returned by the scoped catalog instead of copying the example
 model blindly. A successful `/readyz` response means the gateway can serve
 requests; it does not claim that ClawRouter, the ClawRouter key, or an
-upstream provider is ready. The model probe and agent canary are the inference proofs.
+upstream provider is ready. The model check and agent canary are the inference proofs.
 
 For live diagnosis, enable `OPENCLAW_DEBUG_MODEL_TRANSPORT=1` in the gateway
 process, issue the canary, and inspect the gateway's logs. The metadata-only

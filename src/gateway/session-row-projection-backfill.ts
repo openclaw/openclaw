@@ -1,10 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { SessionRowChange } from "../sessions/session-row-changes.js";
+import { isDeepStrictEqual } from "node:util";
 import {
   canRunSessionListBackgroundWork,
   yieldSessionListBackgroundWork,
 } from "./session-projection-work.js";
-import type { Row } from "./session-row-projection-record.js";
+import { identity, type EntryRow, type Row } from "./session-row-projection-record.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
 
 /** Optional transcript work never participates in row readiness or a foreground response. */
@@ -19,10 +19,25 @@ export function createSessionRowProjectionBackfill(params: {
 }) {
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const queued = new Set<string>();
+  const revisions = new Map<string, ReturnType<typeof revision>>();
   let pending: Promise<void> | undefined;
-  let activeId: string | undefined;
   let started = false;
   let disposed = false;
+  function revision(row: EntryRow, watermark: Row["retainedDatabaseFacts"]) {
+    const { entry, materialized } = row;
+    return {
+      generation: row.generation,
+      watermark: watermark?.activitySummaryWatermark,
+      fallback: entry.fallbackNotice && {
+        status: entry.status,
+        lastRunId: entry.lastRunId,
+        modelProvider: entry.modelProvider,
+        model: entry.model,
+        notice: entry.fallbackNotice,
+        selectedModel: materialized?.source.selectedModel,
+      },
+    };
+  }
   async function drain() {
     for (;;) {
       if (disposed || !queued.size) {
@@ -43,12 +58,14 @@ export function createSessionRowProjectionBackfill(params: {
       queued.delete(id);
       const row = params.read(id);
       const entry = row?.entry;
-      if (!row || !entry) {
+      const captured = revisions.get(id);
+      if (!row || !entry || !captured) {
         continue;
       }
-      activeId = id;
-      // Same-lifecycle publications retain the generation but supersede these transcript facts.
-      const current = () => !disposed && !queued.has(id) && params.current(row);
+      const current = () => {
+        const live = params.read(id);
+        return !disposed && revisions.get(id) === captured && live?.generation === row.generation;
+      };
       let interrupted = false;
       const shouldCommit = () => {
         if (!canRunSessionListBackgroundWork()) {
@@ -72,13 +89,27 @@ export function createSessionRowProjectionBackfill(params: {
             config: row.materialized.source.cfg,
           },
         });
-        if (shouldCommit()) {
-          params.publish(row, fields);
+        // Metadata can rematerialize the row without changing its transcript revision.
+        for (;;) {
+          if (interrupted) {
+            break;
+          }
+          await params.ready();
+          if (!shouldCommit()) {
+            break;
+          }
+          const live = params.read(id);
+          if (live && params.current(live)) {
+            params.publish(row, fields);
+            break;
+          }
         }
       } catch {
         // A later owner publication retries optional fields; do not spin on a cold/error row.
+        if (current()) {
+          revisions.delete(id);
+        }
       } finally {
-        activeId = undefined;
         if (interrupted && current()) {
           queued.add(id);
         }
@@ -103,28 +134,26 @@ export function createSessionRowProjectionBackfill(params: {
   }
   return {
     start,
-    enqueue(id: string, change?: SessionRowChange) {
-      if (
-        change &&
-        "all" in change &&
-        typeof change.scope === "string" &&
-        !(
-          ((change.scope === "config" || change.scope === "stores") && id === activeId) ||
-          ((change.scope === "config" || change.scope === "catalog") &&
-            params.read(id)?.entry?.fallbackNotice)
-        )
-      ) {
-        return;
+    prepare(row: EntryRow, facts: Row["retainedDatabaseFacts"]) {
+      const id = identity(row);
+      const next = revision(row, facts);
+      const previous = revisions.get(id);
+      if (!isDeepStrictEqual(previous, next)) {
+        revisions.set(id, next);
+        queued.add(id);
       }
-      queued.add(id);
       if (started) {
         start();
       }
     },
-    remove: (id: string) => queued.delete(id),
+    remove(this: void, id: string) {
+      revisions.delete(id);
+      queued.delete(id);
+    },
     dispose() {
       disposed = true;
       queued.clear();
+      revisions.clear();
     },
   };
 }

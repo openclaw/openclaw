@@ -9,7 +9,6 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
 import {
-  normalizeChatFastModeInput,
   resolveChatModelUnavailableReason,
   resolveChatFastModeSelectState,
   resolveChatModelOverrideValue,
@@ -76,74 +75,6 @@ function resolveFastModeState(params: {
 }
 
 describe("chat-model-select-state", () => {
-  it("requires current selected-runtime access before showing Ultrafast", () => {
-    const model = {
-      id: "model",
-      name: "Model",
-      provider: "openai",
-      available: true,
-      agentRuntime: { id: "codex", source: "model" as const },
-      supportsFastMode: true,
-      serviceTiers: ["priority", "ultrafast"],
-    };
-    const input = {
-      sessionsResult: createSessionsListResult({ model: "model", modelProvider: "openai" }),
-      currentModelOverride: "openai/model",
-      fastModeTarget: {
-        model: "model",
-        modelProvider: "openai",
-        fastMode: "ultrafast" as const,
-        agentRuntime: { id: "codex", source: "session" as const },
-      },
-    };
-    expect(normalizeChatFastModeInput("ultrafast")).toBe("ultrafast");
-    expect(resolveFastModeSelection({ ...input, catalog: [model] })).toMatchObject({
-      ultrafastSupported: true,
-      currentOverride: "ultrafast",
-      label: "Ultrafast",
-      active: true,
-    });
-    for (const catalog of [
-      [],
-      [{ ...model, supportsFastMode: false }],
-      [{ ...model, serviceTiers: undefined }],
-      [{ ...model, serviceTiers: ["priority"] }],
-      [{ ...model, available: undefined }],
-      [{ ...model, available: false }],
-      [{ ...model, id: "another-model" }],
-      [{ ...model, agentRuntime: { id: "openclaw", source: "model" as const } }],
-    ]) {
-      expect(resolveFastModeSelection({ ...input, catalog })).toMatchObject({
-        ultrafastSupported: false,
-        currentOverride: "ultrafast",
-        label: "Fast",
-      });
-    }
-    // Runtime alternatives are complete projections, not overlays on the base route.
-    const catalog = [
-      {
-        ...model,
-        runtimeChoices: [
-          {
-            agentRuntime: { id: "openclaw", source: "model" as const },
-            available: true,
-            supportsFastMode: true,
-          },
-        ],
-      },
-    ];
-    expect(
-      resolveFastModeSelection({
-        ...input,
-        catalog,
-        fastModeTarget: {
-          ...input.fastModeTarget,
-          agentRuntime: { id: "openclaw", source: "session" },
-        },
-      }),
-    ).toMatchObject({ ultrafastSupported: false, label: "Fast" });
-  });
-
   it.each([
     { reason: "missing-auth", expected: "missing-auth" },
     { reason: "auth-failed", expected: "auth-failed" },

@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createAgentHarnessCompletionScope } from "../agents/agent-harness-completion-scope.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import { prepareCatalogExecutor } from "../agents/embedded-agent-runner/run/attempt-stream-prepare.test-support.js";
 import * as embeddedRuns from "../agents/embedded-agent-runner/runs.js";
+import { buildAgentInternalEventContext } from "../agents/internal-events.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import {
   appendHistory,
@@ -20,21 +22,28 @@ import {
 } from "../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "../agents/sessions/agent-session-loop-resource-loader.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
+import { readMessageIdempotencyKey } from "../config/sessions/transcript-message-identity.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   captureAgentHarnessCompletionCustody,
   deliverAgentHarnessCompletion,
   type AgentHarnessCompletionCustody,
 } from "../plugin-sdk/agent-harness-completion.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { tryBeginGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import * as userTurnTranscript from "../sessions/user-turn-transcript.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { createRegisteredCompletionPair } from "./server.subagent-completion-authority.test-support.js";
 import { loadSessionEntry } from "./session-utils.js";
 import {
   agentCommandMock,
@@ -175,7 +184,131 @@ describe("native completion final-effect authority", () => {
   registerAgentSessionLoopTestLifecycle();
   afterEach(() => vi.restoreAllMocks());
 
-  it.for(["live", "operator-revoked", "requester-replaced"] as const)(
+  it.for(["predecessor", "successor"] as const)(
+    "keeps registered turn delivery independent when %s source is revoked in flight",
+    async (revokedSource, { signal }) => {
+      await prepareGatewayReplyRuntimeForTest();
+      const context = kernel.gatewayRequestContext;
+      const pair = await createRegisteredCompletionPair(context);
+      const createGate = () => ({ entered: createDeferred(), resume: createDeferred() });
+      const gates = [createGate(), createGate()] as const;
+      const sources: unknown[] = [];
+      const attempts: string[] = [];
+      const requesterRuntimeContext: unknown[] = [];
+      let requesterCommands = 0;
+      const release = () => gates.forEach((gate) => gate.resume.resolve());
+      signal.addEventListener("abort", release, { once: true });
+      const requestWork = vi.spyOn(context, "trackExecution");
+      const settleRequests = () =>
+        Promise.allSettled(
+          requestWork.mock.results.flatMap((result) =>
+            result.type === "return" ? [result.value] : [],
+          ),
+        );
+      const stage = sessionAccessor.stageSessionPendingInput;
+      const stageSpy = vi
+        .spyOn(sessionAccessor, "stageSessionPendingInput")
+        .mockImplementation(async (...args) => {
+          const index = pair.runs.findIndex(
+            (run) =>
+              args[0].sessionKey === pair.requesterScope.sessionKey &&
+              readMessageIdempotencyKey(args[1].message) === `${run.idempotencyKey}:user`,
+          );
+          if (index === 0 || index === 1) {
+            sources[index] =
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority?.source;
+            attempts.push(pair.runs[index].runId);
+            gates[index].entered.resolve();
+            await gates[index].resume.promise;
+          }
+          return stage(...args);
+        });
+      agentCommandMock.mockImplementation(async (input) => {
+        const command = input as AgentCommandOpts;
+        const child = pair.handleChildCommand(command);
+        if (child) {
+          return child;
+        }
+        requesterCommands += 1;
+        requesterRuntimeContext.push(
+          ...buildAgentInternalEventContext(
+            command.internalEvents,
+            command.runtimeContextFragments,
+          ),
+        );
+        const recorder = expectDefined(
+          command.userTurnTranscriptRecorder,
+          "Expected real registered completion input recorder",
+        );
+        expect(await recorder.persistApproved()).toMatchObject({ appended: true });
+        return { payloads: [{ text: "Child received", mediaUrl: null }], meta: { durationMs: 1 } };
+      });
+      try {
+        await pair.complete(0);
+        await withinTest(
+          reachBoundary(gates[0].entered.promise, pair.runs[0].settled.promise),
+          signal,
+        );
+        await pair.admitSuccessor();
+        expect(attempts).toEqual([pair.runs[0].runId]);
+        await pair.complete(1);
+        await withinTest(
+          reachBoundary(gates[1].entered.promise, pair.runs[1].settled.promise),
+          signal,
+        );
+        const revokedIndex = revokedSource === "predecessor" ? 0 : 1;
+        pair.runs[revokedIndex].revoked.abort(new Error("operator completion authority revoked"));
+        release();
+        await pair.settle();
+        await settleRequests();
+        expect(attempts.toSorted()).toEqual(pair.runs.map((run) => run.runId).toSorted());
+        const allowed = pair.runs.filter((_, index) => index !== revokedIndex);
+        expect(requesterCommands).toBe(allowed.length);
+        expect(agentCommandMock).toHaveBeenCalledTimes(2 + allowed.length);
+        const events = sessionAccessor.loadTranscriptEventsSync(pair.requesterScope);
+        const inputKeys = events.flatMap((event) =>
+          isRecord(event) && isRecord(event.message) && event.message.role === "user"
+            ? [readMessageIdempotencyKey(event.message)]
+            : [],
+        );
+        expect(inputKeys).toHaveLength(allowed.length);
+        expect(inputKeys).toEqual(
+          expect.arrayContaining(allowed.map((run) => `${run.idempotencyKey}:user`)),
+        );
+        expect((await listSessionPendingInputs(pair.requesterScope)).total).toBe(0);
+        const stored = loadSubagentRegistryFromSqlite();
+        const runtimeContext = JSON.stringify(requesterRuntimeContext);
+        for (const [index, run] of pair.runs.entries()) {
+          expect(sources[index]).toBe(run.source.authority.source);
+          if (index === revokedIndex) {
+            expect(stored.get(run.runId)?.delivery?.status).not.toBe("delivered");
+            expect(context.dedupe.has(`agent:${run.idempotencyKey}`)).toBe(false);
+            expect(runtimeContext).not.toContain(run.result);
+          } else {
+            expect(stored.get(run.runId)?.delivery?.status).toBe("delivered");
+            expect(context.dedupe.get(`agent:${run.idempotencyKey}`)).toMatchObject({ ok: true });
+            expect(runtimeContext).toContain(run.result);
+          }
+          expect(JSON.stringify(events)).not.toContain(run.result);
+          resumeSubagentRun(run.runId);
+        }
+        await pair.settle();
+        await settleRequests();
+        expect(requesterCommands).toBe(allowed.length);
+        expect(agentCommandMock).toHaveBeenCalledTimes(2 + allowed.length);
+        expect(sessionAccessor.loadTranscriptEventsSync(pair.requesterScope)).toEqual(events);
+      } finally {
+        release();
+        await pair.dispose();
+        await settleRequests();
+        stageSpy.mockRestore();
+        requestWork.mockRestore();
+        signal.removeEventListener("abort", release);
+      }
+    },
+  );
+
+  it.for(["operator-revoked", "requester-replaced"] as const)(
     "revalidates %s authority at real Gateway input staging",
     async (change, { signal }) => {
       await prepareGatewayReplyRuntimeForTest();
@@ -223,31 +356,12 @@ describe("native completion final-effect authority", () => {
         const result = await delivery;
         // The RPC responds before its request owner releases the unaccepted reservation.
         await settleRequests();
-        if (change === "live") {
-          expect(result).toMatchObject({ delivered: true, path: "direct" });
-          expect(execution).toHaveBeenCalledOnce();
-          expect(agentCommandMock).toHaveBeenCalledOnce();
-          expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)).toMatchObject({
-            ok: true,
-          });
-          expect(listSessionPendingInputs(completion.sessionScope).total).toBe(0);
-          expect(sessionAccessor.loadTranscriptEventsSync(completion.sessionScope)).toContainEqual(
-            expect.objectContaining({
-              type: "message",
-              message: expect.objectContaining({
-                role: "user",
-                idempotencyKey: `${completion.idempotencyKey}:user`,
-              }),
-            }),
-          );
-        } else {
-          expect(result.delivered).toBe(false);
-          expect(execution).not.toHaveBeenCalled();
-          expect(agentCommandMock).not.toHaveBeenCalled();
-          expect(listSessionPendingInputs(completion.sessionScope).total).toBe(0);
-          expect(sessionAccessor.loadTranscriptEventsSync(completion.sessionScope)).toEqual(before);
-          expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)).toBeUndefined();
-        }
+        expect(result.delivered).toBe(false);
+        expect(execution).not.toHaveBeenCalled();
+        expect(agentCommandMock).not.toHaveBeenCalled();
+        expect((await listSessionPendingInputs(completion.sessionScope)).total).toBe(0);
+        expect(sessionAccessor.loadTranscriptEventsSync(completion.sessionScope)).toEqual(before);
+        expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)).toBeUndefined();
       } finally {
         release();
         await Promise.allSettled([delivery, settleRequests()]);
@@ -259,16 +373,9 @@ describe("native completion final-effect authority", () => {
     },
   );
 
-  it.for([
-    { boundary: "recorder", change: "live" },
-    { boundary: "recorder", change: "operator-revoked" },
-    { boundary: "recorder", change: "requester-replaced" },
-    { boundary: "automatic compaction", change: "live" },
-    { boundary: "automatic compaction", change: "operator-revoked" },
-    { boundary: "automatic compaction", change: "requester-replaced" },
-  ] as const)(
-    "revalidates $change authority after real $boundary",
-    async ({ boundary, change }, { signal }) => {
+  it.for(["live", "operator-revoked", "requester-replaced"] as const)(
+    "revalidates %s authority after the real recorder during automatic compaction",
+    async (change, { signal }) => {
       await prepareGatewayReplyRuntimeForTest();
       const context = kernel.gatewayRequestContext;
       using completion = await createCompletion(context);
@@ -297,38 +404,32 @@ describe("native completion final-effect authority", () => {
       signal.addEventListener("abort", release, { once: true });
       const sessionManager = SessionManager.open(completion.sessionScope);
       guardSessionManager(sessionManager);
-      if (boundary === "automatic compaction") {
-        appendHistory(
-          sessionManager,
-          createAssistant(testModel, [{ type: "text", text: "Previous result" }]),
-        );
-        appendHistory(
-          sessionManager,
-          createAssistant(testModel, [{ type: "text", text: "Latest result" }]),
-        );
-      }
+      await appendHistory(
+        sessionManager,
+        createAssistant(testModel, [{ type: "text", text: "Previous result" }]),
+      );
+      await appendHistory(
+        sessionManager,
+        createAssistant(testModel, [{ type: "text", text: "Latest result" }]),
+      );
       const { session } = await createTestSession({
         sessionManager,
-        ...(boundary === "automatic compaction"
-          ? {
-              settingsManager: createAutoCompactionSettings(),
-              resourceLoader: createResourceLoader(
-                new Map([
-                  [
-                    "session_before_compact",
-                    [
-                      async () => {
-                        compacting.resolve();
-                        await resumeCompaction.promise;
-                        // Keep the prompt in automatic compaction while completion authority changes.
-                        return { cancel: true };
-                      },
-                    ],
-                  ],
-                ]),
-              ),
-            }
-          : {}),
+        settingsManager: createAutoCompactionSettings(),
+        resourceLoader: createResourceLoader(
+          new Map([
+            [
+              "session_before_compact",
+              [
+                async () => {
+                  compacting.resolve();
+                  await resumeCompaction.promise;
+                  // Keep the prompt in automatic compaction while completion authority changes.
+                  return { cancel: true };
+                },
+              ],
+            ],
+          ]),
+        ),
       });
       streamMocks.streamSimple.mockImplementation(() => {
         if (finishModel || closing) {
@@ -345,7 +446,7 @@ describe("native completion final-effect authority", () => {
               testModel,
               [{ type: "text", text: "Ready" }],
               "stop",
-              boundary === "automatic compaction" ? testModel.contextWindow : 1,
+              testModel.contextWindow,
             ),
           });
           stream.end();
@@ -354,7 +455,7 @@ describe("native completion final-effect authority", () => {
         return stream;
       });
       const activeRunId = `active-${randomUUID()}`;
-      const prepared = prepareCatalogExecutor([], {
+      const prepared = prepareCatalogExecutor({
         activeSession: session,
         sessionKey: completion.sessionScope.sessionKey,
         attempt: {
@@ -366,7 +467,7 @@ describe("native completion final-effect authority", () => {
         },
       });
       expect(prepared.queueHandle.messageInjectionV2?.version).toBe(2);
-      const inject = vi.spyOn(session.agent, "steer");
+      const inject = vi.spyOn(session.agent, "admitSteeringMessage");
       const steer = session.steer.bind(session);
       let steering: ReturnType<typeof session.steer> | undefined;
       vi.spyOn(session, "steer").mockImplementation((...args) => (steering = steer(...args)));
@@ -395,11 +496,9 @@ describe("native completion final-effect authority", () => {
       try {
         prompt = session.prompt("Wait for the native child");
         await reachBoundary(modelEntered.promise, prompt);
-        if (boundary === "automatic compaction") {
-          finishModel?.();
-          await reachBoundary(compacting.promise, prompt);
-          expect(prepared.subscription.isCompacting()).toBe(true);
-        }
+        finishModel?.();
+        await reachBoundary(compacting.promise, prompt);
+        expect(prepared.subscription.isCompacting()).toBe(true);
         const before = sessionAccessor.loadTranscriptEventsSync(completion.sessionScope);
         delivery = completion.deliver();
         await reachBoundary(entered.promise, delivery);
@@ -410,9 +509,6 @@ describe("native completion final-effect authority", () => {
           await reachBoundary(queued.promise, delivery);
           expect(inject).toHaveBeenCalledOnce();
           resumeCompaction.resolve();
-          if (boundary === "recorder") {
-            finishModel?.();
-          }
           await prompt;
           expect(await delivery).toMatchObject({ delivered: true, path: "steered" });
           expect(sessionManager.getEntries()).toContainEqual(
@@ -428,17 +524,13 @@ describe("native completion final-effect authority", () => {
           expect((await delivery).delivered).toBe(false);
           await Promise.allSettled([steering]);
           resumeCompaction.resolve();
-          if (boundary === "automatic compaction") {
-            await prompt;
-          }
+          await prompt;
           expect(inject).not.toHaveBeenCalled();
           expect(session.getSteeringMessages()).toEqual([]);
           expect(sessionAccessor.loadTranscriptEventsSync(completion.sessionScope)).toEqual(before);
-          expect(listSessionPendingInputs(completion.sessionScope).total).toBe(0);
+          expect((await listSessionPendingInputs(completion.sessionScope)).total).toBe(0);
         }
-        if (boundary === "automatic compaction") {
-          expect(prepared.subscription.isCompacting()).toBe(false);
-        }
+        expect(prepared.subscription.isCompacting()).toBe(false);
         expect(agentCommandMock).not.toHaveBeenCalled();
         expect(context.dedupe.has(`agent:${completion.idempotencyKey}`)).toBe(false);
       } finally {

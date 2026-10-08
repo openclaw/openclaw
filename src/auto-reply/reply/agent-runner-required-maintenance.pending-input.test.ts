@@ -32,7 +32,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { runReplyAgent } from "./agent-runner.js";
+import { runReplyAgent } from "./agent-runner-run.js";
 import {
   createTestFollowupRun,
   installAgentRunnerMemoryFixture,
@@ -53,6 +53,7 @@ describe("required maintenance with restart-safe admitted input", () => {
     async (history) => {
       await withOpenClawTestState({ label: "required-maintenance-pending" }, async (state) => {
         const requests: ModelRequest[] = [];
+        const runtimeContext = "Synthetic current runtime fact for the approved request.";
         const approved =
           "Approved current request: preserve ünicode 🦞 and exact newlines.\n" +
           "Current background information.\n".repeat(1_600) +
@@ -181,7 +182,7 @@ describe("required maintenance with restart-safe admitted input", () => {
         const scope = { agentId: "main", sessionKey, sessionId, storePath };
         const cfg: OpenClawConfig = {
           agents: {
-            list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+            entries: { main: { workspace: state.workspaceDir } },
             defaults: {
               workspace: state.workspaceDir,
               model: { primary: "test-provider/test-model" },
@@ -271,13 +272,14 @@ describe("required maintenance with restart-safe admitted input", () => {
               }),
             );
           }
-          const request = createRestartSafeChatRequest({
+          const request = await createRestartSafeChatRequest({
             eligible: true,
             message: approved,
             senderIsOwner: true,
             cfg,
           });
           const restartSafeAdmission = resolveRestartSafeChatAdmission({
+            acpMeta: null,
             activeRunScopeKey: sessionKey,
             agentId: "main",
             cfg,
@@ -285,7 +287,9 @@ describe("required maintenance with restart-safe admitted input", () => {
             context: { chatAbortControllers: new Map(), chatQueuedTurns: new Map() },
             entry,
             initialSessionEntry: entry,
+            lifecycleTimestamps: undefined,
             now: Date.now(),
+            placement: undefined,
             request,
             sessionId,
             sessionKey,
@@ -301,6 +305,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             },
             input: { text: approved, timestamp: Date.now(), idempotencyKey: `${runId}:user` },
             ...buildRestartSafeChatTranscriptState({
+              sourceIngress: "control-ui",
               admission: restartSafeAdmission!,
               clientRunId: runId,
               startedAt: Date.now(),
@@ -328,6 +333,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             conversationToolPolicy: { deny: ["read"] },
           });
           followupRun.prompt = approved;
+          followupRun.currentInboundContext = { text: runtimeContext };
           followupRun.userTurnTranscriptRecorder = recorder;
           entry = loadSessionEntry(scope)!;
           const sessionStore = { [sessionKey]: entry };
@@ -413,6 +419,9 @@ describe("required maintenance with restart-safe admitted input", () => {
           expect(providerText(lastUser?.content).endsWith(approved)).toBe(true);
           expect(providerText(lastUser?.content).split(approved)).toHaveLength(2);
           expect(foregroundMessages.filter(isModelRuntimeContextCarrier)).toHaveLength(1);
+          expect(
+            providerText(foregroundMessages.find(isModelRuntimeContextCarrier)?.content),
+          ).toContain(runtimeContext);
           expect(foregroundMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(
             userIndex,
           );

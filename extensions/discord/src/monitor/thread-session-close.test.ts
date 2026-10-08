@@ -162,7 +162,7 @@ describe("closeDiscordThreadSessions", () => {
     const count = await closeDiscordThreadSessions({
       cfg: {
         session: { store: fixedStorePath },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       threadId: THREAD_ID,
     });

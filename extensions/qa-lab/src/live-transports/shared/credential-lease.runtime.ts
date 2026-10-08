@@ -56,28 +56,7 @@ const convexPayloadChunkSuccessSchema = z.object({
   data: z.string(),
 });
 
-type ConvexCredentialBrokerConfig = {
-  acquireTimeoutMs: number;
-  acquireUrl: string;
-  authToken: string;
-  heartbeatIntervalMs: number;
-  heartbeatUrl: string;
-  httpTimeoutMs: number;
-  leaseTtlMs: number;
-  ownerId: string;
-  payloadMaxBytes: number;
-  payloadMaxChunks: number;
-  payloadChunkUrl: string;
-  releaseUrl: string;
-  role: QaCredentialRole;
-};
-
-type QaCredentialLeaseHeartbeat = {
-  getFailure(): Error | null;
-  stop(): Promise<void>;
-  throwIfFailed(): void;
-  whenFailed: Promise<Error>;
-};
+type ConvexCredentialBrokerConfig = ReturnType<typeof resolveConvexCredentialBrokerConfig>;
 
 type QaCredentialRole = "ci" | "maintainer";
 
@@ -168,7 +147,7 @@ function resolveConvexCredentialBrokerConfig(params: {
   env: NodeJS.ProcessEnv;
   ownerId?: string;
   role: QaCredentialRole;
-}): ConvexCredentialBrokerConfig {
+}) {
   const siteUrl = params.env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
   if (!siteUrl) {
     throw new Error("Missing OPENCLAW_QA_CONVEX_SITE_URL for --credential-source convex.");
@@ -618,7 +597,7 @@ export function startQaCredentialLeaseHeartbeat(
     setTimeoutImpl?: typeof setTimeout;
     clearTimeoutImpl?: typeof clearTimeout;
   },
-): QaCredentialLeaseHeartbeat {
+) {
   const intervalMs = opts?.intervalMs ?? lease.heartbeatIntervalMs;
   if (lease.source !== "convex" || !Number.isFinite(intervalMs) || intervalMs < 1) {
     return {

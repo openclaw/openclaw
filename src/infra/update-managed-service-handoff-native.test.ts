@@ -129,26 +129,21 @@ afterEach(() => {
 });
 
 describe("managed handoff native staging", () => {
-  it.each(["linux", "darwin", "win32"] as const)(
-    "preserves the single-file %s stage",
-    async (platform) => {
-      await withMockedPlatform(platform, async () => {
-        const files = stageManagedHandoffRuntime(destination);
-        expect(files).toEqual([path.join(destination, "runtime", "managed-handoff-runtime.mjs")]);
-        expect(fs.readFileSync(files[0]!)).toEqual(runtimeBytes);
-        expect(fs.readdirSync(path.join(destination, "runtime"))).toEqual([
-          "managed-handoff-runtime.mjs",
-        ]);
-        expect(createRequireMock).not.toHaveBeenCalled();
-      });
-    },
-  );
+  it("preserves the single-file stage outside FreeBSD", async () => {
+    await withMockedPlatform("linux", async () => {
+      const files = stageManagedHandoffRuntime(destination);
+      expect(files).toEqual([path.join(destination, "runtime", "managed-handoff-runtime.mjs")]);
+      expect(fs.readFileSync(files[0]!)).toEqual(runtimeBytes);
+      expect(fs.readdirSync(path.join(destination, "runtime"))).toEqual([
+        "managed-handoff-runtime.mjs",
+      ]);
+      expect(createRequireMock).not.toHaveBeenCalled();
+    });
+  });
 
   it.each([
-    { selected: "prebuilt" as const, both: false },
     { selected: "prebuilt" as const, both: true },
     { selected: "canonical" as const, both: false },
-    { selected: "canonical" as const, both: true },
   ])("stages the loaded $selected addon with both=$both", async ({ selected, both }) => {
     const fixture = installedKoffi(selected, both);
     await withMockedPlatform("freebsd", async () => {

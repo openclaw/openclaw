@@ -24,7 +24,7 @@ import {
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../src/config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { WorkerConnectionIdentity } from "../src/gateway/worker-environments/connection-identity.js";
-import { createWorkerTranscriptCommitStore } from "../src/gateway/worker-environments/transcript-commit-store.js";
+import { createWorkerTranscriptCommitStore } from "../src/gateway/worker-environments/transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "../src/gateway/worker-environments/transcript-commit.js";
 import { onSessionTranscriptUpdate } from "../src/sessions/transcript-events.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
@@ -138,7 +138,7 @@ function percentile(samples: number[], fraction: number): number {
 async function seedFixture(state: OpenClawTestState, shape: typeof fixture) {
   const storePath = path.join(state.sessionsDir("main"), "sessions.json");
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: {
       mainKey: "main",
       store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),

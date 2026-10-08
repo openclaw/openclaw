@@ -23,7 +23,9 @@ type AgentHarnessPreparedEnvironment = Readonly<{
 }>;
 
 type AgentHarnessToolSurfaceOptions = Omit<
-  NonNullable<Parameters<(typeof import("../agent-tools.js"))["createOpenClawCodingTools"]>[0]>,
+  NonNullable<
+    Parameters<(typeof import("../agent-tools.js"))["createOpenClawCodingToolsAsync"]>[0]
+  >,
   "operationalRunInstance"
 >;
 
@@ -127,11 +129,16 @@ export type AgentHarnessHostCapabilities = Readonly<{
   activeComputerContext?: () => string;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
   bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
-  /** Creates and binds core tools without exposing admitted-run correlation to the plugin. */
+  /** @deprecated Await createToolSurfaceAsync for fresh worker-backed exec policy. */
   createToolSurface?: (
     options: AgentHarnessToolSurfaceOptions,
     bindingOptions?: Readonly<{ cwd?: string }>,
   ) => AnyAgentTool[];
+  /** Prepares fresh exec policy, then creates and binds tools to this exact live host. */
+  createToolSurfaceAsync?: (
+    options: AgentHarnessToolSurfaceOptions,
+    bindingOptions?: Readonly<{ cwd?: string }>,
+  ) => Promise<AnyAgentTool[]>;
   /** Core-owned byte binding for a native command approval, scoped to this admitted run. */
   prepareMutableFileApproval?: (request: { command: string; cwd?: string }) => Promise<
     | {

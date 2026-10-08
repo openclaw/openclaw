@@ -115,10 +115,11 @@ dimensions. Automatic plugin reload creates a new instance with the changed
 identity; it does not re-embed existing rows.
 </Warning>
 
-OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
-For OpenAI embeddings use an OpenAI API key auth profile, `OPENAI_API_KEY`, or
-`models.providers.openai.apiKey`. OAuth-only users should pick another
-embedding-capable provider such as `github-copilot` or `ollama`.
+The OpenAI provider adapter can use a stored Codex OAuth profile when the account
+grants embedding access. The separate Sign in with ChatGPT token-sharing grant
+does not authorize embeddings. API-key auth remains available through a profile,
+`OPENAI_API_KEY`, or `models.providers.openai.apiKey`. Other embedding-capable
+providers include `github-copilot` and `ollama`.
 
 ```json5
 {

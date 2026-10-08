@@ -208,7 +208,7 @@ export async function importSessionCatalogHistory(params: {
         message,
         idempotencyLookup: "scan",
         cwd: params.cwd,
-        ...(params.commitGuard ? { beforeCommitInTransaction: params.commitGuard } : {}),
+        ...(params.commitGuard ? { beforeFreshMessageCommit: params.commitGuard } : {}),
       });
     }
     const notice = params.continuationNotice?.trim();
@@ -225,7 +225,7 @@ export async function importSessionCatalogHistory(params: {
         },
         idempotencyLookup: "scan",
         cwd: params.cwd,
-        ...(params.commitGuard ? { beforeCommitInTransaction: params.commitGuard } : {}),
+        ...(params.commitGuard ? { beforeFreshMessageCommit: params.commitGuard } : {}),
       });
     }
   });
@@ -262,7 +262,7 @@ export async function preserveSessionCatalogHistory(params: {
       idempotencyLookup: "scan",
       // Replays retain the first notice's timestamp, just as source items retain
       // their first fallback timestamp and randomized untrusted-content boundary.
-      prepareMessageAfterIdempotencyCheck: (message) => message,
+      prepareMessageAfterIdempotencyCheckAsync: async (message) => message,
       beforeFreshMessageCommit: params.commitGuard,
     });
     for (const [index, item] of params.history.items.entries()) {
@@ -299,7 +299,7 @@ export async function preserveSessionCatalogHistory(params: {
         // Despite its name, scan uses the transcript identity index, not a
         // transcript walk. Each source item needs one indexed lookup.
         idempotencyLookup: "scan",
-        prepareMessageAfterIdempotencyCheck: (message) => {
+        prepareMessageAfterIdempotencyCheckAsync: async (message) => {
           const wrapped = importedSessionCatalogMessage({
             catalogId: params.catalogId,
             item: {

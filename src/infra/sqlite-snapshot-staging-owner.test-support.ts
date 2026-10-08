@@ -1,6 +1,9 @@
+import {
+  createRetainedOperation,
+  flatMapRetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import { vi } from "vitest";
 import type { createDeferredCore } from "../shared/deferred.js";
-import { createRetainedOperation, flatMapRetainedOperation } from "./retained-operation.js";
 import type { RetainedNativeWorker } from "./worker-native-lifecycle.types.js";
 
 export async function waitForGate(

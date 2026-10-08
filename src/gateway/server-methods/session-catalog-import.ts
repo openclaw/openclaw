@@ -13,6 +13,7 @@ import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
 import { buildSessionCatalogImportKey } from "../session-create-key.js";
 import { createGatewaySession } from "../session-create-service.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   hasSessionReadAccessChanged,
@@ -26,7 +27,6 @@ import {
   resolveSessionCatalogVisibility,
   type SessionCatalogThreadVisibility,
 } from "./session-catalog-visibility.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { withSessionMutationCommitGuard } from "./session-mutation-guards.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -136,7 +136,6 @@ export async function importAuthorizedSessionCatalog(params: {
       : {}),
     creation: resolveOperatorSessionCreation(client),
     commandSource: "gateway:sessions.catalog.import",
-    loadGatewayModelCatalogSnapshot: () => context.loadGatewayModelCatalogSnapshot({ agentId }),
     commitGuard,
     onCreatedSessionCommitted: (target) => {
       authorization?.recordCreatedSession?.({

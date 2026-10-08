@@ -354,7 +354,6 @@ export function withBrowserDashboardRegistration<T, Authority extends BrowserSes
   return withBrowserSessionTabOperation(registration, current, () => register(current));
 }
 
-/** Starts tracking a browser tab for later session cleanup. */
 export async function trackSessionBrowserTab(
   input: SessionTabParams & { now?: number },
 ): Promise<DurableTab | undefined> {
@@ -464,7 +463,6 @@ function canonicalStorageKey(
     : resolveDurableTabAlias(identity);
 }
 
-/** Updates last-used time for an existing tracked browser tab. */
 export async function touchSessionBrowserTab(
   input: SessionTabParams & { now?: number },
 ): Promise<void> {
@@ -540,7 +538,6 @@ export async function touchSessionBrowserTab(
   }
 }
 
-/** Removes a browser tab from session cleanup tracking. */
 export async function untrackSessionBrowserTab(input: SessionTabParams): Promise<void> {
   const params = {
     ...input,

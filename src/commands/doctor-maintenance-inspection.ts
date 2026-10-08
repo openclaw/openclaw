@@ -17,7 +17,6 @@ import {
   type DoctorMaintenanceRefusal,
 } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
@@ -47,7 +46,10 @@ export async function readDoctorGatewayOwnerLease(
   }
   // The recorded process may have exited while the reader and its private snapshot settled.
   return reply.lease
-    ? { ...reply.lease, state: readStateLeaseProcessOwnerStatus(reply.lease) }
+    ? {
+        ...reply.lease,
+        state: readStateLeaseProcessOwnerStatus(reply.lease, reply.lease.heartbeatAt),
+      }
     : undefined;
 }
 
@@ -100,8 +102,10 @@ export async function assertDoctorMaintenanceReady(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   log: (message: string) => void,
+  databaseTargets?: readonly { path: string; realPath?: string }[],
 ): Promise<{ schemaPublicationDeferred: boolean }> {
   let schemaPublicationDeferred = false;
+  let refusedDatabasePaths: string[] = [];
   const { assertSessionStoreMigrationComplete } =
     await import("../config/sessions/startup-migration.js");
   assertSessionStoreMigrationComplete({ cfg, env, operation: "doctor" });
@@ -115,6 +119,9 @@ export async function assertDoctorMaintenanceReady(
       schemaPublicationDeferred = true;
       log(publication.message);
     },
+    onVerified: (schemas) => {
+      refusedDatabasePaths = schemas.agentRefusals?.flatMap((refusal) => refusal.paths) ?? [];
+    },
     configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(cfg, { env }),
   });
   const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
@@ -122,24 +129,26 @@ export async function assertDoctorMaintenanceReady(
   const { assertNoPendingLegacyExecApprovals } =
     await import("../infra/exec-approvals-migration-gate.js");
   assertNoPendingLegacyExecApprovals({ operation: "doctor", env });
+  if (!schemaPublicationDeferred && databaseTargets) {
+    const { completeDoctorMigrationBackups } =
+      await import("./doctor-migration-backup-artifacts.js");
+    try {
+      completeDoctorMigrationBackups(
+        env,
+        databaseTargets
+          .filter(
+            (target) =>
+              !refusedDatabasePaths.some(
+                (refused) => refused === target.path || refused === target.realPath,
+              ),
+          )
+          .map((target) => target.path),
+      );
+    } catch (error) {
+      log(`Migration backups remain protected; completion registration failed: ${String(error)}`);
+    }
+  }
   return { schemaPublicationDeferred };
-}
-
-/** Repair may have committed config before a later diagnostic failed. */
-export async function readDoctorMaintenanceRecoveryConfig(
-  resources: Pick<OpenClawDatabaseMaintenanceScope, "run">,
-  env: NodeJS.ProcessEnv,
-  log: (message: string) => void,
-): Promise<OpenClawConfig> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  return resources.run(async () => {
-    const { config } = await readConfigFileSnapshot({
-      skipPluginValidation: true,
-      observe: false,
-    });
-    await assertDoctorMaintenanceReady(config, env, log);
-    return config;
-  });
 }
 
 export function assertDoctorMaintenanceInspection(

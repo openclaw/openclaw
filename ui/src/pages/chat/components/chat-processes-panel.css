@@ -1,0 +1,101 @@
+.chat-processes__list,
+.chat-processes__output {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.chat-processes__heading strong {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+}
+.chat-processes__stop {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+.chat-processes__stop svg {
+  width: 8px;
+  height: 8px;
+}
+.chat-processes__metadata {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 17px;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.chat-processes__metadata > :last-child {
+  flex-shrink: 0;
+}
+.chat-processes__failure,
+.chat-processes__error {
+  color: var(--danger);
+}
+.chat-processes__finished-toggle svg {
+  width: 12px;
+  height: 12px;
+}
+.chat-processes__empty,
+.chat-processes__error {
+  padding: 14px 11px;
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
+}
+.chat-processes__empty {
+  color: var(--muted);
+}
+.chat-processes__error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.chat-processes__detail-header {
+  padding: 8px 12px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.chat-processes__back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 4px 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+.chat-processes__back svg {
+  width: 12px;
+  height: 12px;
+}
+.chat-processes__output {
+  padding: 12px;
+}
+.chat-processes__output pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.6;
+}
+.chat-processes__note {
+  margin: 10px 12px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+.chat-processes__output .chat-processes__note {
+  margin-inline: 0;
+}

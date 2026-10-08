@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createStubChild } from "./supervisor/adapters/child.test-support.js";
@@ -153,102 +153,54 @@ it("joins the retained Windows Job after the root exits with descendants still h
   }
 });
 
-it("retains a failed Job observation as cleanup uncertainty", async () => {
-  const cause = new Error("Job accounting unavailable");
-  const child = await createOwnedStdioProcess({
-    argv: [process.execPath, "fixture"],
-    exactEnv: true,
-  });
-  native.inspect.mockImplementation(() => {
-    throw cause;
-  });
-  stub.emitExit(0);
-  stub.emitClose(0);
-  await expect(child.waitForExtinction!()).resolves.toEqual({
-    status: "uncertain",
-    reason: "job-observation-failed",
-    cause,
-  });
-  await expect(closeOwnedStdioProcess(child)).resolves.toBeUndefined();
-  expect(native.close).toHaveBeenCalledOnce();
-});
-
-it("publishes an empty Job's cleanup before the root completion", async () => {
-  const child = await createOwnedStdioProcess({
-    argv: [process.execPath, "fixture"],
-    exactEnv: true,
-  });
-  let confirmed = false;
-  const extinction = child.waitForExtinction!().then(() => {
-    confirmed = true;
-  });
-  native.inspect.mockReturnValue([]);
-  stub.emitExit(0);
-  stub.emitClose(0);
-  try {
-    await child.wait();
-    expect(confirmed).toBe(true);
-  } finally {
-    await extinction;
-    child.dispose();
-  }
-});
-
-it.each(["koffi", "launcher"] as const)(
-  "spawns without %s and reports unavailable Job certification",
-  async (missing) => {
-    native.koffiAvailable = missing !== "koffi";
-    native.launcherAvailable = missing !== "launcher";
+it.each([false, true])(
+  "publishes Job certification before root completion (observation fails=%s)",
+  async (fails) => {
+    const cause = new Error("Job accounting unavailable");
     const child = await createOwnedStdioProcess({
       argv: [process.execPath, "fixture"],
       exactEnv: true,
     });
-    expect(native.spawn).toHaveBeenCalledWith(process.execPath, ["fixture"], expect.any(Object));
+    native.inspect.mockImplementation(() => {
+      if (fails) {
+        throw cause;
+      }
+      return [];
+    });
+    let observed = false;
+    const extinction = child.waitForExtinction!().then((result) => {
+      observed = true;
+      return result;
+    });
     stub.emitExit(0);
     stub.emitClose(0);
-    await expect(child.wait()).resolves.toEqual({ code: 0, signal: null });
-    await expect(child.waitForExtinction!()).resolves.toEqual({
-      status: "uncertain",
-      reason: "job-unavailable",
-    });
-    await expect(closeOwnedStdioProcess(child)).resolves.toBeUndefined();
-    expect(native.terminate).not.toHaveBeenCalled();
-    expect(native.close).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["job-unavailable", "job-admission-failed"] as const)(
-  "preserves %s certification through a supervised exec session",
-  async (reason) => {
-    if (reason === "job-unavailable") {
-      native.koffiAvailable = false;
-    } else {
-      rejectJobAdmission(new Error("Job admission failed"));
+    try {
+      await child.wait();
+      expect(observed).toBe(true);
+      await expect(extinction).resolves.toEqual(
+        fails
+          ? { status: "uncertain", reason: "job-observation-failed", cause }
+          : { status: "confirmed" },
+      );
+      await expect(closeOwnedStdioProcess(child)).resolves.toBeUndefined();
+      expect(native.close).toHaveBeenCalledOnce();
+    } finally {
+      await extinction;
+      child.dispose();
     }
-    const supervisor = createProcessSupervisor();
-    const run = await supervisor.spawn({
-      mode: "child",
-      argv: [process.execPath, "fixture"],
-      exactEnv: true,
-    });
-    stub.child.stdout?.emit("end");
-    stub.child.stderr?.emit("end");
-    stub.emitExit(0);
-    stub.emitClose(0);
-    await expect(run.wait()).resolves.toMatchObject({ exitCode: 0, reason: "exit" });
-    await expect(run.waitForExtinction!()).resolves.toMatchObject({
-      status: "uncertain",
-      reason,
-    });
-    await supervisor.shutdown();
   },
 );
 
-it.each(["create", "configuration", "admission"] as const)(
-  "launches once without containment when Job %s fails",
+it.each(["koffi", "launcher", "create", "configuration", "admission"] as const)(
+  "launches once without containment when Job %s is unavailable",
   async (phase) => {
+    const unavailable = phase === "koffi" || phase === "launcher";
     const cause = new Error(`Job ${phase} failed`);
-    if (phase === "create") {
+    if (phase === "koffi") {
+      native.koffiAvailable = false;
+    } else if (phase === "launcher") {
+      native.launcherAvailable = false;
+    } else if (phase === "create") {
       native.create.mockImplementationOnce(() => {
         throw cause;
       });
@@ -264,7 +216,9 @@ it.each(["create", "configuration", "admission"] as const)(
       exactEnv: true,
     });
     expect(native.spawn.mock.calls.filter(([, args]) => args[0] === "fixture")).toHaveLength(1);
-    if (phase !== "create") {
+    if (unavailable) {
+      expect(native.spawn).toHaveBeenCalledWith(process.execPath, ["fixture"], expect.any(Object));
+    } else if (phase !== "create") {
       expect(native.close.mock.invocationCallOrder[0]).toBeLessThan(
         native.spawn.mock.invocationCallOrder.at(-1)!,
       );
@@ -272,12 +226,21 @@ it.each(["create", "configuration", "admission"] as const)(
     stub.emitExit(0);
     stub.emitClose(0);
     await expect(child.wait()).resolves.toEqual({ code: 0, signal: null });
-    await expect(child.waitForExtinction!()).resolves.toMatchObject({
-      status: "uncertain",
-      reason: `job-${phase}-failed`,
-      cause: expect.objectContaining({ message: cause.message }),
-    });
+    const extinction = child.waitForExtinction!();
+    if (unavailable) {
+      await expect(extinction).resolves.toEqual({ status: "uncertain", reason: "job-unavailable" });
+    } else {
+      await expect(extinction).resolves.toMatchObject({
+        status: "uncertain",
+        reason: `job-${phase}-failed`,
+        cause: expect.objectContaining({ message: cause.message }),
+      });
+    }
     await expect(closeOwnedStdioProcess(child)).resolves.toBeUndefined();
+    if (unavailable) {
+      expect(native.terminate).not.toHaveBeenCalled();
+      expect(native.close).not.toHaveBeenCalled();
+    }
   },
 );
 
@@ -329,85 +292,78 @@ it.each(["create", "admission"] as const)(
   },
 );
 
-describe.each([
-  { processTree: "required-all", external: false, requiresTree: true },
-  { processTree: "owned-only", external: false, requiresTree: true },
-  { processTree: "transport-only", external: false, requiresTree: false },
-  { processTree: "owned-only", external: true, requiresTree: false },
-  { processTree: "required-all", external: true, requiresTree: true },
+it.each([
+  ["required-all", false, true, "job-unavailable"],
+  ["required-all", false, true, "job-admission-failed"],
+  ["required-all", false, true, "job-observation-failed"],
+  ["required-all", false, true, "confirmed"],
+  ["owned-only", false, true, "job-unavailable"],
+  ["transport-only", false, false, "job-unavailable"],
+  ["owned-only", true, false, "job-unavailable"],
+  ["required-all", true, true, "job-unavailable"],
+  ["required-all", true, true, "confirmed"],
 ] as const)(
-  "$processTree cleanup (external=$external)",
-  ({ processTree, external, requiresTree }) => {
-    it.each([
-      "job-unavailable",
-      "job-admission-failed",
-      "job-observation-failed",
-      "confirmed",
-    ] as const)(
-      "interprets %s certification without failing command execution",
-      async (certification) => {
-        if (certification === "job-unavailable") {
-          native.koffiAvailable = false;
-        } else if (certification === "job-admission-failed") {
-          rejectJobAdmission(new Error("Job admission failed"));
-        }
-        const supervisor = createProcessSupervisor();
-        const scopeKey = "scope:windows-certification";
-        const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree });
-        const transportCleanup = supervisor.acquireScopeCleanup(scopeKey, {
-          processTree: "transport-only",
+  "%s cleanup (external=%s, requires tree=%s) interprets %s certification",
+  async (processTree, external, requiresTree, certification) => {
+    if (certification === "job-unavailable") {
+      native.koffiAvailable = false;
+    } else if (certification === "job-admission-failed") {
+      rejectJobAdmission(new Error("Job admission failed"));
+    }
+    const supervisor = createProcessSupervisor();
+    const scopeKey = "scope:windows-certification";
+    const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree });
+    const transportCleanup = supervisor.acquireScopeCleanup(scopeKey, {
+      processTree: "transport-only",
+    });
+    const run = await supervisor.spawn({
+      mode: "child",
+      argv: [process.execPath, "fixture"],
+      exactEnv: true,
+      scopeKey,
+      ...(external ? { cleanupOwnership: "external" } : {}),
+    });
+    try {
+      stub.child.stdout?.emit("data", Buffer.from("command succeeded"));
+      stub.child.stdout?.emit("end");
+      stub.child.stderr?.emit("end");
+      if (certification === "job-observation-failed") {
+        native.inspect.mockImplementation(() => {
+          throw new Error("Job accounting unavailable");
         });
-        const run = await supervisor.spawn({
-          mode: "child",
-          argv: [process.execPath, "fixture"],
-          exactEnv: true,
-          scopeKey,
-          ...(external ? { cleanupOwnership: "external" } : {}),
+      } else {
+        native.inspect.mockReturnValue([]);
+      }
+      stub.emitExit(0);
+      stub.emitClose(0);
+      await expect(run.wait()).resolves.toMatchObject({
+        exitCode: 0,
+        reason: "exit",
+        stdout: "command succeeded",
+      });
+      const outcome = await run.waitForExtinction!();
+      expect(outcome).toMatchObject(
+        certification === "confirmed"
+          ? { status: "confirmed" }
+          : { status: "uncertain", reason: certification },
+      );
+      // Join after the run has retired, alongside a policy that permits uncertainty.
+      await expect(transportCleanup()).resolves.toBeUndefined();
+      if (requiresTree && certification !== "confirmed") {
+        await expect(cleanup()).rejects.toMatchObject({
+          reason: certification,
+          cause: outcome,
+          message: expect.stringContaining(certification),
         });
-        try {
-          stub.child.stdout?.emit("data", Buffer.from("command succeeded"));
-          stub.child.stdout?.emit("end");
-          stub.child.stderr?.emit("end");
-          if (certification === "job-observation-failed") {
-            native.inspect.mockImplementation(() => {
-              throw new Error("Job accounting unavailable");
-            });
-          } else {
-            native.inspect.mockReturnValue([]);
-          }
-          stub.emitExit(0);
-          stub.emitClose(0);
-          await expect(run.wait()).resolves.toMatchObject({
-            exitCode: 0,
-            stdout: "command succeeded",
-          });
-          const outcome = await run.waitForExtinction!();
-          expect(outcome).toMatchObject(
-            certification === "confirmed"
-              ? { status: "confirmed" }
-              : { status: "uncertain", reason: certification },
-          );
-          // Join after the run has retired, alongside a policy that permits uncertainty.
-          await expect(transportCleanup()).resolves.toBeUndefined();
-          if (requiresTree && certification !== "confirmed") {
-            await expect(cleanup()).rejects.toMatchObject({
-              reason: certification,
-              cause: outcome,
-              message: expect.stringContaining(certification),
-            });
-          } else if (requiresTree && external) {
-            await expect(cleanup()).rejects.toThrow(
-              "cannot confirm owned execution-tree settlement",
-            );
-          } else {
-            await expect(cleanup()).resolves.toBeUndefined();
-          }
-          await expect(supervisor.shutdown()).resolves.toBeUndefined();
-        } finally {
-          stub.emitClose(0);
-          await Promise.allSettled([cleanup(), transportCleanup(), supervisor.shutdown()]);
-        }
-      },
-    );
+      } else if (requiresTree && external) {
+        await expect(cleanup()).rejects.toThrow("cannot confirm owned execution-tree settlement");
+      } else {
+        await expect(cleanup()).resolves.toBeUndefined();
+      }
+      await expect(supervisor.shutdown()).resolves.toBeUndefined();
+    } finally {
+      stub.emitClose(0);
+      await Promise.allSettled([cleanup(), transportCleanup(), supervisor.shutdown()]);
+    }
   },
 );

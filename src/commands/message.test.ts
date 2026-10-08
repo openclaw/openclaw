@@ -1,10 +1,10 @@
 // Message command tests cover CLI message sending, environment handling, and runtime dependency wiring.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { CliDeps } from "../cli/deps.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { captureEnv } from "../test-utils/env.js";
 import { messageCommand } from "./message.js";
 
@@ -455,7 +455,7 @@ describe("messageCommand", () => {
   });
 
   it("keeps the retained legacy owner after config load strips the default marker", async () => {
-    const migrated = migratePersistedImplicitMainRoster({
+    const migrated = createCanonicalAgentConfigFixture({
       agents: {
         entries: {
           ops: { default: true },

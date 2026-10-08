@@ -303,7 +303,7 @@ export async function forkCanonicalCodexSession(params: {
           ) {
             throw new Error("The canonical Codex display prefix could not be copied completely");
           }
-          initialization.link({
+          await initialization.linkAsync({
             sessionKey: created.key,
             agentId: created.agentId,
             catalogId: fork.upstream.catalogId,

@@ -74,7 +74,7 @@ These Codex bwrap checks are omitted during `openclaw update`; run
 When Docker sandbox network egress is disabled and a local Codex runtime is
 configured, it also runs the configured Codex binary's own `workspace-write`
 sandbox with network access disabled, exercising Bubblewrap's loopback setup.
-Unrecognized probe failures are reported as unverified rather than as a
+Unrecognized check failures are reported as unverified rather than as a
 namespace diagnosis. Namespace failures usually surface
 as `bwrap: setting up uid map: Permission denied` or
 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` on
@@ -91,7 +91,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.158.0` app-server.
+This preview path uses the pinned Codex `0.160.0` app-server.
 
 ```json5
 {

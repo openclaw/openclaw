@@ -32,13 +32,22 @@ const postGrantPreload = `
   const fixture = workerData.cronMutationProbe;
   let gate;
   let held = false;
-  parentPort.on("message", (request) => {
+  const observeRequest = (request) => {
     if (request.type === "reclaim" &&
         ["entry", "lifecycle-projection-commit"].includes(request.plan.kind) &&
         request.plan.descendantRunBasis?.sessionKeys.includes(fixture.sessionKey)) {
       gate = request.commitGate;
     }
-  });
+  };
+  const on = parentPort.on;
+  parentPort.on = function(event, listener) {
+    if (event === "message") {
+      // An eager preload listener consumes queued requests before the real worker imports finish.
+      parentPort.on = on;
+      on.call(this, event, observeRequest);
+    }
+    return on.call(this, event, listener);
+  };
   const load = Atomics.load;
   Atomics.load = function(view, index) {
     const observed = load(view, index);

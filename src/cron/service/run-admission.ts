@@ -544,7 +544,6 @@ export async function executeQueuedCronRun(params: {
       delete runnableJob.state.queuedAtMs;
       if (
         !isRunnableJob({
-          legacyDefaultAgentId: state.deps.legacyDefaultAgentId,
           job: runnableJob,
           nowMs: state.deps.nowMs(),
           ...params.runnableOptions,
@@ -628,7 +627,7 @@ export async function executeQueuedCronRun(params: {
       params.onSetupError?.(executionJob, errorText);
       outcome = {
         ...base,
-        ...authorCronRunCompletion(state, executionJob, {
+        ...authorCronRunCompletion(executionJob, {
           status: "error",
           error: errorText,
           diagnostics: createCronRunDiagnosticsFromError("cron-setup", errorText, {

@@ -65,36 +65,42 @@ vi.mock("../chrome-mcp-actions.js", () => ({
     await chromeMcpMocks.takeChromeMcpScreenshot(params),
 }));
 
-vi.mock("../chrome-mcp-routing.js", () => ({
+vi.mock("../chrome-mcp-routing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../chrome-mcp-routing.js")>()),
   resolveChromeMcpSnapshotRef: (_session: unknown, targetId: string, uid: string) => ({
     targetId,
     uid,
     documentUid: "root",
   }),
   withChromeMcpTarget: vi.fn(
-    async (_params: unknown, run: (target: unknown) => Promise<unknown>) =>
-      await run({ pageId: 7, profileOptions: {}, lease: { session: {} } }),
+    async (
+      params: { profileName: string; signal?: AbortSignal; timeoutMs?: number },
+      run: (target: unknown) => Promise<unknown>,
+    ) =>
+      await run({
+        pageId: 7,
+        profileOptions: {},
+        session: {},
+        callTool: async (
+          name: string,
+          args: { function: string; args: string[] },
+          options: { signal?: AbortSignal; timeoutMs?: number } = params,
+        ) => {
+          if (name !== "evaluate_script") {
+            throw new Error(`Unexpected tool ${name}`);
+          }
+          const value = await chromeMcpMocks.evaluateChromeMcpScript({
+            profileName: params.profileName,
+            targetId: "7",
+            fn: args.function,
+            args: args.args,
+            signal: options.signal,
+            ...options,
+          });
+          return { structuredContent: { message: JSON.stringify(value) } };
+        },
+      }),
   ),
-  callTool: async (
-    profileName: string,
-    _profile: unknown,
-    name: string,
-    args: { function: string; args: string[] },
-    options: { signal?: AbortSignal; timeoutMs?: number },
-  ) => {
-    if (name !== "evaluate_script") {
-      throw new Error(`Unexpected tool ${name}`);
-    }
-    const value = await chromeMcpMocks.evaluateChromeMcpScript({
-      profileName,
-      targetId: "7",
-      fn: args.function,
-      args: args.args,
-      signal: options.signal,
-      ...options,
-    });
-    return { structuredContent: { message: JSON.stringify(value) } };
-  },
 }));
 
 vi.mock("../cdp.js", () => ({

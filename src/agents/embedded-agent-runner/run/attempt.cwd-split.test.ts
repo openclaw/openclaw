@@ -76,7 +76,7 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     });
     expect(
       hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0]?.customTools?.map((tool) => tool.name),
-    ).toEqual(allowed);
+    ).toEqual(["tool_search", "tool_describe", "tool_call", ...allowed]);
     expect(hoisted.defaultResourceLoaderInitMock.mock.calls[0]?.[0]).toMatchObject({
       cwd: taskRepo,
     });
@@ -135,6 +135,9 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: worktree, workspaceDir: worktree }),
       undefined,
+      undefined,
+      undefined,
+      expect.objectContaining({ assertCurrent: expect.any(Function) }),
     );
   });
 });

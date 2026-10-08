@@ -495,22 +495,18 @@ describe("Beam mirror receiver boundary", () => {
       listCatalogs: () => [catalog],
     });
 
-    try {
-      await runner.tick();
-      active = false;
-      clock += 4 * 60 * 60_000;
-      await runner.tick();
-      expect([...store.values.values()][0]?.completed).toBe(false);
-      expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 1.");
+    await runner.tick();
+    active = false;
+    clock += 4 * 60 * 60_000;
+    await runner.tick();
+    expect([...store.values.values()][0]?.completed).toBe(false);
+    expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 1.");
 
-      await runner.tick();
+    await runner.tick();
 
-      expect(requests).toEqual(["live:200", "completed:503", "completed:200"]);
-      expect([...store.values.values()][0]?.completed).toBe(true);
-      expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 3.");
-    } finally {
-      await runner.stop();
-    }
+    expect(requests).toEqual(["live:200", "completed:503", "completed:200"]);
+    expect([...store.values.values()][0]?.completed).toBe(true);
+    expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 3.");
   });
 });
 

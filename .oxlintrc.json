@@ -227,7 +227,6 @@
     "dist/",
     "dist-runtime/",
     // Intentional negative-test corpora contain parser and lint violations by contract.
-    ".agents/skills/autoreview/tests/fixtures/**",
     "test/fixtures/oxlint-boundary-guards/**",
     "**/a2ui.bundle.js",
     "extensions/diffs/assets/viewer-runtime.js",
@@ -247,6 +246,22 @@
     "**/node_modules/**"
   ],
   "overrides": [
+    {
+      "files": ["packages/worker-runtime/**/*.{js,ts,mts,cts}"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^(?:openclaw(?:/|$)|(?:\\.\\./){3,}src/)",
+                "message": "worker-runtime must remain independent of application src; supply host behavior through its runtime contracts."
+              }
+            ]
+          }
+        ]
+      }
+    },
     {
       "files": ["extensions/browser/src/browser/routes/*.ts"],
       "rules": {

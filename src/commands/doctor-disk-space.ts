@@ -31,44 +31,12 @@ export function formatBytes(bytes: number): string {
   });
 }
 
-function buildDiskSpaceWarnings(params: {
-  availableBytes: number;
-  displayStateDir: string;
-}): string[] {
-  const { availableBytes, displayStateDir } = params;
-  const displayFreeSpace = formatBytes(availableBytes);
-  const warnings: string[] = [];
-
-  if (availableBytes < CRITICAL_BYTES) {
-    warnings.push(
-      `- CRITICAL: only ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
-    );
-    warnings.push("- Config writes, session transcripts, and log rotation may fail silently.");
-    warnings.push("- Free up disk space immediately to avoid data loss.");
-  } else if (availableBytes < WARNING_BYTES) {
-    warnings.push(
-      `- Low disk space: ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
-    );
-    warnings.push("- Consider freeing space to prevent future config/session write failures.");
-  }
-
-  return warnings;
-}
-
-type DiskSpaceHealthOptions = {
-  env?: NodeJS.ProcessEnv;
-  readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
-};
-
-function collectDiskSpaceWarnings(
-  params: DiskSpaceHealthOptions = {},
-): { availableBytes: number; stateDir: string; warnings: readonly string[] } | null {
-  const env = params.env ?? process.env;
+function collectDiskSpaceWarnings() {
+  const env = process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
 
-  const readDiskSpace = params.readDiskSpace ?? tryReadDiskSpace;
-  const snapshot = readDiskSpace(stateDir);
+  const snapshot = tryReadDiskSpace(stateDir);
   // If we cannot determine free space (no existing ancestor, unsupported FS,
   // or permission error), skip silently — other contributions already
   // handle missing directories.
@@ -77,23 +45,31 @@ function collectDiskSpaceWarnings(
   }
 
   const displayStateDir = shortenHomePath(stateDir);
-  const warnings = buildDiskSpaceWarnings({
-    availableBytes: snapshot.availableBytes,
-    displayStateDir,
-  });
-
+  const { availableBytes } = snapshot;
+  const displayFreeSpace = formatBytes(availableBytes);
+  const warnings =
+    availableBytes < CRITICAL_BYTES
+      ? [
+          `- CRITICAL: only ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
+          "- Config writes, session transcripts, and log rotation may fail silently.",
+          "- Free up disk space immediately to avoid data loss.",
+        ]
+      : availableBytes < WARNING_BYTES
+        ? [
+            `- Low disk space: ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
+            "- Consider freeing space to prevent future config/session write failures.",
+          ]
+        : [];
   return {
-    availableBytes: snapshot.availableBytes,
+    availableBytes,
     stateDir,
     warnings,
   };
 }
 
 /** Collects read-only structured findings for low disk space around the state directory. */
-export function collectDiskSpaceHealthFindings(
-  deps?: DiskSpaceHealthOptions,
-): readonly HealthFinding[] {
-  const result = collectDiskSpaceWarnings(deps);
+export function collectDiskSpaceHealthFindings(): readonly HealthFinding[] {
+  const result = collectDiskSpaceWarnings();
   if (!result || result.warnings.length === 0) {
     return [];
   }
@@ -113,8 +89,8 @@ export function collectDiskSpaceHealthFindings(
   ];
 }
 
-export function noteDiskSpace(deps?: DiskSpaceHealthOptions): void {
-  const result = collectDiskSpaceWarnings(deps);
+export function noteDiskSpace(): void {
+  const result = collectDiskSpaceWarnings();
   if (!result || result.warnings.length === 0) {
     return;
   }

@@ -122,8 +122,16 @@ type ApplyApprovalDecisionResult<TPayload> =
     }
   | { ok: false };
 
+type ApprovalPayload =
+  | ExecApprovalRequestPayload
+  | PluginApprovalRequestPayload
+  | SystemAgentApprovalRequestPayload;
+
 async function applyApprovalDecision<TPayload>(params: {
-  manager: ExecApprovalManager<TPayload>;
+  manager: Pick<
+    ExecApprovalManager<TPayload>,
+    "forceDenyDetailed" | "resolveDetailed" | "getLiveSnapshot"
+  >;
   id: string;
   decision: ApprovalDecision | null;
   forceMalformedDeny: boolean;
@@ -406,43 +414,32 @@ export function createApprovalHandlers(
           throw new Error("approval resolver authority is no longer active");
         }
       };
-      let resolution:
-        | ApplyApprovalDecisionResult<ExecApprovalRequestPayload>
-        | ApplyApprovalDecisionResult<PluginApprovalRequestPayload>
-        | ApplyApprovalDecisionResult<SystemAgentApprovalRequestPayload>;
+      let resolution: ApplyApprovalDecisionResult<ApprovalPayload>;
       try {
-        const decisionParams = {
+        resolution = await applyApprovalDecision<ApprovalPayload>({
           id: record.id,
           decision: requestedDecision,
           forceMalformedDeny,
           resolver,
           localResolvedBy,
           guard: { family: approvalGuard.family, assertCurrent },
-        };
-        resolution =
-          record.kind === "exec"
-            ? await applyApprovalDecision({
-                ...decisionParams,
-                manager: params.execApprovalManager,
-                // Grant terms freeze at resolve; an explicit per-resolve
-                // override (custom operator UIs, CLI) beats the config default.
-                ...(requestedDecision === "allow-always" &&
-                typeof resolveParams?.grantExpiresInDays === "number"
-                  ? {
-                      grantExpiresAtMs:
-                        Date.now() + Math.floor(resolveParams.grantExpiresInDays) * 86_400_000,
-                    }
-                  : {}),
-              })
-            : record.kind === "plugin"
-              ? await applyApprovalDecision({
-                  ...decisionParams,
-                  manager: params.pluginApprovalManager,
-                })
-              : await applyApprovalDecision({
-                  ...decisionParams,
-                  manager: params.systemAgentApprovalManager!,
-                });
+          manager:
+            record.kind === "exec"
+              ? params.execApprovalManager
+              : record.kind === "plugin"
+                ? params.pluginApprovalManager
+                : params.systemAgentApprovalManager!,
+          // Grant terms freeze at resolve; an explicit per-resolve
+          // override (custom operator UIs, CLI) beats the config default.
+          ...(record.kind === "exec" &&
+          requestedDecision === "allow-always" &&
+          typeof resolveParams?.grantExpiresInDays === "number"
+            ? {
+                grantExpiresAtMs:
+                  Date.now() + Math.floor(resolveParams.grantExpiresInDays) * 86_400_000,
+              }
+            : {}),
+        });
       } catch (error) {
         if (!readCurrent()) {
           respondApprovalNotFound(respond);

@@ -1,9 +1,7 @@
-/** Reads recent gateway service logs for actionable daemon restart diagnostics. */
 import fs, { type FileHandle } from "node:fs/promises";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
-// Error patterns worth surfacing from gateway service logs after failed starts.
 const GATEWAY_LOG_ERROR_PATTERNS = [
   /\bENOSPC\b/i,
   /no space left on device/i,
@@ -77,9 +75,7 @@ export async function readLastGatewayErrorLine(
   // handles at one file (buildLaunchAgentPlist); break that and darwin startup
   // crashes stop reaching this reader. Other platforms keep stderr separate.
   const { stdoutPath, stderrPath } =
-    platform === "darwin"
-      ? resolveGatewaySupervisorLogPaths(env, { platform })
-      : resolveGatewayLogPaths(env);
+    platform === "darwin" ? resolveGatewaySupervisorLogPaths(env) : resolveGatewayLogPaths(env);
   const stderrLines = readStderr ? await readGatewayLogTailLines(stderrPath).catch(() => []) : [];
   const stdoutLines = await readGatewayLogTailLines(stdoutPath).catch(() => []);
   // stderr is the strongest failure signal on non-darwin platforms, so place it

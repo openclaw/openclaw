@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import { resolveNodePairApprovalScopes } from "../infra/node-pairing-authz.js";
-import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "./node-catalog.js";
+import { createKnownNodeCatalog, listKnownNodes } from "./node-catalog.js";
 
 type CatalogInput = Parameters<typeof createKnownNodeCatalog>[0];
 type TestPairedDevice = CatalogInput["pairedDevices"][number];
@@ -91,7 +91,7 @@ describe("gateway/node-catalog", () => {
       connectedNodes: [],
     });
 
-    const node = getKnownNode(catalog, "mac-1");
+    const node = catalog.get("mac-1");
     expect(node?.commands).toEqual(["system.run"]);
     expect(node?.pendingDeclaredCommands).toEqual(["screen.snapshot"]);
   });
@@ -171,7 +171,7 @@ describe("gateway/node-catalog", () => {
       sessionHostNodeIds: new Set(["mac-1"]),
     });
 
-    expect(getKnownNode(catalog, "mac-1")).toMatchObject({
+    expect(catalog.get("mac-1")).toMatchObject({
       nodeId: "mac-1",
       displayName: "Mac",
       clientId: "openclaw-macos",
@@ -207,21 +207,21 @@ describe("gateway/node-catalog", () => {
       connectedNodes: [connectedNode({ connId: "conn-1", displayName: "Live Name" })],
     });
     expect(listKnownNodes(connected)[0]?.displayName).toBe("Operator Name");
-    expect(getKnownNode(connected, "mac-1")?.displayName).toBe("Operator Name");
+    expect(connected.get("mac-1")?.displayName).toBe("Operator Name");
 
     const reconnected = createKnownNodeCatalog({
       pairedDevices,
       pairedNodes,
       connectedNodes: [connectedNode({ connId: "conn-2", displayName: "Replacement Live Name" })],
     });
-    expect(getKnownNode(reconnected, "mac-1")?.displayName).toBe("Operator Name");
+    expect(reconnected.get("mac-1")?.displayName).toBe("Operator Name");
 
     const liveFallback = createKnownNodeCatalog({
       pairedDevices,
       pairedNodes: [pairedNode({ displayName: undefined })],
       connectedNodes: [connectedNode({ connId: "conn-3", displayName: "Live Fallback" })],
     });
-    expect(getKnownNode(liveFallback, "mac-1")?.displayName).toBe("Live Fallback");
+    expect(liveFallback.get("mac-1")?.displayName).toBe("Live Fallback");
   });
 
   it("surfaces paired-node metadata while the node is offline", () => {
@@ -239,7 +239,7 @@ describe("gateway/node-catalog", () => {
       connectedNodes: [],
     });
 
-    expect(getKnownNode(catalog, "mac-1")).toMatchObject({
+    expect(catalog.get("mac-1")).toMatchObject({
       nodeId: "mac-1",
       caps: ["system"],
       commands: ["system.run"],
@@ -250,8 +250,8 @@ describe("gateway/node-catalog", () => {
       connected: false,
       sessionHost: true,
     });
-    expect(getKnownNode(catalog, "mac-1")?.lastConnectedAtMs).toBeUndefined();
-    expect(getKnownNode(catalog, "mac-1")?.workerSlots).toBeUndefined();
+    expect(catalog.get("mac-1")?.lastConnectedAtMs).toBeUndefined();
+    expect(catalog.get("mac-1")?.workerSlots).toBeUndefined();
   });
 
   it("lets live runner consent override stored session-host history", () => {
@@ -263,7 +263,7 @@ describe("gateway/node-catalog", () => {
       sessionHostNodeIds: new Set(),
       workerSlotsByNodeId: new Map([["mac-1", { total: 2, available: 0 }]]),
     });
-    expect(getKnownNode(storedHostDisabledLive, "mac-1")).toMatchObject({
+    expect(storedHostDisabledLive.get("mac-1")).toMatchObject({
       connected: true,
       sessionHost: false,
       workerSlots: { total: 2, available: 0 },
@@ -276,7 +276,7 @@ describe("gateway/node-catalog", () => {
       sessionHostNodeIds: new Set(["mac-1"]),
       workerSlotsByNodeId: new Map([["mac-1", { total: 2, available: 1 }]]),
     });
-    expect(getKnownNode(storedDisabledLiveHost, "mac-1")).toMatchObject({
+    expect(storedDisabledLiveHost.get("mac-1")).toMatchObject({
       connected: true,
       sessionHost: true,
       workerSlots: { total: 2, available: 1 },
@@ -310,7 +310,7 @@ describe("gateway/node-catalog", () => {
       connectedNodes: [],
     });
 
-    const node = getKnownNode(catalog, "ios-1");
+    const node = catalog.get("ios-1");
     expect(node?.lastConnectedAtMs).toBe(200);
     expect(node?.lastDisconnectedAtMs).toBe(250);
     expect(node?.lastSeenAtMs).toBe(300);
@@ -340,7 +340,7 @@ describe("gateway/node-catalog", () => {
       ],
     });
 
-    const node = getKnownNode(catalog, "mac-1");
+    const node = catalog.get("mac-1");
     expect(node?.caps).toEqual(["canvas"]);
     expect(node?.commands).toEqual(["canvas.snapshot"]);
     expect(node?.lastConnectedAtMs).toBe(1);
@@ -356,7 +356,7 @@ describe("gateway/node-catalog", () => {
       connectedNodes: [],
     });
 
-    const node = getKnownNode(catalog, "new-node");
+    const node = catalog.get("new-node");
     expect(node?.displayName).toBe("Mac");
     expect(node?.approvalState).toBe("pending-approval");
     expect(node?.pendingRequestId).toBe("request-1");
@@ -390,7 +390,7 @@ describe("gateway/node-catalog", () => {
       connectedNodes: [],
     });
 
-    expect(getKnownNode(catalog, "new-node")).toMatchObject({
+    expect(catalog.get("new-node")).toMatchObject({
       nodeId: "new-node",
       clientId: "openclaw-linux",
       clientMode: "node",
@@ -409,7 +409,7 @@ describe("gateway/node-catalog", () => {
       paired: false,
       connected: false,
     });
-    expect(getKnownNode(catalog, "new-node")?.permissions).toBeUndefined();
+    expect(catalog.get("new-node")?.permissions).toBeUndefined();
   });
 
   it("preserves pending first approval when a metadata reconnect omits permissions", () => {
@@ -428,7 +428,7 @@ describe("gateway/node-catalog", () => {
       ],
     });
 
-    const node = getKnownNode(catalog, "new-node");
+    const node = catalog.get("new-node");
     expect(node?.approvalState).toBe("pending-approval");
     expect(node?.pendingRequestId).toBe("request-1");
     expect(node?.pendingDeclaredPermissions).toEqual({ camera: true, screen: true });
@@ -460,7 +460,7 @@ describe("gateway/node-catalog", () => {
       ],
     });
 
-    const node = getKnownNode(catalog, "mac-1");
+    const node = catalog.get("mac-1");
     expect(node?.approvalState).toBe("pending-reapproval");
     expect(node?.pendingRequestId).toBe("request-1");
     expect(node?.pendingDeclaredCaps).toEqual(["camera", "screen"]);
@@ -496,7 +496,7 @@ describe("gateway/node-catalog", () => {
       ],
     });
 
-    const node = getKnownNode(catalog, "mac-1");
+    const node = catalog.get("mac-1");
     expect(node?.approvalState).toBe("approved");
     expect(node?.pendingRequestId).toBeUndefined();
     expect(node?.pendingDeclaredCaps).toBeUndefined();
@@ -557,7 +557,7 @@ describe("gateway/node-catalog", () => {
       connectedNodes: [],
     });
 
-    const node = getKnownNode(catalog, "mac-1");
+    const node = catalog.get("mac-1");
     expect(node?.version).toBeUndefined();
     expect(node?.displayName).toBeUndefined();
     expect(node?.clientId).toBeUndefined();
@@ -583,7 +583,7 @@ describe("gateway/node-catalog", () => {
       ],
     });
 
-    const node = getKnownNode(catalog, "mac-1");
+    const node = catalog.get("mac-1");
     expect(node?.displayName).toBe("Node Display");
     expect(node?.platform).toBe("linux");
   });
@@ -606,7 +606,7 @@ describe("gateway/node-catalog", () => {
 
     const nodes = listKnownNodes(catalog);
     expect(nodes.map((entry) => entry.nodeId)).toEqual(["good-node"]);
-    expect(getKnownNode(catalog, "good-node")).not.toBeNull();
+    expect(catalog.get("good-node")).toBeDefined();
   });
 
   it("compares the normalized public pending surface before selecting approval diagnostics", () => {
@@ -629,7 +629,7 @@ describe("gateway/node-catalog", () => {
       connectedAtMs: 0,
     };
     const input = { pairedDevices: [], pendingNodes: [pending], connectedNodes: [live] };
-    const node = getKnownNode(createKnownNodeCatalog(input), "mac-1");
+    const node = createKnownNodeCatalog(input).get("mac-1");
     expect(node).toMatchObject({
       approvalState: "pending-approval",
       pendingDeclaredCaps: ["screen"],
@@ -638,7 +638,7 @@ describe("gateway/node-catalog", () => {
       commands: [],
     });
     live.declaredCommands.push(NODE_WORKER_PRIVATE_COMMANDS[0]);
-    expect(getKnownNode(createKnownNodeCatalog(input), "mac-1")).toMatchObject({
+    expect(createKnownNodeCatalog(input).get("mac-1")).toMatchObject({
       approvalState: "unapproved",
       pendingRequestId: undefined,
       pendingDeclaredCaps: undefined,
@@ -678,10 +678,10 @@ describe("gateway/node-catalog", () => {
       workerSlotsByNodeId: new Map([["mac-1", workerSlots]]),
       workerBundleByNodeId: new Map([["mac-1", workerBundle]]),
     });
-    const node = expectDefined(getKnownNode(catalog, "mac-1"), "catalog row");
+    const node = expectDefined(catalog.get("mac-1"), "catalog row");
     expect(listKnownNodes(catalog)[0]).toBe(node);
     expect(listKnownNodes(catalog)).not.toBe(listKnownNodes(catalog));
-    expect(getKnownNode(catalog, "absent")).toBeNull();
+    expect(catalog.get("absent")).toBeUndefined();
     expect(node.permissions).toBe(permissions);
     expect(node.nodePluginTools).toBe(live.nodePluginTools);
     expect(node.hostStats).toEqual(hostStats);
@@ -761,7 +761,7 @@ describe("gateway/node-catalog", () => {
       pendingNodes: [pendingNode({ requestId: "newest" }), pendingNode({ requestId: "older" })],
       connectedNodes: [],
     });
-    expect(getKnownNode(catalog, "mac-1")).toMatchObject({
+    expect(catalog.get("mac-1")).toMatchObject({
       displayName: "Selected",
       pendingRequestId: "newest",
       lastSeenAtMs: 7,

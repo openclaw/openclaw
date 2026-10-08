@@ -40,12 +40,7 @@ function stripLeadingHtmlCommentScaffolding(
     }
 
     state.inHtmlComment = false;
-    if (searchText === remaining) {
-      remaining = remaining.slice(commentEnd + 3);
-    } else {
-      const leadingWidth = remaining.length - searchText.length;
-      remaining = remaining.slice(0, leadingWidth) + searchText.slice(commentEnd + 3);
-    }
+    remaining = searchText.slice(commentEnd + 3);
   }
   return remaining;
 }

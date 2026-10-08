@@ -3,21 +3,12 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
-  CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE,
   tryResolveCronJobEffectiveAgentId,
 } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import {
-  DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
-  hasActiveCronRun,
-  isJobEnabled,
-  recomputeJobNextRunAtMs,
-  resolveJobErrorBackoffUntilMs,
-} from "../service/jobs-scheduling.js";
-import { resolveCronNotificationQueueOwner } from "../service/notification-intents.js";
+import { hasActiveCronRun } from "../service/jobs-scheduling.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { applyJobResult } from "../service/timer-outcomes.js";
-import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-runnable.js";
 import { findActiveCronRunReceiptInDatabase } from "./run-receipt-store.js";
 import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
 import {
@@ -60,9 +51,6 @@ export function recordSkippedCronRunsInWorker(
             notifications: [],
             logs: [],
           };
-          if (change.kind === "ownerless" && preparation.legacyDefaultAgentId) {
-            throw new Error(CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE);
-          }
           const ownership = new Map(preparation.ownership.map((owner) => [owner.jobId, owner]));
           const failureAlerts = new Map(
             preparation.failureAlerts.map((alert) => [alert.jobId, alert]),
@@ -87,11 +75,7 @@ export function recordSkippedCronRunsInWorker(
                   storePath: input.storeKey,
                   jobId: job.id,
                 }) ||
-                tryResolveCronJobEffectiveAgentId(
-                  job,
-                  preparation.defaultAgentId,
-                  preparation.legacyDefaultAgentId,
-                )
+                tryResolveCronJobEffectiveAgentId(job, preparation.defaultAgentId)
               ) {
                 if (planned) {
                   outcome.rejected.push(job);
@@ -121,9 +105,7 @@ export function recordSkippedCronRunsInWorker(
                 completionStatus: "failed",
                 error:
                   change.kind === "ownerless"
-                    ? preparation.legacyDefaultAgentId
-                      ? CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE
-                      : CRON_AGENT_SELECTION_REQUIRED_MESSAGE
+                    ? CRON_AGENT_SELECTION_REQUIRED_MESSAGE
                     : change.error,
                 ...(change.kind === "ownerless"
                   ? { executionStarted: false }
@@ -159,117 +141,5 @@ export function recordSkippedCronRunsInWorker(
       operationLabel:
         change.kind === "ownerless" ? "cron.unresolved-owner" : "cron.invalid-manual-run",
     },
-  );
-}
-
-export function planCronStartupInWorker(
-  database: OpenClawStateDatabase,
-  input: CronRuntimeWorkerOperations["cron.planStartup"]["input"],
-): CronRuntimeWorkerOperations["cron.planStartup"]["output"] {
-  const skipped = new Set(input.skipJobIds);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const committed = mutateCronRuntimeRowsInDatabase({
-        database: db,
-        storeKey: input.storeKey,
-        jobIds: new Set(input.jobIds),
-        mutate({ jobs }) {
-          const preparation = prepareCronRuntimeMutation("cron.planStartup", input.nonce, {
-            jobIds: [...jobs.keys()],
-            notificationNeedsDefault: [...jobs.values()].some(
-              (job) =>
-                isJobEnabled(job) &&
-                !skipped.has(job.id) &&
-                !hasActiveCronRun(job, false) &&
-                (job.schedule.kind === "cron" || job.schedule.kind === "every") &&
-                !resolveCronNotificationQueueOwner(job, "auto-disabled").agentId,
-            ),
-          });
-          const outcome: CronRuntimeMutationContracts["cron.planStartup"]["outcome"] = {
-            jobs: [],
-            missed: [],
-            skippedJobIds: [],
-            notifications: [],
-            logs: [],
-          };
-          const state: CronJobPolicyContext = {
-            deps: {
-              nowMs: () => preparation.nowMs,
-              log: createCronMutationLogger(outcome.logs),
-            },
-          };
-          const ownership = new Map(preparation.ownership.map((owner) => [owner.jobId, owner]));
-          for (const job of jobs.values()) {
-            const owner = ownership.get(job.id);
-            if (!owner) {
-              throw new Error("Cron startup planning has no prepared process ownership");
-            }
-            if (
-              !isJobEnabled(job) ||
-              skipped.has(job.id) ||
-              hasActiveCronRun(job, owner.active) ||
-              findActiveCronRunReceiptInDatabase({
-                database: db,
-                storePath: input.storeKey,
-                jobId: job.id,
-              })
-            ) {
-              continue;
-            }
-            const backoffUntilMs =
-              job.schedule.kind === "cron"
-                ? resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS)
-                : undefined;
-            if (
-              backoffUntilMs !== undefined &&
-              preparation.nowMs < backoffUntilMs &&
-              hasMissedCronSlotSinceLastRun(job, preparation.nowMs) &&
-              job.state.nextRunAtMs !== backoffUntilMs
-            ) {
-              job.state.nextRunAtMs = backoffUntilMs;
-              outcome.jobs.push(job);
-              continue;
-            }
-            if (
-              !isRunnableJob({
-                job,
-                nowMs: preparation.nowMs,
-                skipAtIfAlreadyRan: true,
-                allowCronMissedRunByLastRun: true,
-                activeInProcess: owner.active,
-                legacyDefaultAgentId: preparation.legacyDefaultAgentId,
-              })
-            ) {
-              continue;
-            }
-            if (
-              preparation.skipMissedJobs &&
-              (job.schedule.kind === "cron" || job.schedule.kind === "every")
-            ) {
-              if (
-                recomputeJobNextRunAtMs({
-                  state,
-                  job,
-                  nowMs: preparation.nowMs,
-                  deferredNotifications: outcome.notifications,
-                })
-              ) {
-                outcome.jobs.push(job);
-              }
-              outcome.skippedJobIds.push(job.id);
-            } else {
-              outcome.missed.push(job);
-            }
-          }
-          for (const notification of outcome.notifications) {
-            notification.routing = preparation.notificationRouting;
-          }
-          return { upsertJobIds: outcome.jobs.map((job) => job.id), value: outcome };
-        },
-      });
-      return retainCronRuntimeMutationOutcome("cron.planStartup", db, input.nonce, committed.value);
-    },
-    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-    { operationLabel: "cron.startup-schedules" },
   );
 }

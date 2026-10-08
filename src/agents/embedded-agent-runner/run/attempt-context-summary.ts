@@ -20,9 +20,7 @@ function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageB
     const typedBlock = block as { type?: unknown; text?: unknown };
     if (typedBlock.type === "image") {
       imageBlocks++;
-      continue;
-    }
-    if (typeof typedBlock.text === "string") {
+    } else if (typeof typedBlock.text === "string") {
       textChars += typedBlock.text.length;
     }
   }
@@ -48,9 +46,7 @@ export function summarizeSessionContext(messages: AgentMessage[]): {
     const payload = summarizeMessagePayload(msg);
     totalTextChars += payload.textChars;
     totalImageBlocks += payload.imageBlocks;
-    if (payload.textChars > maxMessageTextChars) {
-      maxMessageTextChars = payload.textChars;
-    }
+    maxMessageTextChars = Math.max(maxMessageTextChars, payload.textChars);
   }
 
   return {

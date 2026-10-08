@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
+import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import type {
   PreparedModelRuntimeOwner,
@@ -57,7 +58,7 @@ function buildReplyDispatchPublication(
 
 type PreparedReplyDispatchPublicationHost = Readonly<{
   isGatewayLifecycleActive: () => boolean;
-  getPendingOwnerPublication: (agentId: string) => Promise<unknown> | undefined;
+  getConfiguredOwner: (agentId: string) => PreparedModelRuntimeOwner | undefined;
   getPendingReplacement: () => Promise<void> | undefined;
 }>;
 
@@ -129,12 +130,14 @@ export class PreparedReplyDispatchPublicationOwner {
       }
       const replacement = this.host.getPendingReplacement();
       if (replacement) {
+        assertPreparedModelRuntimeAdmissionCanWait();
         await racePromiseWithAbortSignal(replacement, abortSignal);
         continue;
       }
-      const pendingOwner = this.host.getPendingOwnerPublication(agentId);
-      if (pendingOwner) {
-        await racePromiseWithAbortSignal(pendingOwner, abortSignal);
+      const pendingOwner = this.host.getConfiguredOwner(agentId);
+      if (pendingOwner?.pending) {
+        assertPreparedModelRuntimeAdmissionCanWait(pendingOwner);
+        await racePromiseWithAbortSignal(pendingOwner.pending, abortSignal);
         continue;
       }
       const runtime = this.#publication.find((candidate) => candidate.agentId === agentId);

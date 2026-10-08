@@ -13,6 +13,7 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
+  discardEmptyChildSessionSnapshot,
   hydrateSidebarChildSessions,
   retireStaleChildSessionRows,
 } from "./app-sidebar-child-session-data.ts";
@@ -75,6 +76,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   sessionsResult: SessionsListResult | null = null;
   sessionsAgentId: string | null = null;
   sessionsLoading = false;
+  sessionsStartupPending = false;
   childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>> = {};
   loadedChildSessionKeys: ReadonlySet<string> = new Set();
   childSessionErrorsByParent: ReadonlyMap<string, string> = new Map();
@@ -86,7 +88,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   presenceInstanceId?: string;
   readonly ownerCounts = new SidebarOwnerSessionCounts(() => this.requestSessionDataUpdate());
 
-  // These caches were not Lit state on the element and stay non-reactive here.
   sessionResultsByAgent: Record<string, SessionsListResult> = {};
 
   private readonly subscriptions: SubscriptionsController;
@@ -125,8 +126,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   constructor(private readonly host: SessionDataControllerHost) {
     host.addController(this);
-    // The element used to enter subscriptions before connecting catalog listeners,
-    // then tear subscriptions down after all session cleanup. Keep that ordering.
+    // Subscribe before connecting catalog listeners; unsubscribe after session cleanup.
     this.subscriptions = new SubscriptionsController({
       addController: () => undefined,
       removeController: () => undefined,
@@ -168,6 +168,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   get isSessionDataHostConnected(): boolean {
     return this.host.isConnected;
+  }
+
+  get sessionsStartingUp(): boolean {
+    return this.sessionsStartupPending || this.sessionCatalogLive.startupPending;
   }
 
   get sessionDataHostConnected(): boolean {
@@ -478,6 +482,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.cachedSessionResult = null;
     this.sessionsResult = null;
     this.sessionsAgentId = null;
+    this.sessionsStartupPending = false;
     this.sessionResultsByAgent = {};
     this.resetChildSessionState();
     this.visibleSessionLimits = new Map();
@@ -571,7 +576,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       await existing.hydration;
       return;
     }
-    const scope = childSessionListQuery(parentKey);
+    const scope = { ...childSessionListQuery(parentKey), source: "sidebar" as const };
     const query: ChildSessionQuery = {};
     this.childSessionQueries.set(parentKey, query);
     const isCurrent = () =>
@@ -707,15 +712,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   discardEmptyChildSessionSnapshot(sessionKey: string): void {
-    if (this.childSessionRowsByParent[sessionKey]?.length === 0) {
-      const childRows = { ...this.childSessionRowsByParent };
-      delete childRows[sessionKey];
-      this.childSessionRowsByParent = childRows;
-      const loadedKeys = new Set(this.loadedChildSessionKeys);
-      loadedKeys.delete(sessionKey);
-      this.loadedChildSessionKeys = loadedKeys;
-      this.requestSessionDataUpdate();
-    }
+    discardEmptyChildSessionSnapshot(this, sessionKey);
   }
 
   retryChildSessions(sessionKey: string): void {

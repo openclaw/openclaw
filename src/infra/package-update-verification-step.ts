@@ -42,19 +42,6 @@ export type PackagePostInstallVerifier = (
   results: UpdateStepResult[],
 ) => Promise<UpdateStepResult | null>;
 
-function isNormalProcessExit(
-  step: Pick<UpdateStepResult, "signal" | "killed" | "outputLimitExceeded" | "termination">,
-): boolean {
-  return (
-    step.termination !== "timeout" &&
-    step.termination !== "no-output-timeout" &&
-    step.termination !== "signal" &&
-    step.killed !== true &&
-    step.outputLimitExceeded !== true &&
-    (step.signal === undefined || step.signal === null)
-  );
-}
-
 export function markPackagePostInstallDoctorAdvisory<
   T extends Pick<
     UpdateStepResult,
@@ -89,7 +76,12 @@ export function markPackagePostInstallDoctorAdvisory<
   }
   if (
     !result ||
-    !isNormalProcessExit(step) ||
+    step.termination === "timeout" ||
+    step.termination === "no-output-timeout" ||
+    step.termination === "signal" ||
+    step.killed === true ||
+    step.outputLimitExceeded === true ||
+    (step.signal !== undefined && step.signal !== null) ||
     !(
       (step.exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE &&
         result.status === "advisory") ||
@@ -146,14 +138,6 @@ function failedVerification(root: string, code: string, message: string): Update
   };
 }
 
-function missingPackageVerificationStep(root: string): UpdateStepResult {
-  return failedVerification(
-    root,
-    "verification-result-missing",
-    "Required post-install verification did not produce a result; Gateway activation is unsafe.",
-  );
-}
-
 export function failedPackageVerificationStep(
   root: string,
   error: unknown,
@@ -191,7 +175,14 @@ export async function runPackagePostInstallVerification(
 ): Promise<UpdateStepResult> {
   const results: UpdateStepResult[] = [];
   try {
-    return (await verify(root, results)) ?? missingPackageVerificationStep(root);
+    return (
+      (await verify(root, results)) ??
+      failedVerification(
+        root,
+        "verification-result-missing",
+        "Required post-install verification did not produce a result; Gateway activation is unsafe.",
+      )
+    );
   } catch (error) {
     return failedPackageVerificationStep(root, error, results.at(-1));
   }
