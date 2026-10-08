@@ -8,14 +8,16 @@ export function createSearchableSelectList(items: SearchableSelectItem[], maxVis
 }
 
 /**
- * Lists the current model and recommended models first; every other model waits
- * behind an "All models" row unless the catalog recommends nothing.
+ * Lists the current model and recommended models first; other models of a
+ * provider that recommends any wait behind an "All models" row.
  */
 export function modelSelectItems(
   models: readonly TuiModelChoice[],
   currentRef?: string,
 ): SearchableSelectItem[] {
-  const recommends = models.some((model) => model.recommended);
+  const recommendingProviders = new Set(
+    models.filter((model) => model.recommended).map((model) => model.provider),
+  );
   const items = models.map((model) => {
     const ref = modelKey(model.provider, model.id);
     return {
@@ -27,7 +29,9 @@ export function modelSelectItems(
       ]
         .filter(Boolean)
         .join(" · "),
-      ...(recommends && !model.recommended && ref !== currentRef ? { collapsed: true } : {}),
+      ...(recommendingProviders.has(model.provider) && !model.recommended && ref !== currentRef
+        ? { collapsed: true }
+        : {}),
     };
   });
   const collapsed = items.filter((item) => item.collapsed);
