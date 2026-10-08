@@ -41,6 +41,7 @@ import {
   type OAuthLoopbackCallbackServer,
 } from "../infra/oauth-loopback-callback.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
@@ -81,6 +82,14 @@ async function loadMcpConfig(opts?: { json?: boolean }) {
 type LoadedMcpConfig = Awaited<ReturnType<typeof loadMcpConfig>>;
 
 /**
+ * Plugin inventory shared by the CLI's effective view and by probe/doctor
+ * runtimes. Probes must pass this registry instead of copying plugin servers
+ * into `mcp.servers`, or the runtime relabels them as operator-configured and
+ * drops the plugin's `PLUGIN_DATA` launch-directory ownership.
+ */
+type McpPluginInventory = Pick<PluginManifestRegistry, "plugins">;
+
+/**
  * Effective MCP servers as agent runtimes see them: MCP servers declared by
  * enabled plugins overlaid by operator `mcp.servers` config. Read and OAuth
  * commands must use this view so plugin-declared servers (for example the
@@ -88,24 +97,41 @@ type LoadedMcpConfig = Awaited<ReturnType<typeof loadMcpConfig>>;
  * operating on the config-only registry they own.
  *
  * Unlike the runtime merge, disabled config entries stay visible here so
- * `list`, `status`, and `doctor` can still report them to the operator.
+ * `list`, `status`, and `doctor` can still report them.
  */
 async function loadEffectiveMcpConfig(opts?: { json?: boolean }) {
   const loaded = await loadMcpConfig(opts);
-  const [{ loadEnabledBundleMcpConfig }, { resolvePluginControlPlaneWorkspace }] =
-    await Promise.all([
-      import("../plugins/bundle-mcp.js"),
-      import("../plugins/control-plane-workspace.js"),
-    ]);
+  const [
+    { loadEnabledBundleMcpConfig },
+    { loadPluginManifestRegistryForPluginRegistry },
+    { resolvePluginControlPlaneWorkspace },
+  ] = await Promise.all([
+    import("../plugins/bundle-mcp.js"),
+    import("../plugins/plugin-registry.js"),
+    import("../plugins/control-plane-workspace.js"),
+  ]);
+  // The control plane deliberately resolves no workspace when it cannot prove a
+  // single system owner; keep that omitted scope instead of inventing a cwd.
   const { workspaceDir } = resolvePluginControlPlaneWorkspace({ config: loaded.config });
+  const pluginInventory: McpPluginInventory = {
+    plugins: loadPluginManifestRegistryForPluginRegistry({
+      workspaceDir,
+      config: loaded.config,
+      includeDisabled: true,
+    }).plugins,
+  };
   const bundle = loadEnabledBundleMcpConfig({
-    workspaceDir: workspaceDir ?? process.cwd(),
+    workspaceDir,
     cfg: loaded.config,
+    manifestRegistry: pluginInventory,
   });
+  const configuredMcpServers = loaded.mcpServers;
   // Plugin-declared defaults first; operator config overrides by server name.
   return {
     ...loaded,
-    mcpServers: { ...bundle.config.mcpServers, ...loaded.mcpServers },
+    configuredMcpServers,
+    pluginInventory,
+    mcpServers: { ...bundle.config.mcpServers, ...configuredMcpServers },
   };
 }
 
@@ -387,6 +413,8 @@ async function collectMcpDoctorIssues(params: {
   server: Record<string, unknown>;
   probe: boolean;
   config: OpenClawConfig;
+  configuredServers: Record<string, Record<string, unknown>>;
+  pluginInventory: McpPluginInventory;
 }): Promise<McpDoctorIssue[]> {
   const issues: McpDoctorIssue[] = [];
   const { name, server } = params;
@@ -476,6 +504,8 @@ async function collectMcpDoctorIssues(params: {
       config: params.config,
       name,
       server,
+      configuredServers: params.configuredServers,
+      pluginInventory: params.pluginInventory,
     });
     issues.push(...probeIssues);
   }
@@ -486,10 +516,18 @@ async function probeMcpServerIssues(params: {
   config: OpenClawConfig;
   name: string;
   server: Record<string, unknown>;
+  configuredServers: Record<string, Record<string, unknown>>;
+  pluginInventory: McpPluginInventory;
 }): Promise<McpDoctorIssue[]> {
-  const runtime = await createMcpProbeRuntime("openclaw-cli-mcp-doctor", params.config, {
-    [params.name]: params.server,
-  });
+  const runtime = await createMcpProbeRuntime(
+    "openclaw-cli-mcp-doctor",
+    params.config,
+    selectConfiguredProbeServers({ [params.name]: params.server }, params.configuredServers),
+    {
+      pluginInventory: params.pluginInventory,
+      includeServerNames: new Set([params.name]),
+    },
+  );
   try {
     const result = await readMcpProbeResult(runtime);
     const diagnostic = result.diagnostics[0];
@@ -629,17 +667,42 @@ async function readMcpProbeResult(runtime: SessionMcpRuntime) {
   };
 }
 
+/**
+ * Builds a probe/doctor runtime. `servers` may only carry operator-configured
+ * definitions; plugin-declared servers arrive through `pluginInventory` so their
+ * launch ownership (for example `PLUGIN_DATA` directories) is preserved.
+ * `includeServerNames` keeps the runtime scoped to the requested server(s).
+ */
 function createMcpProbeRuntime(
   sessionId: string,
   config: OpenClawConfig,
   servers: Record<string, Record<string, unknown>>,
+  scope?: {
+    pluginInventory?: McpPluginInventory | undefined;
+    includeServerNames?: ReadonlySet<string> | undefined;
+  },
 ): Promise<SessionMcpRuntime> {
   return createSessionMcpRuntime({
     sessionId,
+    // Session working directory only; plugin discovery comes from `manifestRegistry`.
     workspaceDir: process.cwd(),
     cfg: { ...config, mcp: { ...config.mcp, servers } },
-    manifestRegistry: { plugins: [] },
+    manifestRegistry: scope?.pluginInventory ?? { plugins: [] },
+    ...(scope?.includeServerNames ? { includeServerNames: scope.includeServerNames } : {}),
   });
+}
+
+/**
+ * Plugin-declared servers must not be injected into `mcp.servers`: that would
+ * relabel them as operator-configured and drop their launch ownership.
+ */
+function selectConfiguredProbeServers(
+  servers: Record<string, Record<string, unknown>>,
+  configuredServers: Record<string, Record<string, unknown>>,
+): Record<string, Record<string, unknown>> {
+  return Object.fromEntries(
+    Object.entries(servers).filter(([serverName]) => Object.hasOwn(configuredServers, serverName)),
+  );
 }
 
 const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
@@ -665,6 +728,9 @@ async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
+  configuredServers?: Record<string, Record<string, unknown>> | undefined;
+  pluginInventory?: McpPluginInventory | undefined;
+  includeServerNames?: ReadonlySet<string> | undefined;
 }): Promise<void> {
   const probeServers = Object.fromEntries(
     Object.entries(params.servers).map(([name, server]) => [
@@ -674,10 +740,17 @@ async function probeMcpServersOrFail(params: {
         : { ...server, connectionTimeoutMs: DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS },
     ]),
   );
+  const injectedServers = params.configuredServers
+    ? selectConfiguredProbeServers(probeServers, params.configuredServers)
+    : probeServers;
   const runtime = await createMcpProbeRuntime(
     "openclaw-cli-mcp-probe",
     params.config,
-    probeServers,
+    injectedServers,
+    {
+      pluginInventory: params.pluginInventory,
+      includeServerNames: params.includeServerNames,
+    },
   );
   try {
     const result = await readMcpProbeResult(runtime);
@@ -864,7 +937,15 @@ export function registerMcpCli(program: Command) {
         );
         return;
       }
-      const runtime = await createMcpProbeRuntime("openclaw-cli-mcp-probe", loaded.config, servers);
+      const runtime = await createMcpProbeRuntime(
+        "openclaw-cli-mcp-probe",
+        loaded.config,
+        selectConfiguredProbeServers(servers, loaded.configuredMcpServers),
+        {
+          pluginInventory: loaded.pluginInventory,
+          includeServerNames: name ? new Set([name]) : undefined,
+        },
+      );
       try {
         const result = await readMcpProbeResult(runtime);
         if (opts.json) {
@@ -912,6 +993,8 @@ export function registerMcpCli(program: Command) {
             server,
             config: loaded.config,
             probe: Boolean(opts.probe),
+            configuredServers: loaded.configuredMcpServers,
+            pluginInventory: loaded.pluginInventory,
           });
           return {
             name: serverName,
