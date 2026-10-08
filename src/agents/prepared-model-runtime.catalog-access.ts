@@ -483,7 +483,7 @@ export async function createFullModelCatalogAccess(
           attempt,
           normalizeProvider,
         }),
-        onDiscoveryCompleted: discovery.onCompleted,
+        onDiscoveryCompleted: (rows) => discovery.onCompleted(rows),
       });
       assertCurrent();
       const selectedRowReady =
