@@ -183,10 +183,7 @@ export function flattenMarkdownDetails(text: string): string {
     appendNode(target, text.slice(cursor, start));
     cursor = start + match[0].length;
 
-    const type = match[2]?.toLowerCase();
-    if (type !== "details" && type !== "summary") {
-      continue;
-    }
+    const type = match[2]?.toLowerCase() === "summary" ? "summary" : "details";
     if (match[1]) {
       if (
         type === "details" &&
