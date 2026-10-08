@@ -111,14 +111,18 @@ export async function cleanupSystemAgentSession(session: SystemAgentSession): Pr
 
 type SystemAgentTurnParams = Parameters<SystemAgentTurnRunner>[0];
 
+function clearFailedSystemAgentSessionState(session: SystemAgentSession): void {
+  session.proposalRef.current = undefined;
+  session.proposalRef.operation = undefined;
+  delete session.cliSession;
+}
+
 function throwSystemAgentInferenceUnavailable(params: {
   session: SystemAgentSession;
   failures?: unknown[];
   guidance?: ConstructorParameters<typeof SystemAgentInferenceUnavailableError>[2];
 }): never {
-  params.session.proposalRef.current = undefined;
-  params.session.proposalRef.operation = undefined;
-  delete params.session.cliSession;
+  clearFailedSystemAgentSessionState(params.session);
   throw new SystemAgentInferenceUnavailableError("agent-turn", params.failures, params.guidance);
 }
 
