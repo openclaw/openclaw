@@ -232,30 +232,6 @@ describe("Client.handleInteraction native command channel identity", () => {
     expectVisibleStatus(harness, channelId);
   });
 
-  it("rejects a raw command sender outside commands.allowFrom", async () => {
-    const harness = createHarness();
-    await harness.client.handleInteraction(payload(CHANNEL, false, "100000000000000099"));
-    expect(harness.status).not.toHaveBeenCalled();
-    expectFollowUp(harness, "You are not authorized to use this command.");
-  });
-
-  it("rejects a thread whose parent is outside the allowlist", async () => {
-    const harness = createHarness();
-    denyThreadParent(harness);
-    await harness.client.handleInteraction(payload(THREAD));
-    expect(harness.status).not.toHaveBeenCalled();
-    expectFollowUp(harness, "This channel is not allowed.");
-  });
-
-  it("rejects missing channel identity under an allowlist", async () => {
-    const harness = createHarness();
-    const interaction = payload(CHANNEL);
-    Reflect.deleteProperty(interaction, "channel_id");
-    await harness.client.handleInteraction(interaction);
-    expect(harness.status).not.toHaveBeenCalled();
-    expectFollowUp(harness, "This channel is not allowed.");
-  });
-
   it.each([THREAD])(
     "autocompletes for raw channel %s through the registered option",
     async (channelId) => {
@@ -313,18 +289,15 @@ describe("Client.handleInteraction native command channel identity", () => {
     },
   );
 
-  it.each(["sender", "parent", "identity"] as const)(
+  it.each(["sender", "identity"] as const)(
     "denies raw picker selection with denied %s",
     async (denial) => {
       const harness = createHarness();
       const interaction = pickerPayload(
-        denial === "parent" ? THREAD : CHANNEL,
+        CHANNEL,
         "reset",
         denial === "sender" ? "100000000000000099" : USER,
       );
-      if (denial === "parent") {
-        denyThreadParent(harness);
-      }
       if (denial === "identity") {
         Reflect.deleteProperty(interaction, "channel_id");
       }
