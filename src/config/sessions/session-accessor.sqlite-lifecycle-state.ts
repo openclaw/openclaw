@@ -223,6 +223,23 @@ export function readReferencedSessionIdsAfterTargetMutation(
   return readReferencedSessionIds(database, removedKeys, candidateSessionIds);
 }
 
+/** Entry removal cannot archive a cold transcript; deleting the entry would orphan it. */
+export function hasColdSessionTranscript(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  entry: SessionEntry,
+  sessionKey?: string,
+): boolean {
+  const sessionIds = new Set(collectSessionStateIdsForEntry(entry));
+  if (sessionKey) {
+    for (const sessionId of readSessionGenerationIdsForKeys(database, [sessionKey], {
+      exactStoredKeys: true,
+    })) {
+      sessionIds.add(sessionId);
+    }
+  }
+  return [...sessionIds].some((sessionId) => readSessionColdTranscript(database.db, sessionId));
+}
+
 export function planSessionStateDeleteIfUnreferenced(params: {
   archiveTranscript?: boolean;
   archiveDirectory: string;
@@ -320,7 +337,7 @@ export function planSessionStateAfterEntryRemoval(params: {
 
 /** Ids of every persisted generation owned by the given logical session keys. */
 export function readSessionGenerationIdsForKeys(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   keys: Iterable<string>,
   options: { exactStoredKeys?: boolean } = {},
 ): string[] {
