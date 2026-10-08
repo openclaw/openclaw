@@ -1,4 +1,5 @@
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/core";
+import { applyAuthProfileConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
   resolveClaudeThinkingProfile,
   supportsClaudeNativeMaxEffort,
@@ -11,8 +12,6 @@ import { apiKeyAuthMethod, entraIdAuthMethod } from "./auth.js";
 import { prepareFoundryRuntimeAuth } from "./runtime.js";
 import {
   PROVIDER_ID,
-  applyFoundryProfileBinding,
-  applyFoundryProviderConfig,
   buildFoundryModelConfig,
   buildFoundryProviderBaseUrl,
   extractFoundryEndpoint,
@@ -114,8 +113,10 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
     envVars: ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"],
     auth: [entraIdAuthMethod, apiKeyAuthMethod],
     onModelSelected: async (ctx) => {
-      const providerConfig = ctx.config.models?.providers?.[PROVIDER_ID];
+      const providers = ctx.config.models?.providers;
+      const providerConfig = providers?.[PROVIDER_ID];
       if (
+        !providers ||
         !providerConfig ||
         !providerConfig.baseUrl?.trim() ||
         !Array.isArray(providerConfig.models) ||
@@ -124,10 +125,8 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         return;
       }
       const selectedModelId = ctx.model.slice(`${PROVIDER_ID}/`.length);
-      const configuredModels = providerConfig.models ?? [];
-      const existingModel = configuredModels.find(
-        (model: { id: string }) => model.id === selectedModelId,
-      );
+      const configuredModels = providerConfig.models;
+      const existingModel = configuredModels.find((model) => model.id === selectedModelId);
       const existingModelApi = isFoundryProviderApi(existingModel?.api)
         ? existingModel.api
         : undefined;
@@ -139,7 +138,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         existingModelApi ?? providerApiForExistingModel,
         existingModel?.input,
       );
-      const providerEndpoint = normalizeFoundryEndpoint(providerConfig.baseUrl ?? "");
+      const providerEndpoint = normalizeFoundryEndpoint(providerConfig.baseUrl);
       const selectedProviderEndpoint =
         extractFoundryEndpoint(existingModel?.baseUrl) ?? providerEndpoint;
       const nextModels = configuredModels.map((model) => {
@@ -175,9 +174,13 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
       };
       const targetProfileId = resolveFoundryTargetProfileId(ctx.config);
       if (targetProfileId) {
-        applyFoundryProfileBinding(ctx.config, targetProfileId);
+        ctx.config.auth = applyAuthProfileConfig(ctx.config, {
+          profileId: targetProfileId,
+          provider: PROVIDER_ID,
+          mode: "api_key",
+        }).auth;
       }
-      applyFoundryProviderConfig(ctx.config, nextProviderConfig);
+      providers[PROVIDER_ID] = nextProviderConfig;
     },
     resolveThinkingProfile: ({ modelId, params }) => {
       const modelName =

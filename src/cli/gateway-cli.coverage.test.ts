@@ -1,4 +1,5 @@
 // Gateway CLI coverage tests cover gateway command branches and output modes.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,8 +11,6 @@ import type { CostUsageSummary } from "../infra/session-cost-usage.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { registerGatewayCli } from "./gateway-cli.js";
-
-type GatewayCliDependencies = Parameters<typeof registerGatewayCli>[1];
 
 type DiscoveredBeacon = Awaited<
   ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
@@ -102,10 +101,10 @@ vi.mock("../commands/gateway-status.js", () => ({
 
 let gatewayProgram: Command;
 
-function createGatewayProgram(deps?: GatewayCliDependencies) {
+function createGatewayProgram() {
   const program = new Command();
   program.exitOverride();
-  registerGatewayCli(program, deps);
+  registerGatewayCli(program);
   return program;
 }
 

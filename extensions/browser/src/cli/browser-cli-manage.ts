@@ -53,20 +53,20 @@ async function fetchBrowserManagement<T>(
 async function runBrowserToggle(
   parent: BrowserParentOpts,
   params: {
-    profile?: string;
     path: string;
     query?: Record<string, string | number | boolean | undefined>;
   },
 ) {
+  const profile = parent.browserProfile;
   await callBrowserRequest(parent, {
     method: "POST",
     path: params.path,
-    query: resolveProfileQuery(params.profile, params.query),
+    query: resolveProfileQuery(profile, params.query),
   });
   const status = await fetchBrowserManagement<BrowserStatus>(
     parent,
     "/",
-    resolveProfileQuery(params.profile),
+    resolveProfileQuery(profile),
   );
   if (printJsonResult(parent, status)) {
     return;
@@ -104,22 +104,15 @@ function formatDoctorLine(check: BrowserDoctorCheck): string {
   return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
 }
 
-function isGatewaySecretRefUnavailableErrorShape(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const errorRecord = error as Error & { code?: unknown };
-  return (
-    errorRecord.name === "GatewaySecretRefUnavailableError" ||
-    errorRecord.code === "GATEWAY_SECRET_REF_UNAVAILABLE"
-  );
-}
-
 function formatBrowserDoctorGatewayError(error: unknown): string {
-  if (!isGatewaySecretRefUnavailableErrorShape(error)) {
-    return String(error);
+  if (
+    error instanceof Error &&
+    (error.name === "GatewaySecretRefUnavailableError" ||
+      (error as Error & { code?: unknown }).code === "GATEWAY_SECRET_REF_UNAVAILABLE")
+  ) {
+    return "Gateway auth SecretRef is unavailable in this command path; browser doctor cannot reach the admin-scoped browser.request endpoint. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD, then retry.";
   }
-  return "Gateway auth SecretRef is unavailable in this command path; browser doctor cannot reach the admin-scoped browser.request endpoint. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD, then retry.";
+  return String(error);
 }
 
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
@@ -324,7 +317,7 @@ export function registerBrowserManageCommands(
   browser
     .command("doctor")
     .description("Check browser plugin readiness")
-    .option("--deep", "Run a live snapshot probe")
+    .option("--deep", "Run a live snapshot check")
     .action(async (opts: { deep?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -345,10 +338,8 @@ export function registerBrowserManageCommands(
     .option("--headless", "Launch a local managed browser headless for this start")
     .action(async (opts: { headless?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
         await runBrowserToggle(parent, {
-          profile,
           path: "/start",
           query: opts.headless ? { headless: true } : undefined,
         });
@@ -360,9 +351,8 @@ export function registerBrowserManageCommands(
     .description("Stop the browser (best-effort)")
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        await runBrowserToggle(parent, { profile, path: "/stop" });
+        await runBrowserToggle(parent, { path: "/stop" });
       });
     });
 

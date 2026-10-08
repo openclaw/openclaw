@@ -31,7 +31,7 @@ async function resolveBridgeMissingArtifactsStatus() {
   return resolveMemoryWikiStatus(config, {
     appConfig: {
       agents: {
-        list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+        entries: { main: { workspace: "/tmp/workspace" } },
       },
     } as OpenClawConfig,
     listPublicArtifacts: async () => [],
@@ -88,7 +88,7 @@ describe("resolveMemoryWikiStatus", () => {
     const status = await resolveMemoryWikiStatus(config, {
       appConfig: {
         agents: {
-          list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+          entries: { main: { workspace: "/tmp/workspace" } },
         },
       } as OpenClawConfig,
       listPublicArtifacts: async () => {
@@ -153,7 +153,7 @@ describe("resolveMemoryWikiStatus", () => {
 
     const status = await resolveMemoryWikiStatus(config, {
       appConfig: {
-        agents: { list: [{ id: "support", default: true, workspace: "/tmp/support" }] },
+        agents: { entries: { support: { workspace: "/tmp/support" } } },
       },
       listPublicArtifacts: async () => artifacts,
       pathExists: async () => true,

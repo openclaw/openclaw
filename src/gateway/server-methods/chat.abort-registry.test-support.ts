@@ -71,7 +71,7 @@ export function useChatAbortRegistryFixture() {
     // Delivery results can settle before their detached root's cleanup tail.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         schedulerTesting.reset();
         await cleanupSessionStateForTest({ stateDir: stateDir || undefined });
         clearConfigCache();

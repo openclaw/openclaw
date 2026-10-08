@@ -1,4 +1,5 @@
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import type { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { ChildOperation, ChildPurpose } from "./update-command-executor-children.js";
 import {
@@ -10,6 +11,16 @@ import {
   type ManagedUpdateLeaseAuthority,
 } from "./update-command-executor-state.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+
+export function requireUpdateCommandAcquisition(
+  acquired: ReturnType<ReturnType<typeof createManagedHandoffLeaseStore>["acquire"]>,
+  message: string,
+) {
+  if (acquired.kind !== "acquired") {
+    throw new UpdateCommandRecoveryPendingError(message);
+  }
+  return acquired;
+}
 
 /** Revoke effects now; the owning invocation retains physical custody until it
  * and every admitted descendant join. Never returns a settlement capability. */
@@ -86,8 +97,6 @@ export function reserveUpdateCommandExecutorSlot(fence: UpdateRecoveryFence, roo
   }
   reserve(root);
 }
-
-export type { UpdateCommandChildGrant } from "./update-command-executor-children.js";
 
 export async function withUpdateCommandExecutorChild<T>(
   fence: UpdateRecoveryFence,

@@ -21,14 +21,13 @@ import {
   SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION,
   type SessionIngestionFileState,
 } from "./dreaming-ingestion-state.js";
-import { listMemorySessionTombstones } from "./memory-entry-origins.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 
 export const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
 export const SESSION_INGESTION_SCORE = 0.58;
 export const SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP = 240;
-export const SESSION_INGESTION_MAX_MESSAGES_PER_FILE = 80;
-export const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
+const SESSION_INGESTION_MAX_MESSAGES_PER_FILE = 80;
+const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
 const SESSION_INGESTION_MIN_SNIPPET_CHARS = 12;
 const SESSION_INGESTION_MAX_SNIPPET_CHARS = 280;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
@@ -83,6 +82,16 @@ type SessionIngestionScan = {
 };
 
 type DayDisposition = "include" | "skip" | "block";
+
+export function resolveSessionIngestionFileCap(sourceCount: number): number {
+  return Math.min(
+    SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
+    Math.max(
+      SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
+      Math.ceil(SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP / Math.max(1, sourceCount)),
+    ),
+  );
+}
 
 function buildSessionScope(agentId: string, sessionId: string): string {
   return `${agentId}:${sessionId}`;
@@ -155,17 +164,14 @@ export function resolveAdmissionPolicy(
 
 export function sessionExclusionReason(
   source: SessionIngestionSource,
-  policy?: SessionAdmissionPolicy,
-  forgottenSessionIds?: ReadonlySet<string>,
+  policy: SessionAdmissionPolicy | undefined,
+  forgottenSessionIds: ReadonlySet<string>,
 ): string | undefined {
   if (!source.sessionOrigin) {
     return undefined;
   }
-  const { agentId, sessionId } = source.sessionOrigin;
-  const forgotten = forgottenSessionIds
-    ? forgottenSessionIds.has(sessionId)
-    : listMemorySessionTombstones({ agentId, sessionIds: [sessionId] }).length > 0;
-  if (forgotten) {
+  const { sessionId } = source.sessionOrigin;
+  if (forgottenSessionIds.has(sessionId)) {
     return "forgotten";
   }
   if (!policy) {

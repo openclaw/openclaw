@@ -44,7 +44,7 @@ test("sessions.list preserves recorded sentinel owners for explicit multi-agent 
     testState.sessionConfig = { store: storeTemplate };
     testState.agentsConfig = {
       ownership: "explicit",
-      list: [{ id: "ops" }, { id: "research" }],
+      entries: { ops: {}, research: {} },
     };
     testState.agentConfig = { sessionStore: { agentId: "ops" } };
     const linkedSessionKey = "subagent:workboard-default-owned";
@@ -156,7 +156,7 @@ test("sessions.list preserves separate registered targets under a fixed store ow
       { sessionId: "separate-main", updatedAt: 2 },
     );
     testState.sessionConfig = { store: storePath };
-    testState.agentsConfig = { ownership: "explicit", list: [{ id: "main" }, { id: "ops" }] };
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
     testState.agentConfig = { sessionStore: { agentId: "ops" } };
     const client: GatewayClient = {
       connect: {
@@ -212,7 +212,7 @@ test.for(
         ? path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite")
         : storePath;
       testState.sessionConfig = { store: storePath };
-      testState.agentsConfig = { ownership: "explicit", list: [{ id: "main" }, { id: "ops" }] };
+      testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
       testState.agentConfig = { sessionStore: { agentId: "ops" } };
       openOpenClawAgentDatabase({ agentId: "main", path: physicalPath });
       if (alias) {
@@ -259,41 +259,43 @@ test.for(
           return published;
         });
       const projection = await createSessionRowProjection({ cfg });
-      const ensure = projection.ensureMaterialized;
-      const spy = vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
-        await ensure();
-        expect(
-          projection.snapshot(
-            { key, agentId: "ops" },
-            { includeDerivedTitles: true, includeLastMessage: true },
-          ).row,
-        ).toMatchObject({
-          key,
-          agentId: "ops",
-          derivedTitle: "Physical database title",
-          lastMessagePreview: "Physical database preview",
+      const prepare = projection.prepareSelection;
+      const spy = vi
+        .spyOn(projection, "prepareSelection")
+        .mockImplementationOnce(async (...args) => {
+          await prepare(...args);
+          expect(
+            projection.snapshot(
+              { key, agentId: "ops" },
+              { includeDerivedTitles: true, includeLastMessage: true },
+            ).row,
+          ).toMatchObject({
+            key,
+            agentId: "ops",
+            derivedTitle: "Physical database title",
+            lastMessagePreview: "Physical database preview",
+          });
+          if (change === "delete") {
+            await deleteSessionEntryLifecycle({
+              agentId: scope.agentId,
+              storePath,
+              target: { canonicalKey: key, storeKeys: [key] },
+              archiveTranscript: false,
+              deleteTranscriptWithoutArchive: true,
+            });
+          } else if (change === "draft") {
+            replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
+          } else if (change === "join") {
+            addSessionMember(scope, {
+              identityId: "viewer",
+              addedBy: "owner",
+              expectedSessionId: entry.sessionId,
+            });
+          } else {
+            removeSessionMember(scope, "viewer", undefined, entry.sessionId);
+          }
+          return prepare(...args);
         });
-        if (change === "delete") {
-          await deleteSessionEntryLifecycle({
-            agentId: scope.agentId,
-            storePath,
-            target: { canonicalKey: key, storeKeys: [key] },
-            archiveTranscript: false,
-            deleteTranscriptWithoutArchive: true,
-          });
-        } else if (change === "draft") {
-          replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
-        } else if (change === "join") {
-          addSessionMember(scope, {
-            identityId: "viewer",
-            addedBy: "owner",
-            expectedSessionId: entry.sessionId,
-          });
-        } else {
-          removeSessionMember(scope, "viewer", undefined, entry.sessionId);
-        }
-        await ensure();
-      });
       try {
         await previewPublished.promise;
         publication.mockRestore();
@@ -354,7 +356,7 @@ test("captured sentinel rows never substitute a later same-owner session after d
     const second = { ...first, storePath: path.join(stateDir, "z-second.sqlite") };
     replaceSessionEntrySync(first, { sessionId: "first-sentinel", updatedAt: 1 });
     replaceSessionEntrySync(second, { sessionId: "later-sentinel", updatedAt: 2 });
-    testState.agentsConfig = { list: [{ id: "main", default: true }] };
+    testState.agentsConfig = { entries: { main: {} } };
     const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
     const projection = await createSessionRowProjection({ cfg });
     const client = sharingPolicyClient({ user: "viewer" });
@@ -410,7 +412,7 @@ test("captured sentinel rows never substitute a later same-owner session after d
         expect(send).not.toHaveBeenCalled();
       } finally {
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
       }
       // A new selection may use the remaining physical row; the captured identity may not.
       const current = await directSessionReq<SessionsListResult>(

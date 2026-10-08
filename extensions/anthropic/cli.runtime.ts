@@ -4,7 +4,6 @@ import { PassThrough } from "node:stream";
 import type {
   CliBackendExecuteContext,
   CliBackendLiveSessionCapability,
-  CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "openclaw/plugin-sdk/cli-backend";
@@ -18,12 +17,6 @@ import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
-// Claude Code emits interim results while these run, then delivers their answers
-// in later results under the same admitted turn.
-const RESULT_HOLDING_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
-// Explicit background commands may never finish. Only Bash tasks that started
-// in the foreground and later entered the background list hold their turn.
-const TIMEOUT_BACKGROUNDED_TASK_TYPE = "local_bash";
 
 function readReplayedTaskId(
   message: Record<string, unknown>,
@@ -65,10 +58,12 @@ type ClaudeCliTurn = {
   events: PassThrough;
   inputUuid: string;
   inputStarted: boolean;
+  promptSubmitted: boolean;
   sawTerminalResult: boolean;
   foregroundTaskIds: Set<string>;
   foregroundBashToolUseIds: Set<string>;
   pendingBackgroundTaskIds: Set<string>;
+  subagentTaskIds: Set<string>;
   taskNotifications: Map<string, "queued" | "replayed">;
   /** Same-turn inputs written to native, keyed by UUID until their lifecycle completes. */
   injectedInputs: Map<
@@ -122,8 +117,7 @@ async function authorizeTool(
   signal: AbortSignal,
 ): Promise<CliBackendToolPermissionResult> {
   const turn = activeTurn(session);
-  const input = request.input;
-  const toolName = request.tool_name;
+  const { input, tool_name: toolName } = request;
   if (!turn || signal.aborted || typeof toolName !== "string" || !isRecord(input)) {
     return {
       behavior: "deny",
@@ -200,6 +194,7 @@ async function handleRequest(
     if (!turn || signal.aborted || isInjectedPrompt(turn, input.prompt)) {
       return {};
     }
+    turn.promptSubmitted = true;
     const additionalContext = [
       turn.context.promptContext?.prependContext,
       turn.context.promptContext?.appendContext,
@@ -267,7 +262,12 @@ async function injectInput(
   assertCurrent: () => void,
 ): Promise<void> {
   // Native lifecycle is the only receipt that proves the input joined this turn.
-  if (!session.hasInputLifecycle || !session.transport || activeTurn(session) !== turn) {
+  if (
+    !session.hasInputLifecycle ||
+    !session.transport ||
+    !turn.promptSubmitted ||
+    activeTurn(session) !== turn
+  ) {
     throw new Error("The Claude CLI turn cannot accept more input.");
   }
   assertCurrent();
@@ -285,11 +285,7 @@ async function injectInput(
   await started.promise;
 }
 
-function closeSession(
-  session: ClaudeCliSession,
-  _reason: CliBackendLiveSessionCloseReason,
-  error?: unknown,
-) {
+function closeSession(session: ClaudeCliSession, error?: unknown) {
   if (session.closed) {
     return;
   }
@@ -399,7 +395,11 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     return;
   }
   if (message.type === "system" && message.subtype === "task_started") {
-    if (typeof message.task_id === "string" && message.task_id) {
+    if (message.owned_by_subagent === true) {
+      if (typeof message.task_id === "string" && message.task_id) {
+        turn.subagentTaskIds.add(message.task_id);
+      }
+    } else if (typeof message.task_id === "string" && message.task_id) {
       // task_type is optional here; the background task list names it later.
       if (message.is_backgrounded === false) {
         turn.foregroundTaskIds.add(message.task_id);
@@ -418,9 +418,9 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
         continue;
       }
       if (
-        (typeof task.task_type === "string" && RESULT_HOLDING_TASK_TYPES.has(task.task_type)) ||
-        (task.task_type === TIMEOUT_BACKGROUNDED_TASK_TYPE &&
-          turn.foregroundTaskIds.has(task.task_id))
+        task.task_type === "local_agent" ||
+        task.task_type === "local_workflow" ||
+        (task.task_type === "local_bash" && turn.foregroundTaskIds.has(task.task_id))
       ) {
         // Leaving the live task list is not acknowledgement of its queued answer.
         turn.pendingBackgroundTaskIds.add(task.task_id);
@@ -439,7 +439,9 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     message.type === "system" &&
     message.subtype === "task_notification" &&
     typeof message.task_id === "string" &&
-    message.task_id
+    message.task_id &&
+    // Subagent completions have no parent result and must not consume its queue slots.
+    !turn.subagentTaskIds.delete(message.task_id)
   ) {
     // Include non-held tasks: each queued notification has its own ordered result.
     turn.taskNotifications.set(message.task_id, "queued");
@@ -517,7 +519,7 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
       generation: randomUUID(),
       fingerprint: capability?.fingerprint ?? randomUUID(),
       isIdle: () => !session.closed && !session.currentTurn,
-      close: (reason, error) => closeSession(session, reason, error),
+      close: (_reason, error) => closeSession(session, error),
       waitForExit: () => session.transport?.waitForExit() ?? Promise.resolve(),
     },
   };
@@ -555,11 +557,13 @@ export async function* executeClaudeCli(
     events: new PassThrough({ objectMode: true }),
     inputUuid: randomUUID(),
     inputStarted: false,
+    promptSubmitted: false,
     sawTerminalResult: false,
     foregroundTaskIds: new Set(),
     foregroundBashToolUseIds: new Set(),
     pendingBackgroundTaskIds: new Set(),
     injectedInputs: new Map(),
+    subagentTaskIds: new Set(),
     taskNotifications: new Map(),
   };
   session.currentTurn = turn;
@@ -623,7 +627,10 @@ export async function* executeClaudeCli(
     await session.transport.send(createUserInput(context, context.prompt, turn.inputUuid));
     context.registerMessageInjection?.({
       isAvailable: () =>
-        session.hasInputLifecycle && turn.inputStarted && activeTurn(session) === turn,
+        session.hasInputLifecycle &&
+        turn.inputStarted &&
+        turn.promptSubmitted &&
+        activeTurn(session) === turn,
       queueMessage: (text, assertCurrent) => injectInput(session, turn, text, assertCurrent),
     });
     for await (const record of turn.events) {

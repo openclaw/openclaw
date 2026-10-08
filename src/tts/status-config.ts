@@ -1,8 +1,8 @@
-// TTS status config helpers resolve status output paths for speech generation.
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
+import type { PreparedTtsPreferences } from "./tts-preferences.js";
 import { resolveTtsSettingsSnapshot } from "./tts-settings.js";
 
 const DEFAULT_OPENAI_TTS_BASE_URL = "https://api.openai.com/v1";
@@ -42,17 +42,16 @@ function sanitizeBaseUrlForStatus(value: unknown): string | undefined {
   if (!raw) {
     return undefined;
   }
-  try {
-    const parsed = new URL(raw);
-    parsed.username = "";
-    parsed.password = "";
-    parsed.search = "";
-    parsed.hash = "";
-    const sanitized = parsed.toString().replace(/\/+$/, "");
-    return normalizeStatusDetail(sanitized, 120);
-  } catch {
+  const parsed = URL.parse(raw);
+  if (!parsed) {
     return "[invalid-url]";
   }
+  parsed.username = "";
+  parsed.password = "";
+  parsed.search = "";
+  parsed.hash = "";
+  const sanitized = parsed.toString().replace(/\/+$/, "");
+  return normalizeStatusDetail(sanitized, 120);
 }
 
 function isCustomOpenAiTtsBaseUrl(baseUrl: string | undefined): boolean {
@@ -60,12 +59,9 @@ function isCustomOpenAiTtsBaseUrl(baseUrl: string | undefined): boolean {
 }
 
 function firstStatusDetail(
-  record: Record<string, unknown> | undefined,
-  keys: string[],
+  record: Record<string, unknown>,
+  keys: readonly string[],
 ): string | undefined {
-  if (!record) {
-    return undefined;
-  }
   for (const key of keys) {
     const value = normalizeStatusDetail(record[key]);
     if (value) {
@@ -78,7 +74,7 @@ function firstStatusDetail(
 function resolveProviderConfigRecord(
   raw: TtsConfig,
   provider: TtsProvider,
-): Record<string, unknown> | undefined {
+): Record<string, unknown> {
   const rawRecord: Record<string, unknown> = isObjectRecord(raw)
     ? (raw as Record<string, unknown>)
     : {};
@@ -107,26 +103,18 @@ function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
     return {};
   }
   const record = resolveProviderConfigRecord(raw, provider);
-  const sanitizedBaseUrl = sanitizeBaseUrlForStatus(record?.baseUrl);
+  const sanitizedBaseUrl = sanitizeBaseUrlForStatus(record.baseUrl);
   const customBaseUrl = provider === "openai" && isCustomOpenAiTtsBaseUrl(sanitizedBaseUrl);
   const details: Partial<TtsStatusSnapshot> = {};
-  const displayName = firstStatusDetail(record, ["displayName"]);
-  if (displayName) {
-    details.displayName = displayName;
-  }
-  const model = firstStatusDetail(record, ["model", "modelId"]);
-  if (model) {
-    details.model = model;
-  }
-  const voice = firstStatusDetail(record, [
-    "speakerVoice",
-    "speakerVoiceId",
-    "voice",
-    "voiceId",
-    "voiceName",
-  ]);
-  if (voice) {
-    details.voice = voice;
+  for (const [field, keys] of [
+    ["displayName", ["displayName"]],
+    ["model", ["model", "modelId"]],
+    ["voice", ["speakerVoice", "speakerVoiceId", "voice", "voiceId", "voiceName"]],
+  ] as const) {
+    const value = firstStatusDetail(record, keys);
+    if (value) {
+      details[field] = value;
+    }
   }
   if (sanitizedBaseUrl && (provider !== "openai" || customBaseUrl)) {
     details.baseUrl = sanitizedBaseUrl;
@@ -137,6 +125,7 @@ function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
 
 export function resolveStatusTtsSnapshot(params: {
   cfg: OpenClawConfig;
+  preparedTtsPreferences?: PreparedTtsPreferences;
   sessionAuto?: string;
   agentId?: string;
   channelId?: string;

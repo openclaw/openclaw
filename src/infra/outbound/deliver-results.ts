@@ -2,6 +2,12 @@
 import { resolveReceiptSourceId } from "../../channels/message/receipt.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 
+function normalizePlatformIds(values: Array<string | undefined>): string[] {
+  return values
+    .map((value) => value?.trim())
+    .filter((id): id is string => Boolean(id && id !== "unknown" && id !== "suppressed"));
+}
+
 export function createDeliveryResultRecorder(params: {
   results: OutboundDeliveryResult[];
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
@@ -33,39 +39,15 @@ export function createDeliveryResultRecorder(params: {
   const resultPlatformIds = (
     delivery: OutboundDeliveryResult,
     options?: { receiptOnly?: boolean },
-  ): Set<string> => {
-    const ids = new Set<string>();
-    const add = (value: string | undefined) => {
-      const id = value?.trim();
-      if (id && id !== "unknown" && id !== "suppressed") {
-        ids.add(id);
-      }
-    };
-    if (!options?.receiptOnly) {
-      add(delivery.messageId);
-    }
-    add(delivery.receipt?.primaryPlatformMessageId);
-    for (const id of delivery.receipt?.platformMessageIds ?? []) {
-      add(id);
-    }
-    for (const part of delivery.receipt?.parts ?? []) {
-      add(part.platformMessageId);
-    }
-    return ids;
-  };
-  const reportIdentifiedDeliveryResult = async (
-    delivery: OutboundDeliveryResult,
-  ): Promise<void> => {
-    if (!observeDeliveryResult(delivery)) {
-      return;
-    }
-    const resultIndex = results.length;
-    results.push(delivery);
-    reportedResults.set(resultIndex, resultIdentityKey(delivery));
-    // Persist concrete platform evidence before pinning, hooks, mirroring, or
-    // another send can fail or the process can stop.
-    await params.onDeliveryResult?.(delivery);
-  };
+  ): Set<string> =>
+    new Set(
+      normalizePlatformIds([
+        ...(options?.receiptOnly ? [] : [delivery.messageId]),
+        delivery.receipt?.primaryPlatformMessageId,
+        ...(delivery.receipt?.platformMessageIds ?? []),
+        ...(delivery.receipt?.parts ?? []).map((part) => part.platformMessageId),
+      ]),
+    );
   const recordIdentifiedDeliveryResults = async (
     deliveries: readonly OutboundDeliveryResult[],
     options?: { finalResultIsLastReported?: boolean },
@@ -96,9 +78,9 @@ export function createDeliveryResultRecorder(params: {
           recorded.push(false);
           continue;
         }
-        const receiptPartIds = (delivery.receipt?.parts ?? [])
-          .map((part) => part.platformMessageId?.trim())
-          .filter((id): id is string => Boolean(id && id !== "unknown" && id !== "suppressed"));
+        const receiptPartIds = normalizePlatformIds(
+          (delivery.receipt?.parts ?? []).map((part) => part.platformMessageId),
+        );
         const receiptIds =
           receiptPartIds.length > 0
             ? receiptPartIds
@@ -148,18 +130,25 @@ export function createDeliveryResultRecorder(params: {
       reportedResults.clear();
     }
   };
-  const recordIdentifiedDeliveryResult = async (
-    delivery: OutboundDeliveryResult,
-  ): Promise<boolean> =>
-    (
-      await recordIdentifiedDeliveryResults([delivery], {
-        finalResultIsLastReported: true,
-      })
-    )[0] ?? false;
   return {
-    recordIdentifiedDeliveryResult,
+    recordIdentifiedDeliveryResult: async (delivery: OutboundDeliveryResult): Promise<boolean> => {
+      const [recorded] = await recordIdentifiedDeliveryResults([delivery], {
+        finalResultIsLastReported: true,
+      });
+      return recorded ?? false;
+    },
     recordIdentifiedDeliveryResults,
-    reportIdentifiedDeliveryResult,
+    reportIdentifiedDeliveryResult: async (delivery: OutboundDeliveryResult): Promise<void> => {
+      if (!observeDeliveryResult(delivery)) {
+        return;
+      }
+      const resultIndex = results.length;
+      results.push(delivery);
+      reportedResults.set(resultIndex, resultIdentityKey(delivery));
+      // Persist concrete platform evidence before pinning, hooks, mirroring, or
+      // another send can fail or the process can stop.
+      await params.onDeliveryResult?.(delivery);
+    },
     getSuppressionReason: () => suppressionReason,
     resetPayloadResults: () => {
       reportedResults.clear();

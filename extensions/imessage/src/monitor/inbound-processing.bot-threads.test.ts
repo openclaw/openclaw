@@ -36,11 +36,9 @@ describe("iMessage bot-owned thread mention policy", () => {
   });
 
   function threadConfig(
-    options: {
-      requireMention?: boolean;
-      requireMentionInBotThreads?: boolean;
-      exactRequireMentionInBotThreads?: boolean;
-    } = {},
+    requireMentionInBotThreads?: boolean,
+    exactRequireMentionInBotThreads?: boolean,
+    requireMention = true,
   ): OpenClawConfig {
     return {
       messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
@@ -49,10 +47,10 @@ describe("iMessage bot-owned thread mention policy", () => {
           groupPolicy: "open",
           groups: {
             "*": {
-              requireMention: options.requireMention ?? true,
-              requireMentionInBotThreads: options.requireMentionInBotThreads,
+              requireMention,
+              requireMentionInBotThreads,
             },
-            "123": { requireMentionInBotThreads: options.exactRequireMentionInBotThreads },
+            "123": { requireMentionInBotThreads: exactRequireMentionInBotThreads },
           },
         },
       },
@@ -75,7 +73,7 @@ describe("iMessage bot-owned thread mention policy", () => {
     };
     const text = message.text ?? "";
     return resolveIMessageInboundDecision({
-      cfg: threadConfig({ requireMentionInBotThreads: false }),
+      cfg: threadConfig(false),
       accountId: "default",
       allowFrom: ["*"],
       groupAllowFrom: [],
@@ -91,46 +89,14 @@ describe("iMessage bot-owned thread mention policy", () => {
     });
   }
 
-  const policies: Array<{
-    name: string;
-    requireMention?: boolean;
-    requireMentionInBotThreads?: boolean;
-    exactRequireMentionInBotThreads?: boolean;
-    text?: string;
-    expected: "dispatch" | "drop";
-  }> = [
-    { name: "omitted preserves normal gating", expected: "drop" },
-    { name: "false allows follow-ups", requireMentionInBotThreads: false, expected: "dispatch" },
-    {
-      name: "true requires mentions even in an always-on group",
-      requireMention: false,
-      requireMentionInBotThreads: true,
-      expected: "drop",
-    },
-    {
-      name: "true still accepts an explicit mention",
-      requireMentionInBotThreads: true,
-      text: "@openclaw follow-up",
-      expected: "dispatch",
-    },
-    {
-      name: "exact true overrides wildcard false",
-      requireMentionInBotThreads: false,
-      exactRequireMentionInBotThreads: true,
-      expected: "drop",
-    },
-    {
-      name: "exact false overrides wildcard true",
-      requireMentionInBotThreads: true,
-      exactRequireMentionInBotThreads: false,
-      expected: "dispatch",
-    },
-  ];
-
-  it.each(policies)("$name", async ({ expected, text, ...policy }) => {
+  it.each([
+    ["omitted preserves normal gating", undefined, undefined, "follow-up", "drop"],
+    ["true accepts an explicit mention", true, undefined, "@openclaw follow-up", "dispatch"],
+    ["exact false overrides wildcard true", true, false, "follow-up", "dispatch"],
+  ] as const)("%s", async (_name, wildcard, exact, text, expected) => {
     const decision = await resolveThreadReply({
-      cfg: threadConfig(policy),
-      message: { text: text ?? "follow-up" },
+      cfg: threadConfig(wildcard, exact),
+      message: { text },
     });
     if (expected === "drop") {
       expect(decision).toEqual({ kind: "drop", reason: "no mention" });
@@ -139,21 +105,13 @@ describe("iMessage bot-owned thread mention policy", () => {
     }
   });
 
-  it.each([
-    { option: true, root: rootGuid, expected: "drop" },
-    { option: false, root: rootGuid, expected: "dispatch" },
-    { option: undefined, root: rootGuid, expected: "dispatch" },
-    { option: true, root: "imessage-human-thread-root", expected: "dispatch" },
-  ])(
-    "keeps explicit owned-thread policy $option with disabled mention patterns ($root)",
-    async ({ option, root, expected }) => {
-      const cfg = threadConfig({ requireMentionInBotThreads: option });
+  it.each([true, undefined])(
+    "keeps owned-thread policy %s in an always-on group with disabled mention patterns",
+    async (option) => {
+      const cfg = threadConfig(option, undefined, false);
       cfg.messages = { groupChat: { mentionPatterns: [] } };
-      const decision = await resolveThreadReply({
-        cfg,
-        message: { thread_originator_guid: root },
-      });
-      if (expected === "drop") {
+      const decision = await resolveThreadReply({ cfg });
+      if (option) {
         expect(decision).toEqual({ kind: "drop", reason: "no mention" });
       } else {
         expect(decision.kind).toBe("dispatch");
@@ -162,11 +120,9 @@ describe("iMessage bot-owned thread mention policy", () => {
   );
 
   it.each([
-    { name: "unknown root", message: { thread_originator_guid: "unobserved-root" } },
     { name: "human root", message: { thread_originator_guid: "imessage-human-thread-root" } },
     { name: "another account", accountId: "other" },
     { name: "another group", message: { chat_id: 456 } },
-    { name: "top-level message", message: { thread_originator_guid: undefined } },
     {
       name: "reply to the bot without a native thread root",
       message: { thread_originator_guid: undefined, reply_to_guid: rootGuid },

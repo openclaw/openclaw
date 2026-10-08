@@ -41,9 +41,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         config.preferences.isElementFullscreenEnabled = true
         config.preferences.tabFocusesLinks = true
         canvasWindowLogger.debug("CanvasWindowController init config ready")
-        for scheme in CanvasScheme.allSchemes {
-            config.setURLSchemeHandler(self.schemeHandler, forURLScheme: scheme)
-        }
+        config.setURLSchemeHandler(self.schemeHandler, forURLScheme: CanvasScheme.scheme)
         canvasWindowLogger.debug("CanvasWindowController init scheme handler installed")
 
         canvasWindowLogger.debug("CanvasWindowController init creating WKWebView")
@@ -58,8 +56,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
                 guard let webView else { return }
 
                 // Only auto-reload when we are showing local canvas content.
-                guard let scheme = webView.url?.scheme,
-                      CanvasScheme.allSchemes.contains(scheme) else { return }
+                guard webView.url?.scheme == CanvasScheme.scheme else { return }
 
                 let path = webView.url?.path ?? ""
                 if path == "/" || path.isEmpty {
@@ -120,7 +117,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
-            if CanvasScheme.allSchemes.contains(scheme) {
+            if scheme == CanvasScheme.scheme {
                 canvasWindowLogger.debug("canvas load app-local URL")
                 self.webView.load(URLRequest(url: url))
                 return
@@ -155,7 +152,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
     func updateFilePollingForCommittedNavigation(to url: URL) {
         // Requested navigations can fail or redirect, so polling follows the
         // committed main-frame document rather than the requested target.
-        self.watchesLocalCanvasFiles = CanvasScheme.allSchemes.contains(url.scheme?.lowercased() ?? "")
+        self.watchesLocalCanvasFiles = url.scheme?.lowercased() == CanvasScheme.scheme
         self.updateFilePolling()
     }
 

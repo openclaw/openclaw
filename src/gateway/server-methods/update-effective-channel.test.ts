@@ -60,9 +60,10 @@ vi.mock("../../infra/update-status-schedule.js", () => ({
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   getLatestUpdateRestartSentinel: getLatestUpdateRestartSentinelMock,
-  refreshLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelMock,
+  prepareLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelMock,
 }));
 
 vi.mock("./validation.js", () => ({
@@ -189,7 +190,7 @@ describe("update.status effective channel", () => {
     expect(respond).toHaveBeenCalledWith(true, { sentinel: null, updateAvailable: null });
   });
 
-  it("refreshes the latest update sentinel before responding", async () => {
+  it("prepares the latest update sentinel before responding", async () => {
     getUpdateAvailableMock.mockReturnValueOnce({
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",

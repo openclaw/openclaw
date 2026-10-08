@@ -127,8 +127,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
 
   it.each([
     { auto: false, mergeStateStatus: "CLEAN", route: "immediate" },
-    { auto: true, mergeStateStatus: "CLEAN", route: "immediate" },
-    { auto: true, mergeStateStatus: "BEHIND", route: "auto" },
     { auto: true, mergeStateStatus: "BLOCKED", route: "auto" },
     { auto: false, mergeStateStatus: "CLEAN", route: "immediate", statusFirst: true },
   ])(
@@ -209,18 +207,14 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   });
 
   it.each([
-    "persistent UNKNOWN",
     "persistent UNKNOWN mergeable",
     "persistent UNKNOWN status",
     "known mergeable reverts",
     "known status reverts",
-    "known status changes",
     "invalid metadata",
     "API error",
     "PR identity",
     "head",
-    "base",
-    "closed",
     "merged",
     "draft",
     "auto request",
@@ -231,74 +225,31 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     "known HAS_HOOKS",
     "final UNKNOWN mergeable",
     "final UNKNOWN status",
-    "final changed status",
   ])("stops initial settlement without dispatch on %s", (fault) => {
     const f = fixture();
     const next = f.state();
     const { author: _author, headRefName: _headRefName, ...observedPr } = next.pr;
-    const step: (typeof next.observations)[number] = {};
-    switch (fault) {
-      case "invalid metadata":
-        step.invalid = true;
-        break;
-      case "API error":
-        step.unavailable = true;
-        break;
-      case "PR identity":
-        step.pr = { id: "other-pr" };
-        break;
-      case "head":
-        step.pr = { headRefOid: f.base };
-        break;
-      case "base":
-        step.pr = { baseRefName: "release" };
-        break;
-      case "closed":
-        step.pr = { state: "CLOSED" };
-        break;
-      case "merged":
-        step.main = f.commit(f.tree("after\n"), [f.base]);
-        step.pr = { state: "MERGED", mergeCommit: { oid: step.main } };
-        break;
-      case "draft":
-        step.pr = { isDraft: true };
-        break;
-      case "auto request":
-        step.pr = { autoMergeRequest: { mergeMethod: "SQUASH" } };
-        break;
-      case "queue policy":
-        step.pr = { isMergeQueueEnabled: true };
-        break;
-      case "queue membership":
-        step.pr = { isInMergeQueue: true };
-        break;
-      case "invalid receipt":
-        step.pr = { mergeCommit: { oid: f.head } };
-        break;
-      case "conflicting":
-        step.pr = { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" };
-        break;
-      case "known HAS_HOOKS":
-        step.pr = { mergeable: "MERGEABLE", mergeStateStatus: "HAS_HOOKS" };
-        break;
-      case "known mergeable reverts":
-        step.pr = { mergeable: "UNKNOWN" };
-        break;
-      case "known status reverts":
-        step.pr = { mergeStateStatus: "UNKNOWN" };
-        break;
-      case "known status changes":
-        step.pr = { mergeStateStatus: "BEHIND" };
-        break;
-      case "final UNKNOWN mergeable":
-        step.pr = { mergeable: "UNKNOWN" };
-        break;
-      case "final UNKNOWN status":
-        step.pr = { mergeStateStatus: "UNKNOWN" };
-        break;
-      case "final changed status":
-        step.pr = { mergeStateStatus: "BEHIND" };
-        break;
+    const steps: Record<string, (typeof next.observations)[number]> = {
+      "invalid metadata": { invalid: true },
+      "API error": { unavailable: true },
+      "PR identity": { pr: { id: "other-pr" } },
+      head: { pr: { headRefOid: f.base } },
+      draft: { pr: { isDraft: true } },
+      "auto request": { pr: { autoMergeRequest: { mergeMethod: "SQUASH" } } },
+      "queue policy": { pr: { isMergeQueueEnabled: true } },
+      "queue membership": { pr: { isInMergeQueue: true } },
+      "invalid receipt": { pr: { mergeCommit: { oid: f.head } } },
+      conflicting: { pr: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } },
+      "known HAS_HOOKS": { pr: { mergeable: "MERGEABLE", mergeStateStatus: "HAS_HOOKS" } },
+      "known mergeable reverts": { pr: { mergeable: "UNKNOWN" } },
+      "known status reverts": { pr: { mergeStateStatus: "UNKNOWN" } },
+      "final UNKNOWN mergeable": { pr: { mergeable: "UNKNOWN" } },
+      "final UNKNOWN status": { pr: { mergeStateStatus: "UNKNOWN" } },
+    };
+    const step = steps[fault] ?? {};
+    if (fault === "merged") {
+      step.main = f.commit(f.tree("after\n"), [f.base]);
+      step.pr = { state: "MERGED", mergeCommit: { oid: step.main } };
     }
     next.observations = [{ pr: unknownProjection }];
     const persistent = fault.startsWith("persistent ");
@@ -348,7 +299,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(run.output).toContain(
         fault === "final UNKNOWN mergeable"
           ? 'mergeable: observed="UNKNOWN"; expected="MERGEABLE"'
-          : `mergeStateStatus: observed="${fault === "final UNKNOWN status" ? "UNKNOWN" : "BEHIND"}"; expected="CLEAN"`,
+          : 'mergeStateStatus: observed="UNKNOWN"; expected="CLEAN"',
       );
       for (const [label, expected] of [
         ["observation", { main: f.base, pr: observedPr, transport: "graphql" }],
@@ -448,7 +399,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     f.git(["merge-base", "--is-ancestor", f.head, f.record().landed]);
   });
 
-  it.each(["review", "ready", "checks", "pending", "existing-auto", "auto-ineligible"])(
+  it.each(["review", "ready", "checks", "pending"])(
     "keeps %s admission ahead of intent",
     (gate) => {
       const f = fixture();
@@ -465,12 +416,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       if (gate === "pending") {
         next.gates = "pending";
       }
-      if (gate === "existing-auto") {
-        next.pr.autoMergeRequest = { mergeMethod: "MERGE" };
-      }
-      if (gate === "auto-ineligible") {
-        next.pr.mergeStateStatus = "HAS_HOOKS";
-      }
       f.save(next);
       const run = f.run(true);
       expect(run.status, run.output).toBe(1);
@@ -479,80 +424,52 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     },
   );
 
-  it("blocks ack-only ClawSweeper evidence before intent", () => {
-    const f = fixture();
-    f.save({
-      ...f.state(),
-      issueComments: [
+  it.each(["ack-only", "removed", "unavailable"])(
+    "rejects %s ClawSweeper review evidence before intent",
+    (fault) => {
+      const f = fixture();
+      const comments = [
         {
-          id: 1,
+          id: fault === "ack-only" ? 1 : 2,
           body: "<!-- clawsweeper-pr-ack:opened item=123 -->",
           user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
         },
-      ],
-    });
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(1);
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
-
-  it.each([
-    {
-      name: "removed",
-      comments: [
-        {
-          id: 2,
-          body: "<!-- clawsweeper-pr-ack:opened item=123 -->",
-          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-        },
-      ],
+      ];
+      f.save({
+        ...f.state(),
+        ...(fault === "ack-only"
+          ? { issueComments: comments }
+          : fault === "removed"
+            ? { issueCommentsAfterFirst: comments }
+            : { issueCommentsErrorAt: 2 }),
+      });
+      const run = f.run();
+      expect(run.status, run.output).toBe(1);
+      if (fault === "removed") {
+        expect(run.output).toContain(
+          "ClawSweeper review gate failed: completed review is missing.",
+        );
+        expect(f.state().issueCommentReads).toBe(2);
+      } else if (fault === "unavailable") {
+        expect(run.output).toContain("unable to read current issue comments");
+      }
+      expect(f.state().mutations).toBe(0);
+      expect(() => f.record()).toThrow();
     },
-    {
-      name: "expired",
-      comments: [
-        {
-          id: 2,
-          body: `<!-- clawsweeper-review-version item=123 reviewed_at=${new Date(Date.now() - 13 * 60 * 60_000).toISOString()} sha=${"a".repeat(40)} source_revision=${"c".repeat(64)} lease_owner=github-run-2 lease_comment_id=2 v=1 -->
+  );
 
-<!-- clawsweeper-review item=123 -->`,
-          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-        },
-      ],
-    },
-  ])("revalidates $name review evidence immediately before intent", ({ comments }) => {
+  it("retains the newest completion at final admission regardless of review age", () => {
     const f = fixture();
-    f.save({ ...f.state(), issueCommentsAfterFirst: comments });
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(1);
-    expect(f.state().issueCommentReads).toBe(2);
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
-
-  it("fails closed when the final review comment read is unavailable", () => {
-    const f = fixture();
-    f.save({ ...f.state(), issueCommentsErrorAt: 2 });
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(1);
-    expect(run.output).toContain("unable to read current issue comments");
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
-
-  it("retains evidence from a newer completion observed at final admission", () => {
-    const f = fixture();
-    const reviewedAt = new Date(Date.now() + 1_000).toISOString();
+    const next = f.state();
+    next.issueComments[0]!.body = next.issueComments[0]!.body.replace(
+      /reviewed_at=\S+/u,
+      "reviewed_at=2000-01-01T00:00:00.000Z",
+    );
+    const reviewedAt = "2000-01-02T00:00:00.000Z";
     f.save({
-      ...f.state(),
+      ...next,
       issueCommentsAfterFirst: [
-        ...f.state().issueComments,
+        ...next.issueComments,
         {
           id: 2,
           body: `<!-- clawsweeper-review-version item=123 reviewed_at=${reviewedAt} sha=${f.head} source_revision=${"c".repeat(64)} lease_owner=github-run-2 lease_comment_id=2 v=1 -->

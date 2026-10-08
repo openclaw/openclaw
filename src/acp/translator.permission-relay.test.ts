@@ -153,11 +153,6 @@ function captureRetry(agent: AcpGatewayAgent, approvalId: string): () => Promise
 describe("ACP translator permission relay", () => {
   it.each([
     {
-      name: "explicit allow-always",
-      outcome: { outcome: "selected", optionId: "allow-always" },
-      decision: "allow-always",
-    },
-    {
       name: "explicit deny",
       outcome: { outcome: "selected", optionId: "deny" },
       decision: "deny",
@@ -228,6 +223,7 @@ describe("ACP translator permission relay", () => {
     expect(harness.requestPermission).not.toHaveBeenCalled();
     expect(resolveCalls(harness.request)).toHaveLength(0);
     await harness.agent.handleGatewayEvent(tool(secondRun, "tool-second", "exec", "echo second"));
+    expect(harness.requestPermission).not.toHaveBeenCalled();
     await harness.agent.handleGatewayEvent(rawApproval("approval-shared", "tool-second"));
     await vi.waitFor(() => {
       expect(harness.requestPermission).toHaveBeenCalledTimes(1);

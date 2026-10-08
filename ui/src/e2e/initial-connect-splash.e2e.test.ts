@@ -9,6 +9,7 @@ import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   takeControlUiElementScreenshot,
+  takeControlUiScreenshotFrame,
   takeControlUiViewportScreenshot,
   waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -16,6 +17,7 @@ import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
+  pauseVirtualClock,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
@@ -40,6 +42,7 @@ const openContexts = new Set<BrowserContext>();
 
 async function createPage(): Promise<Page> {
   const context = await browser.newContext({
+    locale: "en-US",
     viewport,
     ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
   });
@@ -59,7 +62,7 @@ function decodeProofPng(png: Buffer) {
 }
 
 async function createPageWithoutRecording(): Promise<Page> {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ locale: "en-US" });
   openContexts.add(context);
   return context.newPage();
 }
@@ -176,7 +179,9 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     });
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
-    await page.goto(`${server.baseUrl}#token=e2e-shared-token`);
+    await page.goto(`${server.baseUrl}#token=e2e-shared-token`, {
+      waitUntil: "domcontentloaded",
+    });
     await gateway.waitForRequest("connect");
     const splash = page.locator(".connect-splash");
     await splash.waitFor();
@@ -284,7 +289,8 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       }
       await route.continue();
     });
-    await installMockGateway(page);
+    // The held chat module cannot publish the foreground readiness that releases the roster.
+    await installMockGateway(page, { awaitInitialRoster: false });
 
     try {
       await page.goto(`${server.baseUrl}chat?session=main`, {
@@ -310,10 +316,21 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
 
       for (const size of [viewport, { width: 1440, height: 1440 }, { width: 390, height: 844 }]) {
         await page.setViewportSize(size);
-        // The shell viewport owner can commit a resize between separate browser calls.
         const { content, header, composer } = await page
           .locator(".content--chat")
-          .evaluate((root) => {
+          .evaluate(async (root, viewportHeight) => {
+            // setViewportSize resolves before the rendering update in which the shell viewport
+            // owner publishes the new canvas height; until then a grown viewport keeps the old one.
+            const canvas = document.querySelector("openclaw-app")!;
+            await new Promise<void>((resolve) => {
+              const observer = new ResizeObserver(() => {
+                if (canvas.getBoundingClientRect().height === viewportHeight) {
+                  observer.disconnect();
+                  resolve();
+                }
+              });
+              observer.observe(canvas);
+            });
             const bounds = (element: Element | null) => {
               if (!element?.checkVisibility({ visibilityProperty: true })) {
                 return null;
@@ -326,7 +343,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
               header: bounds(root.querySelector(".loading-skeleton__header")),
               composer: bounds(root.querySelector(".loading-skeleton__composer")),
             };
-          });
+          }, size.height);
         expect(content).not.toBeNull();
         expect(header).not.toBeNull();
         expect(composer).not.toBeNull();
@@ -361,7 +378,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const loginGateMounted = await traceLoginGateMounts(page);
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
-    await page.goto(server.baseUrl);
+    await page.goto(server.baseUrl, { waitUntil: "domcontentloaded" });
     await gateway.waitForRequest("connect");
     await page.locator(".connect-splash").waitFor();
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
@@ -820,6 +837,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     });
     openContexts.add(context);
     const page = await context.newPage();
+    await page.clock.install();
     await page.setContent(`<!doctype html><style>body { margin: 0; height: 1800px; }
       #row { position: absolute; left: 48.25px; top: 940.25px; width: 302.5px; height: 29.5px; background: #a030b0; }
       #wide { width: 801px; height: 20px; } #tall { width: 20px; height: 601px; }
@@ -842,13 +860,118 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     ]).toEqual([303, 30]);
     const center = (Math.floor(info.height / 2) * info.width + Math.floor(info.width / 2)) * 4;
     expect([...data.subarray(center, center + 3)]).toEqual([160, 48, 176]);
+
+    await page.setContent('<body style="margin:0;width:1600px;height:1200px"></body>');
+    await expect(
+      takeControlUiScreenshotFrame(page, page.locator("body"), [], { fullPage: true }),
+    ).rejects.toThrow("Full-page proof must fit the viewport-frame dimensions");
+
+    await page.setContent(`<style>body { margin: 0; min-height: 100vh; } .stamp { position: absolute; background: var(--stamp); }
+      #first { top: 90.25px; width: 302.5px; height: 29.5px; animation: enter .1s 60s both; }
+      @keyframes enter { from { left: 68.25px; height: 0; } to { left: 88.25px; height: 29.5px; } }
+      #second { left: 411.5px; top: 311.25px; width: 126.25px; height: 61.5px; animation: pulse 1s infinite; }
+      @keyframes pulse { to { opacity: .2; } }
+      </style><div id="first" class="stamp"></div><div id="second" class="stamp"></div>`);
+    await page.evaluate(() => {
+      let stamp = 0;
+      const paint = () => {
+        stamp += 1;
+        document.documentElement.style.setProperty(
+          "--stamp",
+          `rgb(${stamp & 255}, ${(stamp >>> 8) & 255}, 128)`,
+        );
+        requestAnimationFrame(paint);
+      };
+      paint();
+    });
+    const regions = [page.locator("#first"), page.locator("#second")];
+    const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), regions, {
+      elements: regions,
+      animations: "disabled",
+    });
+    expect(await regions[1]!.evaluate((element) => element.getAnimations()[0]?.playState)).toBe(
+      "running",
+    );
+    const whole = decodeProofPng(frame.png);
+    const scale = whole.width / 800;
+    // Static preparation finishes the delayed entrance before measuring bounds.
+    // Pixels still change each rAF; both crops must come from the retained frame.
+    for (const [index, [x, y, width, height]] of [
+      [88.25, 90.25, 302.5, 29.5],
+      [411.5, 311.25, 126.25, 61.5],
+    ].entries()) {
+      const left = Math.floor(x! * scale);
+      const top = Math.floor(y! * scale);
+      const right = Math.ceil((x! + width!) * scale);
+      const bottom = Math.ceil((y! + height!) * scale);
+      const region = decodeProofPng(frame.elements[index]!.png);
+      expect([region.width, region.height]).toEqual([right - left, bottom - top]);
+      const rows = [];
+      for (let pixelRow = top; pixelRow < bottom; pixelRow += 1) {
+        rows.push(
+          whole.data.subarray(
+            (pixelRow * whole.width + left) * 4,
+            (pixelRow * whole.width + right) * 4,
+          ),
+        );
+      }
+      expect(
+        Buffer.from(region.data).equals(Buffer.concat(rows)),
+        `region ${index} uses the same frame`,
+      ).toBe(true);
+    }
+
+    await regions[1]!.evaluate((element) => element.setAttribute("style", "visibility: hidden"));
+    await expect(
+      takeControlUiScreenshotFrame(page, page.locator("body"), [regions[0]!], {
+        elements: [regions[1]!],
+        animations: "disabled",
+      }),
+    ).rejects.toThrow("Proof frame did not reach visible, settled targets");
+
+    await pauseVirtualClock(page);
+    const captureTime = await page.evaluate(() => Date.now());
+    await page.setContent(`<style>html, body { margin: 0; height: 100%; overflow: hidden; }
+      #scroller { position: absolute; top: 40px; left: 10px; width: 300px; height: 200px; overflow: auto; }
+      #spacer { position: relative; height: 1000px; }
+      #target { position: absolute; top: 500px; width: 100px; height: 40px; background: #123456; }
+      </style><div id="scroller" data-resets="0"><div id="spacer"><div id="target">Saved</div></div></div>`);
+    await page.locator("#scroller").evaluate((element) => {
+      let resets = 0;
+      element.addEventListener("scroll", () => {
+        // Deferred renders can undo centering while leaving the target visible.
+        if (element.scrollTop === 420 && resets < 2) {
+          resets += 1;
+          element.setAttribute("data-resets", String(resets));
+          element.scrollTop = 350;
+        }
+      });
+    });
+    const target = page.locator("#target");
+    await target.evaluate((element) => {
+      setTimeout(() => {
+        element.textContent = "";
+      }, 2_000);
+    });
+    const scrolled = await takeControlUiScreenshotFrame(page, page.locator("body"), [target], {
+      elements: [target],
+      scrollTo: target,
+      animations: "disabled",
+    });
+    expect(await page.locator("#scroller").getAttribute("data-resets")).toBe("2");
+    expect((await target.boundingBox())?.y).toBe(120);
+    expect(scrolled.elements[0]!.bounds.y).toBe(120);
+    expect(await target.textContent()).toBe("Saved");
+    expect(await page.evaluate(() => Date.now())).toBe(captureTime);
+    await page.clock.runFor(2_000);
+    expect(await target.textContent()).toBe("");
   });
 
   it("falls back to the login gate when stored credentials are rejected", async () => {
     const page = await createPage();
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
-    await page.goto(`${server.baseUrl}#token=stale-token`);
+    await page.goto(`${server.baseUrl}#token=stale-token`, { waitUntil: "domcontentloaded" });
     await gateway.waitForRequest("connect");
     await page.locator(".connect-splash").waitFor();
 
@@ -866,7 +989,9 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const loginGateMounted = await traceLoginGateMounts(page);
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
-    await page.goto(`${server.baseUrl}#token=e2e-shared-token`);
+    await page.goto(`${server.baseUrl}#token=e2e-shared-token`, {
+      waitUntil: "domcontentloaded",
+    });
     await gateway.waitForRequest("connect");
     const initialConnectCount = (await gateway.getRequests("connect")).length;
     await gateway.deferNext("connect");
@@ -900,7 +1025,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
     // First visit has no credentials, but the Gateway still owns the pending attempt.
-    await page.goto(server.baseUrl);
+    await page.goto(server.baseUrl, { waitUntil: "domcontentloaded" });
     await gateway.waitForRequest("connect");
     await page.locator(".connect-splash").waitFor();
     await gateway.resolveDeferred("connect");
@@ -908,7 +1033,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
 
     // The hello stored a device token, so the reload connect is authenticated
     // and must paint the splash instead of flashing the gate.
-    await page.reload();
+    await page.reload({ waitUntil: "domcontentloaded" });
     await gateway.waitForRequest("connect");
     await page.locator(".connect-splash").waitFor();
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);

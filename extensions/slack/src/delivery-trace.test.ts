@@ -25,6 +25,10 @@ import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { mergeSlackAccountConfig } from "./accounts.js";
 import {
+  BLOCKS_FINAL_PRESENTATION,
+  BLOCKS_FINAL_TEXT,
+  SHORT_FINAL_TEXT,
+  assertSlackSteeringTransportTrace,
   buildSlackDeliveryProofVerdict,
   collectSlackWireTexts,
   createSlackTsNormalizer,
@@ -219,9 +223,7 @@ const NATIVE_FINAL_TEXT =
   "the next fifteen minutes before closing out the change.";
 
 // Below the SDK's buffer threshold: final delivery must explicitly flush it.
-const SHORT_FINAL_TEXT = "All checks passed. Ship it.";
 
-const PREVIEW_PARTIAL_ONE = "Compiling the changelog";
 const PREVIEW_PARTIAL_TWO = "Compiling the changelog for 2026.1.0.";
 const PREVIEW_FINAL_TEXT = "Compiling the changelog for 2026.1.0.\n\nDone: 12 entries.";
 const EXEC_FAILED_TRACE = "⚠️ 🛠️ Exec failed: ";
@@ -230,21 +232,6 @@ const COMPACT_COMMENTARY_TEXT = "Checking the current Slack behavior.";
 const COMPACT_COMMENTARY_TEXT_UPDATED =
   "Checking the current Slack behavior and preparing the focused fix.";
 const COMPACT_FINAL_TEXT = "Compact Slack progress is ready.";
-
-const BLOCKS_FINAL_TEXT = "Release 2026.1.0 is ready to ship.";
-// Portable presentation actions; slack renders them as Block Kit and must
-// synthesize accessible fallback text because blocks hide top-level text.
-const BLOCKS_FINAL_PRESENTATION = {
-  blocks: [
-    {
-      type: "buttons",
-      buttons: [
-        { label: "Approve release", action: { type: "callback", value: "approve-release" } },
-        { label: "Release notes", url: "https://docs.openclaw.ai/release" },
-      ],
-    },
-  ],
-};
 
 // Slack-specific scenario scripts; the runner only consumes `steps` and the
 // name (outside the shared scenario library) keys the golden filename.
@@ -290,7 +277,7 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
   // a disposable app-authored draft plus a separate customized final instead.
   "preview-edit-fallback": [
     { kind: "reply-start" },
-    { kind: "partial", text: PREVIEW_PARTIAL_ONE },
+    { kind: "partial", text: "Compiling the changelog" },
     { kind: "advance", ms: 300 },
     { kind: "partial", text: PREVIEW_PARTIAL_TWO },
     { kind: "advance", ms: 1100 },
@@ -754,6 +741,14 @@ describe("slack delivery trace goldens", () => {
       emoji: "hourglass",
     },
     { name: "disabled reaction", streaming: undefined, typingReaction: "", emoji: undefined },
+    {
+      name: "empty card with hidden tool activity",
+      streaming: {
+        progress: { style: "card" as const, nativeTaskCards: false, toolProgress: false },
+      },
+      typingReaction: "",
+      emoji: undefined,
+    },
   ])(
     "leaves only the final answer on a top-level turn with $name",
     async ({ streaming, typingReaction, emoji }) => {
@@ -820,9 +815,9 @@ describe("slack delivery trace goldens", () => {
   );
 
   it.each([
-    { name: "success", isError: false, title: "✅ *Done*", label: undefined },
-    { name: "error", isError: true, title: "❌ *Failed*", label: undefined },
-    { name: "explicit title only", isError: false, title: "✅ *Review*", label: "Review" },
+    { name: "success", isError: false, title: undefined, label: undefined },
+    { name: "error", isError: true, title: "Failed", label: undefined },
+    { name: "explicit title only", isError: false, title: "Review", label: "Review" },
   ])(
     "keeps an explicit top-level card with the $name terminal title",
     async ({ isError, title, label }) => {
@@ -841,23 +836,21 @@ describe("slack delivery trace goldens", () => {
           setupSlackTrace(recorder, "progress-session-card", (prepared) => {
             prepared.replyToMode = "off";
             prepared.account.config = {
-              streaming: { progress: label ? { label } : { style: "card" } },
+              streaming: { progress: { style: "card", toolProgress: true, label } },
             };
           }),
       });
       const posts = events.filter((event) => event.kind === "chat.postMessage");
       expect(posts).toHaveLength(2);
       expect(posts[0]?.data).toMatchObject({
-        payload: { blocks: [{ type: "section", text: { text: `🔄 *${label ?? "Working"}*` } }] },
+        payload: {
+          text: `${label ? `${label}\n\n` : ""}Read — running\n\n1 tool · 2s`,
+        },
       });
       expect(posts[1]?.data).toMatchObject({ payload: { text: "The answer." } });
-      const terminal = events.findLast((event) => event.kind === "chat.update");
-      expect(terminal?.data).toMatchObject({
+      expect(events.findLast((event) => event.kind === "chat.update")?.data).toMatchObject({
         payload: {
-          text: `${title}\n\nOpen in OpenClaw`,
-          blocks: expect.arrayContaining([
-            { type: "section", text: { type: "mrkdwn", text: title } },
-          ]),
+          text: `${title ? `${title}\n\n` : ""}Read — running\n\nOpen in OpenClaw`,
         },
       });
       expect(
@@ -894,10 +887,9 @@ describe("slack delivery trace goldens", () => {
             prepared.replyToMode = "off";
             prepared.ctxPayload.SessionKey = sessionKey;
             prepared.ctx.cfg.session = { mainKey: "inbox" };
-            prepared.account.config =
-              surface === "native"
-                ? {}
-                : { streaming: { progress: { style: "card", nativeTaskCards: false } } };
+            if (surface === "native") {
+              prepared.account.config = {};
+            }
           }),
       });
       const out = events.filter((event) => event.dir === "out");
@@ -1023,6 +1015,19 @@ describe("slack delivery trace goldens", () => {
     expect(traceRuntimeError).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "keeps top-level native output below later ingress (Slack Stop: %s)",
+    async (stoppedBySlack) =>
+      assertSlackSteeringTransportTrace({
+        stoppedBySlack,
+        channelId: CHANNEL_ID,
+        inboundTs: INBOUND_TS,
+        setup: (recorder) => setupSlackTrace(recorder, "streaming-happy-native"),
+        getClient: () => traceState.client as unknown as WebClient,
+        assertNoRuntimeError: () => expect(traceRuntimeError).not.toHaveBeenCalled(),
+      }),
+  );
+
   it("removes a progress card detached by a later human message", async () => {
     let progressEvents = 0;
     const events = await runDeliveryTraceScenario({
@@ -1063,7 +1068,7 @@ describe("slack delivery trace goldens", () => {
 
     const workingPosts = events.filter(
       (event) =>
-        event.kind === "chat.postMessage" && JSON.stringify(event.data).includes("🔄 *Working*"),
+        event.kind === "chat.postMessage" && JSON.stringify(event.data).includes('"blocks"'),
     );
     expect(workingPosts).toHaveLength(2);
     const firstCardId = (workingPosts[0]?.data as { result?: { ts?: string } } | undefined)?.result
@@ -1084,7 +1089,7 @@ describe("slack delivery trace goldens", () => {
         (event) =>
           event.kind === "chat.update" &&
           (event.data as { target?: string } | undefined)?.target === secondCardId &&
-          JSON.stringify(event.data).includes("✅ *Done*"),
+          JSON.stringify(event.data).includes("Open in OpenClaw"),
       ),
     ).toBe(true);
   });

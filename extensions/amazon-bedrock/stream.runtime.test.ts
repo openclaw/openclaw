@@ -42,20 +42,53 @@ async function captureCommandInput(
   model: Parameters<typeof streamSimpleBedrock>[0],
   context: Parameters<typeof streamSimpleBedrock>[1],
   options: BedrockOptions = {},
+  validateRequest?: (input: Record<string, unknown>) => void,
 ): Promise<Record<string, unknown>> {
-  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+  const response = {
     $metadata: { httpStatusCode: 200 },
     stream: streamEvents([
       { messageStart: { role: ConversationRole.ASSISTANT } },
       { messageStop: { stopReason: BedrockStopReason.END_TURN } },
     ]),
-  } as never);
-  await streamBedrockForTest(model, context, options).result();
+  };
+  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send");
+  if (validateRequest) {
+    send.mockImplementation((command) => {
+      const input = (command as unknown as { input?: Record<string, unknown> }).input;
+      if (!input) {
+        throw new Error("expected ConverseStreamCommand input");
+      }
+      validateRequest(input);
+      return response as never;
+    });
+  } else {
+    send.mockResolvedValue(response as never);
+  }
+  const result = await streamBedrockForTest(model, context, options).result();
+  if (validateRequest && result.stopReason !== "stop") {
+    throw new Error(
+      `Bedrock request fixture rejected replay: ${result.errorMessage ?? result.stopReason}`,
+    );
+  }
   const command = send.mock.calls.at(-1)?.[0] as { input?: Record<string, unknown> } | undefined;
   if (!command?.input) {
     throw new Error("expected ConverseStreamCommand input");
   }
   return command.input;
+}
+
+function findToolUse(input: Record<string, unknown>) {
+  const messages = input.messages as Array<{
+    content?: Array<{ toolUse?: { input?: unknown } }>;
+  }>;
+  return messages.flatMap((message) => message.content ?? []).find((block) => block.toolUse)
+    ?.toolUse;
+}
+
+function expectObjectToolUseInput(input: Record<string, unknown>): void {
+  const toolInput = findToolUse(input)?.input;
+  expect(toolInput).toEqual(expect.any(Object));
+  expect(Array.isArray(toolInput)).toBe(false);
 }
 
 async function captureClientRegion(
@@ -208,6 +241,65 @@ describe("Bedrock tool-result replay", () => {
     });
     expect(JSON.stringify(messages)).not.toContain('"image"');
     expect(JSON.stringify(messages)).not.toContain("see attached image");
+  });
+});
+
+describe("Bedrock assistant tool-use replay", () => {
+  const replayContext = (argumentsValue: unknown) =>
+    ({
+      messages: [
+        {
+          role: "assistant",
+          provider: "amazon-bedrock",
+          api: "bedrock-converse-stream",
+          model: "amazon.nova-micro-v1:0",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_replay",
+              name: "read",
+              arguments: argumentsValue,
+            },
+          ],
+          timestamp: 0,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_replay",
+          toolName: "read",
+          content: [{ type: "text", text: "existing result" }],
+          isError: false,
+          timestamp: 1,
+        },
+        { role: "user", content: "continue", timestamp: 2 },
+      ],
+    }) as never;
+
+  it.each(['{"path":', 42])(
+    "normalizes invalid stored arguments %j at the Bedrock request boundary",
+    async (malformedArguments) => {
+      const context = replayContext(malformedArguments);
+      const originalContext = JSON.stringify(context);
+      const input = await captureCommandInput(
+        bedrockModel({}),
+        context,
+        {},
+        expectObjectToolUseInput,
+      );
+      expect(findToolUse(input)?.input).toEqual({});
+      expect(JSON.stringify(context)).toBe(originalContext);
+    },
+  );
+
+  it("preserves valid object arguments at the same request boundary", async () => {
+    const validArguments = { path: "README.md" };
+    const input = await captureCommandInput(
+      bedrockModel({}),
+      replayContext(validArguments),
+      {},
+      expectObjectToolUseInput,
+    );
+    expect(findToolUse(input)?.input).toEqual(validArguments);
   });
 });
 
@@ -519,87 +611,53 @@ describe("Bedrock thinking request composition", () => {
       },
     ].map((modelOverrides) => ({
       name: `${modelOverrides.id} default`,
-      model: () =>
-        bedrockModel({ ...modelOverrides, contextWindow: 1_000_000, maxTokens: 128_000 }),
+      modelOverrides,
       reasoning: undefined,
-      expectedMaxTokens: 128_000,
       expectedEffort: "medium",
     })),
     {
       name: "Fable 5 explicit off",
-      model: () =>
-        bedrockModel({
-          id: "anthropic.claude-fable-5",
-          contextWindow: 1_000_000,
-          maxTokens: 128_000,
-        }),
+      modelOverrides: { id: "anthropic.claude-fable-5" },
       reasoning: "off" as const,
-      expectedMaxTokens: 128_000,
       expectedEffort: "low",
     },
-    {
-      name: "Opus 5 default",
-      model: () =>
-        bedrockModel({
+    ...[
+      {
+        name: "Opus 5",
+        modelOverrides: {
           id: "global.anthropic.claude-opus-5",
           name: "Claude Opus 5",
-          contextWindow: 1_000_000,
-          maxTokens: 128_000,
           thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-        }),
-      reasoning: undefined,
-      expectedMaxTokens: 128_000,
-      expectedEffort: "high",
-    },
-    {
-      name: "Opus 5 explicit off",
-      model: () =>
-        bedrockModel({
-          id: "global.anthropic.claude-opus-5",
-          name: "Claude Opus 5",
-          contextWindow: 1_000_000,
-          maxTokens: 128_000,
-          thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-        }),
-      reasoning: "off" as const,
-      expectedMaxTokens: 128_000,
-      expectedEffort: undefined,
-    },
-    {
-      name: "Sonnet 5 default",
-      model: () =>
-        bedrockModel({
+        },
+        offEffort: undefined,
+      },
+      {
+        name: "Sonnet 5",
+        modelOverrides: {
           id: "us.anthropic.claude-sonnet-5",
           name: "Claude Sonnet 5",
-          contextWindow: 1_000_000,
-          maxTokens: 128_000,
           thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
-        }),
-      reasoning: undefined,
-      expectedMaxTokens: 128_000,
-      expectedEffort: "high",
-    },
-    {
-      name: "Sonnet 5 explicit off",
-      model: () =>
-        bedrockModel({
-          id: "us.anthropic.claude-sonnet-5",
-          name: "Claude Sonnet 5",
-          contextWindow: 1_000_000,
-          maxTokens: 128_000,
-          thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
-        }),
-      reasoning: "off" as const,
-      expectedMaxTokens: 128_000,
-      expectedEffort: "low",
-    },
+        },
+        offEffort: "low",
+      },
+    ].flatMap(({ name, modelOverrides, offEffort }) => [
+      { name: `${name} default`, modelOverrides, reasoning: undefined, expectedEffort: "high" },
+      {
+        name: `${name} explicit off`,
+        modelOverrides,
+        reasoning: "off" as const,
+        expectedEffort: offEffort,
+      },
+    ]),
   ])("sends $name policy in the final request", async (testCase) => {
     const options = testCase.reasoning === undefined ? {} : { reasoning: testCase.reasoning };
-    const input = await captureCommandInput(testCase.model(), context, options);
-
-    expect(input.inferenceConfig).toEqual(
-      testCase.expectedMaxTokens === undefined ? {} : { maxTokens: testCase.expectedMaxTokens },
+    const input = await captureCommandInput(
+      bedrockModel({ ...testCase.modelOverrides, contextWindow: 1_000_000, maxTokens: 128_000 }),
+      context,
+      options,
     );
+
+    expect(input.inferenceConfig).toEqual({ maxTokens: 128_000 });
     expect(input.additionalModelRequestFields).toEqual(
       testCase.expectedEffort === undefined
         ? undefined
@@ -711,6 +769,28 @@ describe("Bedrock thinking request composition", () => {
       thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort: "xhigh" },
     });
+  });
+});
+
+describe("Bedrock tool order", () => {
+  it("sends the same request bytes for any tool discovery order", async () => {
+    const lookup = {
+      name: "lookup",
+      description: "Lookup",
+      parameters: { type: "object", properties: {} },
+    };
+    const calculate = { ...lookup, name: "calculate", description: "Calculate" };
+    const capture = async (tools: unknown[]) =>
+      captureCommandInput(
+        bedrockModel({ id: "anthropic.claude-sonnet-4-20250514-v1:0" }),
+        { messages: [{ role: "user", content: "Hi", timestamp: 0 }], tools } as never,
+        { cacheRetention: "short", toolChoice: "auto" },
+      );
+    const forward = [lookup, calculate];
+    const first = await capture(forward);
+    const second = await capture([calculate, lookup]);
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+    expect(forward.map((tool) => tool.name)).toEqual(["lookup", "calculate"]);
   });
 });
 

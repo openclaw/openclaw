@@ -2,6 +2,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
 import {
   isSessionStoreTopologyChange,
@@ -9,6 +10,10 @@ import {
   type SessionRowChange,
 } from "../../sessions/session-row-changes.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
+import {
+  isOpenClawAgentDatabaseRegistryChange,
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
+} from "../../state/openclaw-agent-db-registry-listing.js";
 import {
   registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
@@ -22,8 +27,12 @@ import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite
 import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
 import type { SessionDeliveryGeneration } from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
-import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import { isSessionStoreReadCandidateCurrent } from "./session-store-read-candidates.js";
+import {
+  captureSessionStoreReadCandidates,
+  createSessionStoreRegistryMutationFilter,
+} from "./session-store-target-inventory.js";
 
 class SessionDeliveryGenerationRevokedError extends Error {
   readonly code = "SESSION_DELIVERY_GENERATION_REVOKED";
@@ -71,15 +80,20 @@ function isSessionGenerationFacts(value: unknown): value is SessionGenerationFac
 }
 
 /** Prepare once per delivery attempt; committed entry publications keep final I/O checks live. */
-async function prepareSessionGenerationLease(input: SessionGenerationFacts): Promise<{
+async function prepareSessionGenerationLease(
+  input: SessionGenerationFacts,
+  onRevoked?: (reason: unknown) => void,
+): Promise<{
   assertCurrent: () => void;
   assertDeliveryCurrent: () => void;
+  prepareRead: () => Promise<void> | undefined;
   release: () => void;
 }> {
   if (!isSessionGenerationFacts(input)) {
     throw new SessionDeliveryGenerationUnavailableError();
   }
   const generation = { ...input };
+  const binding = captureIncognitoSessionBinding(generation);
   const releases: Array<() => void> = [];
   const paths = new Set([path.resolve(generation.storePath)]);
   let active = true;
@@ -88,6 +102,7 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
   let publications = 0;
   let retained: ReturnType<typeof retainPreparedSessionGenerationFacts> | undefined;
   let observeIncognito: (() => void) | undefined;
+  let assertRegistryPublication: (() => void) | undefined;
   const release = () => {
     if (!active) {
       return;
@@ -96,6 +111,10 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
     for (const stop of releases.splice(0).toReversed()) {
       stop();
     }
+  };
+  const revoke = () => {
+    release();
+    onRevoked?.(new SessionDeliveryGenerationUnavailableError());
   };
   const assertActive = () => {
     if (revoked) {
@@ -122,7 +141,16 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
       if (isSessionStoreTopologyChange(change)) {
-        invalidated = true;
+        // Only canonical registry evidence can prove a topology publication irrelevant.
+        if (isOpenClawAgentDatabaseRegistryChange(change) && assertRegistryPublication) {
+          try {
+            assertRegistryPublication();
+          } catch {
+            invalidated = true;
+          }
+        } else {
+          invalidated = true;
+        }
         return;
       }
       if (typeof change.scope === "object") {
@@ -153,6 +181,7 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
     }
     if (
       change.scope === "automation" ||
+      change.scope === "acp" ||
       change.sessionKey !== generation.sessionKey ||
       (change.agentId && change.agentId !== generation.agentId) ||
       !change.storePath ||
@@ -167,7 +196,15 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
     ) {
       return;
     }
-    if (!isPreparedSessionSharingChange(change)) {
+    if (binding && observeIncognito) {
+      try {
+        observeIncognito();
+      } catch (error) {
+        if (!isSessionDeliveryGenerationRevokedError(error)) {
+          invalidated = true;
+        }
+      }
+    } else if (!isPreparedSessionSharingChange(change)) {
       invalidated = true;
     } else if (observeIncognito && change.facts?.kind === "removed") {
       revoked = true;
@@ -185,7 +222,21 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
   releases.push(sessionChanges.subscribeFacts(changed));
   try {
     let readCurrent: () => void;
-    if (isIncognitoSessionKey(generation.sessionKey)) {
+    let prepareRead: () => Promise<void> | undefined = () => {
+      assertActive();
+      return undefined;
+    };
+    if (binding) {
+      const { actor, admissionSignal } = binding;
+      const claim = actor.sessions.captureCurrent(generation.sessionKey);
+      readCurrent = () => {
+        admissionSignal?.throwIfAborted();
+        actor.assertReadable();
+        claim.assertCurrent();
+        checkEntry(actor.sessions.readSharing(generation.sessionKey)?.entry ?? null);
+      };
+      observeIncognito = readCurrent;
+    } else if (isIncognitoSessionKey(generation.sessionKey)) {
       const database = getOpenIncognitoAgentDatabase(generation.agentId, generation.storePath);
       if (!database && generation.sessionId !== null) {
         throw new SessionDeliveryGenerationRevokedError();
@@ -194,8 +245,8 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
         registerOpenClawAgentDatabaseAsyncResource({
           agentId: generation.agentId,
           path: generation.storePath,
-          revoke: release,
-          close: async () => release(),
+          revoke,
+          close: async () => revoke(),
         }),
       );
       readCurrent = () => {
@@ -232,6 +283,51 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
           readDatabasePathIdentitySync(candidate.physicalPath),
         ]),
       );
+      const preparedSources: Array<{
+        agentId: string;
+        path: string;
+        identity: string;
+        birthtime: string;
+      }> = [];
+      // Capture registry selection before worker I/O; keep its witness for the lease lifetime.
+      const unchangedByRegistry = createSessionStoreRegistryMutationFilter({
+        captured: candidates.map((candidate) => ({
+          candidate,
+          identity: originalSources.get(path.resolve(candidate.physicalPath))!.key,
+          birthtime: originalSources.get(path.resolve(candidate.physicalPath))!.birthtime,
+        })),
+        preparedSources,
+      });
+      const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
+        {},
+        (mutation, entries) => {
+          // Until selection completes, canonical candidates have no verified physical owner.
+          // Do not consume a relevant transition before preparedSources can fence it.
+          if (
+            preparedSources.length === 0 &&
+            mutation.sources.some(
+              (source) =>
+                originalSources.has(source.path) ||
+                originalSources.has(source.physicalPath) ||
+                [...originalSources.values()].some((identity) => identity.key === source.identity),
+            )
+          ) {
+            return false;
+          }
+          return unchangedByRegistry(mutation, entries);
+        },
+      );
+      const assertCandidatePaths = () => {
+        for (const candidate of candidates) {
+          if (!isSessionStoreReadCandidateCurrent(candidate)) {
+            throw new SessionDeliveryGenerationUnavailableError();
+          }
+        }
+      };
+      assertRegistryPublication = () => {
+        registryRead.assertCurrent();
+        assertCandidatePaths();
+      };
       for (const candidate of candidates) {
         paths.add(path.resolve(candidate.path));
         paths.add(path.resolve(candidate.physicalPath));
@@ -240,8 +336,8 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
             registerOpenClawAgentDatabaseReadCandidateResource({
               ...candidate,
               path: pathname,
-              revoke: release,
-              close: async () => release(),
+              revoke,
+              close: async () => revoke(),
             }),
           );
         }
@@ -251,7 +347,14 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
         assertActive();
         const before = publications;
         retained = await withSessionEntriesFromStoresInWorker(
-          [{ ...generation, sessionKeys: [generation.sessionKey], projection: "sharing" }],
+          [
+            {
+              ...generation,
+              sessionKeys: [generation.sessionKey],
+              projection: "sharing",
+              includeAuthorization: true,
+            },
+          ],
           ([read]) => {
             assertActive();
             if (before !== publications) {
@@ -263,7 +366,24 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
             checkEntry(entry ?? null);
             const sharing = read!.result.sharing;
             if (sharing) {
+              const identity = readDatabasePathIdentitySync(sharing.source.path);
+              const workerIdentity = read!.result.databaseIdentity;
+              if (
+                !workerIdentity?.incarnation ||
+                workerIdentity.filename !== sharing.source.path ||
+                "file:" + workerIdentity.identity !== sharing.databaseIdentity ||
+                identity.key !== sharing.databaseIdentity ||
+                identity.birthtime === undefined ||
+                identity.birthtime !== workerIdentity.birthtime
+              ) {
+                throw new SessionDeliveryGenerationUnavailableError();
+              }
               source = { path: sharing.source.path, identity: sharing.databaseIdentity };
+              preparedSources.push({
+                agentId: read!.database.agentId,
+                ...source,
+                birthtime: identity.birthtime,
+              });
             } else {
               const pathname = path.resolve(read!.database.path);
               const original = originalSources.get(pathname);
@@ -289,19 +409,21 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
           },
         );
       }
-      readCurrent = () => {
-        for (const candidate of candidates) {
-          if (
-            captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
-            candidate.physicalPath
-          ) {
-            throw new SessionDeliveryGenerationUnavailableError();
-          }
-        }
+      const assertSourceCurrent = () => {
+        assertActive();
+        registryRead.assertCurrent();
+        assertCandidatePaths();
         if (!source || readDatabasePathIdentitySync(source.path).key !== source.identity) {
           throw new SessionDeliveryGenerationUnavailableError();
         }
+      };
+      readCurrent = () => {
+        assertSourceCurrent();
         checkEntry(retained?.readCurrent());
+      };
+      prepareRead = () => {
+        assertSourceCurrent();
+        return retained?.prepareRead()?.then(assertSourceCurrent);
       };
     }
     const assertCurrent = (delivery = false) => {
@@ -322,17 +444,42 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
         }
         readCurrent();
       } catch (error) {
-        if (
+        const failure =
           isSessionDeliveryGenerationRevokedError(error) ||
           isSessionDeliveryGenerationUnavailableError(error)
-        ) {
-          throw error;
-        }
-        throw new SessionDeliveryGenerationUnavailableError({ cause: error });
+            ? error
+            : new SessionDeliveryGenerationUnavailableError({ cause: error });
+        onRevoked?.(failure);
+        throw failure;
       }
     };
+    for (let pending = prepareRead(); pending; pending = prepareRead()) {
+      await pending;
+    }
     assertCurrent();
-    return { assertCurrent, assertDeliveryCurrent: () => assertCurrent(true), release };
+    if (onRevoked) {
+      let checkedPublications = publications;
+      // Public notifications run after every committed generation fact is installed.
+      releases.push(
+        sessionChanges.subscribe(() => {
+          if (checkedPublications === publications && !invalidated && !revoked) {
+            return;
+          }
+          checkedPublications = publications;
+          try {
+            assertCurrent();
+          } catch {
+            // assertCurrent has already revoked the execution owner.
+          }
+        }),
+      );
+    }
+    return {
+      assertCurrent,
+      assertDeliveryCurrent: () => assertCurrent(true),
+      prepareRead,
+      release,
+    };
   } catch (error) {
     release();
     if (
@@ -347,7 +494,25 @@ async function prepareSessionGenerationLease(input: SessionGenerationFacts): Pro
 
 /** Session lifecycle owners compose these facts with their own admitted mutation authority. */
 export async function prepareSessionGenerationFacts(input: SessionGenerationFacts) {
-  const { assertCurrent, release } = await prepareSessionGenerationLease(input);
+  const { assertCurrent, prepareRead, release } = await prepareSessionGenerationLease(input);
+  return { assertCurrent, prepareRead, release };
+}
+
+/** Stable cron roots retain their admitted run; exact-run keys already name one generation. */
+export async function prepareCronRootSessionGeneration(
+  input: Omit<SessionDeliveryGeneration, "lifecycleRevision"> & { lifecycleRevision?: string },
+  onRevoked?: (reason: unknown) => void,
+) {
+  if (!isCronSessionKey(input.sessionKey) || isCronRunSessionKey(input.sessionKey)) {
+    return undefined;
+  }
+  const { assertCurrent, release } = await prepareSessionGenerationLease(
+    {
+      ...input,
+      lifecycleRevision: input.lifecycleRevision ?? null,
+    },
+    onRevoked,
+  );
   return { assertCurrent, release };
 }
 

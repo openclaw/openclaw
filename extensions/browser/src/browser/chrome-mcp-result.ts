@@ -1,4 +1,3 @@
-// Parses Chrome MCP tool results and formats redacted tool failures.
 import path from "node:path";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
@@ -11,7 +10,6 @@ import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   CHROME_CONNECTION_TOOL_ERROR_RE,
   DEVTOOLS_ACTIVE_PORT_RE,
-  STALE_SELECTED_PAGE_ERROR,
   type ChromeMcpStructuredPage,
   type ChromeMcpToolResult,
   type NormalizedChromeMcpProfileOptions,
@@ -159,10 +157,6 @@ export function extractChromeMcpToolError(
     .find((line) => line.startsWith("Unable to navigate in the selected page:"));
 }
 
-function formatChromeMcpEndpointForDiagnostic(browserUrl: string): string {
-  return redactToolPayloadText(redactCdpUrl(browserUrl) ?? browserUrl);
-}
-
 export function formatChromeMcpToolErrorMessage(params: {
   profileName: string;
   options: NormalizedChromeMcpProfileOptions;
@@ -174,7 +168,7 @@ export function formatChromeMcpToolErrorMessage(params: {
   if (params.options.browserUrl && CHROME_CONNECTION_TOOL_ERROR_RE.test(params.message)) {
     return (
       `Chrome MCP tool "${params.toolName}" failed for profile "${profileLabel}" while using ` +
-      `the configured Chrome endpoint (${formatChromeMcpEndpointForDiagnostic(params.options.browserUrl)}). ` +
+      `the configured Chrome endpoint (${redactToolPayloadText(redactCdpUrl(params.options.browserUrl) ?? params.options.browserUrl)}). ` +
       `Details: ${detail}`
     );
   }
@@ -192,10 +186,6 @@ export function formatChromeMcpToolErrorMessage(params: {
     );
   }
   return detail;
-}
-
-export function shouldReconnectForToolError(name: string, message: string): boolean {
-  return name === "list_pages" && message.includes(STALE_SELECTED_PAGE_ERROR);
 }
 
 export function extractJsonMessage(result: ChromeMcpToolResult): unknown {

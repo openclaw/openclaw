@@ -19,12 +19,12 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const engineId = "synthetic-engine";
 const ownerId = "synthetic-owner";
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("context-engine-selection-"));
-  resetContextEngineRuntimeQuarantineForTests();
+  await resetContextEngineRuntimeQuarantineForTests();
 });
-afterEach(() => {
-  resetContextEngineRuntimeQuarantineForTests();
+afterEach(async () => {
+  await resetContextEngineRuntimeQuarantineForTests();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });

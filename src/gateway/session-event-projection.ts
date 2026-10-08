@@ -4,7 +4,7 @@ import type { PrepareSessionEventProjection } from "./server-broadcast-types.js"
 import { prepareSessionAncestor } from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
-import { prepareSessionRowPublication } from "./session-row-presentation.js";
+import { prepareSessionRowPublication, serializeSessionRow } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
 /** Bind prepared rows without exposing their implementation to transport contracts. */
@@ -62,7 +62,6 @@ export function prepareSessionEventProjection(
       return () => undefined;
     }
     const presentRecipient = prepareSessionRowPublication(projection, Date.now(), rows);
-    const encodedRows = new WeakMap<object, string>();
     const preparedAncestors = new WeakMap<object, ReturnType<typeof prepareSessionAncestor>>();
     const ancestors = projection.ancestorRows(record, read);
     const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
@@ -101,6 +100,8 @@ export function prepareSessionEventProjection(
       const projected: Record<string, unknown> = {
         ...base,
         session: row,
+        fastMode: row.fastMode,
+        effectiveFastMode: row.effectiveFastMode,
         ancestorSessions: ancestorDelivery?.ancestorSessions,
         ancestorSessionRefs: ancestorDelivery?.ancestorSessionRefs,
         visibility: row.visibility,
@@ -119,14 +120,7 @@ export function prepareSessionEventProjection(
       }
       return {
         payload: projected,
-        serializeSession: () => {
-          let encoded = encodedRows.get(row);
-          if (encoded === undefined) {
-            encoded = JSON.stringify(row);
-            encodedRows.set(row, encoded);
-          }
-          return encoded;
-        },
+        serializeSession: () => serializeSessionRow(row),
         delivered: () => {
           references.forget(row.key);
           if (event === "sessions.changed" && source.reason === "activity-summary") {

@@ -47,6 +47,22 @@ describe("OpenAI dynamic model capabilities", () => {
       cacheWrite: 0.0125,
     },
     {
+      id: "gpt-6.1-sol",
+      promptTokens: 272_000,
+      inputRate: 2,
+      output: 0.01,
+      cacheRead: 0.00005,
+      cacheWrite: 0.00125,
+    },
+    {
+      id: "gpt-6.1-sol",
+      promptTokens: 272_001,
+      inputRate: 4,
+      output: 0.015,
+      cacheRead: 0.0001,
+      cacheWrite: 0.0025,
+    },
+    {
       id: "gpt-6-sol",
       promptTokens: 272_000,
       inputRate: 2,
@@ -111,6 +127,13 @@ describe("OpenAI dynamic model capabilities", () => {
         off: null,
         efforts: ["low", "medium", "high", "xhigh", "max"],
         cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      },
+      {
+        api,
+        id: "gpt-6.1-sol",
+        off: null,
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+        cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
       },
       {
         api,

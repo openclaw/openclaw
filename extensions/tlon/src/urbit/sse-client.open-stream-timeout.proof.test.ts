@@ -67,7 +67,6 @@ describe("UrbitSSEClient openStream connect-timeout proof", () => {
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
     const client = new UrbitSSEClient(baseUrl, "urbauth-~zod=proof", {
-      autoReconnect: false,
       ship: "zod",
       ssrfPolicy: { allowPrivateNetwork: true },
       lookupFn: lookupLoopback,
@@ -105,7 +104,6 @@ describe("UrbitSSEClient openStream connect-timeout proof", () => {
     const address = server.address() as AddressInfo;
 
     const client = new UrbitSSEClient(`http://127.0.0.1:${address.port}`, "urbauth-~zod=proof", {
-      autoReconnect: false,
       ship: "zod",
       ssrfPolicy: { allowPrivateNetwork: true },
       lookupFn: lookupLoopback,

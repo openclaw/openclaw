@@ -2,11 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveSshClient } from "./ssh-client.js";
-import {
-  parseSshConfigOutput,
-  resolveSshConfig,
-  SSH_CONFIG_OUTPUT_MAX_CHARS,
-} from "./ssh-config.js";
+import { resolveSshConfig } from "./ssh-config.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
@@ -49,15 +45,22 @@ describe("ssh-config", () => {
     resolveSshClientMock.mockReturnValue("/usr/bin/ssh");
   });
 
-  it("ignores invalid ports and blank lines", () => {
-    const parsed = parseSshConfigOutput(
-      "user bob\nhostname example.com\nport not-a-number\nidentityfile none\nidentityfile   \n",
-    );
-    expect(parsed.port).toBeUndefined();
-    expect(parsed.identityFiles).toStrictEqual([]);
-    expect(parseSshConfigOutput("hostname example.com\nport 2222abc\n").port).toBeUndefined();
-    expect(parseSshConfigOutput("hostname example.com\nport 70000\n").port).toBeUndefined();
-  });
+  it.each(["not-a-number", "2222abc", "70000"])(
+    "ignores invalid port %s and blank lines",
+    async (port) => {
+      runCommandMock.mockResolvedValueOnce(
+        commandResult({
+          stdout: `user bob\nhostname example.com\nport ${port}\nidentityfile none\nidentityfile   \n`,
+        }),
+      );
+      await expect(resolveSshConfig({ host: "alias", port: 22 })).resolves.toEqual({
+        user: "bob",
+        host: "example.com",
+        port: undefined,
+        identityFiles: [],
+      });
+    },
+  );
 
   it("resolves ssh config through the canonical command wrapper", async () => {
     await expect(resolveSshConfig({ user: "me", host: "alias", port: 22 })).resolves.toEqual({
@@ -69,7 +72,7 @@ describe("ssh-config", () => {
     expect(runCommandMock).toHaveBeenCalledWith(
       ["/usr/bin/ssh", "-G", "--", "me@alias"],
       expect.objectContaining({
-        maxOutputBytes: SSH_CONFIG_OUTPUT_MAX_CHARS,
+        maxOutputBytes: 64 * 1024,
         outputCapture: "head",
         terminateOnOutputLimit: true,
       }),

@@ -1,5 +1,5 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 import type {
   SessionCapability,
   SessionConnectionOwner,
@@ -47,20 +47,15 @@ export function createSessionRowLocalPatch(
       return matches ? host.copyRow(row, patch) : row;
     };
     const state = host.readState();
-    const result = projectSessionResultRows(
-      state.result,
-      state.result?.sessions.map((row) => project(row, state.agentId)) ?? [],
-    );
+    const result = mapSessionResultRows(state.result, (row) => project(row, state.agentId));
     // Unscoped callers retain their primary-only contract. A captured target can
     // update its held descriptor without borrowing primary membership or ownership.
     const staged = target
       ? host.stageManagedResults(
           scope,
           (entry) =>
-            projectSessionResultRows(
-              entry.snapshot.result,
-              entry.snapshot.result?.sessions.map((row) => project(row, entry.snapshot.agentId)) ??
-                [],
+            mapSessionResultRows(entry.snapshot.result, (row) =>
+              project(row, entry.snapshot.agentId),
             ),
           (entry) => ({ row: entry.row ? project(entry.row, entry.target.agentId) : null }),
         )

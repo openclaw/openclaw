@@ -1,5 +1,6 @@
 /** Sanitizes and prepares one explicitly reviewed update-failure report. */
 import { isIP } from "node:net";
+import { constants } from "node:os";
 import path from "node:path";
 import { valid as validSemver } from "semver";
 import { resolveStateDir } from "../config/paths.js";
@@ -19,19 +20,20 @@ import { VERSION } from "../version.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { prepareGithubIssue, type PreparedGithubIssue } from "./github-issue.js";
 import { normalizeUpdateChannel } from "./update-channels.js";
-import { UPDATE_DESTINATION_RECOVERY } from "./update-destination-failure.js";
 import { normalizeUpdateDoctorLintFindings } from "./update-doctor-lint.js";
 import {
   formatUpdateFailureFact,
   selectUpdateFailureReportSteps,
+  UPDATE_DESTINATION_RECOVERY,
 } from "./update-failure-facts-format.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
-import {
-  isPublicUpdateFailureCode,
-  projectPublicUpdateFailureIdentifiers,
-} from "./update-failure-public-identifiers.js";
+import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
+import { projectPublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { formatNpmFailureFacts } from "./update-npm-failure.js";
-import { updatePreflightDetailMessage } from "./update-preflight-details.js";
+import {
+  updatePreflightDetailMessage,
+  UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL,
+} from "./update-preflight-details.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -109,10 +111,7 @@ function sanitizeReportField(
     typeof value === "bigint"
       ? String(value)
       : "unknown";
-  const redacted = redactSupportString(redactDiagnosticLines(text), {
-    env: context.env,
-    stateDir: context.stateDir,
-  });
+  const redacted = redactSupportString(redactDiagnosticLines(text), context);
   return truncateUtf8Prefix(redacted.trim(), maxBytes);
 }
 
@@ -131,7 +130,7 @@ function sanitizeFactIdentifier(value: string, context: UpdateFailureReportConte
 type ReportedFailedStep = Pick<
   UpdateStepResult,
   "name" | "exitCode" | "termination" | "failureFacts" | "stderrTail"
-> & { detail?: string };
+> & { detail?: string; signal?: string | null };
 
 function resolveFailedSteps(input: UpdateFailureReportInput): ReportedFailedStep[] {
   const direct = new Map(input.result.steps.map((step) => [updateRunStepKey(step.name), step]));
@@ -156,6 +155,9 @@ function resolveFailedSteps(input: UpdateFailureReportInput): ReportedFailedStep
               exitCode: step.exitCode ?? null,
               failureFacts: step.failureFacts,
               detail: step.detail,
+              termination: step.termination,
+              signal: step.signal,
+              stderrTail: step.stderrTail,
             },
           ]
         : [];
@@ -227,6 +229,10 @@ function resolveRecoveryOutcome(
       },
       sanitizeReportField(recovery?.reason ?? "not-recorded", context, 96),
     ) ??
+    (verification.rollbackOutcome?.status === "not-needed" &&
+    verification.rollbackOutcome.reason === UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL
+      ? UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL
+      : undefined) ??
     (steps.some(
       (step) => step.step === "finalize:package-rollback-not-needed" && step.status === "skipped",
     )
@@ -281,7 +287,11 @@ async function renderBoundedDiagnostics(
   }
   for (const step of selectUpdateFailureReportSteps(steps)) {
     const phase = sanitizeFactIdentifier(step.name, context);
-    const termination = step.termination ? `, termination ${step.termination}` : "";
+    const signal =
+      step.signal && Object.hasOwn(constants.signals, step.signal) ? step.signal : null;
+    const termination = step.termination
+      ? `, termination ${step.termination}${signal ? ` (${signal})` : ""}`
+      : "";
     const message = [
       ...(step.failureFacts ?? []).flatMap((fact) => [fact.message, fact.code]),
       step.detail,
@@ -289,20 +299,29 @@ async function renderBoundedDiagnostics(
     ]
       .filter(Boolean)
       .join("\n");
-    const diagnostic = redactPublicSupportDiagnosticLine(message, context);
+    const facts = normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env);
+    const npm = facts.find(
+      (fact) => (fact.check === "npm" || fact.check === "bun") && fact.npmErrorCode,
+    );
+    const diagnostic = npm
+      ? [npm.npmErrorCode, npm.packageSpec].filter(Boolean).join(" ")
+      : redactPublicSupportDiagnosticLine(message, context);
     const exit = `exit ${step.exitCode ?? "unknown"}`;
-    const detail =
+    const publicDetail =
       diagnostic === "[redacted-diagnostic]"
-        ? exit
-        : step.exitCode == null
-          ? diagnostic
-          : `${exit} (${diagnostic})`;
+        ? facts.map((fact) => updatePreflightDetailMessage(fact.code)).find(Boolean)
+        : diagnostic;
+    const detail = !publicDetail
+      ? exit
+      : step.exitCode == null
+        ? publicDetail
+        : `${exit} (${publicDetail})`;
     diagnostics.push(`Failed phase ${phase}: ${detail}${termination}`);
-    diagnostics.push(...formatNpmFailureFacts(step.failureFacts ?? [], context));
+    diagnostics.push(...formatNpmFailureFacts(facts, context));
     diagnostics.push(
       ...(await Promise.all(
-        normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env)
-          .filter((fact) => fact.check !== "npm")
+        facts
+          .filter((fact) => fact.check !== "npm" && fact.check !== "bun")
           .map(async (fact) =>
             formatUpdateFailureFact({
               ...(await projectPublicUpdateFailureIdentifiers(fact)),

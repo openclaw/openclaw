@@ -1,26 +1,20 @@
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
-  waitForPendingSubagentRegistryWrites,
+  restoreSubagentRunsFromDisk,
 } from "../agents/subagents/registry/subagent-registry-persistence.js";
-// Subagent session reactivation helper.
-// Continues yielded or completed subagent work when a user messages the child session.
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
 } from "../agents/subagents/registry/subagent-registry-read.js";
+import {
+  isSameSubagentRun,
+  isSameSubagentRunOwner,
+} from "../agents/subagents/registry/subagent-run-generation.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
-/**
- * Reactivates a yielded or completed subagent session under its next run id.
- *
- * `task` is the canonical user-supplied prompt text that just dispatched the
- * follow-up. When provided, it is persisted on the new run record so a later
- * orphan recovery / gateway restart rewraps the follow-up prompt rather than
- * the stale original task. Without this, sessions.send and agent.run callers
- * could reactivate a completed run with the new run id but lose the new
- * prompt text from restart redispatch.
- */
+/** Persist the dispatched follow-up prompt so restart recovery cannot reuse the original task. */
 export async function reactivateCompletedSubagentSession(params: {
   sessionKey: string;
   runId?: string;
@@ -36,65 +30,50 @@ export async function reactivateCompletedSubagentSession(params: {
     params.sessionKey,
     (entry) => entry.pauseReason === "sessions_yield",
   );
-  const existing = paused ?? getLatestSubagentRunByChildSessionKey(params.sessionKey);
+  const existing = paused ?? (await getLatestSubagentRunByChildSessionKey(params.sessionKey));
   if (!existing || typeof existing.execution.endedAt !== "number") {
     return false;
   }
+  if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
+    return false;
+  }
   const stateContext = captureOpenClawStateWorkerContext();
-  const selected = getLatestLiveSubagentRunByChildSessionKey(
-    params.sessionKey,
-    (entry) => entry.runId === existing.runId,
-  );
-  const selectedGeneration = selected?.generation;
+  const liveSource = () =>
+    getLatestLiveSubagentRunByChildSessionKey(
+      params.sessionKey,
+      (entry) => entry.runId === existing.runId,
+    );
+  if (!liveSource()) {
+    await restoreSubagentRunsFromDisk({
+      runs: subagentRuns,
+      mergeOnly: true,
+      context: stateContext,
+      assertCurrent: params.assertCurrent,
+    });
+  }
+  const source = liveSource();
+  if (!source || !isSameSubagentRun(source, existing)) {
+    return false;
+  }
   const latest = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
-  const latestGeneration = latest?.generation;
-  const source = selected ?? existing;
-  const isOriginalOwnerCurrent = () => {
+  const assertOriginalOwnerCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
+    const current = liveSource();
+    const currentLatest = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
     if (
-      getLatestLiveSubagentRunByChildSessionKey(
-        params.sessionKey,
-        (entry) => entry.runId === existing.runId,
-      ) !== selected ||
-      selected?.generation !== selectedGeneration ||
-      (selected && selectedGeneration !== existing.generation) ||
-      getLatestLiveSubagentRunByChildSessionKey(params.sessionKey) !== latest ||
-      latest?.generation !== latestGeneration ||
-      typeof source.execution.endedAt !== "number"
+      !isSameSubagentRunOwner(current, source) ||
+      (latest ? !isSameSubagentRunOwner(currentLatest, latest) : currentLatest !== undefined) ||
+      (current && typeof current.execution.endedAt !== "number")
     ) {
       throw new Error("subagent follow-up source changed while its writes settled");
     }
     params.assertCurrent?.();
-    return !params.gatewayContextResolver || Boolean(params.gatewayContextResolver());
+    if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
+      throw new Error("subagent follow-up Gateway owner retired");
+    }
   };
-  const runtime = await import("../agents/subagents/registry/subagent-registry-runtime.js");
-  if (!isOriginalOwnerCurrent()) {
-    return false;
-  }
-  const endedHookStamp = source.endedHookEmittedAt;
-  const pending = waitForPendingSubagentRegistryWrites([source.runId], stateContext.admission);
-  if (pending) {
-    // Hook delivery records its emitted fact before its asynchronous stamp commits.
-    // Join that finite write before comparing the replacement's exact durable source.
-    await pending;
-    if (!isOriginalOwnerCurrent()) {
-      return false;
-    }
-    if (source.endedHookEmittedAt !== endedHookStamp) {
-      // A hook stamp can enter after the first snapshot. Join it once; the
-      // exact replacement comparison still rejects other concurrent changes.
-      const stampWrite = waitForPendingSubagentRegistryWrites(
-        [source.runId],
-        stateContext.admission,
-      );
-      if (stampWrite) {
-        await stampWrite;
-        if (!isOriginalOwnerCurrent()) {
-          return false;
-        }
-      }
-    }
-  }
+  const runtime = await import("../agents/subagents/registry/subagent-registry.js");
+  assertOriginalOwnerCurrent();
   const task = params.task;
   const hasTask = typeof task === "string" && task.trim().length > 0;
   // A yielded child still owes its parent completion; operator follow-ups must
@@ -102,22 +81,24 @@ export async function reactivateCompletedSubagentSession(params: {
   const gatewayBinding = params.gatewayContextResolver
     ? { gatewayContextResolver: params.gatewayContextResolver }
     : {};
-  const replaced = paused
-    ? runtime.adoptPausedSubagentRunForFollowUp({
-        childSessionKey: params.sessionKey,
-        runId,
-        task: hasTask ? task : paused.task,
-        ...gatewayBinding,
-      })
-    : runtime.replaceSubagentRunAfterSteer({
-        previousRunId: source.runId,
-        nextRunId: runId,
-        fallback: source,
-        runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
-        persistenceFailure: "throw",
-        ...(hasTask ? { task } : {}),
-        ...gatewayBinding,
-      });
+  const replaced =
+    source.pauseReason === "sessions_yield"
+      ? await runtime.adoptPausedSubagentRunForFollowUp({
+          childSessionKey: params.sessionKey,
+          runId,
+          task: hasTask ? task : source.task,
+          assertCurrent: assertOriginalOwnerCurrent,
+          ...gatewayBinding,
+        })
+      : await runtime.replaceSubagentRunAfterSteerCore({
+          previousRunId: source.runId,
+          nextRunId: runId,
+          preserveCompletedRun: true,
+          runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
+          ...(hasTask ? { task } : {}),
+          assertCurrent: assertOriginalOwnerCurrent,
+          ...gatewayBinding,
+        });
   if (replaced) {
     return true;
   }

@@ -26,17 +26,15 @@ function calculateAuthProfileCooldownMs(errorCount: number): number {
   return 5 * 60_000; // 5 minutes max
 }
 
-// Without a provider reset, grow failed half-open probes up to one billing day:
-// frequent retries risk metered fallback spend, while a finite cap still retries daily.
-const RATE_LIMIT_BACKOFF_BASE_MS = 30_000;
-const RATE_LIMIT_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
-
-type DisabledFailureReason = Extract<AuthProfileFailureReason, "billing" | "auth_permanent">;
+type BackoffFailureReason = Extract<
+  AuthProfileFailureReason,
+  "billing" | "auth_permanent" | "rate_limit"
+>;
 
 const FAILURE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Keep the initial billing disable short so inline API keys can retry soon
 // after recharge, even though they cannot probe during an active window.
-const DISABLED_FAILURE_BACKOFF_POLICIES = {
+const FAILURE_BACKOFF_POLICIES = {
   billing: {
     baseMs: 10 * 60 * 1000,
     maxMs: 24 * 60 * 60 * 1000,
@@ -47,7 +45,9 @@ const DISABLED_FAILURE_BACKOFF_POLICIES = {
     baseMs: 10 * 60 * 1000,
     maxMs: 60 * 60 * 1000,
   },
-} satisfies Record<DisabledFailureReason, { baseMs: number; maxMs: number }>;
+  // Limit metered fallback spend from repeated half-open failures, capped at one day.
+  rate_limit: { baseMs: 30_000, maxMs: 24 * 60 * 60 * 1000 },
+} satisfies Record<BackoffFailureReason, { baseMs: number; maxMs: number }>;
 
 function calculateCappedExponentialBackoffMs(params: {
   errorCount: number;
@@ -128,37 +128,26 @@ export function computeNextProfileUsageStats(params: {
 
   const disabledFailureReason =
     params.reason === "billing" || params.reason === "auth_permanent" ? params.reason : null;
-
+  const backoffPolicy =
+    disabledFailureReason || params.reason === "rate_limit"
+      ? FAILURE_BACKOFF_POLICIES[disabledFailureReason ?? "rate_limit"]
+      : undefined;
+  const backoffMs = backoffPolicy
+    ? calculateCappedExponentialBackoffMs({
+        errorCount: failureCounts[params.reason] ?? 1,
+        ...backoffPolicy,
+      })
+    : calculateAuthProfileCooldownMs(nextErrorCount);
+  const window = disabledFailureReason ? "disabledUntil" : "cooldownUntil";
+  // Retries within either active window cannot push recovery further out.
+  updatedStats[window] = keepActiveWindowOrRecompute({
+    existingUntil: params.existing[window],
+    now: params.now,
+    recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
+  });
   if (disabledFailureReason) {
-    const disableCount = failureCounts[disabledFailureReason] ?? 1;
-    const backoffMs = calculateCappedExponentialBackoffMs({
-      errorCount: disableCount,
-      ...DISABLED_FAILURE_BACKOFF_POLICIES[disabledFailureReason],
-    });
-    // Keep active disable windows immutable so retries within the window cannot
-    // extend recovery time indefinitely.
-    updatedStats.disabledUntil = keepActiveWindowOrRecompute({
-      existingUntil: params.existing.disabledUntil,
-      now: params.now,
-      recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
-    });
     updatedStats.disabledReason = disabledFailureReason;
   } else {
-    const backoffMs =
-      params.reason === "rate_limit"
-        ? calculateCappedExponentialBackoffMs({
-            errorCount: failureCounts.rate_limit ?? 1,
-            baseMs: RATE_LIMIT_BACKOFF_BASE_MS,
-            maxMs: RATE_LIMIT_BACKOFF_MAX_MS,
-          })
-        : calculateAuthProfileCooldownMs(nextErrorCount);
-    // Keep active cooldown windows immutable so retries within the window
-    // cannot push recovery further out.
-    updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
-      existingUntil: params.existing.cooldownUntil,
-      now: params.now,
-      recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
-    });
     const existingCooldownActive =
       typeof params.existing.cooldownUntil === "number" &&
       params.existing.cooldownUntil > params.now;

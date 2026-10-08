@@ -1,7 +1,12 @@
 // Covers plugin config state normalization and reset behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as bundledChannelCatalog from "../channels/bundled-channel-catalog-read.js";
-import { resolvePolicyPluginActivationState } from "./config-policy.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginActivationStateShared } from "./config-activation-shared.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -62,6 +67,40 @@ function expectNormalizedEnableState(params: {
 }
 
 describe("normalizePluginsConfig", () => {
+  afterEach(() => clearRuntimeConfigSnapshot());
+
+  it("serves published policy without rereading entries and refreshes every publication", () => {
+    const entries = { "google-gemini-cli": { enabled: true } };
+    const readEntries = vi.fn(() => entries);
+    const config: OpenClawConfig = {
+      plugins: {
+        get entries() {
+          return readEntries();
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    readEntries.mockClear();
+
+    expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(true);
+    expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(true);
+    expect(readEntries).not.toHaveBeenCalled();
+
+    entries["google-gemini-cli"].enabled = false;
+    setRuntimeConfigSnapshot(config);
+    expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(false);
+
+    const replacement = { plugins: { allow: ["replacement"] } };
+    setRuntimeConfigSnapshot(replacement);
+    expect(normalizePluginsConfig(replacement.plugins).allow).toEqual(["replacement"]);
+    clearRuntimeConfigSnapshot();
+    replacement.plugins.allow.push("unpublished-edit");
+    expect(normalizePluginsConfig(replacement.plugins).allow).toEqual([
+      "replacement",
+      "unpublished-edit",
+    ]);
+  });
+
   it("keeps targeted authored plugin state identical across JSON persistence", () => {
     const normalized = normalizePluginTargetConfig(
       { plugins: { entries: { CODEX: { enabled: true, config: { appServer: {} } } } } },
@@ -378,7 +417,7 @@ describe("resolveEffectivePluginActivationState", () => {
         };
         for (const resolve of [
           resolveEffectivePluginActivationState,
-          resolvePolicyPluginActivationState,
+          resolvePluginActivationStateShared,
         ]) {
           expect(resolve(params)).toMatchObject({ enabled: expected, activated: expected });
         }

@@ -30,10 +30,9 @@ type ComposerFallbackInput = Pick<
 
 function resolveChatComposerMemoryFallback(
   state: ChatPageHost,
-  sessionKey: string,
-  scopeOverride?: StoredChatOutboxScope,
+  scope: StoredChatOutboxScope,
 ): { fallback?: ChatComposerMemoryFallback; scopeKey: string } {
-  const scope = scopeOverride ?? resolveUiConversationIdentity(state, sessionKey);
+  const { sessionKey } = scope;
   const scopeKey = storedChatOutboxScopeKey(scope);
   const fallbackSourceKeys = new Set([scopeKey]);
   for (const key of Object.keys(state.chatComposerFallbackByScope)) {
@@ -156,20 +155,14 @@ export function retainChatComposerMemoryFallback(
   scope: StoredChatOutboxScope,
   composer: ComposerFallbackInput,
 ): ChatComposerMemoryFallbackOwnership | undefined {
-  const { fallback: existing, scopeKey } = resolveChatComposerMemoryFallback(
-    state,
-    scope.sessionKey,
-    scope,
-  );
+  const { fallback: existing, scopeKey } = resolveChatComposerMemoryFallback(state, scope);
   if (existing && fallbackMatches(existing, composer)) {
     return { sequence: existing.sequence };
   }
-  if (
-    existing?.storageFailed &&
-    !existing.message.trim() &&
-    !existing.replyTarget &&
-    existing.attachments.length === 0
-  ) {
+  const hasInput =
+    existing &&
+    Boolean(existing.message.trim() || existing.replyTarget || existing.attachments.length > 0);
+  if (existing?.storageFailed && !hasInput) {
     state.chatComposerFallbackByScope = {
       ...state.chatComposerFallbackByScope,
       [scopeKey]: {
@@ -182,13 +175,7 @@ export function retainChatComposerMemoryFallback(
     };
     return { sequence: existing.sequence };
   }
-  if (
-    existing &&
-    (existing.storageFailed ||
-      existing.message.trim() ||
-      existing.replyTarget ||
-      existing.attachments.length > 0)
-  ) {
+  if (existing && (existing.storageFailed || hasInput)) {
     return undefined;
   }
   return storeChatComposerMemoryFallback(state, scope, composer);
@@ -199,7 +186,7 @@ export function captureChatComposerMemoryFallbackOwnership(
   scope: StoredChatOutboxScope,
   composer: ComposerFallbackInput,
 ): ChatComposerMemoryFallbackOwnership | undefined {
-  const { fallback: existing } = resolveChatComposerMemoryFallback(state, scope.sessionKey, scope);
+  const { fallback: existing } = resolveChatComposerMemoryFallback(state, scope);
   return existing && fallbackMatches(existing, composer)
     ? { sequence: existing.sequence }
     : undefined;
@@ -221,16 +208,11 @@ export function clearChatComposerMemoryFallback(
   if (!ownership) {
     return false;
   }
-  const ownedEntries = Object.entries(state.chatComposerFallbackByScope).filter(
-    ([, fallback]) => fallback.sequence === ownership.sequence,
-  );
-  if (ownedEntries.length === 0) {
+  const entries = Object.entries(state.chatComposerFallbackByScope);
+  const retained = entries.filter(([, fallback]) => fallback.sequence !== ownership.sequence);
+  if (retained.length === entries.length) {
     return false;
   }
-  const nextFallbacks = { ...state.chatComposerFallbackByScope };
-  for (const [scopeKey] of ownedEntries) {
-    delete nextFallbacks[scopeKey];
-  }
-  state.chatComposerFallbackByScope = nextFallbacks;
+  state.chatComposerFallbackByScope = Object.fromEntries(retained);
   return true;
 }

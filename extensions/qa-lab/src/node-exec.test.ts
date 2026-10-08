@@ -33,23 +33,18 @@ describe("resolveQaNodeExecPath", () => {
         execPath: "/usr/bin/nodejs",
         platform: "linux",
         versions: { ...process.versions, bun: undefined },
-        execFileImpl: async () => {
-          throw new Error("should not search PATH");
-        },
       }),
     ).resolves.toBe("/usr/bin/nodejs");
+    expect(runExecMock).not.toHaveBeenCalled();
   });
 
   it("resolves node from PATH when the parent runtime is bun", async () => {
+    runExecMock.mockResolvedValueOnce({ stdout: "/usr/local/bin/node\n", stderr: "" });
     await expect(
       resolveQaNodeExecPath({
         execPath: "/opt/homebrew/bin/bun",
         platform: "darwin",
         versions: { ...process.versions, bun: "1.2.3" },
-        execFileImpl: async () => ({
-          stdout: "/usr/local/bin/node\n",
-          stderr: "",
-        }),
       }),
     ).resolves.toBe("/usr/local/bin/node");
   });
@@ -75,27 +70,23 @@ describe("resolveQaNodeExecPath", () => {
   });
 
   it("uses trusted Windows where.exe when resolving node from PATH", async () => {
+    runExecMock.mockResolvedValueOnce({
+      stdout: String.raw`D:\nodejs\node.exe` + "\r\n",
+      stderr: "",
+    });
     await expect(
       resolveQaNodeExecPath({
         execPath: String.raw`D:\Tools\bun.exe`,
         platform: "win32",
         versions: { ...process.versions, bun: "1.2.3" },
         env: { SystemRoot: String.raw`D:\Windows` },
-        execFileImpl: async (file, args, options) => {
-          expect(file).toBe(path.win32.join(String.raw`D:\Windows`, "System32", "where.exe"));
-          expect(args).toEqual(["node"]);
-          expect(options).toEqual({
-            encoding: "utf8",
-            env: { SystemRoot: String.raw`D:\Windows` },
-            timeoutMs: 5_000,
-          });
-          return {
-            stdout: String.raw`D:\nodejs\node.exe` + "\r\n",
-            stderr: "",
-          };
-        },
       }),
     ).resolves.toBe(String.raw`D:\nodejs\node.exe`);
+    expect(runExecMock).toHaveBeenCalledWith(
+      path.win32.join(String.raw`D:\Windows`, "System32", "where.exe"),
+      ["node"],
+      { baseEnv: { SystemRoot: String.raw`D:\Windows` }, logOutput: false, timeoutMs: 5_000 },
+    );
   });
 
   it("fails after the lookup timeout when the PATH probe stalls", async () => {
@@ -126,14 +117,12 @@ describe("resolveQaNodeExecPath", () => {
   });
 
   it("throws a clear error when node is unavailable", async () => {
+    runExecMock.mockRejectedValueOnce(new Error("missing"));
     await expect(
       resolveQaNodeExecPath({
         execPath: "/opt/homebrew/bin/bun",
         platform: "darwin",
         versions: { ...process.versions, bun: "1.2.3" },
-        execFileImpl: async () => {
-          throw new Error("missing");
-        },
       }),
     ).rejects.toThrow("Node not found in PATH");
   });

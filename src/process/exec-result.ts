@@ -1,6 +1,19 @@
-import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectNestedErrorCandidates,
+  toErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const commandCleanupUncertain = Symbol.for("openclaw.command-cleanup-uncertain");
+const commandCleanupMessage = "Command cleanup could not confirm that owned work stopped";
+
+function isCanonicalCommandProcessCleanupError(candidate: unknown): boolean {
+  try {
+    return Object.getOwnPropertyDescriptor(candidate, commandCleanupUncertain)?.value === true;
+  } catch {
+    return false;
+  }
+}
 
 /** An admitted command may still write; callers must retain its artifacts for recovery. */
 export class CommandProcessCleanupError extends Error {
@@ -8,7 +21,23 @@ export class CommandProcessCleanupError extends Error {
   readonly cleanup = "uncertain";
 
   constructor(options?: ErrorOptions) {
-    super("Command cleanup could not confirm that owned work stopped", options);
+    let message = commandCleanupMessage;
+    // Preserve the first canonical remedy without exposing unrelated cause text.
+    for (const candidate of collectNestedErrorCandidates(options?.cause)) {
+      if (!isCanonicalCommandProcessCleanupError(candidate)) {
+        continue;
+      }
+      try {
+        const detail: unknown = Object.getOwnPropertyDescriptor(candidate, "message")?.value;
+        if (typeof detail === "string" && detail.trim() && detail !== commandCleanupMessage) {
+          message = detail;
+          break;
+        }
+      } catch {
+        // Opaque causes must not prevent cleanup classification.
+      }
+    }
+    super(message, options);
     this.name = "CommandProcessCleanupError";
     Object.defineProperty(this, commandCleanupUncertain, { value: true });
   }
@@ -16,13 +45,7 @@ export class CommandProcessCleanupError extends Error {
 
 /** Preserve canonical cleanup classification across cause chains and module copies. */
 export function hasCommandProcessCleanupError(error: unknown): boolean {
-  return collectNestedErrorCandidates(error).some((candidate) => {
-    try {
-      return Object.getOwnPropertyDescriptor(candidate, commandCleanupUncertain)?.value === true;
-    } catch {
-      return false;
-    }
-  });
+  return collectNestedErrorCandidates(error).some(isCanonicalCommandProcessCleanupError);
 }
 
 export type SpawnResult = {
@@ -45,6 +68,66 @@ export type SpawnResult = {
   outputLimitExceeded?: boolean;
   outputErrorStream?: "stdout" | "stderr";
 };
+
+export type CommandProcessOutcome = Pick<
+  SpawnResult,
+  "pid" | "code" | "cleanup" | "termination"
+> & {
+  /** False only while a managed beforeInput callback has withheld every input byte. */
+  inputReleased?: boolean;
+};
+const commandFailureOutcome = Symbol.for("openclaw.command-process-outcome");
+
+/** Lifecycle facts stay private; callers retain the original error and its diagnostics. */
+export function recordCommandProcessFailure(error: unknown, outcome: CommandProcessOutcome): Error {
+  const failure = toErrorObject(error, "Command failed");
+  const target = Object.isExtensible(failure)
+    ? failure
+    : new Error(failure.message, { cause: failure });
+  return Object.defineProperty(target, commandFailureOutcome, {
+    value: Object.freeze({ ...outcome }),
+    configurable: true,
+  });
+}
+
+export function readCommandProcessFailure(error: unknown): CommandProcessOutcome | undefined {
+  for (const cause of collectNestedErrorCandidates(error)) {
+    try {
+      const outcome: unknown = isRecord(cause)
+        ? Object.getOwnPropertyDescriptor(cause, commandFailureOutcome)?.value
+        : undefined;
+      if (
+        isRecord(outcome) &&
+        (outcome.pid === undefined ||
+          (typeof outcome.pid === "number" &&
+            Number.isSafeInteger(outcome.pid) &&
+            outcome.pid > 0)) &&
+        (outcome.code === null || typeof outcome.code === "number") &&
+        (outcome.inputReleased === undefined || typeof outcome.inputReleased === "boolean") &&
+        (outcome.cleanup === undefined ||
+          outcome.cleanup === "normal" ||
+          outcome.cleanup === "cooperative" ||
+          outcome.cleanup === "forced" ||
+          outcome.cleanup === "uncertain") &&
+        (outcome.termination === "exit" ||
+          outcome.termination === "signal" ||
+          outcome.termination === "timeout" ||
+          outcome.termination === "no-output-timeout")
+      ) {
+        return {
+          pid: outcome.pid,
+          code: outcome.code,
+          cleanup: outcome.cleanup,
+          termination: outcome.termination,
+          inputReleased: outcome.inputReleased,
+        };
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
 
 export const TIMEOUT_EXIT_CODE = 124;
 

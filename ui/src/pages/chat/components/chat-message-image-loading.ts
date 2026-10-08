@@ -43,8 +43,9 @@ function managedImageResourceIdentity(
     authToken,
     variantUrl,
     artifactKey,
+    variant,
   ]);
-  return { cacheKey, subscriberScope: `${variantUrl}::${artifactKey}` };
+  return { cacheKey, subscriberScope: `${variantUrl}::${artifactKey}::${variant}` };
 }
 
 export function readCachedManagedImageUrl(
@@ -178,7 +179,7 @@ async function fetchManagedImageBlob(
     requesterSessionKey && artifactId && opts?.resolveArtifactDownload
       ? await opts
           .resolveArtifactDownload(
-            { sessionKey: requesterSessionKey, artifactId },
+            { sessionKey: requesterSessionKey, artifactId, variant },
             controller.signal,
           )
           .catch(() => null)

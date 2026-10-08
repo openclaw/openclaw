@@ -1,6 +1,5 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
 import { FeishuChatSchema } from "./chat-schema.js";
@@ -17,13 +16,6 @@ import {
 import { resolveFeishuToolAccount } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as json } from "./tool-result.js";
-
-function readChatPageSize(params: Record<string, unknown>): number | undefined {
-  return readPositiveIntegerParam(params, "page_size", {
-    max: 100,
-    message: "page_size must be a positive integer between 1 and 100",
-  });
-}
 
 export function buildFeishuDirectChatMembers(
   authorization: Extract<FeishuChatMemberReadAuthorization, { kind: "direct" }>,
@@ -63,38 +55,6 @@ export async function getChatInfo(client: Lark.Client, chatId: string) {
     moderation_permission: chat?.moderation_permission,
     avatar: chat?.avatar,
   };
-}
-
-async function getAuthorizedFeishuChatInfo(params: {
-  client: Lark.Client;
-  cfg: NonNullable<OpenClawPluginApi["config"]>;
-  account: ReturnType<typeof resolveFeishuToolAccount>;
-  chatId: string;
-  ctx: OpenClawPluginToolContext;
-}) {
-  const preliminary = resolveFeishuChatReadPreliminaryAuthorization({
-    cfg: params.cfg,
-    account: params.account,
-    chatId: params.chatId,
-    ctx: params.ctx,
-  });
-  if (preliminary.decision === "deny") {
-    assertFeishuChatReadAllowed({
-      cfg: params.cfg,
-      account: params.account,
-      chatId: preliminary.chatId,
-      ctx: params.ctx,
-    });
-  }
-  return readFeishuChatInfoWithAuthorization(
-    {
-      cfg: params.cfg,
-      account: params.account,
-      ctx: params.ctx,
-      preliminary,
-    },
-    (chatId) => getChatInfo(params.client, chatId),
-  );
 }
 
 export async function getChatMembers(
@@ -231,22 +191,25 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
         if (!p.chat_id) {
           return json({ error: `chat_id is required for action ${p.action}` });
         }
-        const chat = await getAuthorizedFeishuChatInfo({
-          client,
-          cfg,
-          account,
+        const readContext = { cfg, account, ctx };
+        const preliminary = resolveFeishuChatReadPreliminaryAuthorization({
+          ...readContext,
           chatId: p.chat_id,
-          ctx,
         });
+        if (preliminary.decision === "deny") {
+          assertFeishuChatReadAllowed({ ...readContext, chatId: preliminary.chatId });
+        }
+        const chat = await readFeishuChatInfoWithAuthorization(
+          { ...readContext, preliminary },
+          (chatId) => getChatInfo(client, chatId),
+        );
         if (p.action === "info") {
           return json(chat);
         }
         const authorization = authorizeFeishuChatMemberRead({
-          cfg,
-          account,
+          ...readContext,
           chatId: p.chat_id,
           chatType: resolveFeishuChatType(chat),
-          ctx,
           memberId: p.action === "member_info" ? p.member_id : undefined,
           memberIdType: p.member_id_type,
         });
@@ -257,7 +220,10 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
               : await getChatMembers(
                   client,
                   p.chat_id,
-                  readChatPageSize(p),
+                  readPositiveIntegerParam(p, "page_size", {
+                    max: 100,
+                    message: "page_size must be a positive integer between 1 and 100",
+                  }),
                   p.page_token,
                   p.member_id_type,
                 ),

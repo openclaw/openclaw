@@ -28,11 +28,13 @@ function renderSessionFilterSummary(host: SessionListHost) {
   const parts = [
     ...(ownerId ? [owner?.label ?? ownerId] : []),
     ...(host.sessionInvolvingMeFilterActive ? [t("sessionsView.involvingMe")] : []),
-    ...(host.sessionsStatusFilter === "archived"
-      ? [t("sessionsView.archived")]
-      : host.sessionsStatusFilter === "all"
-        ? [t("sessionsView.all")]
-        : []),
+    ...(host.sessionsStatusFilter === "snoozed"
+      ? [t("sessionsView.snoozed")]
+      : host.sessionsStatusFilter === "archived"
+        ? [t("sessionsView.archived")]
+        : host.sessionsStatusFilter === "all"
+          ? [t("sessionsView.all")]
+          : []),
   ];
   const summaryText = parts.join(" · ");
   const showAll = t("chat.sidebar.showAllSessions");
@@ -95,7 +97,7 @@ export function renderSidebarSessionFilter(
     aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
     @click=${(event: MouseEvent) => {
       if (event.currentTarget instanceof HTMLElement) {
-        host.sidebarMenus.toggleSessionSortMenu(event.currentTarget);
+        host.sidebarMenus.togglePositionedMenu("sessionSort", event.currentTarget);
       }
     }}
   >

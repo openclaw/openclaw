@@ -98,33 +98,28 @@ export class CodexAppInventoryCache {
   read(params: RefreshParams): CodexAppInventoryCacheRead {
     const nowMs = resolveDateTimestampMs(params.nowMs);
     const entry = this.entries.get(params.key);
-    if (!entry) {
-      const refreshScheduled = params.suppressRefresh ? false : this.scheduleRefresh(params);
-      return {
-        state: "missing",
-        key: params.key,
-        revision: this.revision,
-        refreshScheduled,
-        ...(this.diagnostics.get(params.key)
-          ? { diagnostic: this.diagnostics.get(params.key) }
-          : {}),
-      };
-    }
-
-    const state: CodexAppInventoryReadState =
-      entry.invalidated || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })
+    const state: CodexAppInventoryReadState = !entry
+      ? "missing"
+      : entry.invalidated || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })
         ? "stale"
         : "fresh";
     const refreshScheduled =
-      state === "fresh" && !params.forceRefetch ? false : this.scheduleRefresh(params);
-    const { invalidated: _invalidated, invalidatedAppIds: _invalidatedAppIds, ...snapshot } = entry;
+      (state === "missing"
+        ? !params.suppressRefresh
+        : state === "stale" || Boolean(params.forceRefetch)) && this.scheduleRefresh(params);
+    let snapshot: CodexAppInventorySnapshot | undefined;
+    if (entry) {
+      const { invalidated: _invalidated, invalidatedAppIds: _invalidatedAppIds, ...rest } = entry;
+      snapshot = rest;
+    }
+    const diagnostic = entry ? entry.lastError : this.diagnostics.get(params.key);
     return {
       state,
       key: params.key,
-      revision: entry.revision,
-      snapshot,
+      revision: entry?.revision ?? this.revision,
+      ...(snapshot ? { snapshot } : {}),
       refreshScheduled,
-      ...(entry.lastError ? { diagnostic: entry.lastError } : {}),
+      ...(diagnostic ? { diagnostic } : {}),
     };
   }
 
@@ -194,7 +189,7 @@ export class CodexAppInventoryCache {
     const promise = this.refreshUncoalesced(params, refreshToken, previousRefresh);
     const currentRefresh = {
       promise,
-      targetAppIds: new Set(params.targetAppIds?.filter(Boolean).map(codexAppIdentityKey) ?? []),
+      targetAppIds: targetAppIdSet(params.targetAppIds),
     };
     this.inFlight.set(params.key, currentRefresh);
     try {
@@ -239,9 +234,7 @@ export class CodexAppInventoryCache {
         installedApps: inventory.installedApps,
         ...(params.targetAppIds?.some(Boolean)
           ? {
-              targetAppIds: Array.from(
-                new Set(params.targetAppIds.filter(Boolean).map(codexAppIdentityKey)),
-              ).toSorted(),
+              targetAppIds: Array.from(targetAppIdSet(params.targetAppIds)).toSorted(),
             }
           : {}),
         fetchedAtMs: nowMs,
@@ -267,14 +260,16 @@ export class CodexAppInventoryCache {
       }
       return snapshot;
     } catch (error) {
-      const diagnostic = {
-        message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
-        atMs: nowMs,
-      };
-      this.diagnostics.set(params.key, diagnostic);
-      const entry = this.entries.get(params.key);
-      if (entry) {
-        entry.lastError = diagnostic;
+      if (this.refreshTokens.get(params.key) === refreshToken) {
+        const diagnostic = {
+          message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
+          atMs: nowMs,
+        };
+        this.diagnostics.set(params.key, diagnostic);
+        const entry = this.entries.get(params.key);
+        if (entry) {
+          entry.lastError = diagnostic;
+        }
       }
       embeddedAgentLog.warn("codex app inventory refresh failed", {
         forceRefetch: params.forceRefetch === true,
@@ -377,13 +372,15 @@ function resolveRemainingInvalidationScope(
     : { invalidated: false };
 }
 
+function targetAppIdSet(appIds: readonly string[] | undefined): Set<string> {
+  return new Set(appIds?.filter(Boolean).map(codexAppIdentityKey) ?? []);
+}
+
 function doesInFlightRefreshCover(existing: InFlightRefresh, params: RefreshParams): boolean {
   if (existing.targetAppIds.size === 0) {
     return true;
   }
-  const requestedAppIds = new Set(
-    params.targetAppIds?.filter(Boolean).map(codexAppIdentityKey) ?? [],
-  );
+  const requestedAppIds = targetAppIdSet(params.targetAppIds);
   return (
     requestedAppIds.size > 0 &&
     Array.from(requestedAppIds).every((appId) => existing.targetAppIds.has(appId))
@@ -449,7 +446,7 @@ async function readInstalledApps(
   },
 ): Promise<Pick<CodexAppInventorySnapshot, "apps" | "installedApps">> {
   const installed = await request("app/installed", { forceRefresh: options.forceRefresh });
-  const targetIds = new Set((options.targetAppIds ?? []).filter(Boolean).map(codexAppIdentityKey));
+  const targetIds = targetAppIdSet(options.targetAppIds);
   const apps =
     targetIds.size === 0
       ? installed.apps
@@ -513,7 +510,7 @@ function redactErrorData(value: unknown, depth = 0): JsonValue | undefined {
   if (isRecord(value)) {
     const redacted: Record<string, JsonValue> = {};
     for (const [key, entry] of Object.entries(value)) {
-      redacted[key] = isSensitiveErrorDataKey(key)
+      redacted[key] = /api[_-]?key|authorization|cookie|credential|password|secret|token/i.test(key)
         ? "<redacted>"
         : (redactErrorData(entry, depth + 1) ?? null);
     }
@@ -545,8 +542,4 @@ function sanitizeErrorMessage(message: string): string {
     "$1<redacted>",
   );
   return truncateSerializedErrorText(redacted);
-}
-
-function isSensitiveErrorDataKey(key: string): boolean {
-  return /api[_-]?key|authorization|cookie|credential|password|secret|token/i.test(key);
 }

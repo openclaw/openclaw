@@ -72,7 +72,7 @@ export function readNewSessionSubmissionAccess(options: {
 }): SessionMethodAccess {
   const { gateway, place, pendingPlacement, hasInitialTurn, createParams } = options;
   const pendingPlacementActive = Boolean(pendingPlacement.sessionKey);
-  const target = resolveDraftSessionPlacement(pendingPlacement, place).target;
+  const target = resolveDraftSessionPlacement(pendingPlacement, place);
   const remoteProject = !target && !hasInitialTurn ? place.browser.remoteProject : null;
   if (!pendingPlacementActive && remoteProject && !remoteProject.projectId) {
     const projectAccess = readSessionMethodAccess(gateway, {
@@ -119,7 +119,7 @@ export function requiresNewSessionModelSetup(options: {
       place.remotePlacement ||
       Boolean(pendingPlacement.sessionKey),
     connected: gateway.connected,
-    agentsLoaded: Boolean(agents?.agentsList && !agents.agentsListCached),
+    agentsLoaded: Boolean(agents?.agentsList),
     selectedAgentFound: selectedAgent !== undefined,
     agentModel: selectedAgent?.model?.primary,
   });
@@ -133,7 +133,7 @@ type SubmitGateDraft = {
   readonly mentions: readonly HumanMention[];
   readonly visibility: NewSessionVisibility;
   readonly attachmentDraft: {
-    readonly pendingReads: number;
+    readonly reads: { readonly pendingReads: number };
     readonly attachments: readonly ChatAttachment[];
   };
   readonly capabilities: { readonly toolOverrides: SessionToolOverrides | null };
@@ -170,7 +170,7 @@ export function resolveNewSessionSubmitBlock(
   if (catalog.isRoutePending(snapshot.data, snapshot.context?.sessions)) {
     return { gate: "route-pending", reason: t("newSession.catalogUnavailable") };
   }
-  if (draft.attachmentDraft.pendingReads > 0) {
+  if (draft.attachmentDraft.reads.pendingReads > 0) {
     return { gate: "attachment-reads", reason: t("newSession.readingAttachment") };
   }
   if (!pendingPlacementActive && draft.submissionOutcomeUnknown) {
@@ -233,7 +233,7 @@ export function resolveNewSessionSubmitBlock(
     const retryReady = Boolean(
       draft.pendingPlacement.retryAllowed &&
       client.recoveryScopeReady &&
-      resolveDraftSessionPlacement(draft.pendingPlacement, place).target &&
+      resolveDraftSessionPlacement(draft.pendingPlacement, place) &&
       draft.pendingPlacement.agentId &&
       draft.pendingPlacement.gatewayUrl === connection.connection.gatewayUrl &&
       draft.pendingPlacement.recoveryScope === client.recoveryScope,
@@ -244,18 +244,22 @@ export function resolveNewSessionSubmitBlock(
       ? emptyDraftBlock(draft, kind, pendingPlacementActive)
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
-  if (snapshot.context?.agents.state.agentsListCached) {
+  if (!snapshot.context?.agents.state.agentsList) {
     return {
       gate: "agents",
       reason: t(
-        snapshot.context.agents.state.agentsError
+        snapshot.context?.agents.state.agentsError
           ? "newSession.agentDefaultsUnavailable"
           : "newSession.loadingAgentDefaults",
       ),
     };
   }
+  const placementTarget = resolveDraftSessionPlacement(draft.pendingPlacement, place);
+  const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";
+  const cloudProfile = gateway.cloudProfiles.find((profile) => profile.id === cloudProfileId);
   const modelUnavailableMessage =
-    kind === "session" && place.modelControl.modelSelectionBlockedReason(place.selectedAgent());
+    kind === "session" &&
+    place.modelControl.modelSelectionBlockedReason(place.selectedAgent(), cloudProfile?.inference);
   if (modelUnavailableMessage) {
     return { gate: "model-unavailable", reason: modelUnavailableMessage };
   }
@@ -265,33 +269,28 @@ export function resolveNewSessionSubmitBlock(
   if (!catalog.allowsSelectedAgent(snapshot.data, place.selectedAgent())) {
     return { gate: "agent-not-allowed", reason: t("newSession.catalogUnavailable") };
   }
-  if (kind === "session" && !place.devicePlacementReady()) {
+  const devicePlacement = kind === "session" ? place.devicePlacement() : undefined;
+  if (devicePlacement && !devicePlacement.ready) {
     return {
       gate: "device",
-      reason: place.devicePlacementDisabledReason() ?? t("newSession.nodeUnavailable"),
+      reason: devicePlacement.disabledReason ?? t("newSession.nodeUnavailable"),
     };
   }
   const deviceRuntimeUnsupportedReason = place.modelControl.devicePlacementUnsupportedReason();
   if ((place.deviceId || place.autoDevice) && deviceRuntimeUnsupportedReason) {
     return { gate: "device-runtime", reason: deviceRuntimeUnsupportedReason };
   }
-  const placementTarget = resolveDraftSessionPlacement(draft.pendingPlacement, place).target;
   if (
     placementTarget &&
     (!client.recoveryScope || !client.recoveryScopeReady || gateway.cloudProfilesPending)
   ) {
     return { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
-  const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";
   const cloudRuntimeUnsupportedReason = () =>
-    place.modelControl.cloudRuntimeUnsupportedReason(
-      gateway.cloudProfiles.find((profile) => profile.id === place.cloudProfileId),
-    );
+    place.modelControl.cloudRuntimeUnsupportedReason(cloudProfile);
   if (
     cloudProfileId &&
-    (!gateway.cloudProfilesReady ||
-      !gateway.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
-      Boolean(cloudRuntimeUnsupportedReason()))
+    (!gateway.cloudProfilesReady || !cloudProfile || Boolean(cloudRuntimeUnsupportedReason()))
   ) {
     const reason = cloudRuntimeUnsupportedReason() ?? t("newSession.placementNotReady");
     return { gate: "cloud", reason };
@@ -304,7 +303,7 @@ export function resolveNewSessionSubmitBlock(
           ? t("newSession.checkingGit")
           : place.remotePlacement
             ? t("newSession.remoteSourceUnavailable")
-            : t("newSession.worktreeUnavailable"),
+            : t("newSession.gitCheckUnavailable"),
     };
   }
   if (place.worktree && !place.freshWorkspace && !isWorktreeNameValid(place.worktreeName)) {

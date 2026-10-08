@@ -3,11 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as gitExec from "../../infra/git-exec.js";
 import * as commands from "../../process/exec.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -15,14 +15,11 @@ import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
 const exec = promisify(execFile);
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    vi.unstubAllEnvs();
-    cleanup();
-  }),
-);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "source-only-filters-");
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 const initialize = useManagedWorktreeTestRepository();
 const git = async (cwd: string, ...args: string[]) =>
   (await exec("git", ["-C", cwd, ...args])).stdout.trim();
@@ -33,7 +30,7 @@ let root: string,
   script: string,
   service: ManagedWorktreeService;
 beforeEach(async () => {
-  root = tempDirs.make("source-only-filters-");
+  root = sessionDirs.make();
   globalConfig = path.join(root, "global-config");
   await fs.writeFile(globalConfig, "");
   vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
@@ -190,33 +187,25 @@ it("does not execute a clean filter inserted after publication preflight", async
   expect(await git(created.path, "rev-parse", "HEAD")).toBe(head);
 });
 
-it.each([false, true])(
-  "keeps native lossless removal checks with filters configured (late file=%s)",
-  async (lateFile) => {
-    await git(repo, "push", "origin", "main");
-    const created = await createSourceOnly("lossless", "lossless");
-    await configure("repository", "clean", created.path);
-    await fs.utimes(path.join(created.path, "README.md"), new Date(0), new Date(0));
-    const run = commands.runCommandWithTimeout;
-    let reachedRemoval = false;
-    vi.spyOn(commands, "runCommandWithTimeout").mockImplementation(async (...args) => {
-      if (args[0][0] === "git" && args[0].includes("worktree") && args[0].includes("remove")) {
-        reachedRemoval = true;
-        if (lateFile) {
-          await fs.writeFile(path.join(created.path, "late.txt"), "preserved user bytes");
-        }
-      }
-      return await run(...args);
-    });
-    if (lateFile) {
-      await expect(service.removeIfLossless(created.id)).rejects.toThrow();
-      expect(await fs.readFile(path.join(created.path, "late.txt"), "utf8")).toBe(
-        "preserved user bytes",
-      );
-    } else {
-      expect(await service.removeIfLossless(created.id)).toBe(true);
+it("keeps native lossless removal checks when a late file appears with filters configured", async () => {
+  await git(repo, "push", "origin", "main");
+  const created = await createSourceOnly("lossless", "lossless");
+  await configure("repository", "clean", created.path);
+  await fs.utimes(path.join(created.path, "README.md"), new Date(0), new Date(0));
+  const run = gitExec.executeGitCommand;
+  const removals: string[][] = [];
+  vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+    if (args[0] === "worktree" && args[1] === "remove") {
+      removals.push(args);
+      await fs.writeFile(path.join(created.path, "late.txt"), "preserved user bytes");
     }
-    expect(reachedRemoval).toBe(true);
-    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-  },
-);
+    return await run(cwd, args, options);
+  });
+  await expect(service.removeIfLossless(created.id)).rejects.toThrow();
+  expect(await fs.readFile(path.join(created.path, "late.txt"), "utf8")).toBe(
+    "preserved user bytes",
+  );
+  expect(removals).toHaveLength(1);
+  expect(removals[0]).not.toContain("--force");
+  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+});

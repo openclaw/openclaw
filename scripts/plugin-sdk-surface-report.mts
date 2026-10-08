@@ -12,10 +12,10 @@ import {
   type Checker,
   type Project,
   type Symbol,
-} from "typescript/unstable/sync";
+} from "typescript/unstable/async";
 import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
-import { createNativeTypeScriptProject } from "./lib/native-typescript.mts";
+import { createNativeTypeScriptProjectAsync } from "./lib/native-typescript.mts";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -136,13 +136,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "approval-gateway-runtime": 1,
   "approval-handler-runtime": 1,
   "approval-reply-runtime": 0,
-  "config-runtime": 115,
   "config-contracts": 0,
-  "inbound-reply-dispatch": 24,
-  "channel-reply-pipeline": 12,
+  "inbound-reply-dispatch": 21,
   "interactive-runtime": 11,
-  // +3: canonical incognito classifier projected through deprecated compatibility barrels.
-  "infra-runtime": 596,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   // +1: deprecated agent media projection re-export during the media migration window.
@@ -157,62 +153,79 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
   // deprecated while external harnesses migrate to required-capability V2 contracts.
   // +1: bounded structured-input compiler/executor for native harness protocol adapters.
-  "agent-harness": 2,
-  "agent-harness-runtime": 10,
-  "command-auth": 78,
-  discord: 47,
+  // +1: owner-approved async tool construction retains the deprecated synchronous factory.
+  "agent-harness": 3,
+  // +1: owner-approved synchronous watched-session compatibility during async migration.
+  // +1: owner-approved synchronous agent-end compatibility during async migration.
+  "agent-harness-runtime": 12,
   // +4: deprecated media projection type, builder, and turn aliases.
-  "channel-inbound": 18,
-  "channel-lifecycle": 23,
-  // +1: shared ingress error factory projected through the deprecated message barrel.
-  // +1: shared ingress retention defaults projected through the deprecated message barrel.
-  // +1: WhatsApp ack-policy bridge counted through the channel-message legacy facade.
-  // Rendering helpers also remain available through this shipped legacy facade.
-  "channel-message": 136,
+  "channel-inbound": 21,
+  "inbound-envelope": 3,
   // +2: Slack progress-draft render bridge (function + mode type).
   "channel-outbound": 2,
   // +2: WhatsApp ack-policy bridge (function + mode type).
   "channel-feedback": 2,
-  "channel-pairing": 0,
+  // Released synchronous allowlist compatibility during the approved worker-read migration.
+  "channel-pairing": 1,
   "channel-policy": 7,
   "channel-send-result": 1,
   "reply-runtime": 1,
   "security-runtime": 1,
+  // +2: approved released upstream-link writes retained during worker migration.
+  "session-catalog": 2,
   "session-store-runtime": 4,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
   "reply-history": 6,
-  "provider-auth": 19,
-  "telegram-account": 3,
+  "provider-auth": 15,
 } satisfies Record<string, number>);
 
 export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env) {
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      158,
+      151,
       env,
     ),
-    // #160931 (b4ae783fbfd) added three callable agent-harness-runtime exports
-    // without its ratchet update; these pin exactly that growth.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      4594,
+      // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
+      // +4: owner-approved replay V2 types on core and plugin-entry (2026-10-01).
+      // +11: ten service-lifetime type exports and the owner-bound scheduler resolver.
+      // +1: owner-approved async watched-session preparation with retained sync compatibility.
+      // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
+      // +1: owner-approved async agent-end preparation with retained sync compatibility.
+      // +1: owner-approved async coding-tool construction with retained sync compatibility.
+      // +4: executor controller, binding, context, and resolver.
+      // +1: required session cleanup failure preserves native ownership before host reset.
+      // +2: approved async upstream-link writes with released sync compatibility.
+      // -8: retired Skill Workshop proposal hook types.
+      3641,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      2698,
+      // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
+      // +1: resolvePluginServiceScheduler borrows an existing service/account/CLI owner.
+      // +1: owner-approved async watched-session preparation with retained sync compatibility.
+      // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
+      // +1: owner-approved async agent-end preparation with retained sync compatibility.
+      // +1: owner-approved async coding-tool construction with retained sync compatibility.
+      // +1: resolve the controller from the current invocation registry.
+      // +2: approved async upstream-link writes with released sync compatibility.
+      2111,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      1139,
+      // Remove deprecated sync channel envelope helpers and their compat records at the next Plugin SDK major.
+      // +2: approved synchronous upstream-link write compatibility until the next Plugin SDK major.
+      147,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      47,
+      0,
       env,
     ),
   };
@@ -240,16 +253,17 @@ function unwrapAlias(checker: Checker, symbol: Symbol) {
   return symbol.flags & SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
 }
 
-function hasDeprecatedTag(checker: Checker, symbol: Symbol) {
-  return checker.getJsDocTagsOfSymbol(symbol).some((tag) => tag.name === "deprecated");
+async function hasDeprecatedTag(checker: Checker, symbol: Symbol) {
+  return (await checker.getJsDocTagsOfSymbol(symbol)).some((tag) => tag.name === "deprecated");
 }
 
-function isCallableExport(checker: Checker, symbol: Symbol, sourceFile: ts.SourceFile) {
-  const target = unwrapAlias(checker, symbol);
+async function isCallableExport(checker: Checker, target: Symbol, sourceFile: ts.SourceFile) {
   const declaration =
-    target.valueDeclaration?.resolve() ?? target.declarations[0]?.resolve() ?? sourceFile;
-  const type = checker.getTypeOfSymbolAtLocation(target, declaration);
-  return checker.getSignaturesOfType(type, SignatureKind.Call).length > 0;
+    (await target.valueDeclaration?.resolve()) ??
+    (await target.declarations[0]?.resolve()) ??
+    sourceFile;
+  const type = await checker.getTypeOfSymbolAtLocation(target, declaration);
+  return (await checker.getSignaturesOfType(type, SignatureKind.Call)).length > 0;
 }
 
 function countWildcardReexports(entrypoints: string[]) {
@@ -269,12 +283,12 @@ function countWildcardReexports(entrypoints: string[]) {
   return { count, matches };
 }
 
-function collectExportStats(project: Project, entrypoints: string[]) {
+async function collectExportStats(project: Project, entrypoints: string[]) {
   const { program, checker } = project;
   const byEntrypoint = new Map<string, ExportEntryStats>();
 
   for (const entrypoint of entrypoints) {
-    const sourceFile = program.getSourceFile(entrypointPath(entrypoint));
+    const sourceFile = await program.getSourceFile(entrypointPath(entrypoint));
     if (!sourceFile) {
       byEntrypoint.set(entrypoint, {
         exports: 0,
@@ -284,18 +298,29 @@ function collectExportStats(project: Project, entrypoints: string[]) {
       });
       continue;
     }
-    const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
-    const symbols = moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : [];
+    const moduleSymbol = await checker.getSymbolAtLocation(sourceFile);
+    const symbols = moduleSymbol ? await checker.getExportsOfModule(moduleSymbol) : [];
     let callableExports = 0;
     let deprecatedExports = 0;
     let deprecatedCallableExports = 0;
     const deprecatedEntrypoint = deprecatedPublicEntrypointSet.has(entrypoint);
-    for (const symbol of symbols) {
-      const callable = isCallableExport(checker, symbol, sourceFile);
-      const deprecated =
-        deprecatedEntrypoint ||
-        hasDeprecatedTag(checker, symbol) ||
-        hasDeprecatedTag(checker, unwrapAlias(checker, symbol));
+    // Let the native client batch one entrypoint's reads, and settle them all before closing it.
+    const observations = await Promise.allSettled(
+      symbols.map(async (symbol) => {
+        const target = await unwrapAlias(checker, symbol);
+        const callable = await isCallableExport(checker, target, sourceFile);
+        const deprecated =
+          deprecatedEntrypoint ||
+          (await hasDeprecatedTag(checker, symbol)) ||
+          (await hasDeprecatedTag(checker, target));
+        return { callable, deprecated };
+      }),
+    );
+    for (const observation of observations) {
+      if (observation.status === "rejected") {
+        throw observation.reason;
+      }
+      const { callable, deprecated } = observation.value;
       if (callable) {
         callableExports += 1;
       }
@@ -318,7 +343,7 @@ function collectExportStats(project: Project, entrypoints: string[]) {
 }
 
 function selectExportStats(
-  scannedStats: ReturnType<typeof collectExportStats>,
+  scannedStats: Awaited<ReturnType<typeof collectExportStats>>,
   entrypoints: string[],
 ) {
   const byEntrypoint = new Map<string, ExportEntryStats>();
@@ -363,7 +388,7 @@ function formatStats(label: string, stats: ReturnType<typeof selectExportStats>[
 }
 
 function collectDeprecatedEntrypointBudgetFailures(
-  byEntrypoint: ReturnType<typeof collectExportStats>,
+  byEntrypoint: Awaited<ReturnType<typeof collectExportStats>>,
   entrypointBudgets: Readonly<Record<string, number>>,
 ) {
   const failures: string[] = [];
@@ -378,7 +403,7 @@ function collectDeprecatedEntrypointBudgetFailures(
   return failures;
 }
 
-export function collectPluginSdkSurfaceReport() {
+export async function collectPluginSdkSurfaceReport() {
   const scannedEntrypoints = [
     ...new Set([
       ...pluginSdkEntrypoints,
@@ -388,7 +413,7 @@ export function collectPluginSdkSurfaceReport() {
   ];
   // All inventories share one native graph; its handles never escape this report.
   const configFileName = path.join(repoRoot, "tsconfig.plugin-sdk-surface-report.json");
-  const session = createNativeTypeScriptProject({
+  const session = await createNativeTypeScriptProjectAsync({
     cwd: repoRoot,
     configFileName,
     files: {
@@ -412,11 +437,11 @@ export function collectPluginSdkSurfaceReport() {
     },
   });
   try {
-    const diagnostics = session.project.program.getConfigFileParsingDiagnostics();
+    const diagnostics = await session.project.program.getConfigFileParsingDiagnostics();
     if (diagnostics.length) {
       throw new Error(formatNativeTypeScriptDiagnostics(diagnostics));
     }
-    const scannedStats = collectExportStats(session.project, scannedEntrypoints);
+    const scannedStats = await collectExportStats(session.project, scannedEntrypoints);
     const allStats = selectExportStats(scannedStats, pluginSdkEntrypoints);
     const publicStats = selectExportStats(scannedStats, publicPluginSdkEntrypoints);
     const localOnlyStats = selectExportStats(scannedStats, privateLocalOnlyPluginSdkEntrypoints);
@@ -437,20 +462,23 @@ export function collectPluginSdkSurfaceReport() {
     const deprecatedBarrelMissingFromInventory = [...deprecatedBarrelEntrypointSet].filter(
       (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
     );
-    const deprecatedBarrelWithoutReexports = [...deprecatedBarrelEntrypointSet].filter(
-      (entrypoint) => {
-        const source = session.project.program.getSourceFile(entrypointPath(entrypoint));
-        // Frozen facades retain named reexports without inheriting new APIs through a wildcard.
-        return !source?.statements.some(
+    const deprecatedBarrelWithoutReexports: string[] = [];
+    for (const entrypoint of deprecatedBarrelEntrypointSet) {
+      const source = await session.project.program.getSourceFile(entrypointPath(entrypoint));
+      // Frozen facades retain named reexports without inheriting new APIs through a wildcard.
+      if (
+        !source?.statements.some(
           (statement) =>
             ts.isExportDeclaration(statement) &&
             statement.moduleSpecifier !== undefined &&
             (!statement.exportClause ||
               ts.isNamespaceExport(statement.exportClause) ||
               statement.exportClause.elements.length > 0),
-        );
-      },
-    );
+        )
+      ) {
+        deprecatedBarrelWithoutReexports.push(entrypoint);
+      }
+    }
     return {
       allStats,
       deprecatedBarrelMissingFromInventory,
@@ -464,12 +492,12 @@ export function collectPluginSdkSurfaceReport() {
       publicWildcards,
     };
   } finally {
-    session.close();
+    await session.close();
   }
 }
 
 export function evaluatePluginSdkSurfaceReport(
-  report: ReturnType<typeof collectPluginSdkSurfaceReport>,
+  report: Awaited<ReturnType<typeof collectPluginSdkSurfaceReport>>,
   {
     budgets,
     publicDeprecatedExportsByEntrypointBudget,
@@ -534,7 +562,9 @@ export function evaluatePluginSdkSurfaceReport(
   return failures;
 }
 
-function renderPluginSdkSurfaceReport(report: ReturnType<typeof collectPluginSdkSurfaceReport>) {
+function renderPluginSdkSurfaceReport(
+  report: Awaited<ReturnType<typeof collectPluginSdkSurfaceReport>>,
+) {
   return [
     formatStats("all SDK entrypoints", report.allStats.totals),
     formatStats("public package SDK entrypoints", report.publicStats.totals),
@@ -546,14 +576,14 @@ function renderPluginSdkSurfaceReport(report: ReturnType<typeof collectPluginSdk
   ].join("\n");
 }
 
-function main(argv: string[] = process.argv.slice(2), env = process.env) {
+async function main(argv: string[] = process.argv.slice(2), env = process.env) {
   const cliArgs = parsePluginSdkSurfaceReportArgs(argv);
   if (cliArgs.help) {
     process.stdout.write(usage());
     return 0;
   }
   const budgetConfig = readPluginSdkSurfaceBudgets(env);
-  const report = collectPluginSdkSurfaceReport();
+  const report = await collectPluginSdkSurfaceReport();
   process.stdout.write(`${renderPluginSdkSurfaceReport(report)}\n`);
   const failures = evaluatePluginSdkSurfaceReport(report, budgetConfig);
   if (cliArgs.check && failures.length > 0) {
@@ -573,7 +603,7 @@ const isMain =
 
 if (isMain) {
   try {
-    process.exitCode = main();
+    process.exitCode = await main();
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

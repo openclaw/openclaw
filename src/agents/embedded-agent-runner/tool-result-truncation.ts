@@ -3,7 +3,6 @@ import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { z } from "zod";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
@@ -20,10 +19,10 @@ import {
   resolveAutoLiveToolResultMaxChars,
   resolveLiveToolResultMaxChars,
 } from "../tool-result-limits.js";
+import { readCacheTtlCheckpoint } from "./cache-ttl-checkpoint.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import {
-  hashToolResultProjectionSnapshot,
   recordToolResultPromptProjection,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
@@ -211,24 +210,20 @@ export function pruneExpiredCacheTtlToolResults(params: {
     }
     (next ??= messages.slice())[index] = replacement;
   };
-  const clearCacheTtlToolResult = (message: CacheTtlToolResultMessage) => ({
-    ...message,
-    content: [{ type: "text" as const, text: settings.placeholder }],
-  });
   if (
     !params.pruneNewRounds ||
     !params.lastCacheTouchAt ||
     settings.ttlMs <= 0 ||
     params.now - params.lastCacheTouchAt < settings.ttlMs
   ) {
-    return next ?? unchanged;
+    return unchanged;
   }
   const cutoff =
     messages.flatMap((message, index) => (message.role === "assistant" ? [index] : [])).at(-3) ??
     -1;
   const start = messages.findIndex((message) => message.role === "user");
   if (cutoff < 0 || start < 0) {
-    return next ?? unchanged;
+    return unchanged;
   }
   const estimate = params.dropThinkingBlocksForEstimate ? dropThinkingBlocks(messages) : messages;
   // Thinking removal preserves positions; reuse costs only within this pruning pass.
@@ -236,9 +231,8 @@ export function pruneExpiredCacheTtlToolResults(params: {
   let totalChars = messageChars.reduce((sum, chars) => sum + chars, 0);
   const charWindow = params.contextWindowTokens * 4;
   if (totalChars / charWindow < 0.3) {
-    return next ?? unchanged;
+    return unchanged;
   }
-  let pruned = false;
   const eligible: { index: number; chars: number }[] = [];
   for (let index = start; index < cutoff; index++) {
     const message = messages[index];
@@ -266,7 +260,6 @@ export function pruneExpiredCacheTtlToolResults(params: {
       totalChars += projectedChars - candidate.chars;
       candidate.chars = projectedChars;
       recordProjection(index, projected, "soft");
-      pruned = true;
     }
   }
   if (
@@ -282,13 +275,15 @@ export function pruneExpiredCacheTtlToolResults(params: {
       if (message?.role !== "toolResult") {
         continue;
       }
-      const cleared = clearCacheTtlToolResult(message);
+      const cleared = {
+        ...message,
+        content: [{ type: "text" as const, text: settings.placeholder }],
+      };
       totalChars += cacheTtlMessageChars(cleared) - chars;
       recordProjection(index, cleared, "hard");
-      pruned = true;
     }
   }
-  if (pruned) {
+  if (next) {
     params.onPruned?.();
   }
   return next ?? unchanged;
@@ -303,7 +298,7 @@ export const toolResultWarningDedupe = {
 };
 
 type ToolResultTruncationOptions = {
-  suffix?: string | ((truncatedChars: number) => string);
+  suffix?: (truncatedChars: number) => string;
   minKeepChars?: number;
   minimumRawWeight?: number;
 };
@@ -343,26 +338,15 @@ function logToolResultSessionTruncation(params: {
   );
 }
 
-function resolveSuffixFactory(
-  suffix: ToolResultTruncationOptions["suffix"],
-): (truncatedChars: number) => string {
-  return typeof suffix === "function"
-    ? suffix
-    : typeof suffix === "string"
-      ? () => suffix
-      : DEFAULT_SUFFIX;
-}
-
-function resolveEffectiveMinKeepChars(params: {
-  maxChars: number;
-  minKeepChars: number;
-  suffixFactory: (truncatedChars: number) => string;
-  minimumRawWeight?: number;
-}): number {
-  const suffixFloor = estimateToolResultTextChars(params.suffixFactory(1), {
-    minimumRawWeight: params.minimumRawWeight,
-  });
-  return Math.max(0, Math.min(params.minKeepChars, Math.max(0, params.maxChars - suffixFloor)));
+function resolveEffectiveMinKeepChars(
+  maxChars: number,
+  options: ToolResultTruncationOptions,
+  suffixFactory: (truncatedChars: number) => string,
+): number {
+  const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
+  const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
+  const suffixFloor = estimateToolResultTextChars(suffixFactory(1), budgetOptions);
+  return Math.max(0, Math.min(minKeepChars, maxChars - suffixFloor));
 }
 
 function appendBoundedTruncationSuffix(params: {
@@ -418,14 +402,9 @@ export function truncateToolResultText(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): string {
-  const suffixFactory = resolveSuffixFactory(options.suffix);
+  const suffixFactory = options.suffix ?? DEFAULT_SUFFIX;
   const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
-  const minKeepChars = resolveEffectiveMinKeepChars({
-    maxChars,
-    minKeepChars: options.minKeepChars ?? MIN_KEEP_CHARS,
-    suffixFactory,
-    minimumRawWeight: options.minimumRawWeight,
-  });
+  const minKeepChars = resolveEffectiveMinKeepChars(maxChars, options, suffixFactory);
   if (text.length <= maxChars && estimateToolResultTextChars(text, budgetOptions) <= maxChars) {
     return text;
   }
@@ -436,6 +415,14 @@ export function truncateToolResultText(
     maxChars - estimateToolResultTextChars(defaultSuffix, budgetOptions),
   );
 
+  const appendSuffix = (keptText: string) =>
+    appendBoundedTruncationSuffix({
+      keptText,
+      originalTextLength: text.length,
+      maxChars,
+      suffixFactory,
+      minimumRawWeight: options.minimumRawWeight,
+    });
   if (hasImportantTail(text) && budget > minKeepChars * 2) {
     const tailBudget = Math.min(Math.floor(budget * 0.3), 4_000);
     const headBudget =
@@ -455,13 +442,7 @@ export function truncateToolResultText(
       }
 
       if (headText.length + tailText.length < text.length) {
-        return appendBoundedTruncationSuffix({
-          keptText: headText + MIDDLE_OMISSION_MARKER + tailText,
-          originalTextLength: text.length,
-          maxChars,
-          suffixFactory,
-          minimumRawWeight: options.minimumRawWeight,
-        });
+        return appendSuffix(headText + MIDDLE_OMISSION_MARKER + tailText);
       }
     }
   }
@@ -471,20 +452,8 @@ export function truncateToolResultText(
   if (lastNewline > keptText.length * 0.8) {
     keptText = sliceUtf16Safe(keptText, 0, lastNewline);
   }
-  return appendBoundedTruncationSuffix({
-    keptText,
-    originalTextLength: text.length,
-    maxChars,
-    suffixFactory,
-    minimumRawWeight: options.minimumRawWeight,
-  });
+  return appendSuffix(keptText);
 }
-
-const calculateMaxToolResultChars = (contextWindowTokens: number) =>
-  calculateMaxToolResultCharsWithCap(
-    contextWindowTokens,
-    resolveAutoLiveToolResultMaxChars(contextWindowTokens),
-  );
 
 export function resolveLiveToolResultAggregateMaxChars(params: {
   contextWindowTokens: number;
@@ -531,14 +500,9 @@ export function truncateToolResultMessage(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
-  const suffixFactory = resolveSuffixFactory(options.suffix);
+  const suffixFactory = options.suffix ?? DEFAULT_SUFFIX;
   const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
-  const minKeepChars = resolveEffectiveMinKeepChars({
-    maxChars,
-    minKeepChars: options.minKeepChars ?? MIN_KEEP_CHARS,
-    suffixFactory,
-    minimumRawWeight: options.minimumRawWeight,
-  });
+  const minKeepChars = resolveEffectiveMinKeepChars(maxChars, options, suffixFactory);
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
     return msg;
@@ -709,7 +673,6 @@ export function truncateOversizedToolResultsInMessages(
     branch: projection?.branch ?? sourceBranch,
     maxChars,
     aggregateBudgetChars,
-    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
     protectTrailingToolResults: Boolean(projectionState),
   });
   const replacedBranch = plan.branch;
@@ -746,7 +709,11 @@ function resolveToolResultBudgets(params: {
 }): { maxChars: number; aggregateBudgetChars: number } {
   const maxChars = Math.max(
     1,
-    params.maxCharsOverride ?? calculateMaxToolResultChars(params.contextWindowTokens),
+    params.maxCharsOverride ??
+      calculateMaxToolResultCharsWithCap(
+        params.contextWindowTokens,
+        resolveAutoLiveToolResultMaxChars(params.contextWindowTokens),
+      ),
   );
   return {
     maxChars,
@@ -867,70 +834,37 @@ function getToolResultProjectionKeys(
   });
 }
 
-const cacheTtlProjectionSnapshotSchema = z.object({
-  prunedToolResults: z.array(
-    z.union([
-      z.object({ key: z.string(), mode: z.literal("soft") }),
-      z.object({ key: z.string(), mode: z.literal("hard"), placeholder: z.string() }),
-    ]),
-  ),
-  ambiguousToolResultBaseKeys: z.array(z.string()).optional(),
-  frozenToolResults: z
-    .array(
-      z.object({
-        key: z.string(),
-        sourceHash: z.string(),
-        texts: z.array(z.string()).optional(),
-      }),
-    )
-    .optional(),
-});
-
 /** Reads pruned keys from the active transcript branch, never from a sibling branch. */
 export function restoreCacheTtlToolResultProjections(
   projectionState: ToolResultPromptProjectionState,
   entries: readonly { type?: unknown; customType?: unknown; data?: unknown }[],
 ): void {
-  projectionState.lastWrittenSnapshotHash = undefined;
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index];
-    if (entry?.type === "reset") {
-      return;
-    }
-    if (entry?.type !== "custom" || entry.customType !== "openclaw.cache-ttl") {
-      continue;
-    }
-    const parsed = cacheTtlProjectionSnapshotSchema.safeParse(entry.data);
-    if (!parsed.success) {
-      continue;
-    }
-    projectionState.lastWrittenSnapshotHash = hashToolResultProjectionSnapshot({
-      prunedToolResults: parsed.data.prunedToolResults,
-      ambiguousToolResultBaseKeys: parsed.data.ambiguousToolResultBaseKeys ?? [],
-      frozenToolResults: parsed.data.frozenToolResults ?? [],
-    });
-    for (const key of parsed.data.ambiguousToolResultBaseKeys ?? []) {
-      projectionState.ambiguousBaseKeys.add(key);
-    }
-    for (const { key, sourceHash, texts } of parsed.data.frozenToolResults ?? []) {
-      // A live attempt can be ahead of its last marker; never roll it back.
-      if (projectionState.sourceHashByKey.has(key)) {
-        continue;
-      }
-      projectionState.sourceHashByKey.set(key, sourceHash);
-      projectionState.frozen.add(key);
-      if (texts) {
-        projectionState.replacements.set(key, {
-          content: texts.map((text) => ({ type: "text", text })),
-        });
-      }
-    }
-    for (const { key, ...mark } of parsed.data.prunedToolResults) {
-      if (!projectionState.replacements.get(key)?.cacheTtl) {
-        projectionState.restoredCacheTtl.set(key, mark);
-      }
-    }
+  const checkpoint = readCacheTtlCheckpoint(entries);
+  projectionState.cacheTtlCheckpoint = checkpoint;
+  projectionState.cacheTtlRevision = (projectionState.cacheTtlRevision ?? 0) + 1;
+  if (!checkpoint) {
     return;
+  }
+  for (const key of checkpoint.snapshot.ambiguousToolResultBaseKeys) {
+    projectionState.ambiguousBaseKeys.add(key);
+  }
+  for (const { key, sourceHash, texts } of checkpoint.snapshot.frozenToolResults) {
+    // A live attempt can be ahead of its last marker; never roll it back.
+    if (projectionState.sourceHashByKey.has(key)) {
+      continue;
+    }
+    projectionState.sourceHashByKey.set(key, sourceHash);
+    projectionState.frozen.add(key);
+    if (texts) {
+      projectionState.replacements.set(key, {
+        content: texts.map((text) => ({ type: "text", text })),
+      });
+    }
+  }
+  for (const { key, ...mark } of checkpoint.snapshot.prunedToolResults) {
+    if (!projectionState.replacements.get(key)?.cacheTtl) {
+      projectionState.restoredCacheTtl.set(key, mark);
+    }
   }
 }
 
@@ -1120,40 +1054,35 @@ function hashToolResultText(texts: string[]): string {
 
 function buildAggregateToolResultReplacements(params: {
   branch: MeasuredToolResultBranchEntry[];
-  spillSourceBranch?: ToolResultBranchEntry[];
+  spillSourceBranch: ToolResultBranchEntry[];
   aggregateBudgetChars: number;
-  minKeepChars?: number;
   protectedEntryIds?: Set<string>;
 }): { replacements: MeasuredToolResultReplacement[]; pressureExceeded: boolean } {
-  const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
-  const candidates = params.branch
-    .flatMap(({ entry, textLength }, index) => {
-      const message = entry.message;
-      return entry.type === "message" && message?.role === "toolResult"
-        ? [
-            {
-              entryId: entry.id,
-              message,
-              spillSourceMessage: params.spillSourceBranch?.[index]?.message ?? message,
-              textLength,
-              aggregateEligible: entry.aggregateEligible !== false,
-              protectedByTrailingBatch: params.protectedEntryIds?.has(entry.id) ?? false,
-            },
-          ]
-        : [];
-    })
-    .filter((item) => item.textLength > 0);
+  const candidates = params.branch.flatMap(({ entry, textLength }, index) => {
+    const message = entry.message;
+    return entry.type === "message" && message?.role === "toolResult" && textLength > 0
+      ? [
+          {
+            entryId: entry.id,
+            message,
+            spillSourceMessage: params.spillSourceBranch[index]?.message ?? message,
+            textLength,
+            aggregateEligible: entry.aggregateEligible !== false,
+            protectedByTrailingBatch: params.protectedEntryIds?.has(entry.id) ?? false,
+          },
+        ]
+      : [];
+  });
 
   if (candidates.length < 2) {
     return { replacements: [], pressureExceeded: false };
   }
 
   const suffixFactory =
-    minKeepChars === RECOVERY_MIN_KEEP_CHARS &&
     params.aggregateBudgetChars < candidates.length * estimateToolResultTextChars(DEFAULT_SUFFIX(1))
       ? COMPACT_RECOVERY_SUFFIX
       : DEFAULT_SUFFIX;
-  const minTruncatedTextChars = minKeepChars + estimateToolResultTextChars(suffixFactory(1));
+  const minTruncatedTextChars = estimateToolResultTextChars(suffixFactory(1));
 
   const totalChars = candidates.reduce((sum, item) => sum + item.textLength, 0);
   if (totalChars <= params.aggregateBudgetChars) {
@@ -1200,7 +1129,7 @@ function buildAggregateToolResultReplacements(params: {
           estimateToolResultTextChars(suffix(1)),
         );
         message = truncateToolResultMessage(candidate.message, targetChars, {
-          minKeepChars,
+          minKeepChars: RECOVERY_MIN_KEEP_CHARS,
           suffix,
         });
       }
@@ -1240,7 +1169,7 @@ function getTrailingToolResultEntryIds(branch: ToolResultBranchEntry[]): Set<str
 
 function clearToolResultText(
   message: AgentMessage,
-  maxTextChars = Number.POSITIVE_INFINITY,
+  maxTextChars: number,
   resolvedSpillMarkers?: AggregateElisionMarkers,
 ): AgentMessage {
   const content = (message as { content?: unknown }).content;
@@ -1280,48 +1209,12 @@ function clearToolResultText(
   } as AgentMessage;
 }
 
-function applyToolResultReplacementsToBranch(
-  branch: MeasuredToolResultBranchEntry[],
-  replacements: MeasuredToolResultReplacement[],
-): { branch: MeasuredToolResultBranchEntry[]; reducedChars: number } {
-  if (replacements.length === 0) {
-    return { branch, reducedChars: 0 };
-  }
-  const replacementsById = new Map(replacements.map((item) => [item.entryId, item]));
-  let reducedChars = 0;
-  const nextBranch = branch.map((measured) => {
-    const { entry, textLength } = measured;
-    const replacement = replacementsById.get(entry.id);
-    if (!replacement || entry.type !== "message" || !entry.message) {
-      return measured;
-    }
-    reducedChars += Math.max(0, textLength - replacement.textLength);
-    return {
-      entry: { ...entry, message: replacement.message },
-      textLength: replacement.textLength,
-    };
-  });
-  return { branch: nextBranch, reducedChars };
-}
-
 function buildToolResultReplacementPlan(params: {
   branch: ToolResultBranchEntry[];
   maxChars: number;
   aggregateBudgetChars: number;
-  minKeepChars?: number;
   protectTrailingToolResults?: boolean;
-}): {
-  branch: ToolResultBranchEntry[];
-  replacements: ToolResultReplacement[];
-  oversizedReplacementCount: number;
-  aggregateReplacementCount: number;
-  aggregatePressureExceeded: boolean;
-  oversizedReducibleChars: number;
-  aggregateReducibleChars: number;
-  toolResultCount: number;
-  totalToolResultChars: number;
-} {
-  const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
+}) {
   const protectedEntryIds = params.protectTrailingToolResults
     ? getTrailingToolResultEntryIds(params.branch)
     : undefined;
@@ -1338,6 +1231,27 @@ function buildToolResultReplacementPlan(params: {
     }
     return { entry, textLength };
   });
+  let currentBranch = measuredBranch;
+  const applyReplacements = (replacements: MeasuredToolResultReplacement[]): number => {
+    if (replacements.length === 0) {
+      return 0;
+    }
+    const replacementsById = new Map(replacements.map((item) => [item.entryId, item]));
+    let reducedChars = 0;
+    currentBranch = currentBranch.map((measured) => {
+      const { entry, textLength } = measured;
+      const replacement = replacementsById.get(entry.id);
+      if (!replacement || entry.type !== "message" || !entry.message) {
+        return measured;
+      }
+      reducedChars += Math.max(0, textLength - replacement.textLength);
+      return {
+        entry: { ...entry, message: replacement.message },
+        textLength: replacement.textLength,
+      };
+    });
+    return reducedChars;
+  };
   const oversizedReplacements = measuredBranch.flatMap(
     ({ entry, textLength }): MeasuredToolResultReplacement[] => {
       const message = entry.message;
@@ -1354,9 +1268,7 @@ function buildToolResultReplacementPlan(params: {
         suffix ? estimateToolResultTextChars(suffix(1)) : 0,
       );
       const replacementMessage = truncateToolResultMessage(message, maxChars, {
-        minKeepChars: protectedEntryIds?.has(entry.id)
-          ? Math.max(minKeepChars, MIN_KEEP_CHARS)
-          : minKeepChars,
+        minKeepChars: protectedEntryIds?.has(entry.id) ? MIN_KEEP_CHARS : RECOVERY_MIN_KEEP_CHARS,
         ...(suffix ? { suffix } : {}),
       });
       return [
@@ -1371,32 +1283,26 @@ function buildToolResultReplacementPlan(params: {
       ];
     },
   );
-  const oversizedPhase = applyToolResultReplacementsToBranch(measuredBranch, oversizedReplacements);
+  const oversizedReducibleChars = applyReplacements(oversizedReplacements);
   const aggregatePlan = buildAggregateToolResultReplacements({
-    branch: oversizedPhase.branch,
+    branch: currentBranch,
     spillSourceBranch: params.branch,
     aggregateBudgetChars: params.aggregateBudgetChars,
-    minKeepChars,
     protectedEntryIds,
   });
-  const aggregatePhase = applyToolResultReplacementsToBranch(
-    oversizedPhase.branch,
-    aggregatePlan.replacements,
-  );
+  const aggregateReducibleChars = applyReplacements(aggregatePlan.replacements);
 
   return {
     branch:
-      aggregatePhase.branch === measuredBranch
-        ? params.branch
-        : aggregatePhase.branch.map(({ entry }) => entry),
+      currentBranch === measuredBranch ? params.branch : currentBranch.map(({ entry }) => entry),
     replacements: [...oversizedReplacements, ...aggregatePlan.replacements].map(
       ({ entryId, message }) => ({ entryId, message }),
     ),
     oversizedReplacementCount: oversizedReplacements.length,
     aggregateReplacementCount: aggregatePlan.replacements.length,
     aggregatePressureExceeded: aggregatePlan.pressureExceeded,
-    oversizedReducibleChars: oversizedPhase.reducedChars,
-    aggregateReducibleChars: aggregatePhase.reducedChars,
+    oversizedReducibleChars,
+    aggregateReducibleChars,
     toolResultCount,
     totalToolResultChars,
   };
@@ -1409,11 +1315,7 @@ function buildRecoveryToolResultReplacementPlan(params: {
   aggregateMaxCharsOverride?: number;
   protectTrailingToolResults?: boolean;
   projectionState?: ToolResultPromptProjectionState;
-}): {
-  maxChars: number;
-  aggregateBudgetChars: number;
-  plan: ReturnType<typeof buildToolResultReplacementPlan>;
-} {
+}) {
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
   const projectedBranch = params.projectionState
     ? projectToolResultBranch({
@@ -1423,11 +1325,10 @@ function buildRecoveryToolResultReplacementPlan(params: {
       }).branch
     : params.branch;
   const plan = buildToolResultReplacementPlan({
+    ...params,
     branch: projectedBranch,
     maxChars,
     aggregateBudgetChars,
-    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
-    protectTrailingToolResults: params.protectTrailingToolResults,
   });
   const replacements = params.branch.flatMap((entry, index) => {
     const finalEntry = plan.branch[index];
@@ -1465,7 +1366,6 @@ export function estimateToolResultReductionPotential(params: {
     branch,
     maxChars,
     aggregateBudgetChars,
-    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
   });
   const maxReducibleChars = plan.oversizedReducibleChars + plan.aggregateReducibleChars;
 
@@ -1506,12 +1406,8 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
     }
 
     const { maxChars, aggregateBudgetChars, plan } = buildRecoveryToolResultReplacementPlan({
+      ...params,
       branch,
-      contextWindowTokens,
-      maxCharsOverride: params.maxCharsOverride,
-      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
-      protectTrailingToolResults: params.protectTrailingToolResults,
-      projectionState: params.projectionState,
     });
     if (plan.replacements.length === 0) {
       return {

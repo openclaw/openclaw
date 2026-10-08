@@ -1,4 +1,4 @@
-import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { listFinishedSessions, listRunningSessions } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import { bindRequesterYieldCronAuthority } from "./cron-creator-authority-context.js";
@@ -42,10 +42,9 @@ export function createRequesterYieldCallback(params: {
   if (params.swarmCollector === true) {
     return () => ({ error: SWARM_COLLECTOR_YIELD_UNSUPPORTED_ERROR });
   }
-  const canWaitForMessage = isSubagentSessionKey(params.requesterSessionKey);
   const requesterSessionKey = params.requesterSessionKey?.trim() || undefined;
   const hasRegistryClaim = Boolean(requesterSessionKey && params.requesterTurnRunId);
-  if (!params.claimYieldCompletion && !canWaitForMessage && !requesterSessionKey) {
+  if (!params.claimYieldCompletion && !requesterSessionKey) {
     return undefined;
   }
   const withCronAuthority = bindRequesterYieldCronAuthority(params.requesterTurnRunId);
@@ -71,27 +70,37 @@ export function createRequesterYieldCallback(params: {
       registryClaimed =
         (await (withCronAuthority ? withCronAuthority(markYielded) : markYielded())) > 0;
     }
-    if (runtimeClaimed || registryClaimed) {
-      return true;
-    }
-    if (canWaitForMessage) {
-      // Self-yield can await a user follow-up, but exec completion does not wake
-      // subagent sessions. Inspect the current process owner after awaited claims.
-      if (
-        listRunningSessions().some((session) => session.scopeKey === processScopeKey) ||
-        listFinishedSessions().some(
-          (session) =>
-            session.scopeKey === processScopeKey && session.terminalPollObserved !== true,
-        )
-      ) {
+    const completionClaimed = runtimeClaimed || registryClaimed;
+    if (requesterSessionKey && params.requesterTurnRunId) {
+      const { claimSubagentYield } = await import("./subagents/registry/subagent-registry.js");
+      const claim = await claimSubagentYield({
+        runId: params.requesterTurnRunId,
+        sessionKey: requesterSessionKey,
+        agentId: params.requesterAgentId,
+        waitForMessage: intent?.waitFor === "message",
+        acknowledgment: intent?.acknowledgment,
+        // Exec completion cannot resume a self-paused task. An independently
+        // owned runtime/child completion can, and retains its existing claim.
+        hasPendingWork: () =>
+          !completionClaimed &&
+          (listRunningSessions().some((session) => session.scopeKey === processScopeKey) ||
+            listFinishedSessions().some(
+              (session) =>
+                session.scopeKey === processScopeKey && session.terminalPollObserved !== true,
+            )),
+      });
+      if (claim === "pending-work") {
         return {
           error:
             "Background exec is still running or has an uncollected result in this subagent session. Use process to poll and collect it before yielding; background exec completion cannot resume this subagent, and run-scoped proxy credentials expire when the turn ends.",
         };
       }
-      if (intent?.waitFor === "message") {
-        return true;
+      if (claim !== "nothing-pending") {
+        return claim;
       }
+    }
+    if (completionClaimed) {
+      return true;
     }
     // This turn owns no claim, but an earlier turn of the same session may still
     // await its children: their completion resumes the session on its own, so

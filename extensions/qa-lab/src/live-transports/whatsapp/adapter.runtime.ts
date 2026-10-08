@@ -42,7 +42,7 @@ export async function createWhatsAppQaTransportAdapter(
   const heartbeat = startQaCredentialLeaseHeartbeat(lease);
   const runtimeEnv = lease.payload;
   let authRoot: string | undefined;
-  let driver: WhatsAppQaDriverSession | undefined;
+  let driver: WhatsAppQaDriverSession;
   let driverAuthDir: string;
   let sutAuthDir: string;
   try {
@@ -65,7 +65,6 @@ export async function createWhatsAppQaTransportAdapter(
     driver = await startWhatsAppQaDriverSessionWithRetry({ authDir: driverAuthDir });
   } catch (error) {
     try {
-      await driver?.close().catch(() => undefined);
       await heartbeat.stop();
     } finally {
       try {
@@ -78,19 +77,13 @@ export async function createWhatsAppQaTransportAdapter(
     }
     throw error;
   }
-  const getDriver = () => {
-    if (!driver) {
-      throw new Error("WhatsApp QA driver is not active");
-    }
-    return driver;
-  };
   const accountId = options.sutAccountId?.trim() || "sut";
   const dmTargets = resolveWhatsAppQaMessageTargets({
     driverPhoneE164: runtimeEnv.driverPhoneE164,
     scenarioTarget: "dm",
     sutPhoneE164: runtimeEnv.sutPhoneE164,
   });
-  let observedCount = getDriver().getObservedMessages().length;
+  let observedCount = driver.getObservedMessages().length;
   let stopped = false;
   let pollingError: Error | undefined;
   let logicalConversationId = dmTargets.gatewayTarget;
@@ -102,7 +95,7 @@ export async function createWhatsAppQaTransportAdapter(
       if (stopped) {
         return;
       }
-      const messages = getDriver().getObservedMessages();
+      const messages = driver.getObservedMessages();
       for (const message of messages.slice(observedCount)) {
         observedCount += 1;
         if (message.fromPhoneE164 !== runtimeEnv.sutPhoneE164) {
@@ -153,7 +146,7 @@ export async function createWhatsAppQaTransportAdapter(
         sutPhoneE164: runtimeEnv.sutPhoneE164,
       });
       const quotedMessageId = input.replyToId ? nativeMessageIds.get(input.replyToId) : undefined;
-      const sent = await getDriver().sendText(
+      const sent = await driver.sendText(
         targets.driverTarget,
         input.text,
         quotedMessageId
@@ -197,7 +190,7 @@ export async function createWhatsAppQaTransportAdapter(
       accountId,
       driverAuthDir,
       explicitScenarioSelection: options.explicitScenarioSelection === true,
-      getDriver,
+      getDriver: () => driver,
       replaceDriver: async (nextDriver) => {
         driver = nextDriver;
         observedCount = driver.getObservedMessages().length;
@@ -220,7 +213,7 @@ export async function createWhatsAppQaTransportAdapter(
     async cleanup() {
       stopped = true;
       await polling.catch(() => undefined);
-      await getDriver().close();
+      await driver.close();
     },
     async cleanupAfterGatewayStop() {
       // The Gateway still uses SUT auth and the shared lease after the driver closes.

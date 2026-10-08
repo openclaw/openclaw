@@ -1,5 +1,5 @@
 import { ChildProcess, spawn, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -243,6 +243,52 @@ describe("cross-OS manual gateway lane evidence", () => {
       } else {
         expect(realpath).not.toHaveBeenCalled();
       }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "canonicalizes macOS temp paths before invoking the published updater",
+    async () => {
+      arrangeSuccessfulLane();
+      const createdPhysicalTemp = join(logsDir, "physical-temp");
+      const aliasedTemp = join(logsDir, "aliased-temp");
+      mkdirSync(createdPhysicalTemp);
+      const physicalTemp = realpathSync.native(createdPhysicalTemp);
+      symlinkSync(physicalTemp, aliasedTemp, process.platform === "win32" ? "junction" : "dir");
+      vi.mocked(tmpdir).mockReturnValue(aliasedTemp);
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      for (const key of ["TEMP", "TMP", "TMPDIR", "Temp"]) {
+        vi.stubEnv(key, aliasedTemp);
+      }
+
+      const result = await runUpgradeLane(upgradeParams());
+
+      expect(result).toMatchObject({ status: "pass" });
+      const baselineInstall = mocks.installPackageSpec.mock.calls[0]?.[0];
+      expect(baselineInstall?.lane.rootDir).toMatch(
+        new RegExp(`^${physicalTemp.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+      );
+      expect(baselineInstall?.env).toMatchObject({
+        TEMP: physicalTemp,
+        TMP: physicalTemp,
+        TMPDIR: physicalTemp,
+        Temp: physicalTemp,
+      });
+      expect(mocks.runOpenClaw).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: expect.arrayContaining(["update", "--json"]),
+          env: expect.objectContaining({
+            TEMP: physicalTemp,
+            TMP: physicalTemp,
+            TMPDIR: physicalTemp,
+            Temp: physicalTemp,
+            NPM_CONFIG_PREFIX: expect.stringMatching(
+              new RegExp(`^${physicalTemp.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+            ),
+          }),
+        }),
+      );
+      expect(process.env.TEMP).toBe(aliasedTemp);
     },
   );
 

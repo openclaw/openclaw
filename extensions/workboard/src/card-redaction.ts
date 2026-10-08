@@ -18,15 +18,12 @@ export function redactClaimToken(card: WorkboardCard): WorkboardCard {
   };
 }
 
-export function redactDispatchResult<T extends WorkboardDispatchResult>(
-  result: T,
-  redactCard = redactClaimToken,
-): T {
+export function redactDispatchResult<T extends WorkboardDispatchResult>(result: T): T {
   return {
     ...result,
-    promoted: result.promoted.map(redactCard),
-    reclaimed: result.reclaimed.map(redactCard),
-    blocked: result.blocked.map(redactCard),
-    orchestrated: result.orchestrated.map(redactCard),
+    promoted: result.promoted.map(redactClaimToken),
+    reclaimed: result.reclaimed.map(redactClaimToken),
+    blocked: result.blocked.map(redactClaimToken),
+    orchestrated: result.orchestrated.map(redactClaimToken),
   };
 }

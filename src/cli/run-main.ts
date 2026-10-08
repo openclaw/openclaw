@@ -1,4 +1,3 @@
-// Main CLI entry orchestration: fast paths, env setup, plugin aliases, and Commander dispatch.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -12,11 +11,11 @@ import {
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
 import { resolveGatewayPort, resolveStateDir } from "../config/paths.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
-import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
+import { normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
@@ -28,6 +27,7 @@ import {
   normalizeRootHelpTargetArgv,
   normalizeRootLogLevelArgv,
   normalizeRootNoColorArgv,
+  rewriteUpdateFlagArgv,
 } from "./argv.js";
 import {
   isReservedNonPluginCommandRoot,
@@ -52,19 +52,17 @@ import { isMachineOutputStdoutTTY } from "./machine-output-argv.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
-import {
-  getCoreCliCommandDescriptors,
-  getCoreCliCommandNamesCore,
-} from "./program/core-command-descriptors.js";
+import { getCoreCliCommandDescriptors } from "./program/core-command-descriptors.js";
 import { getSubCliEntriesCore } from "./program/subcli-descriptors.js";
 import { withCliPluginInvocation } from "./run-main-plugin-cache.js";
 import {
   isAgentExecInvocation,
+  isDebugProxyCaptureEnvEnabled,
   isGatewayRunFastPathArgv,
   isRemoteAgentDispatchInvocation,
   resolveMissingPluginCommandMessage,
-  rewriteUpdateFlagArgv,
   shouldHandleBareRoot,
+  shouldBootstrapCliProxyBeforeFastPath,
   shouldEnsureCliPath,
   shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
@@ -89,15 +87,18 @@ import {
 } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
-const CLI_PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
 const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
+const TUI_REQUIRES_TTY =
+  "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.";
+
+function requireInteractiveTty(message: string): boolean {
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    return true;
+  }
+  console.error(message);
+  process.exitCode = 1;
+  return false;
+}
 
 async function tryRunGatewayRunFastPath(
   argv: string[],
@@ -108,10 +109,9 @@ async function tryRunGatewayRunFastPath(
   }
   const [
     { Command },
-    { addGatewayRunCommand },
+    { addGatewayRunCommand, bootstrapGatewayRun },
     { VERSION },
     { emitCliBanner },
-    { ensureCliExecutionBootstrap },
     { defaultRuntime },
   ] = await startupTrace.measure("gateway-run-imports", () =>
     Promise.all([
@@ -119,7 +119,6 @@ async function tryRunGatewayRunFastPath(
       import("./gateway-cli/run-command.js"),
       import("../version.js"),
       import("./banner.js"),
-      import("./command-execution-startup.js"),
       import("../runtime.js"),
     ]),
   );
@@ -140,37 +139,14 @@ async function tryRunGatewayRunFastPath(
     process.exitCode = typeof err.exitCode === "number" ? err.exitCode : 1;
     throw err;
   });
-  const beforeRun = async (opts: { force?: boolean; reset?: boolean }) => {
-    let beforeStatePreparation: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
-    const shouldBootstrap = await startupTrace.measure("gateway-run-pre-bootstrap", async () => {
-      const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =
-        await import("./gateway-cli/pre-bootstrap.js");
-      const prepared = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
-      if (prepared) {
-        beforeStatePreparation = (snapshot) =>
-          recheckGatewayRunBootstrap({
-            opts,
-            runtime: defaultRuntime,
-            ...(snapshot ? { snapshot } : {}),
-          });
-      }
-      return prepared;
+  const beforeRun = (opts: { force?: boolean; reset?: boolean }) =>
+    bootstrapGatewayRun({
+      opts,
+      runtime: defaultRuntime,
+      commandPath,
+      startupPolicy,
+      startupTrace,
     });
-    if (!shouldBootstrap) {
-      return;
-    }
-    await startupTrace.measure("gateway-run-bootstrap", async () => {
-      await ensureCliExecutionBootstrap({
-        runtime: defaultRuntime,
-        commandPath,
-        startupPolicy,
-        loadPlugins: false,
-        ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
-      });
-      const { reloadTrustedGatewayRunEnvironment } = await import("./gateway-cli/pre-bootstrap.js");
-      await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });
-    });
-  };
   const gateway = addGatewayRunCommand(
     program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
     { beforeRun },
@@ -193,19 +169,7 @@ async function tryRunGatewayRunFastPath(
   return true;
 }
 
-export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
-  if (!shouldHandleBareRoot(argv)) {
-    return false;
-  }
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  return shouldStartLocalOnboarding(snapshot);
-}
-
-async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaunchTarget | null> {
-  if (!shouldHandleBareRoot(argv)) {
-    return null;
-  }
+async function resolveBareRootLaunchTarget(): Promise<BareRootLaunchTarget> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (await shouldStartLocalOnboarding(snapshot)) {
@@ -273,43 +237,31 @@ async function resolveReachableGateway(
     if (!isSafeGatewayProbeTarget(target)) {
       continue;
     }
+    const gateway = toReachableGateway(target, auth);
     // A cold-restarting configured Gateway remains the authoritative route.
     // Keep its safe endpoint so one failed probe cannot reopen local onboarding.
     if (options.hasConfiguredGateway && !configuredGateway) {
-      configuredGateway = toReachableGateway(target, auth);
+      configuredGateway = gateway;
     }
-    const probeOptions: Parameters<typeof probeGatewayConfiguredModel>[0] = {
-      url: target.url,
+    const { remote, ...connection } = gateway;
+    const probe = await probeGatewayConfiguredModel({
+      ...connection,
       // A configured remote origin stays remote through a loopback tunnel.
-      ...(target.scope === "remote"
-        ? { config, originScopedDeviceAuth: true, configuredRemote: true }
+      ...(remote ? { config, originScopedDeviceAuth: true, configuredRemote: true } : {}),
+      ...(config.gateway?.remote?.edgeAuth ? { config } : {}),
+      ...(target.preauthHandshakeTimeoutMs
+        ? { preauthHandshakeTimeoutMs: target.preauthHandshakeTimeoutMs }
         : {}),
-    };
-    if (config.gateway?.remote?.edgeAuth) {
-      probeOptions.config = config;
-    }
-    if (auth.token) {
-      probeOptions.token = auth.token;
-    }
-    if (auth.password) {
-      probeOptions.password = auth.password;
-    }
-    if (target.tlsFingerprint) {
-      probeOptions.tlsFingerprint = target.tlsFingerprint;
-    }
-    if (target.preauthHandshakeTimeoutMs) {
-      probeOptions.preauthHandshakeTimeoutMs = target.preauthHandshakeTimeoutMs;
-    }
-    const probe = await probeGatewayConfiguredModel(probeOptions);
+    });
     if (probe.kind === "configured") {
-      return { kind: "configured", gateway: toReachableGateway(target, auth) };
+      return { kind: "configured", gateway };
     }
     if (probe.kind === "missing-configured-model") {
-      missingModelGateway ??= toReachableGateway(target, auth);
+      missingModelGateway ??= gateway;
       continue;
     }
     if (probe.kind === "reachable-unverified" && !reachableUnverifiedGateway) {
-      reachableUnverifiedGateway = toReachableGateway(target, auth);
+      reachableUnverifiedGateway = gateway;
     }
   }
   if (missingModelGateway) {
@@ -463,15 +415,12 @@ function pauseNonTtyStdinForCliExit(): void {
   }
 }
 
-function shouldLoadCliDotEnv(
-  loadGlobalEnv: boolean,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
   const cwd = tryProcessCwd();
   if (cwd && existsSync(path.join(cwd, ".env"))) {
     return true;
   }
-  return loadGlobalEnv && existsSync(path.join(resolveStateDir(env), ".env"));
+  return loadGlobalEnv && existsSync(path.join(resolveStateDir(), ".env"));
 }
 
 function isCommanderParseExit(error: unknown): error is { exitCode: number } {
@@ -557,13 +506,6 @@ function normalizeRootNoColorArgvForProgram(argv: string[], program: CommanderCo
   });
 }
 
-function normalizeRootLogLevelArgvForProgram(argv: string[], program: CommanderCommand): string[] {
-  return normalizeRootLogLevelArgv(argv, {
-    shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
-      resolveRootOptionRole(program, remainingArgs, logLevelIndex) !== "root",
-  });
-}
-
 async function ensureCliEnvProxyDispatcher(): Promise<void> {
   try {
     const { hasEnvHttpProxyAgentConfigured } = await import("../infra/net/proxy-env.js");
@@ -578,27 +520,9 @@ async function ensureCliEnvProxyDispatcher(): Promise<void> {
   }
 }
 
-function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (
-    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
-    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_REQUIRE)
-  );
-}
-
-function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (isDebugProxyCaptureEnvEnabled(env)) {
-    return true;
-  }
-  return CLI_PROXY_ENV_KEYS.some((key) => {
-    const value = env[key];
-    return typeof value === "string" && value.trim().length > 0;
-  });
-}
-
-function isKnownBuiltInCommandRoot(primary: string): boolean {
-  return (
-    getCoreCliCommandNamesCore().includes(primary) ||
-    getSubCliEntriesCore().some((entry) => entry.name === primary)
+function findBuiltInCommandDescriptor(primary: string) {
+  return [...getCoreCliCommandDescriptors(), ...getSubCliEntriesCore()].find(
+    (entry) => entry.name === primary,
   );
 }
 
@@ -611,14 +535,11 @@ function resolvesMachineOutput(
   return descriptor.machineOutput?.({ argv, stdoutIsTTY: isMachineOutputStdoutTTY() }) ?? false;
 }
 
-function resolveBuiltInMachineOutput(argv: string[]): boolean {
-  const { primary } = resolveCliArgvInvocation(argv);
-  if (!primary) {
-    return false;
-  }
-  const descriptor = [...getCoreCliCommandDescriptors(), ...getSubCliEntriesCore()].find(
-    (entry) => entry.name === primary,
-  );
+function resolveBuiltInMachineOutput({
+  argv,
+  primary,
+}: ReturnType<typeof resolveCliArgvInvocation>): boolean {
+  const descriptor = primary ? findBuiltInCommandDescriptor(primary) : undefined;
   return descriptor ? resolvesMachineOutput(descriptor, argv) : false;
 }
 
@@ -628,7 +549,7 @@ async function resolvePluginMachineOutput(params: {
   session?: PluginCliLoadSession;
 }): Promise<boolean> {
   const { primary } = resolveCliArgvInvocation(params.argv);
-  if (!primary || isKnownBuiltInCommandRoot(primary)) {
+  if (!primary || findBuiltInCommandDescriptor(primary)) {
     return false;
   }
   const { loadPluginCliDescriptors } = await import("../plugins/cli-registry-loader.js");
@@ -710,21 +631,21 @@ function resolveUnownedCliPrimaryCandidate(argv: string[]): string | null {
     !primary ||
     primary === "help" ||
     isReservedNonPluginCommandRoot(primary) ||
-    isKnownBuiltInCommandRoot(primary)
+    findBuiltInCommandDescriptor(primary)
   ) {
     return null;
   }
   return primary;
 }
 
-async function resolveUnownedCliPrimary(params: {
+async function assertCliPrimaryOwned(params: {
   argv: string[];
   config: OpenClawConfig;
   session?: PluginCliLoadSession;
-}): Promise<string | null> {
+}): Promise<void> {
   const primary = resolveUnownedCliPrimaryCandidate(params.argv);
   if (!primary) {
-    return null;
+    return;
   }
   const pluginRoot = await isPluginCliRoot({
     primary,
@@ -732,29 +653,24 @@ async function resolveUnownedCliPrimary(params: {
     session: params.session,
   });
   if (pluginRoot !== false) {
-    return null;
+    return;
   }
-  return primary;
-}
-
-async function resolveUnownedCliPrimaryError(params: {
-  argv: string[];
-  primary: string;
-  config: OpenClawConfig;
-}): Promise<Error> {
-  const pluginPolicyError = await resolveExpectedPluginPolicyError(params);
+  const pluginPolicyError = await resolveExpectedPluginPolicyError({
+    primary,
+    config: params.config,
+  });
   if (pluginPolicyError) {
-    return pluginPolicyError;
+    throw pluginPolicyError;
   }
-  const sanitizedPrimary = sanitizeTerminalText(params.primary);
+  const sanitizedPrimary = sanitizeTerminalText(primary);
   const displayPrimary =
     sanitizedPrimary.length <= UNKNOWN_COMMAND_DISPLAY_LIMIT
       ? sanitizedPrimary
       : `${truncateUtf16Safe(sanitizedPrimary, UNKNOWN_COMMAND_DISPLAY_LIMIT - 1)}…`;
   const { createCliUnknownCommandError } = await import("./program/error-output.js");
-  return createCliUnknownCommandError(displayPrimary, {
+  throw createCliUnknownCommandError(displayPrimary, {
     argv: params.argv,
-    ...(displayPrimary === params.primary ? {} : { commandNames: [] }),
+    ...(displayPrimary === primary ? {} : { commandNames: [] }),
   });
 }
 
@@ -779,7 +695,7 @@ async function resolveExpectedPluginPolicyError(params: {
 
 async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
-  options: { ensureDispatcher?: boolean } = {},
+  ensureDispatcher: boolean,
 ): Promise<void> {
   // Capture init and coverage warnings no-op unless the
   // debug-proxy env requests capture; importing their sqlite-store graph anyway
@@ -795,7 +711,7 @@ async function bootstrapCliProxyCaptureAndDispatcher(
     await initializeDebugProxyCaptureAsync("cli");
     maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
   }
-  if (options.ensureDispatcher !== false) {
+  if (ensureDispatcher) {
     await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
   }
 }
@@ -810,10 +726,11 @@ export async function runCli(
 ) {
   const runtimeRecoveryEnv = options.runtimeRecoveryEnv ?? { ...process.env };
   const originalArgv = normalizeWindowsArgv(argv);
-  if (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(originalArgv))) {
+  const originalInvocation = resolveCliArgvInvocation(originalArgv);
+  if (await tryRunUpdateAdmissionBeforeStartup(originalInvocation)) {
     return;
   }
-  const builtInMachineOutput = resolveBuiltInMachineOutput(originalArgv);
+  const builtInMachineOutput = resolveBuiltInMachineOutput(originalInvocation);
   const invoke = () =>
     withConsoleLogsRoutedToStderrForJson(
       originalArgv,
@@ -828,10 +745,7 @@ export async function runCli(
             });
           } catch (error) {
             // Selection and Commander preactions run before the Gateway action's failure boundary.
-            if (
-              isGatewayRunInvocationArgv(originalArgv) &&
-              !resolveCliArgvInvocation(originalArgv).hasHelpOrVersion
-            ) {
+            if (isGatewayRunInvocationArgv(originalArgv) && !originalInvocation.hasHelpOrVersion) {
               const { handleGatewayStartupMaintenance } =
                 await import("./gateway-cli/startup-maintenance.js");
               if (await handleGatewayStartupMaintenance(error)) {
@@ -977,6 +891,19 @@ async function runCliWithPreparedOutputMode(
 
   if (
     !isHelpOrVersionInvocation &&
+    (isGatewayRunInvocation ||
+      normalizedInvocation.primary === "worker" ||
+      (normalizedInvocation.primary === "node" &&
+        (normalizedInvocation.commandPath[1] === "run" ||
+          normalizedInvocation.commandPath[1] === "worker")))
+  ) {
+    // Gateway config selection and CLI bootstrap can create SQLite workers before the action.
+    const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
+    await initializeSqliteRuntimeCapabilities();
+  }
+
+  if (
+    !isHelpOrVersionInvocation &&
     !isDatabaseInvocation &&
     !isAgentExecInvocation(normalizedInvocation.commandPath) &&
     shouldLoadCliDotEnv(loadGlobalEnv)
@@ -1028,9 +955,7 @@ async function runCliWithPreparedOutputMode(
   // runtime, provider, plugin, update, and manifest/metadata-owned plugin commands route egress.
   let proxyHandle: ProxyHandle | null = null;
   let proxyStopPromise: Promise<void> | undefined;
-  let onSigterm: (() => void) | null = null;
-  let onSigint: (() => void) | null = null;
-  let onExit: (() => void) | null = null;
+  let proxySignalHandlers: Array<[NodeJS.Signals | "exit", () => void]> = [];
   let unregisterProxySignalExitBarrier: (() => void) | null = null;
   let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
   let pluginCliSession: PluginCliLoadSession | undefined;
@@ -1082,18 +1007,10 @@ async function runCliWithPreparedOutputMode(
     return await bestEffortConfigPromise;
   };
   const uninstallProxySignalHandlers = () => {
-    if (onSigterm) {
-      process.off("SIGTERM", onSigterm);
-      onSigterm = null;
+    for (const [signal, handler] of proxySignalHandlers) {
+      process.off(signal, handler);
     }
-    if (onSigint) {
-      process.off("SIGINT", onSigint);
-      onSigint = null;
-    }
-    if (onExit) {
-      process.off("exit", onExit);
-      onExit = null;
-    }
+    proxySignalHandlers = [];
   };
   const stopStartedProxy = () => {
     if (proxyStopPromise) {
@@ -1122,7 +1039,7 @@ async function runCliWithPreparedOutputMode(
     handle?.kill("SIGTERM");
   };
   const installProxySignalHandlers = () => {
-    if (!proxyHandle || onSigterm || onSigint || onExit) {
+    if (!proxyHandle || proxySignalHandlers.length > 0) {
       return;
     }
     unregisterProxySignalExitBarrier = registerSignalExitBarrier(stopStartedProxy);
@@ -1131,12 +1048,14 @@ async function runCliWithPreparedOutputMode(
         process.exit(exitCode);
       });
     };
-    onSigterm = () => shutdown(143);
-    onSigint = () => shutdown(130);
-    onExit = () => killStartedProxy();
-    process.once("SIGTERM", onSigterm);
-    process.once("SIGINT", onSigint);
-    process.once("exit", onExit);
+    proxySignalHandlers = [
+      ["SIGTERM", () => shutdown(143)],
+      ["SIGINT", () => shutdown(130)],
+      ["exit", killStartedProxy],
+    ];
+    for (const [signal, handler] of proxySignalHandlers) {
+      process.once(signal, handler);
+    }
   };
   const replaceStartedProxy = async (config: OpenClawConfig["proxy"]) => {
     await stopStartedProxy();
@@ -1159,7 +1078,7 @@ async function runCliWithPreparedOutputMode(
       !isHelpOrVersionInvocation &&
       !bareSessionInvocation &&
       normalizedInvocation.primary &&
-      !isKnownBuiltInCommandRoot(normalizedInvocation.primary)
+      !findBuiltInCommandDescriptor(normalizedInvocation.primary)
     ) {
       const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
       if (
@@ -1174,18 +1093,11 @@ async function runCliWithPreparedOutputMode(
     if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
       const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
       if (!bareSessionInvocation) {
-        const unownedPrimary = await resolveUnownedCliPrimary({
+        await assertCliPrimaryOwned({
           argv: normalizedArgv,
           config,
           session: pluginCliSession,
         });
-        if (unownedPrimary) {
-          throw await resolveUnownedCliPrimaryError({
-            argv: normalizedArgv,
-            primary: unownedPrimary,
-            config,
-          });
-        }
       }
       await replaceStartedProxy(config?.proxy ?? undefined);
     }
@@ -1232,11 +1144,7 @@ async function runCliWithPreparedOutputMode(
     await installConsoleCapture();
 
     if (bareSessionInvocation) {
-      if (!process.stdin.isTTY || !process.stdout.isTTY) {
-        console.error(
-          "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.",
-        );
-        process.exitCode = 1;
+      if (!requireInteractiveTty(TUI_REQUIRES_TTY)) {
         return;
       }
       const { runTuiCliAction } = await import("./tui-cli.js");
@@ -1249,23 +1157,13 @@ async function runCliWithPreparedOutputMode(
     // `openclaw <typo>` instead of silently showing generic top-level help.
     // Runs after legitimate precomputed help fast paths so known help commands
     // still dispatch normally. See #81077.
-    {
-      const unownedPrimaryCandidate = resolveUnownedCliPrimaryCandidate(normalizedArgv);
-      if (unownedPrimaryCandidate) {
-        const config = await readBestEffortCliConfig();
-        const unownedPrimary = await resolveUnownedCliPrimary({
-          argv: normalizedArgv,
-          config,
-          session: pluginCliSession,
-        });
-        if (unownedPrimary) {
-          throw await resolveUnownedCliPrimaryError({
-            argv: normalizedArgv,
-            primary: unownedPrimary,
-            config,
-          });
-        }
-      }
+    if (resolveUnownedCliPrimaryCandidate(normalizedArgv)) {
+      const config = await readBestEffortCliConfig();
+      await assertCliPrimaryOwned({
+        argv: normalizedArgv,
+        config,
+        session: pluginCliSession,
+      });
     }
 
     const shouldRunBareRootCommand = shouldHandleBareRoot(normalizedArgv);
@@ -1273,70 +1171,55 @@ async function runCliWithPreparedOutputMode(
       await ensureCliEnvProxyDispatcher();
     }
     const bareRootLaunchTarget = shouldRunBareRootCommand
-      ? await resolveBareRootLaunchTarget(normalizedArgv)
+      ? await resolveBareRootLaunchTarget()
       : null;
 
     if (bareRootLaunchTarget) {
+      const ttyMessage =
+        bareRootLaunchTarget.kind === "remote-gateway-inference"
+          ? "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway."
+          : bareRootLaunchTarget.kind === "onboarding"
+            ? bareRootLaunchTarget.classic
+              ? "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding."
+              : "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation."
+            : TUI_REQUIRES_TTY;
+      if (!requireInteractiveTty(ttyMessage)) {
+        return;
+      }
       if (bareRootLaunchTarget.kind === "remote-gateway-inference") {
-        if (!process.stdin.isTTY || !process.stdout.isTTY) {
-          console.error(
-            "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway.",
-          );
-          process.exitCode = 1;
-          return;
-        }
         const { runRemoteGatewayInferenceOnboarding } =
           await import("../commands/onboard-remote-gateway.js");
         await runRemoteGatewayInferenceOnboarding(bareRootLaunchTarget.target);
         return;
       }
       if (bareRootLaunchTarget.kind === "onboarding") {
-        if (!process.stdin.isTTY || !process.stdout.isTTY) {
-          console.error(
-            bareRootLaunchTarget.classic
-              ? "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding."
-              : "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
-          );
-          process.exitCode = 1;
-          return;
-        }
         const { setupWizardCommand } = await import("../commands/onboard.js");
         await setupWizardCommand(bareRootLaunchTarget.classic ? { classic: true } : {});
         return;
       }
-      if (bareRootLaunchTarget.kind === "tui") {
-        if (!process.stdin.isTTY || !process.stdout.isTTY) {
-          console.error(
-            "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.",
-          );
-          process.exitCode = 1;
-          return;
-        }
-        const { runTui } = await import("../tui/tui.js");
-        // This TUI now shares the CLI process, so keep its final exit fallback armed
-        // in case imported runtime handles survive the normal teardown.
-        await runTui({
-          ...(bareRootLaunchTarget.local
-            ? { deliver: false, local: true }
-            : {
-                deliver: false,
-                config: bareRootLaunchTarget.config,
-                boundGateway: {
-                  url: bareRootLaunchTarget.gatewayUrl,
-                  ...(bareRootLaunchTarget.configuredRemote ? { configuredRemote: true } : {}),
-                  ...(bareRootLaunchTarget.token ? { token: bareRootLaunchTarget.token } : {}),
-                  ...(bareRootLaunchTarget.password
-                    ? { password: bareRootLaunchTarget.password }
-                    : {}),
-                  ...(bareRootLaunchTarget.tlsFingerprint
-                    ? { tlsFingerprint: bareRootLaunchTarget.tlsFingerprint }
-                    : {}),
-                },
-              }),
-          forceProcessExitOnReturn: true,
-        });
-        return;
-      }
+      const { runTui } = await import("../tui/tui.js");
+      // Keep the final exit fallback armed if runtime handles survive shared-process teardown.
+      await runTui({
+        deliver: false,
+        ...(bareRootLaunchTarget.local
+          ? { local: true }
+          : {
+              config: bareRootLaunchTarget.config,
+              boundGateway: {
+                url: bareRootLaunchTarget.gatewayUrl,
+                ...(bareRootLaunchTarget.configuredRemote ? { configuredRemote: true } : {}),
+                ...(bareRootLaunchTarget.token ? { token: bareRootLaunchTarget.token } : {}),
+                ...(bareRootLaunchTarget.password
+                  ? { password: bareRootLaunchTarget.password }
+                  : {}),
+                ...(bareRootLaunchTarget.tlsFingerprint
+                  ? { tlsFingerprint: bareRootLaunchTarget.tlsFingerprint }
+                  : {}),
+              },
+            }),
+        forceProcessExitOnReturn: true,
+      });
+      return;
     }
 
     const shouldUseCliEnvProxy =
@@ -1361,9 +1244,7 @@ async function runCliWithPreparedOutputMode(
     }
 
     if (!isHelpOrVersionInvocation && !isDatabaseInvocation) {
-      await bootstrapCliProxyCaptureAndDispatcher(startupTrace, {
-        ensureDispatcher: shouldUseCliEnvProxy,
-      });
+      await bootstrapCliProxyCaptureAndDispatcher(startupTrace, shouldUseCliEnvProxy);
     }
 
     if (
@@ -1411,7 +1292,7 @@ async function runCliWithPreparedOutputMode(
         { defaultRuntime, restoreRuntimeTerminalState },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
-          import("./program.js"),
+          import("./program/build-program.js"),
           import("../infra/errors.js"),
           import("./failure-output.js"),
           import("../infra/fatal-error-hooks.js"),
@@ -1503,9 +1384,12 @@ async function runCliWithPreparedOutputMode(
         }
       }
 
-      parseArgv = normalizeRootLogLevelArgvForProgram(
+      parseArgv = normalizeRootLogLevelArgv(
         normalizeRootNoColorArgvForProgram(parseArgv, program),
-        program,
+        {
+          shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
+            resolveRootOptionRole(program, remainingArgs, logLevelIndex) !== "root",
+        },
       );
       startupProgress.done();
 

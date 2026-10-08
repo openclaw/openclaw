@@ -516,35 +516,26 @@ export type TemplateContext = Omit<RuntimeMsgContext, NonTemplateContextKey> & {
 export type FinalizedTemplateContext = Omit<TemplateContext, keyof CanonicalInboundText> &
   CanonicalInboundText;
 
+function formatTemplateScalar(value: unknown): string | undefined {
+  return typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+    ? String(value)
+    : undefined;
+}
+
 function formatTemplateValue(value: unknown): string {
-  if (value == null) {
-    return "";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
+  if (Array.isArray(value)) {
+    return value
+      .map(formatTemplateScalar)
+      .filter((entry) => entry !== undefined)
+      .join(",");
   }
   if (typeof value === "symbol" || typeof value === "function") {
     return value.toString();
   }
-  if (Array.isArray(value)) {
-    return value
-      .flatMap((entry) => {
-        if (
-          typeof entry === "string" ||
-          typeof entry === "number" ||
-          typeof entry === "boolean" ||
-          typeof entry === "bigint"
-        ) {
-          return [String(entry)];
-        }
-        return [];
-      })
-      .join(",");
-  }
-  return "";
+  return formatTemplateScalar(value) ?? "";
 }
 
 // Simple {{Placeholder}} interpolation using inbound message context.

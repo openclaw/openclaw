@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/archive";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { DIR_FETCH_ARCHIVE_POLICY } from "../shared/dir-fetch-archive.js";
 import {
   DIR_FETCH_DEFAULT_MAX_BYTES,
@@ -104,7 +105,6 @@ export function createDirFetchTool(): AnyAgentTool {
         input: params,
         key: "maxBytes",
         defaultValue: DIR_FETCH_DEFAULT_MAX_BYTES,
-        hardMin: 1,
         hardMax: DIR_FETCH_HARD_MAX_BYTES,
       });
 
@@ -213,20 +213,17 @@ export function createDirFetchTool(): AnyAgentTool {
         sha256,
       });
 
-      return {
-        content: [{ type: "text" as const, text: savedDirectoryText(rootDir, files) }],
-        details: {
-          path: canonicalPath,
-          rootDir,
-          fileCount,
-          tarBytes,
-          sha256,
-          files,
-          media: {
-            mediaUrls,
-          },
+      return textResult(savedDirectoryText(rootDir, files), {
+        path: canonicalPath,
+        rootDir,
+        fileCount,
+        tarBytes,
+        sha256,
+        files,
+        media: {
+          mediaUrls,
         },
-      };
+      });
     },
   };
 }

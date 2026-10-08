@@ -60,12 +60,8 @@ export class DirectoryCache<T> {
     }
   }
 
-  clear(cfg?: OpenClawConfig): void {
-    if (cfg) {
-      this.cachesByConfig.delete(cfg);
-    } else {
-      this.cachesByConfig = new WeakMap();
-    }
+  clear(): void {
+    this.cachesByConfig = new WeakMap();
   }
 
   private cacheForConfig(cfg: OpenClawConfig): Map<string, CacheEntry<T>> {

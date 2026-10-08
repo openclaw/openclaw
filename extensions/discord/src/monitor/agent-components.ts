@@ -1,19 +1,14 @@
 import { Modal, type BaseMessageInteractiveComponent } from "../internal/discord.js";
-import { discordComponentControlHandlers } from "./agent-components.handlers.js";
-import { DiscordComponentModal } from "./agent-components.modal.js";
+import {
+  discordComponentControlHandlers,
+  DiscordComponentModal,
+} from "./agent-components.handlers.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
 } from "./agent-components.system-controls.js";
 import type { AgentComponentContext } from "./agent-components.types.js";
-import {
-  createDiscordComponentButtonControl,
-  createDiscordComponentChannelSelectControl,
-  createDiscordComponentMentionableSelectControl,
-  createDiscordComponentRoleSelectControl,
-  createDiscordComponentStringSelectControl,
-  createDiscordComponentUserSelectControl,
-} from "./agent-components.wildcard-controls.js";
+import { discordComponentControlFactories } from "./agent-components.wildcard-controls.js";
 
 type ComponentFactory = (ctx: AgentComponentContext) => BaseMessageInteractiveComponent;
 
@@ -22,14 +17,7 @@ export const createAgentComponentControls = [
   createAgentSelectMenu,
 ] satisfies readonly ComponentFactory[];
 
-export const createDiscordComponentControls = [
-  createDiscordComponentButtonControl,
-  createDiscordComponentStringSelectControl,
-  createDiscordComponentUserSelectControl,
-  createDiscordComponentRoleSelectControl,
-  createDiscordComponentMentionableSelectControl,
-  createDiscordComponentChannelSelectControl,
-].map(
+export const createDiscordComponentControls = discordComponentControlFactories.map(
   (createControl): ComponentFactory =>
     (ctx) =>
       createControl(ctx, discordComponentControlHandlers),

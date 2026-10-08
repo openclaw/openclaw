@@ -11,7 +11,7 @@ import {
 } from "./admitted-run-context.js";
 import { externalCliDiscoveryScoped } from "./auth-profiles/external-cli-discovery.js";
 import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-list.js";
-import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 import {
   FailoverError,
   buildProviderReauthCommand,
@@ -181,7 +181,7 @@ async function runWithModelFallbackInternal<T>(
   const authRuntime =
     !params.skipAuthProfileRuntime &&
     params.cfg &&
-    (userLockedAuthProfileId || hasAnyAuthProfileStoreSource(params.agentDir))
+    (userLockedAuthProfileId || (await hasAnyAuthProfileStoreSourceAsync(params.agentDir)))
       ? await modelFallbackAuthRuntimeLoader.load()
       : null;
   const authStore = authRuntime
@@ -475,7 +475,7 @@ async function runWithModelFallbackInternal<T>(
           // Same-provider siblings share one transient cooldown probe per run.
           const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
           if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
-            const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
+            const error = `Provider ${candidate.provider} is in cooldown (check already attempted this run)`;
             pushSkippedAttempt(error, decision.reason, authMode);
             await observeCandidateDecision("skip_candidate", {
               reason: decision.reason,

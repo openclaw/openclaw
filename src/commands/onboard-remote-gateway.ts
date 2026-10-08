@@ -24,7 +24,6 @@ import type {
 } from "../system-agent/setup-inference.js";
 import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
-import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 const GATEWAY_SETUP_DETECT_TIMEOUT_MS = 40_000;
 const GATEWAY_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
@@ -35,8 +34,6 @@ const GATEWAY_RESTART_WAIT_TIMEOUT_MS = 45_000;
 const GATEWAY_RESTART_IDENTITY_ERROR =
   "Inference settings were saved, but the Gateway did not provide a boot identity. Update and restart the remote Gateway, then run onboarding again.";
 
-type CallGateway = <T>(options: CallGatewayCliOptions) => Promise<T>;
-
 type RemoteGatewayInferenceTarget = {
   config: OpenClawConfig;
   gatewayUrl: string;
@@ -44,13 +41,6 @@ type RemoteGatewayInferenceTarget = {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
-};
-
-type RemoteGatewayInferenceOnboardingDeps = {
-  callGateway?: CallGateway;
-  createPrompter?: GuidedOnboardingDeps["createPrompter"];
-  runTui?: typeof import("../tui/tui.js").runTui;
-  runGuidedOnboarding?: typeof import("./onboard-guided.js").runGuidedOnboarding;
 };
 
 function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupInferenceDetection {
@@ -193,11 +183,9 @@ function toVerifiedActivationResult(params: {
 export async function runRemoteGatewayInferenceOnboarding(
   target: RemoteGatewayInferenceTarget,
   runtime: RuntimeEnv = defaultRuntime,
-  deps: RemoteGatewayInferenceOnboardingDeps = {},
 ): Promise<void> {
-  const callGateway = deps.callGateway ?? (await import("../gateway/call.js")).callGatewayCli;
-  const runGuidedOnboarding =
-    deps.runGuidedOnboarding ?? (await import("./onboard-guided.js")).runGuidedOnboarding;
+  const { callGatewayCli } = await import("../gateway/call.js");
+  const { runGuidedOnboarding } = await import("./onboard-guided.js");
   const boundConfig = bindGatewayConfig(target);
   const explicitAuth = Boolean(target.token || target.password);
   let gatewayWorkspace: string | undefined;
@@ -208,7 +196,7 @@ export async function runRemoteGatewayInferenceOnboarding(
       "method" | "params" | "onHelloOk" | "signal" | "deviceIdentity"
     > & { timeoutMs: number },
   ): Promise<T> =>
-    await callGateway<T>({
+    await callGatewayCli<T>({
       ...params,
       config: boundConfig,
       // Preserve configured SSH routing across RPCs; an explicitly selected
@@ -239,11 +227,7 @@ export async function runRemoteGatewayInferenceOnboarding(
     let started = false;
     let terminal = false;
     const prompter: WizardPrompter =
-      params.prompter ??
-      (await (deps.createPrompter?.() ??
-        import("../wizard/clack-prompter.js").then(({ createClackPrompter }) =>
-          createClackPrompter(),
-        )));
+      params.prompter ?? (await import("../wizard/clack-prompter.js")).createClackPrompter();
     let result: WizardNextResult;
     try {
       result = await request<WizardStartResult>({
@@ -388,16 +372,13 @@ export async function runRemoteGatewayInferenceOnboarding(
     // custodian flow (question zero, local setup apply, local hatch) is wrong here.
     handoffMode: "chat",
     runSetupMemoryImportStep: async () => ({ status: "skipped", providers: [] }),
-    ...(deps.createPrompter ? { createPrompter: deps.createPrompter } : {}),
     runSystemAgentChat: async () => {
-      const prompter = await (deps.createPrompter?.() ??
-        import("../wizard/clack-prompter.js").then(({ createClackPrompter }) =>
-          createClackPrompter(),
-        ));
+      const { createClackPrompter } = await import("../wizard/clack-prompter.js");
+      const prompter = createClackPrompter();
       await prompter.intro("OpenClaw");
       // One-shot RPCs have different connections. Preserve a signed device
       // owner across chat replies even when loopback shared auth needs no device.
-      const deviceIdentity = resolveDeviceIdentityForGatewayCall();
+      const deviceIdentity = await resolveDeviceIdentityForGatewayCall();
       const sessionId = randomUUID();
       let reply = await request<SystemAgentChatResult>({
         method: "openclaw.chat",
@@ -441,7 +422,7 @@ export async function runRemoteGatewayInferenceOnboarding(
 
       // Keep resolved credentials in-process; child argv is observable to
       // other local users and must never carry the Gateway secret.
-      const runTui = deps.runTui ?? (await import("../tui/tui.js")).runTui;
+      const { runTui } = await import("../tui/tui.js");
       await runTui({
         config: boundConfig,
         deliver: false,

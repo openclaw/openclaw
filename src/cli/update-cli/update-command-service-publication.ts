@@ -82,6 +82,13 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         { cause },
       );
     };
+    const inspectionFailed = (error: unknown): never => {
+      assertCurrent();
+      if (error instanceof UpdatePreMutationError) {
+        throw error;
+      }
+      return refuse(error);
+    };
     const service = resolveGatewayService();
     type PathIdentity = { real: string; stat?: Stats };
     const identity = async (file: string) => {
@@ -260,19 +267,9 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           return consumer ? !consumer.disjoint : null;
         },
       });
-      return { state, disjoint, parents, destinations, database, nativeIdentity, serving };
+      return { disjoint, parents, destinations, database, nativeIdentity, serving };
     };
-    const inspect = async () => {
-      try {
-        return await readInspection();
-      } catch (error) {
-        assertCurrent();
-        if (error instanceof UpdatePreMutationError) {
-          throw error;
-        }
-        return refuse(error);
-      }
-    };
+    const inspect = () => readInspection().catch(inspectionFailed);
     const before = await inspect();
     assertCurrent();
     if (before.serving && !before.serving.entrypoint.stat) {
@@ -328,22 +325,14 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           });
         }
       } catch (error) {
-        assertCurrent();
-        if (error instanceof UpdatePreMutationError) {
-          throw error;
-        }
-        refuse(error);
+        inspectionFailed(error);
       }
       const publishOwned = async () => {
         try {
           await assertPublicationCurrent();
           assertCurrent();
         } catch (error) {
-          assertCurrent();
-          if (error instanceof UpdatePreMutationError) {
-            throw error;
-          }
-          refuse(error);
+          inspectionFailed(error);
         }
         // The publisher joins its rollback before settling, keeping both exclusions held.
         const result = await publish(assertPublicationCurrent);
@@ -354,18 +343,13 @@ export async function withGatewayRuntimeArtifactPublication<T>(
     } catch (error) {
       publicationFailures.push(error);
     }
-    try {
-      await maintenance?.close();
-    } catch (error) {
-      if (!publicationFailures.includes(error)) {
-        publicationFailures.push(error);
-      }
-    }
-    try {
-      processOwner?.release();
-    } catch (error) {
-      if (!publicationFailures.includes(error)) {
-        publicationFailures.push(error);
+    for (const close of [() => maintenance?.close(), () => processOwner?.release()]) {
+      try {
+        await close();
+      } catch (error) {
+        if (!publicationFailures.includes(error)) {
+          publicationFailures.push(error);
+        }
       }
     }
     throwSqliteLifecycleErrors(

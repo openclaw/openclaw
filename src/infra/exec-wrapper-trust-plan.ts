@@ -169,63 +169,33 @@ export function resolveExecWrapperTrustPlan(
       continue;
     }
 
-    const shellArgvCarrierUnwrap = unwrapTransparentShellArgvCarrierInvocation(current, platform);
-    if (shellArgvCarrierUnwrap.kind === "blocked") {
+    const carrier = unwrapTransparentShellArgvCarrierInvocation(current, platform);
+    const isMultiplexer = carrier.kind === "not-wrapper";
+    const shellWrapper = isMultiplexer ? unwrapKnownShellMultiplexerInvocation(current) : carrier;
+    if (shellWrapper.kind === "blocked") {
       return blockedExecWrapperTrustPlan({
         argv: current,
         policyArgv,
         wrapperChain,
         wrapperInvocations,
-        blockedWrapper: shellArgvCarrierUnwrap.wrapper,
+        blockedWrapper: shellWrapper.wrapper,
       });
     }
-    if (shellArgvCarrierUnwrap.kind === "unwrapped") {
-      dispatchChainComplete = false;
-      wrapperChain.push(shellArgvCarrierUnwrap.wrapper);
-      wrapperInvocations.push({
-        wrapper: shellArgvCarrierUnwrap.wrapper,
-        sourceArgv: [...current],
-      });
-      current = shellArgvCarrierUnwrap.argv;
-      if (!sawShellMultiplexer) {
-        policyArgv = current;
-      }
-      if (wrapperChain.length >= maxDepth) {
-        break;
-      }
-      continue;
+    if (shellWrapper.kind === "not-wrapper") {
+      break;
     }
-
-    const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(current);
-    if (shellMultiplexerUnwrap.kind === "blocked") {
-      return blockedExecWrapperTrustPlan({
-        argv: current,
-        policyArgv,
-        wrapperChain,
-        wrapperInvocations,
-        blockedWrapper: shellMultiplexerUnwrap.wrapper,
-      });
+    dispatchChainComplete = false;
+    wrapperChain.push(shellWrapper.wrapper);
+    wrapperInvocations.push({ wrapper: shellWrapper.wrapper, sourceArgv: [...current] });
+    if (!sawShellMultiplexer) {
+      // Trust policy must see the multiplexer applet, not only the shell it launches.
+      policyArgv = isMultiplexer ? current : shellWrapper.argv;
+      sawShellMultiplexer = isMultiplexer;
     }
-    if (shellMultiplexerUnwrap.kind === "unwrapped") {
-      dispatchChainComplete = false;
-      wrapperChain.push(shellMultiplexerUnwrap.wrapper);
-      wrapperInvocations.push({
-        wrapper: shellMultiplexerUnwrap.wrapper,
-        sourceArgv: [...current],
-      });
-      if (!sawShellMultiplexer) {
-        // Trust policy must see the multiplexer applet, not only the shell it launches.
-        policyArgv = current;
-        sawShellMultiplexer = true;
-      }
-      current = shellMultiplexerUnwrap.argv;
-      if (wrapperChain.length >= maxDepth) {
-        break;
-      }
-      continue;
+    current = shellWrapper.argv;
+    if (wrapperChain.length >= maxDepth) {
+      break;
     }
-
-    break;
   }
 
   if (wrapperChain.length >= maxDepth) {

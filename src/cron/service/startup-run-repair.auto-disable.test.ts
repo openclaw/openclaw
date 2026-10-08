@@ -8,7 +8,7 @@ import {
   resolveHeartbeatRunPrompt,
 } from "../../infra/heartbeat-runner-prompt.js";
 import { startHeartbeatRunner } from "../../infra/heartbeat-runner-scheduler.js";
-import { requestHeartbeat as requestHeartbeatWake } from "../../infra/heartbeat-wake.js";
+import { requestHeartbeatAndWait } from "../../infra/heartbeat-wake.js";
 import {
   drainSystemEvents,
   enqueueSystemEvent as queueSystemEvent,
@@ -121,12 +121,13 @@ describe("startup run repair auto-disable", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { heartbeat: { every: "0m" } },
-        list: [{ id: "main" }, { id: "other" }],
+        entries: { main: {}, other: {} },
       },
     };
     const sessionKey =
       testCase.creatorSessionKey ?? resolveAgentMainSessionKey({ cfg, agentId: "main" });
     const prompts: string[] = [];
+    const pendingWakes: Array<ReturnType<typeof requestHeartbeatAndWait>> = [];
     const runOnce = vi.fn(async (options: HeartbeatRunOptions) => {
       const preflight = await resolveHeartbeatPreflight({
         cfg,
@@ -165,12 +166,15 @@ describe("startup run repair auto-disable", () => {
             sessionKey: options?.sessionKey ?? sessionKey,
             contextKey: options?.contextKey,
           }),
-        requestHeartbeat: (wake) =>
-          requestHeartbeatWake({
-            ...wake,
-            sessionKey: wake.sessionKey ?? sessionKey,
-            coalesceMs: 0,
-          }),
+        requestHeartbeat: (wake) => {
+          pendingWakes.push(
+            requestHeartbeatAndWait({
+              ...wake,
+              sessionKey: wake.sessionKey ?? sessionKey,
+              coalesceMs: 0,
+            }),
+          );
+        },
         runIsolatedAgentJob: vi.fn(),
       });
       const job: CronJob = {
@@ -200,6 +204,7 @@ describe("startup run repair auto-disable", () => {
       expect(deferredNotifications).toHaveLength(1);
       runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
       await vi.advanceTimersByTimeAsync(1);
+      await Promise.all(pendingWakes);
 
       expect(runOnce).toHaveBeenCalledOnce();
       expect(runOnce).toHaveBeenCalledWith(
@@ -216,9 +221,15 @@ describe("startup run repair auto-disable", () => {
       expect(prompts[0]).toContain("openclaw automations enable restart-auto-disable-notification");
       expect(prompts[0]).toContain("Please relay this reminder to the user");
     } finally {
-      runner.stop();
-      drainSystemEvents(sessionKey);
-      vi.useRealTimers();
+      try {
+        // Stopping the runner retains unfinished notifications for its successor.
+        await vi.advanceTimersByTimeAsync(1);
+        await Promise.all(pendingWakes);
+      } finally {
+        runner.stop();
+        drainSystemEvents(sessionKey);
+        vi.useRealTimers();
+      }
     }
   });
 

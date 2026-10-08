@@ -13,6 +13,7 @@ import {
   closeAuthProfileReadDatabase,
   closeAuthProfileReadPool,
 } from "./sqlite-read-pool.js";
+import { recordAuthProfileNativeCommit } from "./store-update-commit.js";
 import type { AuthProfileRowRead, PersistedAuthProfileStoreInspection } from "./types.js";
 
 type AgentAuthProfileDatabase = Pick<
@@ -23,32 +24,15 @@ type SharedAuthProfileDatabase = Pick<OpenClawStateKyselyDatabase, "config_machi
 
 // Auth profiles store one JSON blob for secrets and one JSON blob for runtime
 // state. SQLite owns durability/transactions; JSON shape owns compatibility.
-export const PRIMARY_ROW_KEY = "primary";
+const PRIMARY_ROW_KEY = "primary";
+const AGENT_AUTH_CELLS = {
+  store: { table: "auth_profile_store", key: "store_key", value: "store_json" },
+  state: { table: "auth_profile_state", key: "state_key", value: "state_json" },
+} as const;
 // Shared-state auth payloads live in config_machine_state; the keys are listed
 // in STATE_SECRET_CONFIG_STATE_KEY_PREFIXES so git backups never carry them.
-export const SHARED_STORE_STATE_KEY = "authProfiles.store";
-export const SHARED_STATE_STATE_KEY = "authProfiles.state";
+const SHARED_AUTH_CELL_KEYS = { store: "authProfiles.store", state: "authProfiles.state" };
 export const SHARED_AUTH_STORE_STATE_KEY = "auth.sharedStore";
-
-// Callers own transactions; opening another here would nest.
-export function readSharedAuthKvCell(db: DatabaseSync, stateKey: string): string | undefined {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getSharedAuthProfileKysely(db)
-      .selectFrom("config_machine_state")
-      .select("value_json")
-      .where("state_key", "=", stateKey),
-  );
-  return row?.value_json;
-}
-
-export function getAgentAuthProfileKysely(db: DatabaseSync) {
-  return getNodeSqliteKysely<AgentAuthProfileDatabase>(db);
-}
-
-function getSharedAuthProfileKysely(db: DatabaseSync) {
-  return getNodeSqliteKysely<SharedAuthProfileDatabase>(db);
-}
 
 function inspectAuthProfileTable(
   db: DatabaseSync,
@@ -56,11 +40,7 @@ function inspectAuthProfileTable(
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection | null {
   const tableName =
-    databaseKind === "shared-state"
-      ? "config_machine_state"
-      : target === "store"
-        ? "auth_profile_store"
-        : "auth_profile_state";
+    databaseKind === "shared-state" ? "config_machine_state" : AGENT_AUTH_CELLS[target].table;
   const schemaObject = executeWithCachedStatement(
     db,
     "SELECT type FROM sqlite_master WHERE name = ?",
@@ -75,6 +55,31 @@ function inspectAuthProfileTable(
   return schemaObject.type === "table" ? null : { status: "unreadable" };
 }
 
+/** Read admitted auth cells without discarding malformed JSON needed for migration backups. */
+export function readAuthProfileJsonCellText(
+  db: DatabaseSync,
+  target: "store" | "state",
+  databaseKind: "agent" | "shared-state",
+): string | undefined {
+  if (databaseKind === "shared-state") {
+    return executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<SharedAuthProfileDatabase>(db)
+        .selectFrom("config_machine_state")
+        .select("value_json")
+        .where("state_key", "=", SHARED_AUTH_CELL_KEYS[target]),
+    )?.value_json;
+  }
+  const cell = AGENT_AUTH_CELLS[target];
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<AgentAuthProfileDatabase>(db)
+      .selectFrom(cell.table)
+      .select(cell.value)
+      .where(cell.key, "=", PRIMARY_ROW_KEY),
+  )?.[cell.value];
+}
+
 export function inspectAuthProfileJsonCell(
   db: DatabaseSync,
   target: "store" | "state",
@@ -84,40 +89,9 @@ export function inspectAuthProfileJsonCell(
   if (tableInspection) {
     return tableInspection;
   }
-  let raw: string;
-  if (databaseKind === "shared-state") {
-    const cell = readSharedAuthKvCell(
-      db,
-      target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
-    );
-    if (cell === undefined) {
-      return { status: "missing", reason: "row" };
-    }
-    raw = cell;
-  } else if (target === "store") {
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getAgentAuthProfileKysely(db)
-        .selectFrom("auth_profile_store")
-        .select("store_json")
-        .where("store_key", "=", PRIMARY_ROW_KEY),
-    );
-    if (!row) {
-      return { status: "missing", reason: "row" };
-    }
-    raw = row.store_json;
-  } else {
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getAgentAuthProfileKysely(db)
-        .selectFrom("auth_profile_state")
-        .select("state_json")
-        .where("state_key", "=", PRIMARY_ROW_KEY),
-    );
-    if (!row) {
-      return { status: "missing", reason: "row" };
-    }
-    raw = row.state_json;
+  const raw = readAuthProfileJsonCellText(db, target, databaseKind);
+  if (raw === undefined) {
+    return { status: "missing", reason: "row" };
   }
   try {
     return { status: "readable", raw: JSON.parse(raw) as unknown };
@@ -173,8 +147,20 @@ export function readAuthProfileRows(
   databaseKind: "agent" | "shared-state",
 ): AuthProfileRowRead {
   const canCache = prepareSqliteReadCache(database, databasePath);
-  const store = inspectAuthProfileJsonCell(database, "store", databaseKind);
-  const state = inspectAuthProfileJsonCell(database, "state", databaseKind);
+  const inspect = (target: "store" | "state"): PersistedAuthProfileStoreInspection => {
+    try {
+      return inspectAuthProfileJsonCell(database, target, databaseKind);
+    } catch (error) {
+      // Shared-state read ownership handles native failures and poisoned-handle eviction.
+      if (databaseKind === "shared-state") {
+        throw error;
+      }
+      // A broken state table must not turn an absent credential row into a present source.
+      return { status: "unreadable" };
+    }
+  };
+  const store = inspect("store");
+  const state = inspect("state");
   return {
     store,
     state,
@@ -189,43 +175,35 @@ export function writeAuthProfileJsonCell(
   kind: "agent" | "shared-state",
   payload: unknown,
 ): void {
+  recordAuthProfileNativeCommit(database);
   const value = JSON.stringify(payload);
   const now = Date.now();
-  if (kind === "shared-state") {
-    executeSqliteQuerySync(
-      database,
-      getSharedAuthProfileKysely(database)
-        .insertInto("config_machine_state")
-        .values({
-          state_key: target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
-          value_json: value,
-          updated_at_ms: now,
-        })
-        .onConflict((conflict) =>
-          conflict.column("state_key").doUpdateSet({ value_json: value, updated_at_ms: now }),
-        ),
-    );
-  } else if (target === "store") {
-    executeSqliteQuerySync(
-      database,
-      getAgentAuthProfileKysely(database)
-        .insertInto("auth_profile_store")
-        .values({ store_key: PRIMARY_ROW_KEY, store_json: value, updated_at: now })
-        .onConflict((conflict) =>
-          conflict.column("store_key").doUpdateSet({ store_json: value, updated_at: now }),
-        ),
-    );
-  } else {
-    executeSqliteQuerySync(
-      database,
-      getAgentAuthProfileKysely(database)
-        .insertInto("auth_profile_state")
-        .values({ state_key: PRIMARY_ROW_KEY, state_json: value, updated_at: now })
-        .onConflict((conflict) =>
-          conflict.column("state_key").doUpdateSet({ state_json: value, updated_at: now }),
-        ),
-    );
-  }
+  const query =
+    kind === "shared-state"
+      ? getNodeSqliteKysely<SharedAuthProfileDatabase>(database)
+          .insertInto("config_machine_state")
+          .values({
+            state_key: SHARED_AUTH_CELL_KEYS[target],
+            value_json: value,
+            updated_at_ms: now,
+          })
+          .onConflict((conflict) =>
+            conflict.column("state_key").doUpdateSet({ value_json: value, updated_at_ms: now }),
+          )
+      : target === "store"
+        ? getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
+            .insertInto("auth_profile_store")
+            .values({ store_key: PRIMARY_ROW_KEY, store_json: value, updated_at: now })
+            .onConflict((conflict) =>
+              conflict.column("store_key").doUpdateSet({ store_json: value, updated_at: now }),
+            )
+        : getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
+            .insertInto("auth_profile_state")
+            .values({ state_key: PRIMARY_ROW_KEY, state_json: value, updated_at: now })
+            .onConflict((conflict) =>
+              conflict.column("state_key").doUpdateSet({ state_json: value, updated_at: now }),
+            );
+  executeSqliteQuerySync(database, query);
 }
 
 export function deleteAuthProfileJsonCell(
@@ -233,30 +211,15 @@ export function deleteAuthProfileJsonCell(
   target: "store" | "state",
   kind: "agent" | "shared-state",
 ): void {
-  if (kind === "shared-state") {
-    executeSqliteQuerySync(
-      database,
-      getSharedAuthProfileKysely(database)
-        .deleteFrom("config_machine_state")
-        .where(
-          "state_key",
-          "=",
-          target === "store" ? SHARED_STORE_STATE_KEY : SHARED_STATE_STATE_KEY,
-        ),
-    );
-  } else if (target === "store") {
-    executeSqliteQuerySync(
-      database,
-      getAgentAuthProfileKysely(database)
-        .deleteFrom("auth_profile_store")
-        .where("store_key", "=", PRIMARY_ROW_KEY),
-    );
-  } else {
-    executeSqliteQuerySync(
-      database,
-      getAgentAuthProfileKysely(database)
-        .deleteFrom("auth_profile_state")
-        .where("state_key", "=", PRIMARY_ROW_KEY),
-    );
-  }
+  recordAuthProfileNativeCommit(database);
+  const cell = AGENT_AUTH_CELLS[target];
+  const query =
+    kind === "shared-state"
+      ? getNodeSqliteKysely<SharedAuthProfileDatabase>(database)
+          .deleteFrom("config_machine_state")
+          .where("state_key", "=", SHARED_AUTH_CELL_KEYS[target])
+      : getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
+          .deleteFrom(cell.table)
+          .where(cell.key, "=", PRIMARY_ROW_KEY);
+  executeSqliteQuerySync(database, query);
 }

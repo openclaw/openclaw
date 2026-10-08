@@ -1,15 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
+import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import {
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "../pages/chat/chat-pending-inputs.ts";
+import { chatStartupStatusLabel } from "../pages/chat/chat-run-startup.ts";
 import { buildChatItems } from "../pages/chat/chat-thread-build.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../pages/chat/history-merge.ts";
+import type { ApplicationGateway } from "./gateway.ts";
+import createRuntime from "./session-placement-startup.runtime.ts";
 import {
+  blockStorageWrites,
   createPlacementStartupHarness,
   createStartupPlacement,
   flushStartupMicrotasks,
@@ -113,127 +118,96 @@ describe("application placement delivery recovery", () => {
     },
   );
 
-  it.each(["active", "local", "failed", "reclaimed"])(
-    "delivery recovery checks uncertain sending without mutating %s placement",
-    async (state) => {
-      const request = vi.fn((method: string) => {
-        if (method === "chat.history") {
-          return Promise.resolve({ messages: [] });
-        }
-        if (method === "sessions.describe") {
-          return Promise.resolve({ session: { placement: createStartupPlacement(state, 2) } });
-        }
-        return Promise.resolve({ status: "started" });
+  it("delivery recovery checks uncertain sending without mutating placement", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.history") {
+        return Promise.resolve({ messages: [] });
+      }
+      return Promise.resolve({ status: "started" });
+    });
+    const { startup, input, dependencies } = createPlacementStartupHarness(request);
+    const attachments = [
+      { type: "file", mimeType: "text/plain", fileName: "note.txt", content: "SGk=" },
+    ];
+    input.recovery = { ...input.recovery, phase: "sending", attachments };
+    writeSessionPlacementRecovery(input.recovery);
+    startup.resumeRecovery();
+    try {
+      await vi.waitFor(() =>
+        expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+          phase: "failed",
+          action: "check-delivery",
+          initialTurn: {
+            text: input.recovery.message,
+            sendState: "unconfirmed",
+            attachments: [{ dataUrl: "data:text/plain;base64,SGk=" }],
+          },
+        }),
+      );
+      startup.retry(input.recovery.sessionKey);
+      startup.retry(input.recovery.sessionKey);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      expect(request.mock.calls.every(([method]) => method === "chat.history")).toBe(true);
+      expect(request).toHaveBeenCalledWith(
+        "chat.history",
+        expect.objectContaining({ sessionKey: input.recovery.sessionKey, limit: 1000 }),
+      );
+      expect(
+        readSessionPlacementRecovery(
+          input.recovery.gatewayUrl,
+          input.recovery.recoveryScope,
+          input.recovery.sessionKey,
+        ),
+      ).toMatchObject({
+        phase: "paused",
+        reason: "unconfirmed",
+        messageId: input.recovery.messageId,
+        attachments,
       });
-      const { startup, input, dependencies } = createPlacementStartupHarness(request);
-      const attachments = [
-        { type: "file", mimeType: "text/plain", fileName: "note.txt", content: "SGk=" },
-      ];
-      input.recovery = { ...input.recovery, phase: "sending", attachments };
-      writeSessionPlacementRecovery(input.recovery);
-      startup.resumeRecovery();
+      startup.dispose();
+      const reloaded = createApplicationPlacementStartup(dependencies);
+      reloaded.resumeRecovery();
       try {
         await vi.waitFor(() =>
-          expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-            phase: "failed",
+          expect(reloaded.get(input.recovery.sessionKey)).toMatchObject({
             action: "check-delivery",
-            initialTurn: {
-              text: input.recovery.message,
-              sendState: "unconfirmed",
-              attachments: [{ dataUrl: "data:text/plain;base64,SGk=" }],
-            },
+            initialTurn: { text: input.recovery.message, sendRunId: input.recovery.messageId },
           }),
         );
-        startup.retry(input.recovery.sessionKey);
-        startup.retry(input.recovery.sessionKey);
-        await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-        expect(request.mock.calls.every(([method]) => method === "chat.history")).toBe(true);
-        expect(request).toHaveBeenCalledWith(
-          "chat.history",
-          expect.objectContaining({ sessionKey: input.recovery.sessionKey, limit: 1000 }),
-        );
-        expect(
-          readSessionPlacementRecovery(
-            input.recovery.gatewayUrl,
-            input.recovery.recoveryScope,
-            input.recovery.sessionKey,
-          ),
-        ).toMatchObject({
-          phase: "paused",
-          reason: "unconfirmed",
-          messageId: input.recovery.messageId,
-          attachments,
-        });
-        startup.dispose();
-        const reloaded = createApplicationPlacementStartup(dependencies);
-        reloaded.resumeRecovery();
-        try {
-          await vi.waitFor(() =>
-            expect(reloaded.get(input.recovery.sessionKey)).toMatchObject({
-              action: "check-delivery",
-              initialTurn: { text: input.recovery.message, sendRunId: input.recovery.messageId },
-            }),
-          );
-          expect(request).toHaveBeenCalledTimes(2);
-        } finally {
-          reloaded.dispose();
-        }
+        expect(request).toHaveBeenCalledTimes(2);
       } finally {
-        startup.dispose();
+        reloaded.dispose();
       }
-    },
-  );
+    } finally {
+      startup.dispose();
+    }
+  });
 
-  it.each([
-    "exact-user",
-    "pending-queued",
-    "pending-interrupted",
-    "pending-cancelled",
-    "retained-outside-page",
-    "consumed",
-    "assistant",
-    "same-text",
-    "unavailable",
-  ])("delivery recovery settles only authoritative input custody (%s)", async (evidence) => {
-    const acceptedInput =
-      evidence.startsWith("pending-") ||
-      evidence === "retained-outside-page" ||
-      evidence === "consumed";
-    const delivered = evidence === "exact-user" || acceptedInput;
-    const request = vi.fn((method: string, payload?: Record<string, unknown>) => {
-      if (method === "chat.history") {
-        if (evidence === "unavailable") {
-          return Promise.reject(new Error("history unavailable"));
-        }
-        return Promise.resolve({
-          sessionId: "physical-cloud-session",
-          messages: acceptedInput
-            ? []
-            : [
-                {
-                  role: evidence === "assistant" ? "assistant" : "user",
-                  content: [{ type: "text", text: "fix the cloud task" }],
-                  __openclaw: {
-                    idempotencyKey: evidence === "same-text" ? "other:user" : "message-stable:user",
-                  },
-                },
-              ],
-          pendingInputs: {
-            items: evidence.startsWith("pending-")
-              ? [
+  it.each(["retained-outside-page", "assistant", "same-text", "unavailable"])(
+    "delivery recovery settles only authoritative input custody (%s)",
+    async (evidence) => {
+      const delivered = evidence === "retained-outside-page";
+      const request = vi.fn((method: string, payload?: Record<string, unknown>) => {
+        if (method === "chat.history") {
+          if (evidence === "unavailable") {
+            return Promise.reject(new Error("history unavailable"));
+          }
+          return Promise.resolve({
+            sessionId: "physical-cloud-session",
+            messages: delivered
+              ? []
+              : [
                   {
-                    id: "accepted-initial-input",
-                    runId: "message-stable",
-                    state: evidence.slice("pending-".length),
-                    acceptedAt: 1_000,
-                    message: {
-                      role: "user",
-                      content: "fix the cloud task",
-                      __openclaw: { id: "pending:accepted-initial-input" },
+                    role: evidence === "assistant" ? "assistant" : "user",
+                    content: [{ type: "text", text: "fix the cloud task" }],
+                    __openclaw: {
+                      idempotencyKey:
+                        evidence === "same-text" ? "other:user" : "message-stable:user",
                     },
                   },
-                ]
-              : evidence === "retained-outside-page"
+                ],
+            pendingInputs: {
+              items: delivered
                 ? Array.from({ length: 20 }, (_, index) => ({
                     id: `newer-${index}`,
                     runId: `newer-${index}`,
@@ -242,72 +216,64 @@ describe("application placement delivery recovery", () => {
                     message: { role: "user", content: `newer-${index}` },
                   }))
                 : [],
-            total:
-              evidence === "retained-outside-page" ? 21 : evidence.startsWith("pending-") ? 1 : 0,
-          },
-          ...(acceptedInput &&
-          Array.isArray(payload?.inputRunIds) &&
-          payload.inputRunIds.includes("message-stable")
-            ? {
-                inputReceipts: [
-                  evidence === "consumed"
-                    ? {
-                        runId: "message-stable",
-                        state: "consumed",
-                        consumedByEventId: "aggregate-user",
-                      }
-                    : { runId: "message-stable", state: "pending" },
-                ],
-              }
-            : {}),
-        });
-      }
-      if (method === "sessions.describe") {
-        return Promise.resolve({ session: { placement: createStartupPlacement("active", 1) } });
-      }
-      return Promise.resolve({ status: "started" });
-    });
-    const { startup, input, chatSubmissions, client } = createPlacementStartupHarness(request);
-    input.recovery = { ...input.recovery, phase: "sending" };
-    writeSessionPlacementRecovery(input.recovery);
-    startup.resumeRecovery();
-    try {
-      await vi.waitFor(() =>
-        expect(request).toHaveBeenCalledWith("chat.history", expect.anything()),
-      );
-      await vi.waitFor(() => {
-        if (delivered) {
-          expect(startup.get(input.recovery.sessionKey)).toBeNull();
-          expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
-          const handoff = chatSubmissions.readInitial(input.recovery.sessionKey, client);
-          expect(handoff?.pendingRunId).toBe(input.recovery.messageId);
-        } else {
-          expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-            phase: "failed",
-            action: "check-delivery",
-            initialTurn: { text: input.recovery.message },
+              total: delivered ? 21 : 0,
+            },
+            ...(delivered &&
+            Array.isArray(payload?.inputRunIds) &&
+            payload.inputRunIds.includes("message-stable")
+              ? {
+                  inputReceipts: [{ runId: "message-stable", state: "pending" }],
+                }
+              : {}),
           });
         }
+        if (method === "sessions.describe") {
+          return Promise.resolve({ session: { placement: createStartupPlacement("active", 1) } });
+        }
+        return Promise.resolve({ status: "started" });
       });
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
-      const stored = readSessionPlacementRecovery(
-        input.recovery.gatewayUrl,
-        input.recovery.recoveryScope,
-        input.recovery.sessionKey,
-      );
-      if (delivered) {
-        expect(stored).toBeNull();
-      } else {
-        expect(stored).toMatchObject({
-          phase: "paused",
-          reason: "unconfirmed",
-          messageId: input.recovery.messageId,
+      const { startup, input, chatSubmissions, client } = createPlacementStartupHarness(request);
+      input.recovery = { ...input.recovery, phase: "sending" };
+      writeSessionPlacementRecovery(input.recovery);
+      startup.resumeRecovery();
+      try {
+        await vi.waitFor(() =>
+          expect(request).toHaveBeenCalledWith("chat.history", expect.anything()),
+        );
+        await vi.waitFor(() => {
+          if (delivered) {
+            expect(startup.get(input.recovery.sessionKey)).toBeNull();
+            expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
+            const handoff = chatSubmissions.readInitial(input.recovery.sessionKey, client);
+            expect(handoff?.pendingRunId).toBe(input.recovery.messageId);
+          } else {
+            expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+              phase: "failed",
+              action: "check-delivery",
+              initialTurn: { text: input.recovery.message },
+            });
+          }
         });
+        expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
+        const stored = readSessionPlacementRecovery(
+          input.recovery.gatewayUrl,
+          input.recovery.recoveryScope,
+          input.recovery.sessionKey,
+        );
+        if (delivered) {
+          expect(stored).toBeNull();
+        } else {
+          expect(stored).toMatchObject({
+            phase: "paused",
+            reason: "unconfirmed",
+            messageId: input.recovery.messageId,
+          });
+        }
+      } finally {
+        startup.dispose();
       }
-    } finally {
-      startup.dispose();
-    }
-  });
+    },
+  );
 
   it.each([
     { order: "pane-first", receipt: "pending" },
@@ -474,4 +440,390 @@ describe("application placement delivery recovery", () => {
       }
     },
   );
+});
+
+describe("placement startup reconnect", () => {
+  function transition(gateway: ApplicationGateway, snapshot: ApplicationGateway["snapshot"]) {
+    Object.assign(gateway, { snapshot });
+    for (const [listener] of vi.mocked(gateway.subscribe).mock.calls) {
+      listener(snapshot);
+    }
+  }
+
+  beforeEach(() => sessionStorage.clear());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  describe("initial turn ownership through disconnect", () => {
+    it("restores paused content without effects after storage failure and client replacement", async () => {
+      const request = vi.fn(() => {
+        blockStorageWrites();
+        return Promise.reject(
+          new GatewayRequestError({ code: "INVALID_REQUEST", message: "target unavailable" }),
+        );
+      });
+      const { startup, input, client, gateway } = createPlacementStartupHarness(request);
+      sessionStorage.clear();
+      startup.start(input);
+      await vi.waitFor(() => expect(startup.get(input.recovery.sessionKey)?.phase).toBe("failed"));
+      client.recoveryScopeReady = false;
+      transition(gateway, { ...gateway.snapshot, phase: "reconnecting" });
+      const reconnecting = startup.get(input.recovery.sessionKey);
+      expect(reconnecting).toMatchObject({
+        phase: "reconnecting",
+        retryable: false,
+        initialTurn: {
+          text: input.recovery.message,
+          sendRunId: input.recovery.messageId,
+          sendState: "waiting-reconnect",
+        },
+      });
+      expect(chatStartupStatusLabel(null, reconnecting)).toBe("Reconnecting…");
+      expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
+      startup.retry(input.recovery.sessionKey);
+      const replacement = { ...client, recoveryScopeReady: true };
+      transition(gateway, {
+        ...gateway.snapshot,
+        client: replacement as never,
+        phase: "connected",
+      });
+      await flushStartupMicrotasks();
+      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+        phase: "failed",
+        startedAt: input.createdAt,
+        initialTurn: { text: input.recovery.message, sendRunId: input.recovery.messageId },
+        action: "retry",
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(sessionStorage.length).toBe(0);
+      startup.dispose();
+    });
+
+    it("keeps an explicit Start while its lazy runtime loads offline", async () => {
+      const moduleLoad = createDeferred<{ default: typeof createRuntime }>();
+      const request = vi.fn((method: string) =>
+        method === "sessions.dispatch"
+          ? Promise.reject(
+              new GatewayRequestError({ code: "INVALID_REQUEST", message: "target unavailable" }),
+            )
+          : Promise.reject(new Error(`unexpected ${method}`)),
+      );
+      const { startup, input, client, gateway } = createPlacementStartupHarness(request, {
+        loadRuntime: () => moduleLoad.promise,
+      });
+      sessionStorage.clear();
+      startup.start({ ...input, persistRecovery: false });
+      client.recoveryScopeReady = false;
+      transition(gateway, { ...gateway.snapshot, phase: "reconnecting" });
+      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+        phase: "reconnecting",
+        retryable: false,
+        initialTurn: { text: input.recovery.message, sendState: "waiting-reconnect" },
+      });
+      moduleLoad.resolve({ default: createRuntime });
+      await flushStartupMicrotasks();
+      expect(request).not.toHaveBeenCalled();
+      expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
+      expect(startup.get(input.recovery.sessionKey)?.initialTurn?.text).toBe(
+        input.recovery.message,
+      );
+      const replacement = { ...client, recoveryScopeReady: true };
+      transition(gateway, {
+        ...gateway.snapshot,
+        client: replacement as never,
+        phase: "connected",
+      });
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "sessions.dispatch",
+          expect.objectContaining({ key: input.recovery.sessionKey, profileId: "aws" }),
+        ),
+      );
+      await vi.waitFor(() => expect(startup.get(input.recovery.sessionKey)?.phase).toBe("failed"));
+      expect(sessionStorage.length).toBe(0);
+      startup.dispose();
+    });
+    it.each(["credentials", "hello-before-recovery", "principal"])(
+      "fences a replaced %s owner while retaining its original storage",
+      async (change) => {
+        const request = vi
+          .fn()
+          .mockRejectedValue(
+            new GatewayRequestError({ code: "INVALID_REQUEST", message: "target unavailable" }),
+          );
+        const { startup, input, client, gateway } = createPlacementStartupHarness(request);
+        Object.assign(gateway.snapshot, { selfUser: { id: "user-a" } });
+        startup.start(input);
+        await vi.waitFor(() =>
+          expect(startup.get(input.recovery.sessionKey)?.phase).toBe("failed"),
+        );
+        if (change === "credentials") {
+          Object.assign(gateway, { connectionRevision: 1 });
+        }
+        if (change === "hello-before-recovery") {
+          client.recoveryScopeReady = false;
+          Object.assign(gateway.snapshot.hello!, { auth: { recoveryScope: "principal-b" } });
+        }
+        if (change === "principal") {
+          client.recoveryScopeReady = false;
+          Object.assign(gateway.snapshot, { selfUser: { id: "user-b" } });
+        }
+        expect(startup.get(input.recovery.sessionKey)).toBeNull();
+        expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
+        startup.retry(input.recovery.sessionKey);
+        await flushStartupMicrotasks();
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(sessionStorage.length).toBe(1);
+        startup.dispose();
+      },
+    );
+
+    it.each([false, true])(
+      "claims restored ownership during an offline runtime load (credentials changed: %s)",
+      async (credentialsChanged) => {
+        const moduleLoad = createDeferred<{ default: typeof createRuntime }>();
+        const request = vi.fn();
+        const { startup, input, gateway, client } = createPlacementStartupHarness(request, {
+          loadRuntime: () => moduleLoad.promise,
+        });
+        writeSessionPlacementRecovery({
+          ...input.recovery,
+          phase: "paused",
+          reason: "not-sent",
+          error: "target unavailable",
+        });
+        startup.resumeRecovery();
+        expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
+        client.recoveryScopeReady = false;
+        if (credentialsChanged) {
+          Object.assign(gateway, { connectionRevision: 1 });
+        }
+        transition(gateway, { ...gateway.snapshot, phase: "reconnecting" });
+        expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(!credentialsChanged);
+        expect(startup.get(input.recovery.sessionKey)).toBeNull();
+        moduleLoad.resolve({ default: createRuntime });
+        await flushStartupMicrotasks();
+        expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(!credentialsChanged);
+        if (credentialsChanged) {
+          client.recoveryScope = "principal-b";
+        }
+        client.recoveryScopeReady = true;
+        transition(gateway, { ...gateway.snapshot, phase: "connected" });
+        await flushStartupMicrotasks();
+        expect(request).not.toHaveBeenCalled();
+        expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(!credentialsChanged);
+        if (!credentialsChanged) {
+          expect(startup.get(input.recovery.sessionKey)?.initialTurn?.text).toBe(
+            input.recovery.message,
+          );
+        }
+        startup.dispose();
+      },
+    );
+
+    it("releases a temporary key hold when the loaded owner rejects an invalid record", async () => {
+      const moduleLoad = createDeferred<{ default: typeof createRuntime }>();
+      const request = vi.fn();
+      const { startup, input } = createPlacementStartupHarness(request, {
+        loadRuntime: () => moduleLoad.promise,
+      });
+      const { gatewayUrl, recoveryScope, sessionKey } = input.recovery;
+      sessionStorage.setItem(
+        sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, sessionKey),
+        "{}",
+      );
+      const holds: boolean[] = [];
+      startup.subscribe(() => holds.push(startup.hasPendingTurn(sessionKey)));
+      startup.resumeRecovery();
+      expect(startup.hasPendingTurn(sessionKey)).toBe(true);
+      moduleLoad.resolve({ default: createRuntime });
+      await flushStartupMicrotasks();
+      expect(holds.at(-1)).toBe(false);
+      expect(startup.hasPendingTurn(sessionKey)).toBe(false);
+      expect(startup.get(sessionKey)).toBeNull();
+      expect(request).not.toHaveBeenCalled();
+      expect(sessionStorage.length).toBe(0);
+      startup.dispose();
+    });
+
+    it("keeps interrupted pending ownership until reconciliation and retires only accepted delivery", async () => {
+      const dispatch = createDeferred<unknown>();
+      const request = vi.fn((method: string) => {
+        if (method === "sessions.dispatch") {
+          return dispatch.promise;
+        }
+        if (method === "sessions.describe") {
+          return Promise.resolve({ session: { placement: createStartupPlacement("active", 2) } });
+        }
+        if (method === "sessions.send") {
+          return Promise.resolve({ status: "started" });
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+      const { startup, input, client, gateway } = createPlacementStartupHarness(request);
+      startup.start(input);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      client.recoveryScopeReady = false;
+      transition(gateway, { ...gateway.snapshot, phase: "reconnecting" });
+      dispatch.resolve({ placement: createStartupPlacement("active", 2) });
+      await flushStartupMicrotasks();
+      expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
+      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+        phase: "reconnecting",
+        initialTurn: { text: input.recovery.message, sendState: "waiting-reconnect" },
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+      client.recoveryScopeReady = true;
+      transition(gateway, { ...gateway.snapshot, phase: "connected" });
+      expect(startup.get(input.recovery.sessionKey)?.startedAt).toBe(input.createdAt);
+      await vi.waitFor(() => expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false));
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "sessions.dispatch",
+        "sessions.describe",
+        "sessions.send",
+      ]);
+      expect(sessionStorage.length).toBe(0);
+      startup.dispose();
+    });
+    it("keeps accepted display when client replacement follows recovery retirement", async () => {
+      const send = createDeferred<unknown>();
+      const request = vi.fn((method: string) => {
+        if (method === "sessions.dispatch") {
+          return Promise.resolve({ placement: createStartupPlacement("active", 2) });
+        }
+        if (method === "sessions.send") {
+          return send.promise;
+        }
+        if (method === "chat.history") {
+          return Promise.resolve({
+            messages: [
+              {
+                role: "user",
+                content: "fix the cloud task",
+                __openclaw: { id: "accepted-user", idempotencyKey: "message-stable:user" },
+              },
+            ],
+          });
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+      const { startup, input, client, gateway, chatSubmissions } =
+        createPlacementStartupHarness(request);
+      startup.start(input);
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("sessions.send", expect.anything()),
+      );
+      const storage = sessionStorage;
+      const remove = storage.removeItem.bind(storage);
+      const recoveryKey = sessionPlacementRecoveryExactStorageKey(
+        input.recovery.gatewayUrl,
+        input.recovery.recoveryScope,
+        input.recovery.sessionKey,
+      );
+      vi.spyOn(Storage.prototype, "removeItem").mockImplementation((key) => {
+        remove(key);
+        if (key === recoveryKey) {
+          queueMicrotask(() => {
+            client.recoveryScopeReady = false;
+            transition(gateway, { ...gateway.snapshot, phase: "reconnecting" });
+            const replacement = { ...client, recoveryScopeReady: true };
+            transition(gateway, {
+              ...gateway.snapshot,
+              phase: "connected",
+              client: replacement as never,
+            });
+          });
+        }
+      });
+      const visible: boolean[] = [];
+      const stop = startup.subscribe(() =>
+        visible.push(
+          Boolean(
+            startup.get(input.recovery.sessionKey)?.initialTurn ||
+            chatSubmissions.readInitial(input.recovery.sessionKey, gateway.snapshot.client),
+          ),
+        ),
+      );
+      try {
+        send.resolve({ status: "started" });
+        await vi.waitFor(() =>
+          expect(
+            chatSubmissions.readInitial(input.recovery.sessionKey, gateway.snapshot.client)
+              ?.pendingRunId,
+          ).toBe(input.recovery.messageId),
+        );
+        expect(visible).not.toContain(false);
+        expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
+        expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+      } finally {
+        stop();
+        startup.dispose();
+      }
+    });
+
+    it.each(["reclaim", "archive", "delete"])(
+      "retains an incognito %s failure that settles after same-credential reconnect",
+      async (failure) => {
+        const dispatch = createDeferred<unknown>();
+        const request = vi.fn((method: string, params?: { archived?: boolean }) => {
+          if (method === "sessions.dispatch") {
+            return dispatch.promise;
+          }
+          if (method === "sessions.reclaim") {
+            return failure === "reclaim"
+              ? Promise.reject(new Error("cleanup unavailable"))
+              : Promise.resolve({ ok: true });
+          }
+          if (method === "sessions.describe") {
+            return Promise.resolve({ session: { sessionId: "temporary-session" } });
+          }
+          if (method === "sessions.patch") {
+            return failure === "archive" && params?.archived
+              ? Promise.reject(new Error("cleanup unavailable"))
+              : Promise.resolve({ ok: true });
+          }
+          if (method === "sessions.delete") {
+            return Promise.reject(new Error("cleanup unavailable"));
+          }
+          throw new Error(`unexpected ${method}`);
+        });
+        const { startup, input, client, gateway } = createPlacementStartupHarness(request);
+        sessionStorage.clear();
+        startup.start({ ...input, persistRecovery: false });
+        await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+        client.recoveryScopeReady = false;
+        transition(gateway, { ...gateway.snapshot, phase: "reconnecting" });
+        transition(gateway, {
+          ...gateway.snapshot,
+          client: { ...client, recoveryScopeReady: true } as never,
+          phase: "connected",
+        });
+        dispatch.resolve({ placement: createStartupPlacement("active", 2) });
+        await vi.waitFor(() =>
+          expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+            phase: "failed",
+            error: "cleanup unavailable",
+            retryable: true,
+            initialTurn: { text: input.recovery.message },
+          }),
+        );
+        expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
+        expect(request.mock.calls.map(([method]) => method)).toEqual(
+          failure === "reclaim"
+            ? ["sessions.dispatch", "sessions.reclaim"]
+            : [
+                "sessions.dispatch",
+                "sessions.reclaim",
+                "sessions.describe",
+                "sessions.patch",
+                ...(failure === "delete" ? ["sessions.delete", "sessions.patch"] : []),
+              ],
+        );
+        expect(sessionStorage.length).toBe(0);
+        startup.dispose();
+      },
+    );
+  });
 });

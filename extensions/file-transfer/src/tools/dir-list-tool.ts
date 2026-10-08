@@ -1,6 +1,7 @@
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { readClampedInt } from "../shared/params.js";
 import {
   DIR_LIST_DEFAULT_MAX_ENTRIES,
@@ -78,7 +79,6 @@ export function createDirListTool(): AnyAgentTool {
         input: params,
         key: "maxEntries",
         defaultValue: DIR_LIST_DEFAULT_MAX_ENTRIES,
-        hardMin: 1,
         hardMax: DIR_LIST_HARD_MAX_ENTRIES,
       });
 
@@ -113,20 +113,15 @@ export function createDirListTool(): AnyAgentTool {
         decision: "allowed",
       });
 
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: directoryListingText(canonicalPath, entries, pageToken, nextPageToken, truncated),
-          },
-        ],
-        details: {
+      return textResult(
+        directoryListingText(canonicalPath, entries, pageToken, nextPageToken, truncated),
+        {
           path: canonicalPath,
           entries,
           nextPageToken,
           truncated,
         },
-      };
+      );
     },
   };
 }

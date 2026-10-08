@@ -3,11 +3,13 @@ import {
   buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
   embeddingProviderOwnsDestination,
+  normalizeEmbeddingModelWithPrefixes,
   resolveEmbeddingEndpointUrl,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
+  type RemoteEmbeddingClient,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import {
@@ -22,7 +24,6 @@ import {
   readProviderJsonObjectResponse,
   readProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -30,11 +31,7 @@ import {
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 
-export type GeminiEmbeddingClient = {
-  baseUrl: string;
-  headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  model: string;
+export type GeminiEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl"> & {
   modelPath: string;
   apiKeys: string[];
   outputDimensionality?: number;
@@ -175,18 +172,11 @@ function resolveGeminiOutputDimensionality(model: string, requested?: number): n
   return requested;
 }
 function normalizeGeminiModel(model: string): string {
-  const trimmed = model.trim();
-  if (!trimmed) {
-    return DEFAULT_GEMINI_EMBEDDING_MODEL;
-  }
-  const withoutPrefix = trimmed.replace(/^models\//, "");
-  if (withoutPrefix.startsWith("gemini/")) {
-    return withoutPrefix.slice("gemini/".length);
-  }
-  if (withoutPrefix.startsWith("google/")) {
-    return withoutPrefix.slice("google/".length);
-  }
-  return withoutPrefix;
+  return normalizeEmbeddingModelWithPrefixes({
+    model,
+    defaultModel: DEFAULT_GEMINI_EMBEDDING_MODEL,
+    prefixes: ["models/gemini/", "models/google/", "models/", "gemini/", "google/"],
+  });
 }
 
 /**
@@ -310,25 +300,24 @@ function normalizeGeminiBaseUrl(raw: string): string {
   if (!trimmed) {
     return DEFAULT_GOOGLE_API_BASE_URL;
   }
-  try {
-    const url = new URL(trimmed);
-    url.hash = "";
-    // OpenAI endpoint aliases and trailing slashes belong to the path, not tenant query values.
-    const openAiIndex = url.pathname.indexOf("/openai");
-    url.pathname = (openAiIndex < 0 ? url.pathname : url.pathname.slice(0, openAiIndex)).replace(
-      /\/+$/,
-      "",
-    );
-    if (
-      url.origin.toLowerCase() === "https://generativelanguage.googleapis.com" &&
-      url.pathname === "/"
-    ) {
-      url.pathname = "/v1beta";
-    }
-    return url.search ? url.href : url.href.replace(/\/$/, "");
-  } catch {
+  const url = URL.parse(trimmed);
+  if (!url) {
     return trimmed;
   }
+  url.hash = "";
+  // OpenAI endpoint aliases and trailing slashes belong to the path, not tenant query values.
+  const openAiIndex = url.pathname.indexOf("/openai");
+  url.pathname = (openAiIndex < 0 ? url.pathname : url.pathname.slice(0, openAiIndex)).replace(
+    /\/+$/,
+    "",
+  );
+  if (
+    url.origin.toLowerCase() === "https://generativelanguage.googleapis.com" &&
+    url.pathname === "/"
+  ) {
+    url.pathname = "/v1beta";
+  }
+  return url.search ? url.href : url.href.replace(/\/$/, "");
 }
 
 export async function createGeminiEmbeddingProvider(

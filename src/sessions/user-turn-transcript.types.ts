@@ -1,4 +1,3 @@
-// User-turn transcript type contracts shared by runtime and queue option types.
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
@@ -9,6 +8,7 @@ import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
 } from "../config/sessions/goals-operations.types.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -156,6 +156,7 @@ export type UserTurnTranscriptTargetResolver =
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
 export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
+  beforeFreshMessageCommit?: SessionSourceAssertion;
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
@@ -185,7 +186,7 @@ export type CreateUserTurnTranscriptRecorderParams = {
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
   errorContext?: string;
   /** Revalidate the original input at fresh commit, not at ACK or preparation. */
-  assertOriginalInputCommit?: () => void;
+  assertOriginalInputCommit?: SessionSourceAssertion;
   onPersistenceError?: (error: unknown) => void;
   onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
   /** Fresh original input only, after durable append and before transcript publication. */
@@ -204,20 +205,29 @@ export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
   /** Committed input, accepted pending custody, and blocked notices are exempt. */
-  assertOriginalInputCommit?: () => void;
+  assertOriginalInputCommit?: SessionSourceAssertion;
   /** Durable input custody leaves the active transcript unchanged until execution owns it. */
   stageApproved?: (options: {
     runId: string;
     assertCurrent: () => void;
     assertAdmittedCurrent?: () => void;
     assertCompletionCurrent?: () => void;
+    authority?: import("../config/sessions/session-pending-input-authority.js").SessionPendingInputAuthority;
   }) => Promise<boolean>;
   getProcessingCompletion?: () => AgentRunTerminalOutcome | undefined;
+  /** Released synchronous SDK contract; internal recorders use completeProcessingAsync. */
   completeProcessing?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome | undefined;
+  completeProcessingAsync?: (
+    outcome: AgentRunTerminalOutcome,
+  ) => Promise<AgentRunTerminalOutcome | undefined>;
   getPendingInputMessage?: () => PersistedUserTurnMessage | undefined;
   isPendingInputConsumed?: () => boolean;
   withPendingInput?: <T>(run: () => T) => T;
+  withPendingInputCurrent?: <T>(run: () => T) => Promise<Awaited<T>>;
+  assertPendingInputLifetimeCurrent?: () => void;
   finishPendingInput?: (disposition: "cancelled" | "interrupted") => void;
+  /** Join accepted completion and disposition writes before releasing the turn's admission. */
+  waitForPendingInputSettlement?: () => Promise<void>;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
   replaceTextBeforePersistence?: (text: string) => void;
   /** Confirms exact-run steering provenance after transcript commitment is proven. */

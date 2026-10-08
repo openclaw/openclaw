@@ -1,10 +1,7 @@
 /** Native systemd EnvironmentFile value decoding; no filesystem or service access. */
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
 
-function decodeSystemdEnvironmentFileValue(rawValue: string): {
-  value: string;
-  literalDollar: boolean;
-} {
+function decodeSystemdEnvironmentFileValue(rawValue: string) {
   type ParseState =
     | "pre"
     | "unquoted"
@@ -94,9 +91,7 @@ function decodeSystemdEnvironmentFileValue(rawValue: string): {
   return { value: decoded, literalDollar };
 }
 
-export function parseSystemdEnvironmentFileLine(
-  rawLine: string,
-): { key: string; value: string; literalShellReference: boolean } | null {
+export function parseSystemdEnvironmentFileLine(rawLine: string) {
   const trimmedStart = rawLine.trimStart();
   if (!trimmedStart || trimmedStart.startsWith("#") || trimmedStart.startsWith(";")) {
     return null;
@@ -106,9 +101,6 @@ export function parseSystemdEnvironmentFileLine(
     return null;
   }
   const key = trimmedStart.slice(0, eq).trim();
-  if (!key) {
-    return null;
-  }
   const decoded = decodeSystemdEnvironmentFileValue(trimmedStart.slice(eq + 1));
   return {
     key,

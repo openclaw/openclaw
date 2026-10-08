@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "@openclaw/retry";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
@@ -30,6 +31,8 @@ import {
   resolveSubagentModelConfigSelectionResult,
   type ResolvedPublishedModelCatalogOwner,
 } from "./run-model-selection.runtime.js";
+
+const CRON_THINKING_HYDRATION_WAIT_MS = 5_000;
 
 type CronSessionModelOverrides = {
   modelOverride?: string;
@@ -135,18 +138,26 @@ async function resolveCronThinkingCatalog(params: {
     return catalog;
   }
   // Thinking capability is a per-model fact; never materialize the full live catalog on cron turns.
-  const refreshed = normalizeThinkingCatalogProviders(
-    await loadProviderScopedThinkingCatalog({
-      config: params.owner.config,
-      provider: params.provider,
-      model: params.model,
-      agentRuntime: params.agentRuntime,
-      agentId: params.owner.agentId,
-      agentDir: params.owner.agentDir,
-      workspaceDir: params.owner.workspaceDir,
-    }),
+  const hydration = loadProviderScopedThinkingCatalog({
+    config: params.owner.config,
+    provider: params.provider,
+    model: params.model,
+    agentRuntime: params.agentRuntime,
+    agentId: params.owner.agentId,
+    agentDir: params.owner.agentDir,
+    workspaceDir: params.owner.workspaceDir,
+  });
+  // Native discovery can queue behind catalog renewal for longer than the cron setup watchdog.
+  // Discovery keeps running under its owner; this turn uses the admitted catalog meanwhile.
+  const refreshed = await raceWithTimeout(
+    hydration.then(normalizeThinkingCatalogProviders),
+    CRON_THINKING_HYDRATION_WAIT_MS,
+    () => undefined,
+    { ref: false },
   );
-  return findModelInCatalog(refreshed, params.provider, params.model) ? refreshed : catalog;
+  return refreshed && findModelInCatalog(refreshed, params.provider, params.model)
+    ? refreshed
+    : catalog;
 }
 
 export async function resolveCronThinkingSelection(params: {

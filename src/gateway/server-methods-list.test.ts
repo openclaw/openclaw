@@ -11,6 +11,21 @@ import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "./server-methods-list.test-fixtures.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
+const mcpAppExtensionMethods = [
+  "mcp.app.onboard",
+  "mcp.app.discover",
+  "mcp.app.launch",
+  "mcp.app.settings",
+  "mcp.app.mention",
+  "mcp.app.formResource",
+  "mcp.app.modelContext",
+  "mcp.app.removeModelContext",
+  "mcp.app.writeResource",
+  "mcp.app.subscribeResource",
+  "mcp.app.unsubscribeResource",
+  "mcp.app.openFile",
+];
+
 describe("GATEWAY_EVENTS", () => {
   it("advertises Talk event streams in hello features", () => {
     expect(GATEWAY_EVENTS).toContain("talk.event");
@@ -78,6 +93,8 @@ describe("listGatewayMethods", () => {
     "session.suggestions.add",
     "session.suggestions.list",
     "session.suggestions.resolve",
+    "session.reactions.set",
+    "session.reactions.list",
     "session.typing",
     "sessions.companion.ask",
     "sessions.companion.state",
@@ -209,6 +226,7 @@ describe("listGatewayMethods", () => {
       "sessions.storage.run",
       "plugins.reload",
       "claws.packages.remove",
+      "claws.removalJournal",
       "canvas.document.preview",
       "computer.status",
       "computer.invoke",
@@ -248,6 +266,24 @@ describe("listGatewayMethods", () => {
       "users.merge",
       "gateway.stop.request",
       "diagnostics.heapSnapshot",
+      "sessions.catalog.import",
+      "backup.status",
+      "storage.locations.list",
+      "storage.locations.probe",
+      ...mcpAppExtensionMethods,
+      "memory.get",
+      "memory.status",
+      "sessions.files.assets",
+      "worktrees.recoverRemoval",
+      "worktrees.retireSnapshot",
+      "sessions.processes.list",
+      "sessions.processes.stop",
+      "catalog.browse",
+      "catalog.searchKeywords",
+      "skills.workshop.list",
+      "skills.workshop.changes",
+      "skills.workshop.archive",
+      "skills.workshop.restore",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -280,6 +316,7 @@ describe("listGatewayMethods", () => {
       "sessions.storage.run",
       "plugins.reload",
       "claws.packages.remove",
+      "claws.removalJournal",
       "canvas.document.preview",
       "computer.status",
       "computer.invoke",
@@ -319,6 +356,24 @@ describe("listGatewayMethods", () => {
       "users.merge",
       "gateway.stop.request",
       "diagnostics.heapSnapshot",
+      "sessions.catalog.import",
+      "backup.status",
+      "storage.locations.list",
+      "storage.locations.probe",
+      ...mcpAppExtensionMethods,
+      "memory.get",
+      "memory.status",
+      "sessions.files.assets",
+      "worktrees.recoverRemoval",
+      "worktrees.retireSnapshot",
+      "sessions.processes.list",
+      "sessions.processes.stop",
+      "catalog.browse",
+      "catalog.searchKeywords",
+      "skills.workshop.list",
+      "skills.workshop.changes",
+      "skills.workshop.archive",
+      "skills.workshop.restore",
     ]);
   });
 
@@ -382,7 +437,14 @@ describe("listGatewayMethods", () => {
   it("classifies cron mutations as control-plane writes", () => {
     const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
 
-    for (const method of ["cron.add", "cron.update", "cron.remove", "cron.run", "claws.monitors"]) {
+    for (const method of [
+      "cron.add",
+      "cron.update",
+      "cron.remove",
+      "cron.run",
+      "claws.monitors",
+      "claws.removalJournal",
+    ]) {
       expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
         name: method,
         scope: "operator.admin",
@@ -479,6 +541,7 @@ describe("listGatewayMethods", () => {
       "sessions.storage.run",
       "plugins.reload",
       "claws.packages.remove",
+      "claws.removalJournal",
       "canvas.document.preview",
       "computer.status",
       "computer.invoke",
@@ -518,6 +581,24 @@ describe("listGatewayMethods", () => {
       "users.merge",
       "gateway.stop.request",
       "diagnostics.heapSnapshot",
+      "sessions.catalog.import",
+      "backup.status",
+      "storage.locations.list",
+      "storage.locations.probe",
+      ...mcpAppExtensionMethods,
+      "memory.get",
+      "memory.status",
+      "sessions.files.assets",
+      "worktrees.recoverRemoval",
+      "worktrees.retireSnapshot",
+      "sessions.processes.list",
+      "sessions.processes.stop",
+      "catalog.browse",
+      "catalog.searchKeywords",
+      "skills.workshop.list",
+      "skills.workshop.changes",
+      "skills.workshop.archive",
+      "skills.workshop.restore",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
@@ -651,17 +732,6 @@ describe("listGatewayMethods", () => {
         controlPlaneWrite: true,
       });
     }
-  });
-
-  it("classifies proposal evaluation as a control-plane write", () => {
-    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
-
-    expect(
-      descriptors.find((descriptor) => descriptor.name === "skills.proposals.evaluate"),
-    ).toMatchObject({
-      scope: "operator.admin",
-      controlPlaneWrite: true,
-    });
   });
 
   it("classifies project cloning as a described control-plane write", () => {

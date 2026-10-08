@@ -2,7 +2,6 @@ import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
-import type { EventLogEntry } from "../../api/event-log.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { HealthSnapshot, StatusSummary } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
@@ -42,7 +41,6 @@ class DebugPage extends OpenClawLightDomElement {
   @state() private debugCallError: string | null = null;
   @state() private debugDiagnosticsError: string | null = null;
   @state() private debugLiveError: string | null = null;
-  @state() private eventLog: readonly EventLogEntry[] = [];
 
   private readonly polling = new PollController(
     this,
@@ -134,13 +132,9 @@ class DebugPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.gateway,
       (gateway, notify) => gateway.subscribeEventLog(notify),
-      (gateway) => {
-        this.eventLog = gateway.eventLog;
-      },
     )
-    .watch(
+    .watchStore(
       () => this.context?.settingsAgentSelection,
-      (selection, notify) => selection.subscribe(notify),
       (selection) => {
         const agentId = selection.state.selectedId;
         if (agentId === this.diagnosticsAgentId) {
@@ -242,7 +236,7 @@ class DebugPage extends OpenClawLightDomElement {
       lanes: this.debugLanes,
       dynamic: this.debugDynamic,
       diagnosticsError: this.debugDiagnosticsError ?? this.debugLiveError,
-      eventLog: this.eventLog,
+      eventLog: this.context.gateway.eventLog,
       methods: (this.context.gateway.snapshot.hello?.features?.methods ?? []).toSorted(),
       callMethod: this.debugCallMethod,
       callParams: this.debugCallParams,

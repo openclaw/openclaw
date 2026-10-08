@@ -33,11 +33,6 @@ export function readRecoveries(db: DatabaseSync): UpdateRecoveryRecord[] {
     decodeUpdateRecovery(row.value_json, row.state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
   );
 }
-function inspectRecoveries(db: DatabaseSync): UpdateRecoveryInspection[] {
-  return readRecoveryRows(db).map((row) =>
-    inspectUpdateRecovery(row.value_json, row.state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
-  );
-}
 /** Private read-only compatibility surface for diagnostics and retained-pair
  * inspection. Legacy receipts remain exact historical evidence, never authority.
  * Execution loaders below deliberately reject them instead of upgrading them. */
@@ -46,7 +41,10 @@ export function inspectUpdateRecoveries(
 ): UpdateRecoveryInspection[] {
   return (
     withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-      ({ db }) => inspectRecoveries(db),
+      ({ db }) =>
+        readRecoveryRows(db).map(({ value_json, state_key }) =>
+          inspectUpdateRecovery(value_json, state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
+        ),
       options,
     ) ?? []
   );

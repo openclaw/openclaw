@@ -1,22 +1,30 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { threadId, type Worker } from "node:worker_threads";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import type { FixtureReceiptChannel } from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { withEnv } from "../../test-utils/env.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
+import { closeAuthProfileReadPool } from "../auth-profiles/sqlite-read-pool.js";
 import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "../plugin-model-catalog.js";
+import * as catalogWorker from "../prepared-model-catalog-worker.js";
 import { isPreparedModelCatalogFull } from "../prepared-model-runtime.full-catalog.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import type {
@@ -26,9 +34,13 @@ import type {
 
 const waitTimeoutMs = 30_000;
 
-export function usePreparedCatalogWorkerFixtures() {
+export function usePreparedCatalogWorkerFixtures(
+  fixtureOptions: { observeCatalogWork?: boolean } = {},
+) {
   const retirements = new Set<() => void | Promise<void>>();
   const workers = new Set<Worker>();
+  const catalogSettlements = new Map<string, (operation: PromiseLike<unknown>) => void>();
+  let restoreCatalogWorkerFactory: (() => void) | undefined;
   let restoreWorkerFactory: (() => void) | undefined;
   async function waitForWorkers(options?: { requireCreated?: boolean }): Promise<void> {
     if (options?.requireCreated) {
@@ -55,6 +67,25 @@ export function usePreparedCatalogWorkerFixtures() {
       return worker;
     });
     restoreWorkerFactory = () => tracking.mockRestore();
+    if (fixtureOptions.observeCatalogWork) {
+      const createCatalogWorker = catalogWorker.createPreparedModelCatalogWorker;
+      const catalogTracking = vi
+        .spyOn(catalogWorker, "createPreparedModelCatalogWorker")
+        .mockImplementation((params) => {
+          const worker = createCatalogWorker(params);
+          return {
+            ...worker,
+            loadCatalog: (...args) => {
+              const operation = worker.loadCatalog(...args);
+              // Bounded foreground reads may return retained rows before acquisition even starts.
+              catalogSettlements.get(params.agentFacts.input.agentDir)?.(operation);
+              catalogSettlements.delete(params.agentFacts.input.agentDir);
+              return operation;
+            },
+          };
+        });
+      restoreCatalogWorkerFactory = () => catalogTracking.mockRestore();
+    }
   });
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(async () => {
@@ -73,21 +104,87 @@ export function usePreparedCatalogWorkerFixtures() {
         restoreWorkerFactory?.();
         restoreWorkerFactory = undefined;
         workers.clear();
+        restoreCatalogWorkerFactory?.();
+        restoreCatalogWorkerFactory = undefined;
+        catalogSettlements.clear();
         clearRuntimeAuthProfileStoreSnapshots();
+        closeAuthProfileReadPool();
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
+        // Agent lease retirement can retain shared actors; retire them before roots can reuse inodes.
+        await closeStateDatabaseForTest();
         cleanup();
       }
     });
   });
   return {
+    readCatalogWorkers: (): readonly Worker[] => [...workers],
     makeTempDir: (prefix: string) => tempDirs.make(prefix),
+    observeCatalogEntry: (
+      receipts: FixtureReceiptChannel,
+      fixture: { marker: string; agentDir: string },
+    ) => {
+      const { marker, agentDir } = fixture;
+      const before = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "";
+      const count = before.split("start\n").length;
+      const completed = createDeferredCore<unknown>();
+      catalogSettlements.set(agentDir, completed.resolve);
+      return (operation: PromiseLike<unknown>, signal: AbortSignal) =>
+        withinTest(
+          catalogFixtureEventBeforeSettlement(
+            receipts,
+            marker,
+            Promise.all([operation, completed.promise]),
+            count,
+          ),
+          signal,
+        );
+    },
     retireAfterTest: (retire: () => void | Promise<void>) => {
       retirements.add(retire);
     },
     waitForWorkers,
-    waitForMarker: async (marker: string): Promise<void> => {
-      await expect.poll(() => fs.existsSync(marker), { timeout: waitTimeoutMs }).toBe(true);
+  };
+}
+
+/** Confirms the durable start record if the worker reply beats its independent receipt. */
+async function catalogFixtureEventBeforeSettlement(
+  receipts: FixtureReceiptChannel,
+  marker: string,
+  operation: PromiseLike<unknown>,
+  count = 1,
+): Promise<void> {
+  const recorded = () =>
+    fs.existsSync(marker) && fs.readFileSync(marker, "utf8").split("start\n").length - 1 >= count;
+  const settled = Promise.resolve(operation).then(
+    () => {
+      expect(recorded(), `Catalog task settled before start reached ${marker}`).toBe(true);
     },
+    (error: unknown) => {
+      if (!recorded()) {
+        throw error;
+      }
+    },
+  );
+  await Promise.race([receipts.waitFor(marker, "start", count), settled]);
+}
+
+export function observeSyntheticAuth(root: string) {
+  const entered = createDeferredCore();
+  const aborted = createDeferredCore();
+  const events = channel(`openclaw.fixture.synthetic-auth:${root}`);
+  const observe = (event: unknown) => {
+    if (event === "entered") {
+      entered.resolve();
+    } else if (event === "aborted") {
+      aborted.resolve();
+    }
+  };
+  events.subscribe(observe);
+  return {
+    entered: entered.promise,
+    aborted: aborted.promise,
+    close: () => events.unsubscribe(observe),
   };
 }
 
@@ -117,11 +214,13 @@ module.exports = {
         ? `
     if (require("node:worker_threads").threadId !== ${threadId}) throw Error("native auth probe entered worker");
     fs.appendFileSync(${JSON.stringify(path.join(params.root, "synthetic-auth-owner.txt"))}, "parent\\n");
+    require("node:diagnostics_channel").channel(${JSON.stringify(`openclaw.fixture.synthetic-auth:${params.root}`)}).publish("entered");
     if (fs.existsSync(${JSON.stringify(path.join(params.root, "synthetic-auth-hold"))})) {
       if (!signal) throw Error("held auth probe has no cancellation owner");
       await new Promise((resolve, reject) => {
         const abort = () => {
           fs.appendFileSync(${JSON.stringify(path.join(params.root, "synthetic-auth-cancel.txt"))}, "abort\\n");
+          require("node:diagnostics_channel").channel(${JSON.stringify(`openclaw.fixture.synthetic-auth:${params.root}`)}).publish("aborted");
           const cleanup = setInterval(() => {
             if (fs.existsSync(${JSON.stringify(path.join(params.root, "synthetic-auth-hold"))})) return;
             clearInterval(cleanup);
@@ -252,30 +351,29 @@ export async function loadCompletedFullCatalog(
   return completed!;
 }
 
-export function seedFixturePluginModelCatalog(
+export async function seedFixturePluginModelCatalog(
   agentDir: string,
   env: NodeJS.ProcessEnv,
   pluginId: string,
   providerId: string,
-): void {
-  withEnv(env, () =>
-    replacePersistedPluginModelCatalogs({
-      agentDir,
-      pluginCatalogWrites: {
-        [encodePluginModelCatalogRelativePath(pluginId)]: JSON.stringify({
-          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-          providers: {
-            [providerId]: {
-              baseUrl: "https://worker-catalog.invalid/v1",
-              api: "openai-completions",
-              apiKey: "WORKER_CATALOG_API_KEY",
-              models: [{ id: "sqlite-model", name: "SQLite model" }],
-            },
+): Promise<void> {
+  await replacePersistedPluginModelCatalogs({
+    agentDir,
+    env,
+    pluginCatalogWrites: {
+      [encodePluginModelCatalogRelativePath(pluginId)]: JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          [providerId]: {
+            baseUrl: "https://worker-catalog.invalid/v1",
+            api: "openai-completions",
+            apiKey: "WORKER_CATALOG_API_KEY",
+            models: [{ id: "sqlite-model", name: "SQLite model" }],
           },
-        }),
-      },
-    }),
-  );
+        },
+      }),
+    },
+  });
 }
 
 export function writeCatalogFailureControl(

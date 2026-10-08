@@ -355,11 +355,7 @@ describe("security fix", () => {
   it("tightens the live legacy main auth store for a named default roster", async () => {
     const stateDir = await createStateDir("named-default-legacy-auth");
     const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
-      "utf-8",
-    );
+    await fs.writeFile(configPath, JSON.stringify({ agents: { entries: { ops: {} } } }), "utf-8");
     const legacyAuthPath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
     await fs.mkdir(path.dirname(legacyAuthPath), { recursive: true });
     await fs.writeFile(legacyAuthPath, "{}\n", "utf-8");

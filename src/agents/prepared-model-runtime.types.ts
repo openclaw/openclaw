@@ -1,6 +1,7 @@
 import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
+import type { ActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
 import type { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
@@ -8,7 +9,10 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import type { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
-import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
+import type {
+  AgentHarnessPluginSelection,
+  RuntimePluginLoadPurpose,
+} from "./harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "./prepared-model-catalog.types.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
@@ -33,6 +37,8 @@ export type PreparedModelCatalogRefreshOptions = {
   refresh?: boolean;
   providerIds?: readonly string[];
   changedOnly?: boolean;
+  /** Await acquisition instead of returning published rows after the foreground deadline. */
+  wait?: boolean;
 };
 
 export type PreparedNativeModelSelection = {
@@ -55,6 +61,7 @@ export type PreparedMediaCapabilityProviderAcquisition = Readonly<{
 }>;
 
 export type PreparedModelRuntimePluginGeneration = Readonly<{
+  remoteCatalog: ActiveRemoteModelCatalog | null;
   pluginMetadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
@@ -88,6 +95,8 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
     /** Inventory demand may renew expired providers without waiting or replacing saved rows. */
     refreshExpiredModelCatalog?: () => void;
+    /** Rechecks native CLI login availability without refreshing provider inventory. */
+    recheckNativeLogin?: () => void;
     /** Reads validated executable rows from this owner's accepted provider publication. */
     readPublishedModels?: () => ReadonlyMap<string, readonly Model[]> | undefined;
     /** Builds this generation's full control-plane catalog without replacing turn facts. */
@@ -144,6 +153,8 @@ export type PreparedModelRuntimeInput = {
   readOnly?: boolean;
   /** Load the exact runtime plugin generation for an isolated executable probe. */
   loadRuntimePlugins?: boolean;
+  /** Prompt-only inference selects providers/harnesses without agent capabilities. */
+  runtimePluginPurpose?: RuntimePluginLoadPurpose;
   skipCredentials?: boolean;
   env?: NodeJS.ProcessEnv;
   allowGatewaySubagentBinding?: boolean;
@@ -216,16 +227,22 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
   fullCatalogConcurrencyLimit: number;
 }>;
 
+export type PreparedModelCatalogProviderFacts = {
+  source: string;
+  credentials: string;
+  expiresAt?: number;
+  /** Consecutive failed discoveries; their backed-off retry deadline is `expiresAt`. */
+  discoveryFailures?: number;
+  legacyRows?: ReadonlySet<string>;
+};
+
 export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
   runtimeModels: ReadonlyMap<string, readonly Model[]>;
   key: string;
   pluginFingerprint: string;
   nativeSource: string;
-  providers: ReadonlyMap<
-    string,
-    { source: string; credentials: string; expiresAt?: number; legacyRows?: ReadonlySet<string> }
-  >;
+  providers: ReadonlyMap<string, PreparedModelCatalogProviderFacts>;
   discoveryOrigins: readonly { provider: string; profileId?: string }[];
 };
 
@@ -258,6 +275,8 @@ export type PreparedModelRuntimeOwner = {
   /** Source-bound attempt status, including failure before any inventory was published. */
   catalogAttempt?: PreparedModelCatalogAttempt;
   refreshError?: Error;
+  /** The configured publication owner recovers when an idle Gateway lender retires. */
+  onPluginGenerationRetired?: () => void;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   /** Explicit generation admitted for the current publication, when known. */

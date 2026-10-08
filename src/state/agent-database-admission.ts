@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
 import {
   listAgentIds,
   tryResolveAmbientOwnerAgentId,
@@ -10,6 +11,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { formatAgentDatabaseOwnershipRepairHint } from "../infra/state-migrations.agent-owner-guidance.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
   openClawStateDatabaseCache,
@@ -33,6 +35,19 @@ export type AgentDatabaseAdmissionRefusal = {
 
 type AdmissionOptions = { env?: NodeJS.ProcessEnv };
 
+export function createAgentDatabaseAdmissionErrorShape(
+  refusal: AgentDatabaseAdmissionRefusal,
+): ErrorShape {
+  const retryable = refusal.code === "agent-database-inspection-pending";
+  return {
+    code: "UNAVAILABLE",
+    message: `${refusal.reason}\n${refusal.repairHint}`,
+    details: refusal,
+    retryable,
+    ...(retryable ? { retryAfterMs: 250 } : {}),
+  };
+}
+
 // Refusals are public protocol objects. Keep inspection causes private to the admission owner.
 const refusalCauses = new WeakMap<AgentDatabaseAdmissionRefusal, unknown>();
 
@@ -49,6 +64,7 @@ const preparation = new AsyncLocalStorage<{
   key: string;
   active: boolean;
   assertCurrent: () => void;
+  completion: Promise<void>;
 }>();
 
 export function createAgentDatabaseInspectionRefusal(params: {
@@ -89,9 +105,17 @@ export function captureAgentDatabasePreparationDeletion(
   agentId: string,
   database: Pick<OpenClawStateDatabase, "db" | "path">,
 ): () => void {
+  return captureAgentDatabasePreparationDeletionForIdentity(agentId, {
+    identityKey: requireOpenClawStateDatabaseIdentity(database).key,
+    databasePath: database.path,
+  });
+}
+
+export function captureAgentDatabasePreparationDeletionForIdentity(
+  agentId: string,
+  { identityKey, databasePath }: { identityKey: string; databasePath: string },
+): () => void {
   const id = normalizeAgentId(agentId);
-  const identityKey = requireOpenClawStateDatabaseIdentity(database).key;
-  const databasePath = database.path;
   const captured = [...refusalsByState].flatMap(([key, owner]) => {
     const known = openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(key);
     const refusal = owner.refusals.get(id);
@@ -154,6 +178,19 @@ export function captureAgentDatabasePreparationJournal(
       throw new Error(`Agent ${scope.refusal.agentId} was deleted during startup inspection`);
     }
   };
+}
+
+/** Background work joins its creating admission without retaining the temporary write borrow. */
+export function captureAgentDatabasePreparationCompletion(
+  agentId: string,
+  options: AdmissionOptions = {},
+): Promise<void> | undefined {
+  const scope = preparation.getStore();
+  return scope?.active &&
+    scope.refusal.agentId === normalizeAgentId(agentId) &&
+    sameKnownState(scope.key, stateKey(options))
+    ? scope.completion
+    : undefined;
 }
 
 /** Ownership is derived from the inspected file; missing or corrupt metadata keeps normal refusal. */
@@ -275,7 +312,10 @@ export async function preparePendingAgentDatabase(
     }
   };
   assertCurrent();
-  const scope = { key, refusal, assertCurrent, active: true };
+  const completion = createDeferredCore();
+  // Preparation can fail without a background consumer.
+  void completion.promise.catch(() => {});
+  const scope = { key, refusal, assertCurrent, active: true, completion: completion.promise };
   try {
     await preparation.run(scope, run);
     scope.assertCurrent();
@@ -283,6 +323,10 @@ export async function preparePendingAgentDatabase(
     const refusals = new Map(current.refusals);
     refusals.delete(refusal.agentId);
     current.refusals = refusals;
+    completion.resolve();
+  } catch (error) {
+    completion.reject(error);
+    throw error;
   } finally {
     scope.active = false;
   }

@@ -31,14 +31,14 @@ export async function queueSteeredCliUserTurn(
       }
     }
   } catch (error) {
-    failure = toErrorObject(error);
+    failure = toErrorObject(error, "CLI steering failed.");
   }
   try {
     // This receipt is terminal even when persistence failed; the registry retains
     // accepted-input disposition and aborts rather than replaying an unconfirmed turn.
     options?.onQueueSettled?.();
   } catch (error) {
-    failure ??= toErrorObject(error);
+    failure ??= toErrorObject(error, "CLI steering completion observer failed.");
   }
   if (failure) {
     if (!accepted) {

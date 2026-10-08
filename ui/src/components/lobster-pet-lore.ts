@@ -19,6 +19,13 @@ const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
   bee: "Buzz",
   rubberduck: "Debuggy",
   watermelon: "Pips",
+  clawnstantine: "Clawnstantine",
+  clawiestardust: "Clawie Stardust",
+  taylorpinch: "Taylor Pinch",
+  clawtoodeetoo: "Clawtoo Deetoo",
+  leonardodepinchy: "Leonardo DaPinchy",
+  shellvis: "Shellvis",
+  alexandergrahamshell: "Alexander Graham Shell",
   clawtron: "Clawtron",
   selene: "Selene",
   geode: "Amethyst",
@@ -50,6 +57,8 @@ const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
   goldenretro: "24K",
 };
 
+// Keep legacy random-name slots stable. Dedicated character discoveries are
+// keyed by palette id, not these older visitor names.
 const PET_NAMES = [
   "Pinchy",
   "Barnaby",
@@ -116,6 +125,34 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
     hint: "Quack.",
   },
   watermelon: { flavor: "Contains 6% lobster.", hint: "Ripe when thumped." },
+  clawnstantine: {
+    flavor: "Built an empire. Still rules from the ledge.",
+    hint: "All tides lead here.",
+  },
+  clawiestardust: {
+    flavor: "Changes shells. Never changes style.",
+    hint: "Something electric washed ashore.",
+  },
+  taylorpinch: {
+    flavor: "Turns every tide into an era.",
+    hint: "Someone is shaking off the sand.",
+  },
+  clawtoodeetoo: {
+    flavor: "Speaks fluent beep. Fixes things anyway.",
+    hint: "A resourceful little droid.",
+  },
+  leonardodepinchy: {
+    flavor: "Every shell is a canvas.",
+    hint: "A little Renaissance is washing ashore.",
+  },
+  shellvis: {
+    flavor: "The king of rock and claw.",
+    hint: "Someone brought blue suede claws.",
+  },
+  alexandergrahamshell: {
+    flavor: "Good ideas ring a bell.",
+    hint: "A familiar ringing from the shore.",
+  },
   clawtron: { flavor: "60% rivets, 40% love.", hint: "Beep boop snip." },
   selene: { flavor: "Carries the current moon on its belly.", hint: "Waxes and wanes." },
   geode: { flavor: "Rock outside, amethyst inside.", hint: "Crack the surface." },

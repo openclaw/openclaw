@@ -43,7 +43,7 @@ describe("restart health", () => {
 
     expect(snapshot.healthy).toBe(false);
     expect(snapshot.probeError).toContain("read ECONNRESET");
-    expect(diagnostics).toContain("Gateway probe failed: read ECONNRESET");
+    expect(diagnostics).toContain("Gateway check failed: read ECONNRESET");
     expect(diagnostics).toContain("Port diagnostics errors: listener inspection warning");
     expect(diagnostics).toContain("\\nGateway probe succeeded: spoofed");
     expect(diagnostics.split("\n")).toHaveLength(2);

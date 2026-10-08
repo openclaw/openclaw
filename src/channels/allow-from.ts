@@ -5,9 +5,6 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
  */
 export const ACCESS_GROUP_ALLOW_FROM_PREFIX = "accessGroup:";
 
-/**
- * Parses an access-group allowFrom entry and returns the referenced group name.
- */
 export function parseAccessGroupAllowFromEntry(entry: string): string | null {
   const trimmed = entry.trim();
   if (!trimmed.startsWith(ACCESS_GROUP_ALLOW_FROM_PREFIX)) {
@@ -55,18 +52,10 @@ export function resolveGroupAllowFromSources(params: {
 /**
  * Returns the first value that is present, preserving falsy values such as false, 0, and "".
  */
-export function firstDefined<T>(...values: Array<T | undefined>) {
-  for (const value of values) {
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  return undefined;
+export function firstDefined<T>(...values: Array<T | undefined>): T | undefined {
+  return values.find((value) => value !== undefined);
 }
 
-/**
- * Checks a normalized sender allowlist with wildcard and empty-list policy handling.
- */
 export function isSenderIdAllowed(
   allow: { entries: string[]; hasWildcard: boolean; hasEntries: boolean },
   senderId: string | undefined,

@@ -20,7 +20,7 @@ import {
   clearAgentRunContext,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { runReplyAgent } from "./agent-runner.runtime.js";
+import { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import { baseParams, createInboundTurn, createSessionTurn } from "./get-reply-run.test-support.js";
 

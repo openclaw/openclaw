@@ -1,4 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type {
   AcpSessionRuntimeOptions,
   SessionAcpIdentity,
@@ -11,14 +12,11 @@ import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import {
-  type AcpSessionEntryBinding,
-  type AcpSessionRow,
   buildAcpDatabaseSessionKey,
-  legacyAcpDatabaseSessionKeys,
-  resolveLegacyFreeAcpSessionKey,
   resolveReadableAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
 } from "./session-meta-keys.js";
+import type { AcpSessionEntryBinding, AcpSessionRow } from "./session-meta-read.types.js";
 
 /** Each result stays bound to the entry lifecycle captured by the row reader. */
 export async function readAcpSessionMetaForEntries(
@@ -38,7 +36,7 @@ export async function readAcpSessionMetaForEntries(
     return [];
   }
   const entries = params.entries.map((item) => ({
-    sessionKey: item.sessionKey,
+    sessionKey: normalizeStoreSessionKey(item.sessionKey),
     agentId: item.agentId,
     entry: item.entry
       ? {
@@ -53,11 +51,7 @@ export async function readAcpSessionMetaForEntries(
     {
       type: "acpSessions.metadata",
       entries: entries.map(({ sessionKey, agentId, entry }) => ({
-        keys: [
-          buildAcpDatabaseSessionKey(sessionKey, agentId),
-          ...legacyAcpDatabaseSessionKeys(sessionKey, agentId, params.cfg),
-        ],
-        legacyKey: resolveLegacyFreeAcpSessionKey(sessionKey),
+        keys: [buildAcpDatabaseSessionKey(sessionKey, agentId)],
         entry,
       })),
     },
@@ -120,13 +114,7 @@ export function readAcpSessionMetaForEntry(
   const row = read(
     ({ db }) =>
       resolveReadableAcpSessionRow({
-        row: selectAcpSessionRowForStoreEntry(
-          db,
-          sessionKey,
-          params.agentId,
-          params.cfg,
-          params.entry,
-        ),
+        row: selectAcpSessionRowForStoreEntry(db, sessionKey, params.agentId, params.entry),
         entry: params.entry,
       }),
     { env: params.env, path: params.databasePath },

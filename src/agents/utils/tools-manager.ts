@@ -8,7 +8,6 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { join } from "node:path";
-import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
@@ -244,11 +243,7 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
     const stagingRoot = await fsRoot(stagingDir);
     await downloadFile(downloadUrl, stagingRoot, assetName);
 
-    if (assetName.endsWith(".tar.gz") || assetName.endsWith(".zip")) {
-      await extractArchiveSafe(archivePath, extractDir, assetName);
-    } else {
-      throw new Error(`Unsupported archive format: ${assetName}`);
-    }
+    await extractArchiveSafe(archivePath, extractDir, assetName);
 
     // Find the binary in extracted files. Some archives contain files directly
     // at root, others nest under a versioned subdirectory.
@@ -308,71 +303,31 @@ function installTool(tool: "fd" | "rg", toolsDir: string): Promise<string> {
   );
 }
 
-// Termux package names for tools
-const TERMUX_PACKAGES: Record<string, string> = {
-  fd: "fd",
-  rg: "ripgrep",
-};
-
-// Ensure a tool is available, downloading if necessary
-// Returns the path to the tool, or null if unavailable
-export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<string | undefined> {
+/** Returns the existing or installed binary path, or undefined when unavailable. */
+export async function ensureTool(tool: "fd" | "rg"): Promise<string | undefined> {
   const toolsDir = getBinDir();
   const existingPath = getToolPath(tool, toolsDir);
   if (existingPath) {
     return existingPath;
   }
 
-  const config = TOOLS[tool];
-
   if (!toolsDir) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(
-          `${config.name} not found. Install it on PATH or select an agent owner before downloading.`,
-        ),
-      );
-    }
     return undefined;
   }
 
   if (isTruthyEnvValue(process.env.OPENCLAW_OFFLINE)) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(`${config.name} not found. Offline mode enabled, skipping download.`),
-      );
-    }
     return undefined;
   }
 
   // On Android/Termux, Linux binaries don't work due to Bionic libc incompatibility.
   // Users must install via pkg.
   if (platform() === "android") {
-    const pkgName = TERMUX_PACKAGES[tool] ?? tool;
-    if (!silent) {
-      console.log(chalk.yellow(`${config.name} not found. Install with: pkg install ${pkgName}`));
-    }
     return undefined;
   }
 
-  if (!silent) {
-    console.log(chalk.dim(`${config.name} not found. Downloading...`));
-  }
-
   try {
-    const path = await installTool(tool, toolsDir);
-    if (!silent) {
-      console.log(chalk.dim(`${config.name} installed to ${path}`));
-    }
-    return path;
-  } catch (e) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(
-          `Failed to download ${config.name}: ${e instanceof Error ? e.message : String(e)}`,
-        ),
-      );
-    }
+    return await installTool(tool, toolsDir);
+  } catch {
     return undefined;
   }
 }

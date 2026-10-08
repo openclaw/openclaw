@@ -15,9 +15,11 @@ import {
   UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
-import type { inspectStagedUpdateCandidateAdmission } from "./update-command-candidate-admission.js";
 import type { UpdateCommandExecutor } from "./update-command-executor.js";
-import type { UpdateInitializationAdmission } from "./update-command-initialization-types.js";
+import type {
+  StagedUpdateCandidateAdmission,
+  UpdateInitializationAdmission,
+} from "./update-command-initialization-types.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
@@ -33,9 +35,12 @@ export type UpdateTargetSelection =
 export type InitializedUpdate = UpdateInitializationAdmission &
   UpdateTargetSelection & {
     executor: UpdateCommandExecutor;
-    registerRun: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>;
+    registerRun: (
+      run: NonNullable<UpdateCommandOptions["run"]>,
+      disposePresentation: () => void,
+    ) => Promise<void>;
     stagedPackage?: StagedPackageInstallUpdate;
-    candidateAdmission?: Awaited<ReturnType<typeof inspectStagedUpdateCandidateAdmission>>;
+    candidateAdmission?: StagedUpdateCandidateAdmission;
     downgradeConfirmed?: boolean;
     callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
   };

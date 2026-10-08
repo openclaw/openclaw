@@ -62,7 +62,7 @@ export async function readSharedGitHubPublication(
           type: "githubPublication.sharedObservation",
           input: { kind, session, selector: capturedSelector, entry: workspaceSelection(entry) },
         },
-        { current: true },
+        { current: true, preferIndependentWarmRead: true },
       ),
     );
     if (result && (!result.ok || result.type !== "githubPublication.sharedObservation")) {

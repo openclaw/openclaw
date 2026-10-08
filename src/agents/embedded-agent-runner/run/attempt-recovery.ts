@@ -5,7 +5,6 @@ import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
-import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
   findCliTerminalStopError,
@@ -15,13 +14,14 @@ import { failoverReasonFromClassification } from "../../failover/classification-
 import { classifyFailoverSignal } from "../../failover/classify.js";
 import { getFailoverErrorCode } from "../../failover/error.js";
 import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
 import type { normalizeUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
-import type { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
+import type { NormalizedEmbeddedRunAttempt } from "./attempt-normalization.js";
 import { hasAsyncActivity, isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
 import { resolveCodexAppServerRecoveryRetry } from "./codex-app-server-recovery.js";
@@ -41,10 +41,6 @@ import { isEmbeddedRunTerminalInterrupted, isEmbeddedRunTimeoutFinal } from "./t
 import { recoverEmbeddedRunTimeout } from "./timeout-context-recovery.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
-type NormalizedAttempt = Extract<
-  Awaited<ReturnType<typeof normalizeEmbeddedRunAttempt>>,
-  { action: "proceed" }
->;
 type Dispatch = Awaited<ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>>;
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 type FailoverRetryController = ReturnType<typeof createEmbeddedRunFailoverRetryController>;
@@ -53,7 +49,7 @@ type CompactionRuntime = ReturnType<typeof createEmbeddedRunCompactionRuntime>;
 export async function recoverEmbeddedRunAttempt(input: {
   runInput: PreparedEmbeddedRunInput;
   preparedRuntime: PreparedRuntime;
-  normalizedAttempt: NormalizedAttempt;
+  normalizedAttempt: NormalizedEmbeddedRunAttempt;
   runtimePlan: Dispatch["runtimePlan"];
   sessionPromptState: SessionPromptState;
   failoverRetryController: FailoverRetryController;
@@ -104,11 +100,11 @@ export async function recoverEmbeddedRunAttempt(input: {
     terminalState,
     setTerminalLifecycleMeta,
     attemptCompactionCount,
-    activeErrorContext,
     resolveReplayInvalidForAttempt,
     assistantErrorText,
     canRestartForLiveSwitch,
   } = normalizedAttempt;
+  const terminal = projectAgentRunAttemptTerminal(attempt.terminal);
   const {
     aborted,
     externalAbort,
@@ -119,7 +115,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     timedOutDuringToolExecution,
     timedOutByRunBudget,
     idleTimedOut,
-  } = projectAgentRunAttemptTerminal(attempt.terminal);
+  } = terminal;
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
   const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
   const settledEvidence = resolveSettledToolBatchEvidence(attempt);
@@ -236,25 +232,34 @@ export async function recoverEmbeddedRunAttempt(input: {
       currentAttemptAssistant,
     });
 
-  if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
-    recordRecoveryDecision("rejected", "hook_block");
-    const errorText = formatErrorMessage(promptError);
+  const completeBlocked = (
+    errorKind: Parameters<typeof buildEmbeddedRunBlockedResult>[0]["errorKind"],
+    errorMessage: string,
+    text = errorMessage,
+    finalPromptText?: string,
+  ) => {
     const replayInvalid = resolveReplayInvalidForAttempt();
     setTerminalLifecycleMeta({ replayInvalid, livenessState: "blocked" });
     return {
-      action: "complete",
+      action: "complete" as const,
       result: buildEmbeddedRunBlockedResult({
-        text: errorText,
-        errorKind: "hook_block",
-        errorMessage: errorText,
+        text,
+        errorKind,
+        errorMessage,
         durationMs: Date.now() - runInput.startedAtMs,
         agentMeta: buildAttemptErrorMeta(),
         attempt,
         replayInvalid,
+        finalPromptText,
       }),
     };
+  };
+
+  if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
+    recordRecoveryDecision("rejected", "hook_block");
+    return completeBlocked("hook_block", formatErrorMessage(promptError));
   }
-  const requestedSelection = shouldSwitchToLiveModel({
+  const requestedSelection = await shouldSwitchToLiveModel({
     cfg: params.config,
     sessionPersistence: params.sessionPersistence,
     sessionKey: runInput.resolvedSessionKey,
@@ -277,6 +282,9 @@ export async function recoverEmbeddedRunAttempt(input: {
       cfg: params.config,
       sessionKey: runInput.resolvedSessionKey,
       agentId: params.agentId,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+      expectedSelection: requestedSelection,
     });
     log.info(
       `live session model switch requested during active attempt for ${params.sessionId}: ` +
@@ -330,6 +338,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     requested: currentAttemptReplaySafe ? requestedSelection : undefined,
   });
   const commonRecoveryInput = {
+    runInput,
     runParams: params,
     state: input.contextRecoveryState,
     contextEngine: input.contextEngine,
@@ -427,9 +436,28 @@ export async function recoverEmbeddedRunAttempt(input: {
     }))
   ) {
     runInput.laneController.throwIfAborted();
+    if (outputLimitFailure) {
+      sessionPromptState.markOwnedTranscriptRetry();
+      await sessionPromptState.settleOwnedTranscriptProjection(
+        sessionPromptState.sessionTarget,
+        params.abortSignal,
+      );
+      runInput.laneController.throwIfAborted();
+      const terminalDetails = recoveryAssistant?.diagnostics?.find(
+        (diagnostic) => diagnostic.type === "openai_responses_terminal",
+      )?.details;
+      const toolCallId = terminalDetails?.incompleteToolCallId;
+      await sessionPromptState.withSessionWriterContext(() =>
+        sessionPromptState.recordOutputLimitNotice(
+          typeof toolCallId === "string" ? toolCallId : undefined,
+        ),
+      );
+      runInput.laneController.throwIfAborted();
+    }
     sessionPromptState.markOwnedTranscriptRetry();
     sessionPromptState.continueFromCurrentTranscript({
       includeToolFailureInstruction: Boolean(attempt.lastToolError),
+      messages: attempt.messagesSnapshot,
     });
     recordRecoveryDecision("accepted", "transient_retry");
     return retry({
@@ -467,21 +495,12 @@ export async function recoverEmbeddedRunAttempt(input: {
   }
   if (overflowRecovery.action === "surface") {
     recordRecoveryDecision("rejected", "overflow_unrecoverable");
-    const replayInvalid = resolveReplayInvalidForAttempt();
-    setTerminalLifecycleMeta({ replayInvalid, livenessState: "blocked" });
-    return {
-      action: "complete",
-      result: buildEmbeddedRunBlockedResult({
-        text: overflowRecovery.userText,
-        errorKind: overflowRecovery.kind,
-        errorMessage: overflowRecovery.errorText,
-        durationMs: Date.now() - runInput.startedAtMs,
-        agentMeta: buildAttemptErrorMeta(),
-        attempt,
-        replayInvalid,
-        finalPromptText: attempt.finalPromptText,
-      }),
-    };
+    return completeBlocked(
+      overflowRecovery.kind,
+      overflowRecovery.errorText,
+      overflowRecovery.userText,
+      attempt.finalPromptText,
+    );
   }
   // Profile rotation and original-prompt replay still require replay-safe evidence.
   if (!currentAttemptReplaySafe) {
@@ -519,34 +538,15 @@ export async function recoverEmbeddedRunAttempt(input: {
     !hasCodexAppServerTimeoutOutcome
   ) {
     const promptFailureOutcome = await handleEmbeddedPromptFailure({
-      runParams: params,
-      attempt,
-      promptError,
-      promptErrorSource,
-      activeErrorContext,
-      provider: preparedRuntime.provider,
-      modelId: preparedRuntime.modelId,
-      authProfileId: runtime.lastProfileId,
-      authProfileStore: preparedRuntime.attemptAuthProfileStore,
-      sessionIdUsed,
-      lane: runInput.globalLane,
-      agentDir: runInput.agentDir,
+      runInput,
+      preparedRuntime,
+      normalizedAttempt,
+      runtime,
+      terminal,
       suspensionSessionId: sessionPromptState.sessionId ?? params.sessionId,
       runtimeAuthRetry: input.runtimeAuthRetry,
-      maybeRefreshRuntimeAuthForAuthError: preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
-      suspendForFailure: runInput.suspendForFailure,
-      resolveReplayInvalid: resolveReplayInvalidForAttempt,
-      setTerminalLifecycleMeta,
       buildErrorAgentMeta: buildAttemptErrorMeta,
-      startedAtMs: runInput.startedAtMs,
-      fallbackConfigured: runInput.fallbackConfigured,
-      aborted,
-      externalAbort,
-      pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
-      timedOutByRunBudget,
       failover: failoverRetryController,
-      attemptedThinking: preparedRuntime.attemptedThinking,
-      thinkLevel: runtime.thinkLevel,
       getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,
       traceAttempts: input.traceAttempts,
       previousRetryFailoverReason: input.lastRetryFailoverReason,

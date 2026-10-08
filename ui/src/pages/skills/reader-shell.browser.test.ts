@@ -2,7 +2,7 @@ import { nothing, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import "../../styles.css";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
-import { renderConnectMachineDialog } from "../new-session/connect-machine-dialog.ts";
+import { ConnectMachineSetupState } from "../new-session/connect-machine-dialog.ts";
 import { createProps, createSkill } from "./view.test-support.ts";
 import { renderSkills } from "./view.ts";
 
@@ -24,16 +24,13 @@ describe.runIf(browserMode)("skill reader shell", () => {
     await page.viewport(width, 844);
     container = document.createElement("openclaw-skills-page");
     document.body.append(container);
+    const connection = new ConnectMachineSetupState(
+      () => ({ client: null, connected: false }),
+      () => undefined,
+    );
+    connection.start();
     render(
-      renderConnectMachineDialog({
-        open: true,
-        loading: false,
-        error: null,
-        setup: null,
-        onRefresh: () => undefined,
-        onClose: () => undefined,
-        onManageDevices: () => undefined,
-      }),
+      connection.render(true, () => undefined),
       container,
     );
     const canonical = await getRenderedModalDialog(container);

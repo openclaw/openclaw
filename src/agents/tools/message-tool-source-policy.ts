@@ -5,6 +5,7 @@ import {
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TObject } from "typebox";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { AgentRuntimeMessageActionContext } from "../../gateway/message-action-turn-capability.js";
@@ -12,10 +13,20 @@ import { MessageActionDeniedError } from "../../infra/outbound/message-action-de
 import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { channelTargetSchema, stringEnum } from "../schema/typebox.js";
 import { readToolStringParam } from "./common.js";
 import { normalizeEscapedLineBreaksForVisibleText } from "./message-tool-visible-content.js";
+
+export function resolveSourceReplySinkDeliveryMode(
+  provider: string | undefined,
+  configuredMode: SourceReplyDeliveryMode | undefined,
+): SourceReplyDeliveryMode | undefined {
+  // Internal tool sends use the private sink; the run's final answer stays automatic.
+  return normalizeMessageChannel(provider) === INTERNAL_MESSAGE_CHANNEL
+    ? "message_tool_only"
+    : configuredMode;
+}
 
 function sourceReplyPolicyError(message: string): MessageActionDeniedError {
   return new MessageActionDeniedError(

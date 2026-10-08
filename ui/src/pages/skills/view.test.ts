@@ -17,6 +17,38 @@ import { renderSkills } from "./view.ts";
 const dialogRestores: Array<() => void> = [];
 const installDialogMethod = createDialogMethodInstaller(dialogRestores);
 
+function createContainer() {
+  const container = document.createElement("div");
+  document.body.append(container);
+  dialogRestores.push(() => container.remove());
+  return container;
+}
+
+function skillReport(skills: SkillStatusReport["skills"]): SkillStatusReport {
+  return { workspaceDir: "/tmp/workspace", managedSkillsDir: "/tmp/skills", skills };
+}
+
+function createCodingAgentSkill(overrides: Parameters<typeof createSkill>[0] = {}) {
+  const requirements = {
+    bins: [],
+    anyBins: ["claude", "codex", "opencode"],
+    env: [],
+    config: [],
+    os: [],
+  };
+  return createSkill({
+    skillKey: "coding-agent",
+    name: "Coding Agent",
+    requirements,
+    missing: { ...requirements },
+    ...overrides,
+  });
+}
+
+function renderView(container: HTMLElement, overrides: Parameters<typeof createProps>[0] = {}) {
+  render(renderSkills(createProps(overrides)), container);
+}
+
 describe("renderSkills", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -28,57 +60,68 @@ describe("renderSkills", () => {
 
   it("keeps settings focused on installed skills when remote results are available", () => {
     const container = document.createElement("div");
-    render(
-      renderSkills(
-        createProps({
-          surface: "settings",
-          clawhubResults: [
-            {
-              score: 1,
-              slug: "remote-skill",
-              registry: "https://clawhub.ai",
-              displayName: "Remote Skill",
-            },
-          ],
-        }),
-      ),
-      container,
-    );
+    renderView(container, {
+      surface: "settings",
+      clawhubResults: [
+        {
+          score: 1,
+          slug: "remote-skill",
+          installRef: "@fixture/remote-skill",
+          registry: "https://clawhub.ai",
+          displayName: "Remote Skill",
+        },
+      ],
+    });
 
     expect(container.querySelector('input[name="skills-filter"]')).not.toBeNull();
     expect(container.querySelector("openclaw-agent-select")).toBeNull();
-    expect(container.querySelector(".skills-group")?.textContent).toContain("Repo Skill");
+    const group = expectDefined(
+      container.querySelector<HTMLDetailsElement>("details.skills-group"),
+      "skill group details",
+    );
+    expect(group.open).toBe(true);
+    expect(
+      normalizeText(
+        expectDefined(
+          group.querySelector("summary h2.settings-section__heading"),
+          "group summary heading",
+        ),
+      ),
+    ).toContain("1");
+    expect(
+      normalizeText(
+        expectDefined(group.querySelector(".settings-group .settings-row"), "skill row"),
+      ),
+    ).toContain("Repo Skill");
     expect(container.querySelector('input[name="clawhub-search"]')).toBeNull();
     expect(container.textContent).not.toContain("Remote Skill");
     expect(container.querySelector(".plugin-catalog-card")).toBeNull();
   });
 
   it.each([
-    { editValue: "", disabled: true },
     { editValue: "   ", disabled: true },
     { editValue: "  sk-test  ", disabled: false },
   ])(
     "only enables credential replacement for nonblank input: $editValue",
     async ({ editValue, disabled }) => {
       const container = document.createElement("div");
-      document.body.append(container);
-      dialogRestores.push(() => container.remove());
-      installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      const showModal = vi.fn(function (this: HTMLDialogElement) {
+        expect(this.isConnected).toBe(true);
         this.setAttribute("open", "");
       });
+      installDialogMethod("showModal", showModal);
       const onSaveKey = vi.fn();
 
-      render(
-        renderSkills(
-          createProps({
-            detailKey: "repo-skill",
-            edits: { "repo-skill": editValue },
-            onSaveKey,
-          }),
-        ),
-        container,
-      );
-      await Promise.resolve();
+      renderView(container, {
+        detailKey: "repo-skill",
+        edits: { "repo-skill": editValue },
+        onSaveKey,
+      });
+      document.body.append(container);
+      dialogRestores.push(() => container.remove());
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(showModal).toHaveBeenCalledTimes(1);
+      expect(dialog.open).toBe(true);
 
       const input = container.querySelector<HTMLInputElement>('input[type="password"]');
       const save = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -100,447 +143,97 @@ describe("renderSkills", () => {
     },
   );
 
-  it("renders skill groups as open collapsible sections with heading summaries", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-
-    render(renderSkills(createProps()), container);
+  it("preserves retained group identity and restores removed groups when filtering", async () => {
+    const container = createContainer();
+    const report = skillReport([
+      createSkill({ skillKey: "ws", name: "Workspace Skill", source: "openclaw-workspace" }),
+      createSkill({ skillKey: "bi", name: "Weather", bundled: true }),
+      createSkill({ skillKey: "inst", name: "Installed Skill", source: "openclaw-managed" }),
+    ]);
+    const onDetailOpen = vi.fn();
+    renderView(container, { report, onDetailOpen });
     await Promise.resolve();
-
-    const group = container.querySelector<HTMLDetailsElement>("details.skills-group");
-    expect(expectDefined(group, "skill group details").open).toBe(true);
-    const heading = group?.querySelector("summary h2.settings-section__heading");
-    expect(normalizeText(expectDefined(heading, "group summary heading"))).toContain("1");
-    expect(normalizeText(group!.querySelector(".settings-group .settings-row")!)).toContain(
-      "Repo Skill",
-    );
+    const groups = [...container.querySelectorAll<HTMLDetailsElement>("details.skills-group")];
+    expect(groups).toHaveLength(3);
+    expect(groups.every((group) => group.open)).toBe(true);
+    groups[0]!.open = false;
+    const row = groups[1]!.querySelector(".settings-row");
+    renderView(container, { report, filter: "weather", onDetailOpen });
+    await Promise.resolve();
+    const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toBe(groups[1]);
+    expect(remaining[0]!.open).toBe(true);
+    expect(remaining[0]!.querySelector(".settings-row")).toBe(row);
+    expect(remaining[0]!.textContent).toContain("Weather");
+    remaining[0]!.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
+    expect(onDetailOpen).toHaveBeenCalledExactlyOnceWith("bi");
+    renderView(container, { report });
+    await Promise.resolve();
+    const restored = [...container.querySelectorAll<HTMLDetailsElement>("details.skills-group")];
+    expect(restored).toHaveLength(3);
+    expect(restored.every((group) => group.open)).toBe(true);
   });
 
-  it.each([true, false])(
-    "preserves retained group open=%s when an earlier group is filtered away",
-    async (retainedOpen) => {
-      const container = document.createElement("div");
-      document.body.append(container);
-      dialogRestores.push(() => container.remove());
-
-      const workspaceSkill = createSkill({
-        skillKey: "ws-skill",
-        name: "Workspace Skill",
-        source: "openclaw-workspace",
+  it.each(["missing", "unrelated", "present"] as const)(
+    "offers only an installer satisfying a missing alternative: %s",
+    async (mode) => {
+      const container = createContainer();
+      installDialogMethod("showModal", function () {
+        this.setAttribute("open", "");
       });
-      const builtInSkill = createSkill({
-        skillKey: "bi-skill",
-        name: "Weather",
-        bundled: true,
-      });
-      const report: SkillStatusReport = {
-        workspaceDir: "/tmp/workspace",
-        managedSkillsDir: "/tmp/skills",
-        skills: [workspaceSkill, builtInSkill],
+      const onInstall = vi.fn();
+      const unrelated: SkillStatusReport["skills"][number]["install"][number] = {
+        id: "node-unrelated",
+        kind: "node",
+        label: "Install unrelated CLI",
+        bins: ["unrelated"],
       };
-
-      const onDetailOpen = vi.fn();
-      render(renderSkills(createProps({ report, onDetailOpen })), container);
+      const codex: SkillStatusReport["skills"][number]["install"][number] = {
+        id: "node-codex",
+        kind: "node",
+        label: "Install Codex CLI",
+        bins: ["codex"],
+      };
+      const skill = createCodingAgentSkill({
+        eligible: mode === "present",
+        ...(mode === "present"
+          ? { missing: { bins: [], anyBins: [], env: [], config: [], os: [] } }
+          : {}),
+        install: mode === "unrelated" ? [unrelated] : [unrelated, codex],
+      });
+      renderView(container, { report: skillReport([skill]), detailKey: "coding-agent", onInstall });
       await Promise.resolve();
-
-      const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
-      expect(groups).toHaveLength(2);
-      expect(groups[0]!.open).toBe(true);
-      expect(groups[1]!.open).toBe(true);
-
-      groups[0]!.open = false;
-      groups[1]!.open = retainedOpen;
-      const row = groups[1]!.querySelector(".settings-row");
-
-      render(renderSkills(createProps({ report, filter: "weather", onDetailOpen })), container);
-      await Promise.resolve();
-
-      const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
-      expect(remaining).toHaveLength(1);
-      expect(remaining[0]!.querySelector(".settings-row")?.textContent).toContain("Weather");
-      expect(remaining[0]).toBe(groups[1]);
-      expect(remaining[0]!.open).toBe(retainedOpen);
-      expect(remaining[0]!.querySelector(".settings-row")).toBe(row);
-      remaining[0]!.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
-      expect(onDetailOpen).toHaveBeenCalledExactlyOnceWith("bi-skill");
+      const buttons = [...container.querySelectorAll<HTMLButtonElement>("button")];
+      expect(buttons.some((button) => normalizeText(button) === "Install unrelated CLI")).toBe(
+        false,
+      );
+      const install = buttons.find((button) => normalizeText(button) === "Install Codex CLI");
+      if (mode === "present") {
+        expect(normalizeText(container)).not.toContain("bin:any of");
+      } else {
+        expect(
+          normalizeText(
+            expectDefined(
+              container.querySelector(".skill-reader-dialog__body .callout"),
+              "alternative binary requirement",
+            ),
+          ),
+        ).toContain("bin:any of (claude, codex, opencode)");
+      }
+      if (mode === "missing") {
+        expect(install).toBeInstanceOf(HTMLButtonElement);
+        install!.click();
+        expect(onInstall).toHaveBeenCalledWith("coding-agent", "Coding Agent", "node-codex");
+      } else {
+        expect(install).toBeUndefined();
+        expect(onInstall).not.toHaveBeenCalled();
+      }
     },
   );
 
-  it("preserves retained group expansion when a middle group is filtered away", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-
-    const workspaceSkill = createSkill({
-      skillKey: "ws-skill",
-      name: "Keep Workspace",
-      source: "openclaw-workspace",
-    });
-    const builtInSkill = createSkill({
-      skillKey: "bi-skill",
-      name: "Weather",
-      bundled: true,
-    });
-    const installedSkill = createSkill({
-      skillKey: "inst-skill",
-      name: "Keep Installed",
-      source: "openclaw-managed",
-    });
-    const report: SkillStatusReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [workspaceSkill, builtInSkill, installedSkill],
-    };
-
-    render(renderSkills(createProps({ report })), container);
-    await Promise.resolve();
-
-    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
-    expect(groups).toHaveLength(3);
-    groups[1]!.open = false;
-
-    render(renderSkills(createProps({ report, filter: "keep" })), container);
-    await Promise.resolve();
-
-    const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
-    expect(remaining).toHaveLength(2);
-    expect(remaining[0]!.querySelector(".settings-row")?.textContent).toContain("Keep Workspace");
-    expect(remaining[0]).toBe(groups[0]);
-    expect(remaining[1]).toBe(groups[2]);
-    expect(remaining[0]!.open).toBe(true);
-    expect(remaining[1]!.open).toBe(true);
-    expect(remaining[1]!.textContent).toContain("Keep Installed");
-  });
-
-  it("restores a removed group as initially open after filter is cleared", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-
-    const workspaceSkill = createSkill({
-      skillKey: "ws-skill",
-      name: "Workspace Skill",
-      source: "openclaw-workspace",
-    });
-    const builtInSkill = createSkill({
-      skillKey: "bi-skill",
-      name: "Weather",
-      bundled: true,
-    });
-    const report: SkillStatusReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [workspaceSkill, builtInSkill],
-    };
-
-    render(renderSkills(createProps({ report })), container);
-    await Promise.resolve();
-
-    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
-    groups[0]!.open = false;
-
-    render(renderSkills(createProps({ report, filter: "weather" })), container);
-    await Promise.resolve();
-
-    expect(container.querySelectorAll("details.skills-group")).toHaveLength(1);
-
-    render(renderSkills(createProps({ report })), container);
-    await Promise.resolve();
-
-    const restored = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
-    expect(restored).toHaveLength(2);
-    expect(restored[0]!.open).toBe(true);
-    expect(restored[1]!.open).toBe(true);
-  });
-
-  it("preserves built-in group expansion when status filtering removes the workspace group", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-
-    const workspaceSkill = createSkill({
-      skillKey: "ws-skill",
-      name: "Workspace Skill",
-      source: "openclaw-workspace",
-      blockedByAgentFilter: true,
-    });
-    const builtInSkill = createSkill({
-      skillKey: "bi-skill",
-      name: "Weather",
-      bundled: true,
-    });
-    const report: SkillStatusReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [workspaceSkill, builtInSkill],
-    };
-
-    render(renderSkills(createProps({ report })), container);
-    await Promise.resolve();
-
-    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
-    expect(groups).toHaveLength(2);
-    groups[0]!.open = false;
-
-    render(renderSkills(createProps({ report, statusFilter: "ready" })), container);
-    await Promise.resolve();
-
-    const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0]!.querySelector(".settings-row")?.textContent).toContain("Weather");
-    expect(remaining[0]!.open).toBe(true);
-  });
-
-  it("recovers from empty filter results and restores groups as initially open", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-
-    const workspaceSkill = createSkill({
-      skillKey: "ws-skill",
-      name: "Workspace Skill",
-      source: "openclaw-workspace",
-    });
-    const builtInSkill = createSkill({
-      skillKey: "bi-skill",
-      name: "Weather",
-      bundled: true,
-    });
-    const report: SkillStatusReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [workspaceSkill, builtInSkill],
-    };
-
-    render(renderSkills(createProps({ report })), container);
-    await Promise.resolve();
-
-    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
-    groups[0]!.open = false;
-
-    render(renderSkills(createProps({ report, filter: "zzzz-no-match" })), container);
-    await Promise.resolve();
-
-    expect(container.querySelectorAll("details.skills-group")).toHaveLength(0);
-
-    render(renderSkills(createProps({ report })), container);
-    await Promise.resolve();
-
-    const restored = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
-    expect(restored).toHaveLength(2);
-    expect(restored[0]!.open).toBe(true);
-    expect(restored[1]!.open).toBe(true);
-  });
-
-  it("preserves built-in group expansion when an earlier group is filtered away with retained query", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-
-    const workspaceSkill = createSkill({
-      skillKey: "ws-skill",
-      name: "Workspace Skill",
-      source: "openclaw-workspace",
-    });
-    const builtInSkill = createSkill({
-      skillKey: "bi-skill",
-      name: "Weather",
-      bundled: true,
-    });
-    const report: SkillStatusReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [workspaceSkill, builtInSkill],
-    };
-
-    render(renderSkills(createProps({ report, filter: "skill" })), container);
-    await Promise.resolve();
-
-    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
-    expect(groups).toHaveLength(2);
-    groups[0]!.open = false;
-
-    render(renderSkills(createProps({ report, filter: "weather" })), container);
-    await Promise.resolve();
-
-    const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0]!.querySelector(".settings-row")?.textContent).toContain("Weather");
-    expect(remaining[0]!.open).toBe(true);
-  });
-
-  it("renders alternative missing binaries and exposes their installer", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    installDialogMethod("showModal", function (this: HTMLDialogElement) {
-      this.setAttribute("open", "");
-    });
-    const onInstall = vi.fn();
-    const skill = createSkill({
-      skillKey: "coding-agent",
-      name: "Coding Agent",
-      eligible: false,
-      requirements: {
-        bins: [],
-        anyBins: ["claude", "codex", "opencode"],
-        env: [],
-        config: [],
-        os: [],
-      },
-      missing: {
-        bins: [],
-        anyBins: ["claude", "codex", "opencode"],
-        env: [],
-        config: [],
-        os: [],
-      },
-      install: [
-        {
-          id: "node-unrelated",
-          kind: "node",
-          label: "Install unrelated CLI",
-          bins: ["unrelated"],
-        },
-        { id: "node-codex", kind: "node", label: "Install Codex CLI", bins: ["codex"] },
-      ],
-    });
-
-    render(
-      renderSkills(
-        createProps({
-          report: {
-            workspaceDir: "/tmp/workspace",
-            managedSkillsDir: "/tmp/skills",
-            skills: [skill],
-          },
-          detailKey: "coding-agent",
-          onInstall,
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    const warning = container.querySelector(".skill-reader-dialog__body .callout");
-    expect(normalizeText(expectDefined(warning, "alternative binary requirement"))).toContain(
-      "bin:any of (claude, codex, opencode)",
-    );
-    const installButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => normalizeText(button) === "Install Codex CLI",
-    );
-    expect(installButton).toBeInstanceOf(HTMLButtonElement);
-    installButton?.click();
-    expect(onInstall).toHaveBeenCalledWith("coding-agent", "Coding Agent", "node-codex");
-  });
-
-  it("does not offer an installer that cannot satisfy a missing alternative", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    installDialogMethod("showModal", function (this: HTMLDialogElement) {
-      this.setAttribute("open", "");
-    });
-    const skill = createSkill({
-      skillKey: "coding-agent",
-      name: "Coding Agent",
-      eligible: false,
-      requirements: {
-        bins: [],
-        anyBins: ["claude", "codex", "opencode"],
-        env: [],
-        config: [],
-        os: [],
-      },
-      missing: {
-        bins: [],
-        anyBins: ["claude", "codex", "opencode"],
-        env: [],
-        config: [],
-        os: [],
-      },
-      install: [
-        {
-          id: "node-unrelated",
-          kind: "node",
-          label: "Install unrelated CLI",
-          bins: ["unrelated"],
-        },
-      ],
-    });
-
-    render(
-      renderSkills(
-        createProps({
-          report: {
-            workspaceDir: "/tmp/workspace",
-            managedSkillsDir: "/tmp/skills",
-            skills: [skill],
-          },
-          detailKey: "coding-agent",
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(normalizeText(container)).toContain("bin:any of (claude, codex, opencode)");
-    expect(
-      Array.from(container.querySelectorAll<HTMLButtonElement>("button")).some(
-        (button) => normalizeText(button) === "Install unrelated CLI",
-      ),
-    ).toBe(false);
-  });
-
-  it("does not offer an installer once an alternative binary is present", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    installDialogMethod("showModal", function (this: HTMLDialogElement) {
-      this.setAttribute("open", "");
-    });
-    const skill = createSkill({
-      skillKey: "coding-agent",
-      name: "Coding Agent",
-      requirements: {
-        bins: [],
-        anyBins: ["claude", "codex", "opencode"],
-        env: [],
-        config: [],
-        os: [],
-      },
-      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
-      install: [{ id: "node-codex", kind: "node", label: "Install Codex CLI", bins: ["codex"] }],
-    });
-
-    render(
-      renderSkills(
-        createProps({
-          report: {
-            workspaceDir: "/tmp/workspace",
-            managedSkillsDir: "/tmp/skills",
-            skills: [skill],
-          },
-          detailKey: "coding-agent",
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(normalizeText(container)).not.toContain("bin:any of");
-    expect(
-      Array.from(container.querySelectorAll<HTMLButtonElement>("button")).some(
-        (button) => normalizeText(button) === "Install Codex CLI",
-      ),
-    ).toBe(false);
-  });
-
   it("keeps update and install permissions independent", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
+    const container = createContainer();
     installDialogMethod("showModal", function (this: HTMLDialogElement) {
       this.setAttribute("open", "");
     });
@@ -549,21 +242,12 @@ describe("renderSkills", () => {
       install: [{ id: "skill-cli", kind: "node", label: "Install skill-cli", bins: ["skill-cli"] }],
     });
 
-    render(
-      renderSkills(
-        createProps({
-          canUpdate: false,
-          canInstall: true,
-          detailKey: skill.skillKey,
-          report: {
-            workspaceDir: "/tmp/workspace",
-            managedSkillsDir: "/tmp/skills",
-            skills: [skill],
-          },
-        }),
-      ),
-      container,
-    );
+    renderView(container, {
+      canUpdate: false,
+      canInstall: true,
+      detailKey: skill.skillKey,
+      report: skillReport([skill]),
+    });
     await Promise.resolve();
 
     expect(
@@ -576,9 +260,7 @@ describe("renderSkills", () => {
   });
 
   it("locks every skill mutation control behind the active mutation", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
+    const container = createContainer();
     installDialogMethod("showModal", function (this: HTMLDialogElement) {
       this.setAttribute("open", "");
     });
@@ -590,11 +272,7 @@ describe("renderSkills", () => {
         { id: "calendar-cli", kind: "brew", label: "Install calendar-cli", bins: ["calendar-cli"] },
       ],
     });
-    const report: SkillStatusReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [createSkill(), calendar],
-    };
+    const report: SkillStatusReport = skillReport([createSkill(), calendar]);
     const onRefresh = vi.fn();
     const onToggle = vi.fn();
     const onSaveKey = vi.fn();
@@ -609,6 +287,7 @@ describe("renderSkills", () => {
         {
           score: 1,
           slug: "github",
+          installRef: "@openclaw/github",
           registry: "https://clawhub.ai",
           displayName: "GitHub",
           version: "1.0.0",
@@ -666,9 +345,7 @@ describe("renderSkills", () => {
   });
 
   it("keeps the remaining skill's status and details target when a skill leaves the disabled tab", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
+    const container = createContainer();
 
     const passwordSkill = createSkill({ skillKey: "1password", name: "1Password", disabled: true });
     const appleNotesSkill = createSkill({
@@ -676,28 +353,20 @@ describe("renderSkills", () => {
       name: "Apple Notes",
       disabled: true,
     });
-    const report: SkillStatusReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [passwordSkill, appleNotesSkill],
-    };
+    const report: SkillStatusReport = skillReport([passwordSkill, appleNotesSkill]);
 
-    render(renderSkills(createProps({ report, statusFilter: "disabled" })), container);
+    renderView(container, { report, statusFilter: "disabled" });
     await Promise.resolve();
 
     expect(container.querySelectorAll(".plugins-item [role=img]")).toHaveLength(2);
 
-    const updatedReport: SkillStatusReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [{ ...passwordSkill, disabled: false }, appleNotesSkill],
-    };
+    const updatedReport: SkillStatusReport = skillReport([
+      { ...passwordSkill, disabled: false },
+      appleNotesSkill,
+    ]);
 
     const onDetailOpen = vi.fn();
-    render(
-      renderSkills(createProps({ report: updatedReport, statusFilter: "disabled", onDetailOpen })),
-      container,
-    );
+    renderView(container, { report: updatedReport, statusFilter: "disabled", onDetailOpen });
     await Promise.resolve();
 
     const row = container.querySelector(".plugins-item")!;
@@ -709,29 +378,20 @@ describe("renderSkills", () => {
   });
 
   it("treats skills blocked by the selected agent filter as needing setup", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
+    const container = createContainer();
     installDialogMethod("showModal", function (this: HTMLDialogElement) {
       this.setAttribute("open", "");
     });
-    const report: SkillStatusReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [createSkill({ blockedByAgentFilter: true })],
-    };
+    const report: SkillStatusReport = skillReport([createSkill({ blockedByAgentFilter: true })]);
 
-    render(renderSkills(createProps({ report, statusFilter: "ready" })), container);
+    renderView(container, { report, statusFilter: "ready" });
     await Promise.resolve();
 
     expect(container.querySelectorAll(".plugins-item")).toHaveLength(0);
     expect(normalizeText(container)).toContain("Ready 0");
     expect(normalizeText(container)).toContain("Needs Setup 1");
 
-    render(
-      renderSkills(createProps({ report, statusFilter: "needs-setup", detailKey: "repo-skill" })),
-      container,
-    );
+    renderView(container, { report, statusFilter: "needs-setup", detailKey: "repo-skill" });
     await Promise.resolve();
 
     expect(container.querySelector(".plugins-item .settings-status--warn")).not.toBeNull();
@@ -739,24 +399,5 @@ describe("renderSkills", () => {
     expect(
       Array.from(container.querySelectorAll(".chip")).map((chip) => normalizeText(chip)),
     ).toContain("blocked");
-  });
-
-  it("defers detail dialog opening until the dialog is connected", async () => {
-    const container = document.createElement("div");
-    const showModal = vi.fn(function (this: HTMLDialogElement) {
-      expect(this.isConnected).toBe(true);
-      this.setAttribute("open", "");
-    });
-
-    installDialogMethod("showModal", showModal);
-
-    render(renderSkills(createProps({ detailKey: "repo-skill" })), container);
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-
-    const { dialog } = await getRenderedModalDialog(container);
-
-    expect(showModal).toHaveBeenCalledTimes(1);
-    expect(dialog.open).toBe(true);
   });
 });

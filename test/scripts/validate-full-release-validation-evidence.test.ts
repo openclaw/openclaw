@@ -158,42 +158,43 @@ function validate(
 }
 
 describe("full release validation evidence", () => {
-  it.each([3, 4])("accepts bound Windows Node advisory evidence in manifest v%s", (version) => {
-    const job = {
-      name: "checks-windows-node-test-2",
-      status: "completed",
-      conclusion: "failure",
-      url: "https://example.invalid/job",
-    };
-    const advisory = {
-      class: "windows-node-ci",
-      child: "normalCi",
-      job: job.name,
-      conclusion: "failure",
-      runId: "456",
-      url: job.url,
-    };
-    const manifest = {
-      version,
-      childRuns: { normalCi: "456" },
-      childEvidence: { normalCi: { runId: "456", jobs: [job] } },
-      advisoryJobs: [advisory],
-    };
-    expect(validate({}, manifest).result.source).toBe("sha-pinned-main");
-    for (const changed of [
-      { class: "windows" },
-      { child: "releaseChecksCandidate" },
-      { job: "macos-node" },
-      { job: "cross_os_release_checks / Windows / packaged upgrade" },
-      { runId: "789" },
-    ]) {
+  it.each([3, 4])(
+    "rejects retained windows-node-ci advisory evidence under current strict tooling (v%s)",
+    (version) => {
       expect(() =>
-        validate({}, { ...manifest, advisoryJobs: [{ ...advisory, ...changed }] }),
-      ).toThrow(/advisory jobs differ/u);
-    }
-    expect(() => validate({}, { ...manifest, advisoryJobs: [] })).toThrow(/advisory jobs differ/u);
-    expect(validate({}, { version, advisoryJobs: [] }).result.source).toBe("sha-pinned-main");
-  });
+        validate(
+          {},
+          {
+            version,
+            childRuns: { normalCi: "456" },
+            childEvidence: {
+              normalCi: {
+                runId: "456",
+                jobs: [
+                  {
+                    name: "checks-windows-node-test-2",
+                    status: "completed",
+                    conclusion: "failure",
+                    url: "https://example.invalid/windows",
+                  },
+                ],
+              },
+            },
+            advisoryJobs: [
+              {
+                class: "windows-node-ci",
+                child: "normalCi",
+                job: "checks-windows-node-test-2",
+                conclusion: "failure",
+                runId: "456",
+                url: "https://example.invalid/windows",
+              },
+            ],
+          },
+        ),
+      ).toThrow("Release manifest contains failed selected job evidence");
+    },
+  );
 
   it.each([
     { validationInputs: { laneWaiver: "approved" } },
@@ -227,6 +228,7 @@ describe("full release validation evidence", () => {
     "context",
     "tooling",
     "missing-publication",
+    "new-publish-without-admission",
   ])("authenticates new source-admission evidence: %s", (scenario) => {
     const selection: PublicationSelection = {
       route: "normal",
@@ -291,6 +293,9 @@ describe("full release validation evidence", () => {
         manifest,
         getWorkflowSource: () =>
           'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n' +
+          (scenario === "new-publish-without-admission"
+            ? '  FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"\n'
+            : "") +
           (scenario === "missing-publication"
             ? '  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n'
             : ""),

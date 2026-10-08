@@ -29,29 +29,15 @@ export function formatRuntimeStatus(runtime: GatewayServiceRuntime | undefined):
   if (!runtime) {
     return null;
   }
-  const details: string[] = [];
-  if (runtime.subState) {
-    details.push(`sub ${runtime.subState}`);
-  }
-  if (runtime.lastExitStatus !== undefined) {
-    details.push(formatLastExitStatus(runtime.lastExitStatus));
-  }
-  if (runtime.lastExitReason) {
-    details.push(`reason ${runtime.lastExitReason}`);
-  }
-  if (runtime.lastRunResult) {
-    details.push(`last run ${runtime.lastRunResult}`);
-  }
-  if (runtime.lastRunTime) {
-    details.push(`last run time ${runtime.lastRunTime}`);
-  }
-  const cgroupSummary = getSystemdCgroupHygieneSummary(runtime.systemd);
-  if (cgroupSummary) {
-    details.push(cgroupSummary);
-  }
-  if (runtime.detail) {
-    details.push(runtime.detail);
-  }
+  const details = [
+    runtime.subState ? `sub ${runtime.subState}` : undefined,
+    runtime.lastExitStatus !== undefined ? formatLastExitStatus(runtime.lastExitStatus) : undefined,
+    runtime.lastExitReason ? `reason ${runtime.lastExitReason}` : undefined,
+    runtime.lastRunResult ? `last run ${runtime.lastRunResult}` : undefined,
+    runtime.lastRunTime ? `last run time ${runtime.lastRunTime}` : undefined,
+    getSystemdCgroupHygieneSummary(runtime.systemd),
+    runtime.detail,
+  ].filter((detail): detail is string => Boolean(detail));
   return formatRuntimeStatusWithDetails({
     status: runtime.status,
     pid: runtime.pid,

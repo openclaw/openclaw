@@ -7,6 +7,7 @@ import {
   resolveFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
   verifyReleasePreflightToolingIdentity,
+  verifyNpmPreflightPublicationLineage,
 } from "../npm-preflight-tooling-identity.mjs";
 import { validatePreparedCorePackages } from "../npm-prepared-bundle.mjs";
 import { validateNpmPreflightDistTag } from "../openclaw-npm-extended-stable-release.mjs";
@@ -24,7 +25,16 @@ import {
 import { isRecord, trimString } from "./record-shared.mjs";
 import type { ReleasePublishGate } from "./release-publish-gates.mts";
 
-export type PublishPreflightGh = (args: string[]) => string;
+export type PublishPreflightGh = (args: string[], options?: { timeoutMs?: number }) => string;
+
+export function publishPreflightGhError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const stderr =
+    isRecord(error) && (typeof error.stderr === "string" || Buffer.isBuffer(error.stderr))
+      ? error.stderr.toString().trim()
+      : "";
+  return [stderr, message].filter(Boolean).join("; ").replace(/\s+/gu, " ").slice(0, 1000);
+}
 export type PublishPreflightRecord = Record<string, unknown>;
 type CoreTarball = {
   packageName: string;
@@ -183,13 +193,14 @@ export function requirePreflightRecord(value: unknown, label: string): PublishPr
 
 export function createPublishPreflightGh(): PublishPreflightGh {
   const responses = new Map<string, string>();
-  return (args) => {
+  return (args, options) => {
     const key = JSON.stringify(args);
     let response = responses.get(key);
     if (response === undefined) {
       response = execFileSync("gh", args, {
         encoding: "utf8",
-        timeout: 60_000,
+        timeout: Math.min(60_000, options?.timeoutMs ?? 60_000),
+        killSignal: "SIGKILL",
         maxBuffer: 32 * 1024 * 1024,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -205,11 +216,66 @@ export function preflightApi(runGh: PublishPreflightGh, repo: string, endpoint: 
   );
 }
 
-export function readPublishPreflightRelease(runGh: PublishPreflightGh, repo: string, tag: string) {
-  // The tag endpoint omits drafts, and gh release view can mask a failed draft
-  // lookup as absence. One bounded list owner preserves errors and shared caching.
+export function readPublishPreflightRelease(
+  runGh: PublishPreflightGh,
+  repo: string,
+  tag: string,
+  onProgress: (message: string) => void = () => {},
+) {
+  const found = (release: unknown) => {
+    if (
+      !isRecord(release) ||
+      release.tag_name !== tag ||
+      typeof release.id !== "number" ||
+      typeof release.draft !== "boolean" ||
+      typeof release.prerelease !== "boolean" ||
+      typeof release.html_url !== "string" ||
+      typeof release.target_commitish !== "string"
+    ) {
+      throw new Error("Invalid GitHub release response.");
+    }
+    return {
+      state: "found" as const,
+      release: {
+        id: release.id,
+        draft: release.draft,
+        prerelease: release.prerelease,
+        tag_name: tag,
+        html_url: release.html_url,
+        target_commitish: release.target_commitish,
+        body: release.body,
+        assets: release.assets,
+      },
+    };
+  };
+  onProgress(`release lookup exact tag ${tag}`);
+  let exact: unknown;
+  try {
+    exact = preflightApi(runGh, repo, `releases/tags/${encodeURIComponent(tag)}`);
+  } catch (error) {
+    // A missing public tag does not establish draft absence; preserve the
+    // authenticated inventory fallback, but never mask other read failures.
+    if (!/\b404\b/u.test(publishPreflightGhError(error))) {
+      throw error;
+    }
+  }
+  if (exact !== undefined) {
+    return found(exact);
+  }
   for (let page = 1; page <= 20; page++) {
-    const releases = preflightApi(runGh, repo, `releases?per_page=100&page=${page}`);
+    onProgress(`release lookup page ${page}/20`);
+    // Retain full evidence only for this tag; other bodies/assets can dominate
+    // the response by megabytes while contributing only pagination and tag names.
+    const releases: unknown = JSON.parse(
+      runGh([
+        "api",
+        `repos/${repo}/releases?per_page=100&page=${page}`,
+        "--method",
+        "GET",
+        "--jq",
+        `map(if .tag_name == ${JSON.stringify(tag)} then . else {tag_name} end)`,
+      ]),
+    );
     if (
       !Array.isArray(releases) ||
       releases.length > 100 ||
@@ -222,32 +288,11 @@ export function readPublishPreflightRelease(runGh: PublishPreflightGh, repo: str
     }
     const release = releases.find((entry) => entry.tag_name === tag);
     if (release) {
-      if (
-        typeof release.id !== "number" ||
-        typeof release.draft !== "boolean" ||
-        typeof release.prerelease !== "boolean" ||
-        typeof release.html_url !== "string" ||
-        typeof release.target_commitish !== "string"
-      ) {
-        throw new Error("Invalid GitHub release response.");
-      }
-      return {
-        state: "found" as const,
-        release: {
-          id: release.id,
-          draft: release.draft,
-          prerelease: release.prerelease,
-          tag_name: tag,
-          html_url: release.html_url,
-          target_commitish: release.target_commitish,
-          body: release.body,
-          assets: release.assets,
-        },
-      };
+      return found(release);
     }
     if (releases.length < 100) {
-      // GitHub includes drafts only for readers with push access. A complete
-      // public-only list cannot establish that publication has no existing draft.
+      // GitHub includes drafts only for readers with push access.
+      onProgress("release lookup verifying draft visibility");
       const repository = requirePreflightRecord(preflightApi(runGh, repo, ""), "repository");
       if (!isRecord(repository.permissions) || repository.permissions.push !== true) {
         return {
@@ -487,7 +532,7 @@ function readPreflightArchive(repo: string, artifact: PublishPreflightRecord) {
   });
 }
 
-export function validatePublishPreflightNpm(
+export async function validatePublishPreflightNpm(
   options: {
     repo: string;
     tag: string;
@@ -555,13 +600,19 @@ export function validatePublishPreflightNpm(
       "Npm preflight must come from main, the active protected branch, or a verified protected tag.",
     );
   }
-  const comparison = requirePreflightRecord(
-    preflightApi(runGh, repo, `compare/${sha}...${options.toolingSha}?per_page=1`),
-    "preflight tooling ancestry",
-  );
-  if (comparison.status !== "ahead" && comparison.status !== "identical") {
-    throw new Error("Npm preflight tooling is not on the selected publisher lineage.");
-  }
+  await verifyNpmPreflightPublicationLineage({
+    manifest: qualified ? options.fullManifest : undefined,
+    repository: repo,
+    sourceSha: options.targetSha,
+    toolingSha: sha,
+    publisherSha: options.toolingSha,
+    producerRunId,
+    producerRunAttempt: String(run.run_attempt),
+    runGh,
+    publisherFullRef: options.workflowRef.startsWith("release-publish/")
+      ? "refs/tags/" + options.workflowRef
+      : "refs/heads/" + options.workflowRef,
+  });
   let manifest = context.npmManifest;
   let manifestSha256: string | undefined;
   let files: Map<string, Buffer>;

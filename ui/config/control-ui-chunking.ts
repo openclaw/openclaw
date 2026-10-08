@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { build, type Plugin, type ResolvedConfig } from "vite";
 import { resolvedLocaleConfigHintsModulePrefix } from "./control-ui-locales.ts";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
@@ -68,10 +69,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/sidebar-update-card.ts":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
-    case "ui/src/pages/chat/components/chat-transcript-layout-owner.ts":
-    case "ui/src/pages/chat/components/chat-transcript-scroll-events.ts":
-      // Keep geometry and its event channel independent of the shared transcript bundle.
-      return "chat-transcript-layout";
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
       return "session-snapshot-database";
@@ -165,10 +162,10 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // them (and therefore other routes) into its eagerly imported chunk.
                 priority: 8 - index,
                 includeDependenciesRecursively: true,
-                // Shared and chat groups both contain dense UI modules; keep their
-                // generated chunks within the existing compressed-size budget.
+                // Shared boot needs a smaller partition cap because its dense chat
+                // modules can exceed the compressed-size budget after regrouping.
                 minSize: 16 * 1024,
-                maxSize: 1408 * 1024,
+                maxSize: (route === "shared" ? 1344 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {
@@ -189,3 +186,78 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
 }
 
 export const controlUiCodeSplitting = createControlUiCodeSplitting();
+
+export function controlUiIsolatedDesktopRuntimePlugin(): Plugin {
+  let config: ResolvedConfig;
+  let runtime: Promise<string> | undefined;
+  return {
+    name: "control-ui-isolated-desktop-runtime",
+    apply: "build",
+    enforce: "pre",
+    configResolved(resolved) {
+      config = resolved;
+    },
+    buildStart() {
+      runtime = undefined;
+    },
+    async resolveDynamicImport(source, importer) {
+      if (source !== "@novnc/novnc") {
+        return null;
+      }
+      // noVNC awaits browser codec detection at module scope. In the main graph,
+      // that disables Rolldown's facade optimization even for unrelated boot entries.
+      // Bundle it unchanged and retain the desktop owner's dynamic import/await.
+      runtime ??= (async () => {
+        const resolved = await this.resolve(source, importer);
+        if (!resolved) {
+          return this.error("Cannot resolve the Control UI desktop runtime");
+        }
+        const result = await build({
+          configFile: false,
+          root: config.root,
+          publicDir: false,
+          logLevel: "silent",
+          build: {
+            write: false,
+            outDir: config.build.outDir,
+            minify: config.build.minify,
+            target: config.build.target,
+            sourcemap: config.build.sourcemap,
+            rolldownOptions: {
+              input: resolved.id,
+              preserveEntrySignatures: "strict",
+              output: {
+                entryFileNames: `${config.build.assetsDir}/novnc-[hash].js`,
+                strictExecutionOrder: true,
+                codeSplitting: false,
+              },
+            },
+          },
+        });
+        if (Array.isArray(result) || !("output" in result)) {
+          return this.error("Expected one Control UI desktop runtime build");
+        }
+        const entry = result.output.find((output) => output.type === "chunk" && output.isEntry);
+        if (!entry) {
+          return this.error("Control UI desktop runtime build has no entry");
+        }
+        for (const output of result.output) {
+          this.emitFile(
+            output.type === "chunk"
+              ? {
+                  type: "prebuilt-chunk",
+                  fileName: output.fileName,
+                  code: output.code,
+                  exports: output.exports,
+                  map: output.map ?? undefined,
+                }
+              : { type: "asset", fileName: output.fileName, source: output.source },
+          );
+        }
+        // Vite emits the desktop importer and this runtime in the same assets directory.
+        return `./${path.posix.basename(entry.fileName)}`;
+      })();
+      return { id: await runtime, external: true };
+    },
+  };
+}

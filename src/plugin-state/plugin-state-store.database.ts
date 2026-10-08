@@ -1,7 +1,6 @@
 import { hasErrnoCode } from "../infra/errno.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
-import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { hasOpenClawStateTablesBeyondStartupCheckpoint } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -10,7 +9,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  resolveDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "../state/openclaw-state-db.paths.js";
 import { createPluginStateError, type PluginStateDatabase } from "./plugin-state-store.kernel.js";
 import {
   PluginStateStoreError,
@@ -122,5 +124,7 @@ export function runWriteTransaction<T>(
   if (!isOpenClawStateDatabaseOpen(resolveOpenClawStateSqlitePath(options.env ?? process.env))) {
     openPluginStateDatabase(operation, options);
   }
-  return runOpenClawStateWriteTransaction(write, options);
+  return runOpenClawStateWriteTransaction(write, options, {
+    operationLabel: `pluginState.${operation}`,
+  });
 }

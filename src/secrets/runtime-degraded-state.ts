@@ -168,6 +168,9 @@ function cloneOwner<T extends DegradedSecretOwner>(owner: T): T {
     ...owner,
     paths: [...owner.paths],
     refKeys: [...owner.refKeys],
+    ...(owner.providerFailures
+      ? { providerFailures: owner.providerFailures.map((failure) => ({ ...failure })) }
+      : {}),
   };
 }
 

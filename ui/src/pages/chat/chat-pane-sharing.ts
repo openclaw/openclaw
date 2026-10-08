@@ -18,8 +18,8 @@ import {
   scopedSessionArtifactKey,
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
+import { ChatPaneReactions } from "./chat-pane-reactions.ts";
 import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
-import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   typingActorIdForSessionMessage,
@@ -28,7 +28,6 @@ import {
   type ChatTypingOverflow,
 } from "./chat-typing-presence.ts";
 import { canManageChatSessionSharing } from "./components/chat-session-sharing.ts";
-import { lockChatScroll } from "./scroll.ts";
 
 const TYPING_ACTIVE_MS = 2_500;
 const TYPING_DRAFT_ACTIVE_MS = 10_000;
@@ -36,7 +35,7 @@ const TYPING_DRAFT_IDLE_MS = 30_000;
 const TYPING_DRAFT_EXIT_MS = 300;
 const TYPING_PREVIEW_INTERVAL_MS = 250;
 
-export abstract class ChatPaneSharing extends ChatPaneSharingActions {
+export abstract class ChatPaneSharing extends ChatPaneReactions {
   // The existing actor/timer owner also owns this bounded presentation cache.
   // Every mutation below refreshes it; reconnect, route, and teardown clear it.
   private readonly typingActiveIds = new Set<string>();
@@ -452,10 +451,6 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
       this.removeTypingActor(event.actor.id);
       this.refreshTypingPresentation();
       return;
-    }
-    if (!this.typingActors.has(event.actor.id) && state.chatHasAutoScrolled) {
-      // Retire queued and native follow before the new remote draft changes the transcript.
-      lockChatScroll(state, "remote-input");
     }
     const activeMs = event.preview ? TYPING_DRAFT_ACTIVE_MS : TYPING_ACTIVE_MS;
     const now = Date.now();

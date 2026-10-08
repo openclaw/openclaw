@@ -1,6 +1,9 @@
 import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
@@ -11,6 +14,7 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
+import { renderAgentHarnessPreflightUserMessage } from "../../embedded-agent-helpers/user-facing-text.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import { renderAssistantRequestFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
@@ -88,6 +92,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   const thinkingOnlyTerminal =
     params.payloadCount !== 0 &&
     !assistantState.visibleText.length &&
+    !assistant?.openclawDelivery?.tts?.text?.trim() &&
     !hasTerminalOutput &&
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
 
@@ -106,12 +111,13 @@ export function resolveIncompleteTurnPayloadText(params: {
 
   if (
     params.attempt.hasToolMediaBlockReply ||
-    resolveSourceReplyDelivery(params.attempt) !== "missing"
+    resolveSourceReplyDelivery(params.attempt) !== "missing" ||
+    // A tool-authored final reply awaits host delivery, so its delivery state is still missing.
+    params.attempt.messagingToolSourceReplyPayloads?.some(
+      (payload) => payload.toolAuthored === true,
+    ) ||
+    hasCompletionMessageSessionSpawn(params.attempt.acceptedSessionSpawns)
   ) {
-    return null;
-  }
-
-  if (hasCompletionMessageSessionSpawn(params.attempt.acceptedSessionSpawns)) {
     return null;
   }
 
@@ -139,22 +145,36 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   const { promptError } = projectAgentRunAttemptTerminal(params.attempt.terminal);
-  const failureFacts = promptError
-    ? resolveReplyFailoverFacts(promptError, formatErrorMessage(promptError))
-    : undefined;
+  if (
+    !promptError &&
+    assistant?.stopReason === "error" &&
+    assistant.errorCode === "incomplete_tool_call"
+  ) {
+    return formatUserFacingAssistantErrorText(assistant);
+  }
+  const preflightFailureText = renderAgentHarnessPreflightUserMessage(promptError);
+  const failureFacts =
+    promptError && preflightFailureText === undefined
+      ? resolveReplyFailoverFacts(promptError, formatErrorMessage(promptError))
+      : undefined;
   // A non-replayable harness failure may have no assistant message to carry its error.
   // Share classified copy with thrown failures; never display raw prompt diagnostics.
-  const promptFailureText = failureFacts
-    ? (failureFacts.providerRequestError?.userMessage ??
-      failureFacts.formatFailureText ??
-      renderAssistantRequestFailureCopy({
-        reason: failureFacts.reason,
-        status: failureFacts.status,
-        code: failureFacts.code,
-      }))
-    : undefined;
+  const promptFailureText =
+    preflightFailureText ??
+    (failureFacts
+      ? (failureFacts.providerRequestError?.userMessage ??
+        failureFacts.formatFailureText ??
+        renderAssistantRequestFailureCopy({
+          reason: failureFacts.reason,
+          status: failureFacts.status,
+          code: failureFacts.code,
+        }))
+      : undefined);
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
     return `${promptFailureText ?? "⚠️ Agent couldn't generate a response."} Note: some tool actions may have already been executed — please verify before retrying.`;
+  }
+  if (preflightFailureText !== undefined) {
+    return preflightFailureText;
   }
   if (assistant && isProviderRefusalAssistantError(assistant)) {
     return formatUserFacingAssistantErrorText(assistant);
@@ -216,6 +236,7 @@ interface YieldContinuationAttempt {
   successfulCronAdds?: number;
   acceptedSessionSpawns?: readonly { runId: string; childSessionKey: string }[];
   runtimeContinuationStarted?: boolean;
+  yieldMessageWaitRegistered?: boolean;
   messagingToolSentTexts?: readonly string[];
   messagingToolSentMediaUrls?: readonly string[];
   messagingToolSentTargets?: readonly MessagingToolSend[];
@@ -232,6 +253,7 @@ export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt):
     hasCommittedMessagingToolDeliveryEvidence(attempt) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.runtimeContinuationStarted === true ||
+    attempt.yieldMessageWaitRegistered === true ||
     hasAsyncActivity(attempt.toolMetas) ||
     (attempt.successfulCronAdds ?? 0) > 0
   );
@@ -245,24 +267,14 @@ export const TRUNCATED_REPLY_NOTICE_TEXT =
 
 function readMessageTextContent(message: AgentMessage): string | undefined {
   const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    const trimmed = content.trim();
-    return trimmed || undefined;
-  }
-  const text = collectTextContentBlocks(content)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0)
-    .join("\n");
-  return text || undefined;
-}
-
-function readToolResultAggregatedText(message: AgentMessage): string | undefined {
-  const aggregated = (message as { details?: { aggregated?: unknown } }).details?.aggregated;
-  if (typeof aggregated !== "string") {
-    return undefined;
-  }
-  const trimmed = aggregated.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(
+    typeof content === "string"
+      ? content
+      : collectTextContentBlocks(content)
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0)
+          .join("\n"),
+  );
 }
 
 function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean {
@@ -276,7 +288,11 @@ function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean
       if ((message as { isError?: boolean }).isError === true) {
         return false;
       }
-      const text = readMessageTextContent(message) ?? readToolResultAggregatedText(message);
+      const text =
+        readMessageTextContent(message) ??
+        normalizeOptionalString(
+          (message as { details?: { aggregated?: unknown } }).details?.aggregated,
+        );
       return isSilentReplyText(text, SILENT_REPLY_TOKEN);
     }
     if (role === "assistant" && !readMessageTextContent(message)) {

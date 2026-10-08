@@ -1,17 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  AgentDeletionAuthorityRollbackError,
-  AgentDeletionCommitUncertainError,
-} from "../../agents/agent-lifecycle-registry.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
 import {
   type CronActiveJobMarker,
   noteActiveCronJobRemoval,
   onCronJobInactive,
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
-import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronJobEffectiveAgentId, tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { normalizeCronRunJobId } from "../run-history.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
@@ -58,13 +54,10 @@ import type {
 import { emit } from "./state.js";
 import {
   captureCronJobMutationSource,
+  captureCronServiceMutationSource,
   ensureLoaded,
   ensureLoadedForOperation,
-  persist,
   persistCronJobMutation,
-  persistOrRestore,
-  pruneCronJobScratchAfterCommit,
-  runPostPersistCronNotifications,
   snapshotStoreForRollback,
   warnIfDisabled,
 } from "./store.js";
@@ -213,16 +206,8 @@ export async function add(
     if (normalizedId && state.store?.jobs.some((job) => job.id === normalizedId)) {
       throw new Error(`cron job already exists: ${normalizedId}`);
     }
-    const explicitOwnerAgentId =
-      normalizeOptionalAgentId(normalizedInput.agentId) ??
-      parseAgentSessionKey(normalizeOptionalString(normalizedInput.sessionKey))?.agentId;
-    const retainedLegacyAgentId = normalizeOptionalAgentId(state.deps.legacyDefaultAgentId);
-    const creationInput =
-      !explicitOwnerAgentId && retainedLegacyAgentId === agentId
-        ? { ...normalizedInput, agentId }
-        : normalizedInput;
     const snapshot = snapshotStoreForRollback(state);
-    const job = createJob(state, creationInput, {
+    const job = createJob(state, normalizedInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       toolsAllowExecTarget: opts?.toolsAllowExecTarget,
@@ -444,7 +429,6 @@ export async function remove(
         activeMarker: CronActiveJobMarker | undefined;
         agentId: string;
         sessionStorePath: string;
-        done: Promise<void>;
         finish: () => void;
         release: () => void;
       }
@@ -513,7 +497,6 @@ export async function remove(
               activeMarker,
               agentId,
               sessionStorePath,
-              done,
               finish,
               release,
             };
@@ -581,89 +564,86 @@ export async function remove(
   return outcome.value;
 }
 
-/** Remove one agent's jobs while holding the cron lock across an external roster commit. */
+/** The caller retains its agent-deletion fence while the cron lock joins roster and row writes. */
 export async function removeAgentJobsTransactional<T>(
   state: CronServiceState,
   agentId: string,
   commit: () => Promise<T>,
 ): Promise<T> {
+  const source = captureCronServiceMutationSource(state);
   return await locked(state, async () => {
+    source.assertCurrent();
     warnIfDisabled(state, "remove agent jobs");
     await ensureLoadedForOperation(state);
+    source.assertCurrent();
     const id = normalizeOptionalAgentId(agentId);
     if (!id || !state.store) {
       return await commit();
     }
     const defaultAgentId = resolveCurrentDefaultAgentId(state);
-    const removedJobs = state.store.jobs.filter(
-      (job) => resolveCronJobEffectiveAgentId(job, defaultAgentId) === id,
+    const previous = structuredClone(state.store);
+    const removedJobs = previous.jobs.filter(
+      (job) => tryResolveCronJobEffectiveAgentId(job, defaultAgentId) === id,
     );
     if (removedJobs.length === 0) {
       return await commit();
     }
-    const snapshot = snapshotStoreForRollback(state);
-    state.store.jobs = state.store.jobs.filter(
-      (job) => resolveCronJobEffectiveAgentId(job, defaultAgentId) !== id,
-    );
-    const postPersistNotifications: DeferredCronNotifications = [];
-    recomputeNextRunsForMaintenance(state, { deferredNotifications: postPersistNotifications });
-    // Cron is durable first, but notifications stay speculative until the roster commits.
-    await persistOrRestore(state, snapshot);
-    let result: T;
+    let roster: { value: T } | { error: AgentDeletionCommitUncertainError };
     try {
-      result = await commit();
+      roster = { value: await commit() };
     } catch (error) {
-      if (error instanceof AgentDeletionCommitUncertainError) {
-        // Uncertain roster writes intentionally keep the cron deletion durable.
-        runPostPersistCronNotifications(state, postPersistNotifications);
-        armTimer(state);
-        for (const job of removedJobs) {
-          noteActiveCronJobRemoval(job.id);
-        }
-        pruneCronJobScratchAfterCommit(
-          state,
-          removedJobs.map((job) => job.id),
-        );
-        for (const job of removedJobs) {
-          emit(state, { jobId: job.id, action: "removed", job });
-        }
+      if (!(error instanceof AgentDeletionCommitUncertainError)) {
         throw error;
       }
-      try {
-        if (state.deps.cronEnabled) {
-          state.store = snapshot.store;
-          state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
-          if (!(await persist(state))) {
-            throw new Error("cron: rollback store write did not complete", { cause: error });
+      roster = { error };
+    }
+    // Retain the original rows through roster failure. Atomic removal owns scratch and grant
+    // revocation too, so failed or uncertain cleanup leaves a complete source for retry.
+    const next = structuredClone(previous);
+    const removedJobIds = new Set(removedJobs.map((job) => job.id));
+    next.jobs = next.jobs.filter((job) => !removedJobIds.has(job.id));
+    const postPersistNotifications: DeferredCronNotifications = [];
+    recomputeNextRunsForMaintenance(
+      { ...state, store: next },
+      { deferredNotifications: postPersistNotifications },
+    );
+    try {
+      await persistCronJobMutation({
+        state,
+        source,
+        previous,
+        next,
+        method: "cron.remove",
+        postPersistNotifications,
+        afterCommit() {
+          for (const job of removedJobs) {
+            noteActiveCronJobRemoval(job.id);
           }
-        } else {
-          const deletedSnapshot = snapshotStoreForRollback(state);
-          state.store = snapshot.store;
-          state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
-          await persistOrRestore(state, deletedSnapshot, { preserveConcurrentAdds: true });
-        }
-        armTimer(state);
-      } catch (rollbackError) {
-        throw new AgentDeletionAuthorityRollbackError(
-          [error, rollbackError],
-          `cron: failed to roll back agent job deletion for ${id}`,
-          { cause: error },
+        },
+        afterPublish() {
+          armTimer(state);
+          for (const job of removedJobs) {
+            emit(state, { jobId: job.id, action: "removed", job });
+          }
+        },
+      });
+    } catch (error) {
+      if ("error" in roster) {
+        throw new AgentDeletionCommitUncertainError(
+          new AggregateError(
+            [roster.error, error],
+            "Cron cleanup failed after an uncertain agent roster commit",
+            { cause: roster.error },
+          ),
         );
       }
-      throw error;
+      throw new Error("Agent roster committed, but cron cleanup did not complete.", {
+        cause: error,
+      });
     }
-    runPostPersistCronNotifications(state, postPersistNotifications);
-    for (const job of removedJobs) {
-      noteActiveCronJobRemoval(job.id);
+    if ("error" in roster) {
+      throw roster.error;
     }
-    pruneCronJobScratchAfterCommit(
-      state,
-      removedJobs.map((job) => job.id),
-    );
-    armTimer(state);
-    for (const job of removedJobs) {
-      emit(state, { jobId: job.id, action: "removed", job });
-    }
-    return result;
+    return roster.value;
   });
 }

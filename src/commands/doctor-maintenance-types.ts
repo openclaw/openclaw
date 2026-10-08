@@ -1,9 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type {
-  UpdateDatabaseGenerations,
-  UpdateDatabaseWriteReceipt,
-} from "../infra/update-database-generations.js";
-import type { UpdateFailureFact } from "../infra/update-failure-facts.js";
+import type { UpdateDatabaseGenerations } from "../infra/update-database-generations.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 
@@ -17,20 +13,4 @@ export type DoctorMaintenanceParams = {
   assertCurrent?: () => void;
   databaseGenerations?: UpdateDatabaseGenerations;
   beforeStateMutation?: (context: { env: NodeJS.ProcessEnv; signal: AbortSignal }) => Promise<void>;
-};
-
-export type DoctorMaintenance = {
-  run<T>(operation: () => T): T;
-  signal: AbortSignal;
-  releaseState(): Promise<void>;
-  repairSqliteNoCow(paths: readonly string[]): Promise<void>;
-  release(): Promise<void>;
-  finish(
-    cfg: OpenClawConfig | undefined,
-    writeConfig?: DoctorConfigWriter,
-    failure?: unknown,
-  ): Promise<void>;
-  warnings?: string[];
-  failureFacts?: UpdateFailureFact[];
-  readonly databaseWrites?: UpdateDatabaseWriteReceipt;
 };

@@ -112,9 +112,9 @@ const WORKFLOW_CALL_ONLY_INPUTS = new Set([
 
 const PACKAGE_UPDATE_CHUNKS = [
   "package-update-openai",
+  "package-update-restart-auth",
   "package-update-onboarding",
   "package-update-migrations",
-  "package-update-self-upgrade",
 ];
 
 const FULL_DOCKER_CHUNKS = [
@@ -132,11 +132,6 @@ const FULL_DOCKER_CHUNKS = [
   "plugins-runtime-install-h",
 ];
 
-// The six-way first-hop self-upgrade aggregate stays full-only until it runs in waves.
-const STABLE_DOCKER_CHUNKS = FULL_DOCKER_CHUNKS.filter(
-  (chunk) => chunk !== "package-update-self-upgrade",
-);
-
 const PROFILE_EXPECTATIONS = [
   {
     profile: "minimum",
@@ -150,7 +145,7 @@ const PROFILE_EXPECTATIONS = [
   },
   {
     profile: "stable",
-    dockerE2eChunks: STABLE_DOCKER_CHUNKS,
+    dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: ["anthropic", "google", "minimax", "openai"],
   },
   {
@@ -623,19 +618,16 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       expect(plan.dockerE2e.matrix.include.map((entry: MatrixEntry) => entry.chunk_id)).toEqual(
         dockerE2eChunks,
       );
-      const selfUpgrade = plan.dockerE2e.matrix.include.find(
-        (entry: MatrixEntry) => entry.chunk_id === "package-update-self-upgrade",
-      );
-      if (dockerE2eChunks.includes("package-update-self-upgrade")) {
-        expect(selfUpgrade).toMatchObject({ timeout_minutes: 130 });
-      } else {
-        expect(selfUpgrade).toBeUndefined();
-      }
       expect(
         plan.dockerE2e.matrix.include.find(
           (entry: MatrixEntry) => entry.chunk_id === "package-update-openai",
         ),
-      ).toMatchObject({ timeout_minutes: 160 });
+      ).toMatchObject({ timeout_minutes: 60 });
+      expect(
+        plan.dockerE2e.matrix.include.find(
+          (entry: MatrixEntry) => entry.chunk_id === "package-update-restart-auth",
+        ),
+      ).toMatchObject({ timeout_minutes: 55 });
       expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual(
         liveModelProviders,
       );

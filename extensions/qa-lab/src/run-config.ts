@@ -1,14 +1,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { uniqueStrings, uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { z } from "zod";
 import type {
-  QaLabExecutionKind,
   QaLabResolvedRunPlan,
   QaLabRunnerSnapshot,
   QaLabRunSelection,
 } from "../runner-contract.js";
-import { defaultQaModelForMode as defaultStaticQaModelForMode } from "./model-selection.js";
 import {
   defaultQaRuntimeModelForMode,
   resolveQaRuntimeModelPair,
@@ -49,12 +47,6 @@ export function defaultQaModelForMode(mode: QaProviderMode, alternate = false) {
   return defaultQaRuntimeModelForMode(mode, alternate ? { alternate: true } : undefined);
 }
 
-type QaDefaultModelResolver = (mode: QaProviderMode, alternate?: boolean) => string;
-
-function defaultStaticModelForMode(mode: QaProviderMode, alternate = false) {
-  return defaultStaticQaModelForMode(mode, alternate ? { alternate: true } : undefined);
-}
-
 function requireQaRunProfile(profiles: readonly QaLabRunProfileOption[], profileId: string) {
   const profile = profiles.find((entry) => entry.id === profileId);
   if (!profile) {
@@ -65,18 +57,16 @@ function requireQaRunProfile(profiles: readonly QaLabRunProfileOption[], profile
 
 function createDefaultQaRunSelection(
   profiles: readonly QaLabRunProfileOption[],
-  options?: { resolveDefaultModel?: QaDefaultModelResolver },
 ): QaLabRunSelection {
   const profile = requireQaRunProfile(profiles, "smoke-ci");
   const providerMode: QaProviderMode = "mock-openai";
-  const resolveDefaultModel = options?.resolveDefaultModel ?? defaultQaModelForMode;
   return {
     profile: profile.id,
     channel: null,
     channelDriver: profile.channelDriver,
     evidenceMode: profile.evidenceMode,
     providerMode,
-    ...resolveQaRuntimeModelPair({ providerMode, resolveDefaultModel }),
+    ...resolveQaRuntimeModelPair({ providerMode }),
     fastMode: getQaProvider(providerMode).kind === "live",
     runtimePair: null,
     runtimePairLane: null,
@@ -145,10 +135,11 @@ function normalizeQaProfile(
   if (input !== undefined && input !== null && (typeof input !== "string" || !input.trim())) {
     throw new Error("QA runner profile must be a non-empty string");
   }
-  const profile = typeof input === "string" ? input.trim() : fallback;
-  if (!profiles.some((entry) => entry.id === profile)) {
+  const profileId = typeof input === "string" ? input.trim() : fallback;
+  const profile = profiles.find((entry) => entry.id === profileId);
+  if (!profile) {
     throw new Error(
-      `unknown QA run profile: ${profile}; expected one of ${profiles.map((entry) => entry.id).join(", ")}`,
+      `unknown QA run profile: ${profileId}; expected one of ${profiles.map((entry) => entry.id).join(", ")}`,
     );
   }
   return profile;
@@ -193,12 +184,12 @@ export function normalizeQaRunSelection(
     throw new Error("QA runner request must be a JSON object");
   }
   const payload = input as Record<string, unknown>;
-  const profile = normalizeQaProfile(
+  const profileDefaults = normalizeQaProfile(
     payload.profile,
     profiles,
     Array.isArray(payload.scenarioIds) ? "all" : undefined,
   );
-  const profileDefaults = requireQaRunProfile(profiles, profile);
+  const profile = profileDefaults.id;
   const providerMode = normalizeQaProviderMode(
     payload.providerMode ?? (profile === "smoke-ci" ? "mock-openai" : undefined),
   );
@@ -398,9 +389,7 @@ export function resolveQaLabRunPlan(params: {
   if (selectedScenarios.length === 0) {
     errors.push("QA run plan selected no runnable scenarios.");
   }
-  const executionKinds = uniqueStrings(
-    selectedScenarios.map((scenario) => scenario.execution.kind),
-  ) as QaLabExecutionKind[];
+  const executionKinds = uniqueValues(selectedScenarios.map((scenario) => scenario.execution.kind));
   return {
     status: errors.length > 0 ? "invalid" : "ready",
     profile: selection.profile,
@@ -428,9 +417,7 @@ export function createIdleQaRunnerSnapshot(
 ): QaLabRunnerSnapshot {
   return {
     status: "idle",
-    selection: createDefaultQaRunSelection(profiles, {
-      resolveDefaultModel: defaultStaticModelForMode,
-    }),
+    selection: createDefaultQaRunSelection(profiles),
     plan,
     artifacts: null,
     error: null,

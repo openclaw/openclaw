@@ -6,7 +6,7 @@ import {
   appendSessionTranscriptReport,
   type SessionTranscriptWriteScope,
 } from "../config/sessions/session-accessor.js";
-import { appendSessionTranscriptReportNative } from "../config/sessions/session-accessor.sqlite-transcript-reports.js";
+import type { CustomMessageReportAppend } from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -20,29 +20,34 @@ function sanitizeSessionRunError(error: unknown): string {
   return redactSensitiveText(text, { mode: "tools" });
 }
 
-/** Shared failure receipt; optional settlement joins the receipt's synchronous transaction. */
+type GatewaySessionRunFailure = {
+  target: SessionTranscriptWriteScope & { sessionId: string };
+  runId: string;
+  error: unknown;
+  errorKind?: "state_contention";
+  assertCommitAllowed?: () => void;
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
+};
+
 export async function recordGatewaySessionRunFailure(
-  params: {
-    target: SessionTranscriptWriteScope & { sessionId: string };
-    runId: string;
-    error: unknown;
-    errorKind?: "state_contention";
-    assertCommitAllowed?: () => void;
-  } & (
-    | { settleStartupSession: () => undefined; sessionEntryCurrent?: never }
-    | { settleStartupSession?: undefined; sessionEntryCurrent?: SessionEntryCurrentCheck }
-  ),
+  params: GatewaySessionRunFailure,
 ): Promise<void> {
   const { runId } = params;
   const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
-  const append = params.settleStartupSession
-    ? appendSessionTranscriptReportNative
-    : appendSessionTranscriptReport;
+  const report: CustomMessageReportAppend = {
+    customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
+    content:
+      params.errorKind === "state_contention"
+        ? STATE_CONTENTION_SUMMARY
+        : `Your request couldn't be completed: ${error}`,
+    display: true,
+    details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
+  };
   const result = await withSessionTranscriptWriteAssertion(
     params.target,
     () => params.assertCommitAllowed?.(),
     () =>
-      append(
+      appendSessionTranscriptReport(
         params.target,
         {
           kind: "custom",
@@ -50,24 +55,7 @@ export async function recordGatewaySessionRunFailure(
           suppressWhenAssistantRun: runId,
           selectReport: (latest) => {
             params.assertCommitAllowed?.();
-            params.settleStartupSession?.();
-            params.assertCommitAllowed?.();
-            if (isRecord(latest?.details) && latest.details.runId === runId) {
-              return undefined;
-            }
-            return {
-              customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
-              content:
-                params.errorKind === "state_contention"
-                  ? STATE_CONTENTION_SUMMARY
-                  : `Your request couldn't be completed: ${error}`,
-              display: true,
-              details: {
-                runId,
-                error,
-                ...(params.errorKind ? { errorKind: params.errorKind } : {}),
-              },
-            };
+            return isRecord(latest?.details) && latest.details.runId === runId ? undefined : report;
           },
         },
         { sessionEntryCurrent: params.sessionEntryCurrent },

@@ -6,9 +6,9 @@ function pickerMenu(target: EventTarget | null): HTMLElement | null {
     : null;
 }
 
-function visibleModelRows(root: HTMLElement): HTMLButtonElement[] {
+function selectableModelRows(root: HTMLElement): HTMLButtonElement[] {
   return [...root.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")]
-    .filter((row) => !row.hidden)
+    .filter((row) => !row.hidden && isSelectableModelRow(row))
     .toSorted(
       (left, right) =>
         Number(left.dataset.chatModelRank ?? left.dataset.chatModelIndex ?? 0) -
@@ -18,10 +18,6 @@ function visibleModelRows(root: HTMLElement): HTMLButtonElement[] {
 
 function isSelectableModelRow(row: HTMLButtonElement): boolean {
   return !row.disabled && row.getAttribute("aria-disabled") !== "true";
-}
-
-function selectableModelRows(root: HTMLElement): HTMLButtonElement[] {
-  return visibleModelRows(root).filter(isSelectableModelRow);
 }
 
 function ensureModelPickerIds(menu: HTMLElement): void {
@@ -160,12 +156,6 @@ export function updateModelSearch(input: HTMLInputElement, preserveHighlight = f
 }
 
 export function resetModelSearch(details: HTMLDetailsElement): void {
-  details.querySelectorAll("[data-chat-model-provider-toggle]").forEach((toggle) => {
-    const selected = toggle
-      .closest("section")
-      ?.querySelector('[data-chat-model-option][aria-selected="true"]');
-    toggle.setAttribute("aria-expanded", String(Boolean(selected)));
-  });
   const input = details.querySelector<HTMLInputElement>("[data-chat-model-search]");
   if (!input) {
     return;

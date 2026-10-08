@@ -160,14 +160,6 @@ function createMeetingChromeTransportWithAudioPolicy<
     return audio;
   }
 
-  async function assertAudioDeviceAvailable(params: {
-    runtime: PluginRuntime;
-    config: Config;
-    timeoutMs: number;
-  }): Promise<void> {
-    await prepareAudioRuntime(params);
-  }
-
   async function startRealtimeEngine(
     params: MeetingChromeLaunchParams<Config, Mode>,
     transport: MeetingRealtimeAudioTransport,
@@ -175,6 +167,9 @@ function createMeetingChromeTransportWithAudioPolicy<
   ): Promise<MeetingRealtimeAudioEngineHandle> {
     const bindings = options.runtime.createBindings({ platform: options.platform, ...params });
     const engineContext = {
+      config: params.config,
+      fullConfig: params.fullConfig,
+      runtime: params.runtime,
       meetingSessionId: params.meetingSessionId,
       requesterSessionKey: params.requesterSessionKey,
       ...(node ? { logPrefix: "node" as const } : {}),
@@ -183,23 +178,18 @@ function createMeetingChromeTransportWithAudioPolicy<
     };
     if (params.mode === "agent") {
       return await options.runtime.startAgentRealtimeEngine({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
         platform: bindings.platform,
         ...engineContext,
         consultAgent: bindings.consultAgent,
       });
     }
     return await options.runtime.startRealtimeEngine({
+      ...engineContext,
       config: {
         ...params.config,
         realtime: { ...params.config.realtime, strategy: "bidi" },
       },
-      fullConfig: params.fullConfig,
-      runtime: params.runtime,
       ...bindings,
-      ...engineContext,
       ...(node
         ? {
             talkSessionId: `${options.platform.id}:${params.meetingSessionId}:${node.bridgeId}:node-realtime`,
@@ -301,14 +291,9 @@ function createMeetingChromeTransportWithAudioPolicy<
     }
     const callBrowser = await resolveLocalMeetingBrowserRequest(params.runtime);
     const result = await openOrRecoverMeeting({
+      ...params,
       callBrowser,
-      config: params.config,
-      fullConfig: params.fullConfig,
       locationLabel: "in local Chrome",
-      meetingSessionId: params.meetingSessionId,
-      mode: params.mode,
-      trackedTargetId: params.trackedTargetId,
-      url: params.url,
     });
     if (!options.isRealtimeRouteReady(params.mode, result.browser)) {
       return { ...result, audioBackend: audio?.backend };
@@ -324,12 +309,9 @@ function createMeetingChromeTransportWithAudioPolicy<
     } catch (error) {
       if (!options.preserveTrackedBrowserOnEngineFailure || !params.trackedTargetId) {
         await rollbackBrowserJoin({
+          ...params,
           callBrowser,
-          config: params.config,
-          logger: params.logger,
-          meetingSessionId: params.meetingSessionId,
           tab: result.tab,
-          url: params.url,
         });
       }
       throw error;
@@ -370,6 +352,17 @@ function createMeetingChromeTransportWithAudioPolicy<
       runtime: params.runtime,
       requestedNode: params.config.chromeNode.node,
     });
+    const audioParams = {
+      audioBackend: params.config.chrome.audioBackend,
+      audioFormat: params.config.chrome.audioFormat,
+      audioBufferBytes: params.config.chrome.audioBufferBytes,
+      ...(params.config.chrome.audioInputCommandOverride
+        ? { audioInputCommand: params.config.chrome.audioInputCommandOverride }
+        : {}),
+      ...(params.config.chrome.audioOutputCommandOverride
+        ? { audioOutputCommand: params.config.chrome.audioOutputCommandOverride }
+        : {}),
+    };
     try {
       await params.runtime.nodes.invoke({
         nodeId,
@@ -391,15 +384,7 @@ function createMeetingChromeTransportWithAudioPolicy<
             command: options.nodeCommandName,
             params: {
               action: "setup",
-              audioBackend: params.config.chrome.audioBackend,
-              audioFormat: params.config.chrome.audioFormat,
-              audioBufferBytes: params.config.chrome.audioBufferBytes,
-              ...(params.config.chrome.audioInputCommandOverride
-                ? { audioInputCommand: params.config.chrome.audioInputCommandOverride }
-                : {}),
-              ...(params.config.chrome.audioOutputCommandOverride
-                ? { audioOutputCommand: params.config.chrome.audioOutputCommandOverride }
-                : {}),
+              ...audioParams,
             },
             timeoutMs: 12_000,
           }),
@@ -407,14 +392,9 @@ function createMeetingChromeTransportWithAudioPolicy<
       : undefined;
     const callBrowser = await resolveBrowserRequest(params.runtime, nodeId);
     const browser = await openOrRecoverMeeting({
+      ...params,
       callBrowser,
-      config: params.config,
-      fullConfig: params.fullConfig,
       locationLabel: "on the selected Chrome node",
-      meetingSessionId: params.meetingSessionId,
-      mode: params.mode,
-      trackedTargetId: params.trackedTargetId,
-      url: params.url,
     });
     if (!options.isRealtimeRouteReady(params.mode, browser.browser)) {
       return {
@@ -438,15 +418,7 @@ function createMeetingChromeTransportWithAudioPolicy<
           launch: false,
           browserProfile: params.config.chrome.browserProfile,
           joinTimeoutMs: params.config.chrome.joinTimeoutMs,
-          ...(params.config.chrome.audioInputCommandOverride
-            ? { audioInputCommand: params.config.chrome.audioInputCommandOverride }
-            : {}),
-          ...(params.config.chrome.audioOutputCommandOverride
-            ? { audioOutputCommand: params.config.chrome.audioOutputCommandOverride }
-            : {}),
-          audioBackend: params.config.chrome.audioBackend,
-          audioFormat: params.config.chrome.audioFormat,
-          audioBufferBytes: params.config.chrome.audioBufferBytes,
+          ...audioParams,
           ...(audioBridge.external
             ? {
                 audioBridgeCommand: params.config.chrome.audioBridgeCommand,
@@ -544,12 +516,9 @@ function createMeetingChromeTransportWithAudioPolicy<
       }
       if (!options.preserveTrackedBrowserOnEngineFailure || !params.trackedTargetId) {
         await rollbackBrowserJoin({
+          ...params,
           callBrowser,
-          config: params.config,
-          logger: params.logger,
-          meetingSessionId: params.meetingSessionId,
           tab: browser.tab,
-          url: params.url,
         });
       }
       throw error;
@@ -596,10 +565,9 @@ function createMeetingChromeTransportWithAudioPolicy<
     nodeId?: string;
     tab: MeetingBrowserTab;
   }) {
-    const nodeId = params.nodeId;
     return await leaveMeetingWithBrowser({
       adapter: options.platform,
-      callBrowser: await resolveBrowserRequest(params.runtime, nodeId),
+      callBrowser: await resolveBrowserRequest(params.runtime, params.nodeId),
       launch: params.config.chrome.launch || !params.tab.openedByPlugin,
       meetingSessionId: params.meetingSessionId,
       meetingUrl: params.meetingUrl,
@@ -617,10 +585,9 @@ function createMeetingChromeTransportWithAudioPolicy<
     nodeId?: string;
     tab: MeetingBrowserTab;
   }): Promise<Transcript> {
-    const nodeId = params.nodeId;
     return await readMeetingTranscriptWithBrowser({
       adapter: options.platform,
-      callBrowser: await resolveBrowserRequest(params.runtime, nodeId),
+      callBrowser: await resolveBrowserRequest(params.runtime, params.nodeId),
       finalize: params.finalize === true,
       meetingUrl: params.meetingUrl,
       meetingSessionId: params.meetingSessionId,
@@ -629,7 +596,9 @@ function createMeetingChromeTransportWithAudioPolicy<
     });
   }
   return {
-    assertAudioDeviceAvailable,
+    assertAudioDeviceAvailable: async (params: Parameters<typeof prepareAudioRuntime>[0]) => {
+      await prepareAudioRuntime(params);
+    },
     launchInChrome,
     launchOnNode,
     leaveInBrowser,

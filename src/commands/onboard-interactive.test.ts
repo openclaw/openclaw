@@ -109,7 +109,7 @@ describe("runConversationalOnboarding", () => {
             "fixture/model": { agentRuntime: { id: "fixture-runtime" } },
           },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
       plugins: { entries: { codex: { enabled: true }, "fixture-runtime": { enabled: true } } },
     };

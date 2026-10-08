@@ -211,7 +211,7 @@ describe("SQLite NUL capability probe", () => {
           ...(sqlFailure ? { error: "injected SQL failure" } : {}),
         },
         failure: sqlFailure
-          ? expect.stringContaining("node:sqlite NUL round-trip capability probe failed")
+          ? expect.stringContaining("node:sqlite NUL round-trip capability check failed")
           : null,
         closed: 1,
         workersStarted: 0,

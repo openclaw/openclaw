@@ -39,7 +39,10 @@ import {
   resolveMessageRunId,
   toArtifactSummary,
 } from "./server-methods/artifacts-content.js";
-import type { SessionTranscriptReader } from "./session-transcript-read-kernel.js";
+import type {
+  SessionTranscriptPageReader,
+  SessionTranscriptVisitor,
+} from "./session-transcript-read.types.js";
 import {
   parseTranscriptImageArtifactId,
   projectTranscriptImageArtifacts,
@@ -51,10 +54,8 @@ const IMAGE_PAGE_BYTES = 1024 * 1024;
 const IMAGE_INLINE_PREVIEW_MAX_BYTES = 256 * 1024;
 
 type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "messageRole">;
-type ArtifactReaders = Pick<
-  SessionTranscriptReader,
-  "visitSessionMessagesAsync" | "readSessionMessagesPageWithStatsAsync"
->;
+type ArtifactReaders = SessionTranscriptVisitor &
+  Pick<SessionTranscriptPageReader, "readSessionMessagesPageWithStatsAsync">;
 
 export type SessionArtifactReadQuery = SessionArtifactFilters &
   (
@@ -108,19 +109,18 @@ export type SessionArtifactReadResult =
     }
   | { kind: "download-response"; response?: ArtifactDownloadResponse };
 
-function normalizeArtifactType(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "image" || normalized === "input_image" || normalized === "image_url") {
-    return "image";
-  }
-  if (normalized === "audio" || normalized === "input_audio") {
-    return "audio";
-  }
-  if (normalized === "video" || normalized === "input_video") {
-    return "video";
-  }
-  return "file";
-}
+const artifactTypes = new Map([
+  ["image", "image"],
+  ["input_image", "image"],
+  ["image_url", "image"],
+  ["audio", "audio"],
+  ["input_audio", "audio"],
+  ["video", "video"],
+  ["input_video", "video"],
+  ["file", "file"],
+  ["attachment", "file"],
+  ["input_file", "file"],
+]);
 
 /** Generates a stable id from transcript position plus display metadata. */
 function artifactId(parts: {
@@ -147,21 +147,8 @@ function resolveMessageSeq(message: Record<string, unknown>, fallback: number): 
 
 function isArtifactBlock(block: Record<string, unknown>): boolean {
   const type = asNonEmptyString(block.type)?.toLowerCase();
-  if (
-    type === "image" ||
-    type === "audio" ||
-    type === "video" ||
-    type === "file" ||
-    type === "attachment" ||
-    type === "input_image" ||
-    type === "input_audio" ||
-    type === "input_video" ||
-    type === "input_file" ||
-    type === "image_url"
-  ) {
-    return true;
-  }
   return (
+    (type !== undefined && artifactTypes.has(type)) ||
     typeof block.data === "string" ||
     Boolean(block.url || block.openUrl || block.source || block.image_url || block.audio_url)
   );
@@ -216,9 +203,8 @@ function collectArtifactsFromMessage(
       }
     }
   }
-  for (let contentIndex = 0; contentIndex < content.length; contentIndex += 1) {
-    const block = asOptionalRecord(content[contentIndex]);
-    if (!block || !isArtifactBlock(block)) {
+  for (const [contentIndex, block] of content.entries()) {
+    if (!isArtifactBlock(block)) {
       continue;
     }
     // Fallback titles participate in existing artifact IDs. Count omitted roles
@@ -231,7 +217,7 @@ function collectArtifactsFromMessage(
     const type =
       params.imagesOnly && attachment?.kind === "image"
         ? "image"
-        : normalizeArtifactType(asNonEmptyString(block.type) ?? "file");
+        : (artifactTypes.get(asNonEmptyString(block.type)?.toLowerCase() ?? "file") ?? "file");
     if (params.imagesOnly && type !== "image") {
       continue;
     }

@@ -4,6 +4,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
@@ -60,15 +61,24 @@ it("keeps snapshot bytes and their creator lock after supervisor loss until orig
       // Both spies call through: observe the actual factory handle and its real supervisor Worker.
       const constructions = vi.spyOn(originalSource, "create");
       const registrations = vi.spyOn(Worker.prototype, "on");
+      const captures = vi.spyOn(SpawnBrokerHost.prototype, "captureNativeResource");
       let supervisor: Worker | undefined;
+      let broker: SpawnBrokerHost | undefined;
       let prepared: RetainedPreparedSqliteReadOnlyLocation;
       try {
         prepared = await startSqliteReadOnlyLocationAsync(source, {
           preserveSourceArtifacts: true,
         }).result;
         supervisor = registrations.mock.contexts.find((receiver) => receiver instanceof Worker);
+        expect(captures).toHaveBeenCalledOnce();
+        const capturedBroker = captures.mock.contexts[0];
+        if (!(capturedBroker instanceof SpawnBrokerHost)) {
+          throw new Error("Original snapshot resource broker was not observed");
+        }
+        broker = capturedBroker;
       } finally {
         registrations.mockRestore();
+        captures.mockRestore();
       }
       const constructed = constructions.mock.results[0];
       expect(constructions).toHaveBeenCalledOnce();
@@ -89,6 +99,9 @@ it("keeps snapshot bytes and their creator lock after supervisor loss until orig
       try {
         if (!supervisor) {
           throw new Error("Snapshot supervisor Worker was not observed");
+        }
+        if (!(broker instanceof SpawnBrokerHost)) {
+          throw new Error("Original snapshot resource broker was not observed");
         }
         await supervisor.terminate();
         await nextTurn();
@@ -136,6 +149,8 @@ it("keeps snapshot bytes and their creator lock after supervisor loss until orig
         if (!removed) {
           expect(await prepared.cleanupAsync()).toBe(true);
         }
+        // Child exit releases snapshot custody; source rotation also joins the original broker.
+        await broker.close();
         expect(recaptureSource()).not.toBe(originalSource);
         expect(fs.existsSync(directory)).toBe(false);
         next = await startSqliteReadOnlyLocationAsync(source, { preserveSourceArtifacts: true })

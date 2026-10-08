@@ -1,4 +1,3 @@
-// Defines plugin auto-enable decision and candidate types.
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Reasons a configured surface can cause a plugin to be auto-enabled. */
@@ -8,7 +7,14 @@ export type PluginAutoEnableCandidate = { pluginId: string } & (
       channelId: string;
     }
   | {
-      kind: "provider-auth-configured";
+      kind:
+        | "provider-auth-configured"
+        | "speech-provider-selected"
+        | "worker-provider-selected"
+        | "storage-provider-selected"
+        | "decision-provider-selected"
+        | "web-search-provider-selected"
+        | "web-fetch-provider-selected";
       providerId: string;
     }
   | {
@@ -16,40 +22,15 @@ export type PluginAutoEnableCandidate = { pluginId: string } & (
       modelRef: string;
     }
   | {
-      kind: "speech-provider-selected";
-      providerId: string;
-    }
-  | {
-      kind: "worker-provider-selected";
-      providerId: string;
-    }
-  | {
-      kind: "decision-provider-selected";
-      providerId: string;
-    }
-  | {
       kind: "agent-harness-runtime-configured";
       runtime: string;
     }
   | {
-      kind: "web-search-provider-selected";
-      providerId: string;
-    }
-  | {
-      kind: "web-fetch-provider-selected";
-      providerId: string;
-    }
-  | {
-      kind: "plugin-web-search-configured";
-    }
-  | {
-      kind: "plugin-web-fetch-configured";
-    }
-  | {
-      kind: "plugin-tool-configured";
-    }
-  | {
-      kind: "configured-plugin-repaired";
+      kind:
+        | "plugin-web-search-configured"
+        | "plugin-web-fetch-configured"
+        | "plugin-tool-configured"
+        | "configured-plugin-repaired";
     }
   | {
       kind: "setup-auto-enable";

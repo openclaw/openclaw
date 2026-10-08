@@ -9,7 +9,11 @@ import {
 } from "./update-channels.js";
 import { currentUpdateCheckLifecycle } from "./update-check-lifecycle.js";
 import { resolveStartupInstallStatus, withUpdateInstallStatus } from "./update-install-status.js";
-import { getUpdateSchedule, setUpdateScheduleCache } from "./update-status-state.js";
+import {
+  getUpdateSchedule,
+  setUpdateScheduleCache,
+  withoutUpdateCampaign,
+} from "./update-status-state.js";
 
 /** Projects scheduler facts independently of optional checkout discovery. */
 export function getGatewayUpdateSchedule(
@@ -21,16 +25,12 @@ export function getGatewayUpdateSchedule(
   // Read policy, not discovery success. External supervision must not rewrite
   // the authored auto-update preference, and status must never clear a campaign.
   const campaign = currentUpdateCheckLifecycle().campaign?.getState();
-  const { campaign: _cachedCampaign, ...cachedFacts } = schedule ?? {
-    channel,
-    campaign: undefined,
-  };
   const facts =
     schedule &&
     (schedule.channel === channel || (campaign && schedule.campaign?.id === campaign.id))
-      ? cachedFacts
+      ? withoutUpdateCampaign(schedule)
       : { channel };
-  return {
+  const result = {
     ...facts,
     autoEnabled:
       Boolean(cfg.update?.auto?.enabled) &&
@@ -38,9 +38,13 @@ export function getGatewayUpdateSchedule(
       !isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE),
     ...(campaign ? { campaign } : {}),
   };
+  const install = currentUpdateCheckLifecycle().installStatus;
+  return install && (install.status.error?.timeoutMs || install.status.installKind === "immutable")
+    ? withUpdateInstallStatus(result, install.status, true, install.installReceipt, install.root)
+    : result;
 }
 
-/** Refreshes the read-only Dev checkout comparison used by update.status. */
+/** Refreshes read-only checkout and immutable-generation facts used by update.status. */
 export function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
   const lifecycle = currentUpdateCheckLifecycle();
   const pending = lifecycle.refreshes.get(cfg);
@@ -67,12 +71,24 @@ export function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
           (schedule === scheduleAtStart || schedule?.channel === channel)
         );
       };
-      if (channel !== "dev" || !isCurrent()) {
+      if (
+        (channel !== "dev" && lifecycle.installStatus?.status.installKind !== "immutable") ||
+        !isCurrent()
+      ) {
         return;
       }
       const { root, status, installReceipt } = await resolveStartupInstallStatus(true, signal);
       if (!isCurrent()) {
         return;
+      }
+      // Repair failed discovery and invalidate generation facts when the adopted
+      // installation or prepared receipt changes, including loss of ownership.
+      if (
+        (lifecycle.installStatus?.status.error && !status.error) ||
+        lifecycle.installStatus?.status.installKind === "immutable" ||
+        status.installKind === "immutable"
+      ) {
+        lifecycle.installStatus = { root, status, installReceipt };
       }
       const schedule = getUpdateSchedule();
       const current =

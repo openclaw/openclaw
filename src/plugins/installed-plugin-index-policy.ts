@@ -1,4 +1,3 @@
-// Applies policy checks to installed plugin index records.
 import type { OpenClawConfig } from "../config/types.js";
 import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { listPluginCompatRecords } from "./compat/registry.js";

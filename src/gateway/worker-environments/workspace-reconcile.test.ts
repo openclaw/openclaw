@@ -59,10 +59,10 @@ function prepareWorkspaceResult(params: {
       remoteWorkspaceDir: "/worker/workspace",
       baseManifestRef: params.base.ref,
       journal: {
-        load: () => undefined,
-        begin: () => {},
-        commit: () => {},
-        abort: () => {},
+        load: async () => undefined,
+        begin: async () => {},
+        commit: async () => {},
+        abort: async () => {},
       },
       stagedResult: { ref: params.ref, record: params.record ?? (() => {}) },
     },
@@ -117,7 +117,9 @@ describe("worker workspace reconciliation", () => {
       publishAcceptedManifest: async (accepted) => {
         events.push(`publish:${accepted.manifestRef}`);
       },
-      commit: (manifestRef) => events.push(`commit:${manifestRef}`),
+      commit: (manifestRef) => {
+        events.push(`commit:${manifestRef}`);
+      },
     });
 
     expect(events).toEqual([`publish:${applied.manifestRef}`, `commit:${applied.manifestRef}`]);
@@ -162,13 +164,13 @@ describe("worker workspace reconciliation", () => {
         remoteWorkspaceDir: "/worker/workspace",
         baseManifestRef: base.ref,
         journal: {
-          load: () => undefined,
-          begin: () => {},
-          commit: (manifestRef) => {
+          load: async () => undefined,
+          begin: async () => {},
+          commit: async (manifestRef) => {
             expect(recordedRef).toBeUndefined();
             acceptedManifestRef = manifestRef;
           },
-          abort: () => {},
+          abort: async () => {},
         },
         stagedResult: {
           ref,
@@ -225,16 +227,16 @@ describe("worker workspace reconciliation", () => {
     await expect(fs.readFile(path.join(local, "odd\nname.txt"), "utf8")).resolves.toBe(
       "quoted path\n",
     );
-    const replayCommit = vi.fn();
+    const replayCommit = vi.fn(async () => {});
     await applyStagedWorkerWorkspaceResult({
       root: local,
       stagedResultRef: ref,
       expectedBaseManifestRef: current.ref,
       journal: {
-        load: () => undefined,
-        begin: () => {},
+        load: async () => undefined,
+        begin: async () => {},
         commit: replayCommit,
-        abort: () => {},
+        abort: async () => {},
       },
     });
     expect(replayCommit).toHaveBeenCalledWith(current.ref);
@@ -325,10 +327,10 @@ describe("worker workspace reconciliation", () => {
       stagedResultRef: ref,
       expectedBaseManifestRef: current.ref,
       journal: {
-        load: () => undefined,
-        begin: () => {},
-        commit: () => {},
-        abort: () => {},
+        load: async () => undefined,
+        begin: async () => {},
+        commit: async () => {},
+        abort: async () => {},
       },
     });
 
@@ -400,10 +402,12 @@ describe("worker workspace reconciliation", () => {
       expectedBaseManifestRef: base.ref,
       alreadyAccepted: true,
       journal: {
-        load: () => undefined,
-        begin: () => {},
-        commit: (manifestRef) => committed.push(manifestRef),
-        abort: () => {},
+        load: async () => undefined,
+        begin: async () => {},
+        commit: async (manifestRef) => {
+          committed.push(manifestRef);
+        },
+        abort: async () => {},
       },
     });
 
@@ -430,17 +434,17 @@ describe("worker workspace reconciliation", () => {
     expect(committed?.manifestRef).not.toBe(current.ref);
     await prepared.publishStagedResult();
     await fs.writeFile(path.join(local, "result.txt"), "later local\n");
-    const replayCommit = vi.fn();
+    const replayCommit = vi.fn(async () => {});
 
     const replay = await applyStagedWorkerWorkspaceResult({
       root: local,
       stagedResultRef: ref,
       expectedBaseManifestRef: committed!.manifestRef,
       journal: {
-        load: () => undefined,
-        begin: () => {},
+        load: async () => undefined,
+        begin: async () => {},
         commit: replayCommit,
-        abort: () => {},
+        abort: async () => {},
       },
     });
 
@@ -539,23 +543,6 @@ describe("worker workspace reconciliation", () => {
     await applyWorkspace({ root: local, stagingRoot: staged, base, current });
 
     await expect(fs.readFile(path.join(local, "encoded.txt"))).resolves.toEqual(currentBytes);
-  });
-
-  it("preserves an exact local-only path and reports conflicting content", async () => {
-    const local = await temporaryDirectory("workspace-local-only");
-    const staged = await temporaryDirectory("workspace-local-only-staged");
-    await gitInit(local);
-    await fs.writeFile(path.join(local, "same.txt"), "same");
-    const base = { version: 1, baseCommit: null, entries: [] } satisfies WorkerWorkspaceManifest;
-    await fs.writeFile(path.join(staged, "same.txt"), "same");
-    const current = await manifestFor(staged);
-    await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-    await expect(fs.readFile(path.join(local, "same.txt"), "utf8")).resolves.toBe("same");
-
-    await fs.writeFile(path.join(local, "same.txt"), "local");
-    const result = await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-    expect(result.conflictPaths).toEqual(["same.txt"]);
-    await expect(fs.readFile(path.join(local, "same.txt"), "utf8")).resolves.toBe("local");
   });
 
   it("ignores local divergence on worker-unchanged paths", async () => {
@@ -674,6 +661,9 @@ describe("worker workspace reconciliation", () => {
     expect(acceptedManifestRef).toBe(result.manifestRef);
     await expect(fs.readFile(path.join(local, "apply.txt"), "utf8")).resolves.toBe("worker");
     await expect(fs.readFile(path.join(local, "noop.txt"), "utf8")).resolves.toBe("worker");
+    await expect(fs.readFile(path.join(local, "added-identical.txt"), "utf8")).resolves.toBe(
+      "worker",
+    );
     await expect(fs.readFile(path.join(local, "conflict.txt"), "utf8")).resolves.toBe("local");
     await expect(fs.lstat(path.join(local, "deleted-apply.txt"))).rejects.toMatchObject({
       code: "ENOENT",

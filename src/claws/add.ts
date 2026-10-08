@@ -3,7 +3,8 @@ import { lstat, mkdir, rmdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
-import { listAgentEntries } from "../agents/agent-scope.js";
+import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope.js";
+import { applyAgentConfig } from "../commands/agents.config.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,12 +16,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
-import {
-  hasUnsupportedMutationActions,
-  planWithPackageActions,
-  sameCommittedAgent,
-  statusAtLeast,
-} from "./add-plan-helpers.js";
+import { planWithPackageActions, sameCommittedAgent, statusAtLeast } from "./add-plan-helpers.js";
 import { ClawBootstrapWriteError, seedClawPackageBootstrap } from "./bootstrap.js";
 import {
   ClawCronInstallError,
@@ -28,7 +24,6 @@ import {
   type ClawCronGateway,
   type PersistedClawCronRef,
 } from "./cron.js";
-import { replaceLegacyCommittedAgent } from "./legacy-resume.js";
 import {
   ClawMcpInstallError,
   installClawMcpServers,
@@ -147,12 +142,6 @@ export async function applyClawAddPlan(
 ): Promise<ClawAddResult> {
   if (plan.blockers.length > 0) {
     throw new ClawAddMutationError("plan_blocked", "The Claw add plan contains blockers.");
-  }
-  if (hasUnsupportedMutationActions(plan)) {
-    throw new ClawAddMutationError(
-      "unsupported_components",
-      "This build cannot add one or more declared Claw component kinds.",
-    );
   }
   if (options.consentPlanIntegrity !== (options.resumePlan?.planIntegrity ?? plan.planIntegrity)) {
     throw new ClawAddMutationError(
@@ -416,12 +405,12 @@ export async function applyClawAddPlan(
     await commit((config) => {
       const existingAgents = listAgentEntries(config);
       const agentsToPreserve: AgentConfig[] =
-        existingAgents.length > 0 ? existingAgents : [{ id: DEFAULT_AGENT_ID, default: true }];
+        existingAgents.length > 0 ? existingAgents : [{ id: DEFAULT_AGENT_ID }];
       const configWithPreservedAgents: OpenClawConfig = {
         ...config,
         agents: {
           ...config.agents,
-          entries: Object.fromEntries(agentsToPreserve.map(({ id, ...entry }) => [id, entry])),
+          entries: toAgentEntriesRecord(agentsToPreserve),
         },
       };
       const normalizedAgentId = normalizeAgentId(plan.agent.finalId);
@@ -432,17 +421,23 @@ export async function applyClawAddPlan(
         if (sameCommittedAgent(existingAgent, plan)) {
           return config;
         }
-        const nextConfig = replaceLegacyCommittedAgent({
-          config: configWithPreservedAgents,
-          agents: agentsToPreserve,
-          normalizedAgentId,
-          plan,
-          resumePlan: options.resumePlan,
-          resumeRecord: options.resumeRecord,
-          matchesPlan: sameCommittedAgent,
-        });
-        if (nextConfig) {
-          return nextConfig;
+        if (
+          options.resumePlan &&
+          options.resumeRecord?.schemaVersion === "openclaw.clawInstallRecord.v1" &&
+          options.resumeRecord.status !== "complete" &&
+          sameCommittedAgent(existingAgent, options.resumePlan)
+        ) {
+          return {
+            ...configWithPreservedAgents,
+            agents: {
+              ...configWithPreservedAgents.agents,
+              entries: toAgentEntriesRecord(
+                agentsToPreserve.map((agent) =>
+                  normalizeAgentId(agent.id) === normalizedAgentId ? plan.agent.config : agent,
+                ),
+              ),
+            },
+          };
         }
         throw new ClawAddMutationError(
           "agent_id_collision",
@@ -458,16 +453,19 @@ export async function applyClawAddPlan(
           "Workspace " + JSON.stringify(workspace) + " is already assigned to an agent.",
         );
       }
-      const nextConfig: OpenClawConfig = {
-        ...config,
+      const nextConfig = applyAgentConfig(configWithPreservedAgents, {
+        agentId: normalizedAgentId,
+      });
+      return {
+        ...nextConfig,
         agents: {
-          ...config.agents,
-          entries: Object.fromEntries(
-            [...agentsToPreserve, plan.agent.config].map(({ id, ...entry }) => [id, entry]),
-          ),
+          ...nextConfig.agents,
+          entries: {
+            ...nextConfig.agents?.entries,
+            ...toAgentEntriesRecord([plan.agent.config]),
+          },
         },
       };
-      return nextConfig;
     });
     // The transform runs before persistence can still fail; record the fact only after commit.
     // Moving this into the callback retains the workspace and reports a write that never landed.

@@ -8,12 +8,7 @@ export function resolveDirectiveRuntimeContext(
 ) {
   const activeAgentId = params.agentId;
   const agentDir = resolveAgentDir(params.cfg, activeAgentId);
-  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
-    agentId: activeAgentId,
-    cfg: params.cfg,
-    ctx: params.ctx,
-    sessionKey: params.sessionKey,
-  });
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey(params);
   const runtimeIsSandboxed = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     agentId: activeAgentId,

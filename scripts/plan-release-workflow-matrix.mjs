@@ -1,4 +1,3 @@
-// Plans release workflow matrix entries from profile and suite inputs.
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parseLaneSelection } from "./lib/docker-e2e-plan.mts";
 import { allReleasePathLanes } from "./lib/docker-e2e-scenarios.mts";
@@ -17,10 +16,14 @@ const DOCKER_E2E_CHUNKS = [
   },
   {
     chunk_id: "package-update-openai",
-    label: "package/update OpenAI and recovery",
-    // Five weight-3 npm lanes serialize at limit 5: 30m + 30m + 20m + 25m + 43m.
-    // The 10m chat lane overlaps; add 10m for setup/artifacts => 158m, round to 160m.
-    timeout_minutes: 160,
+    label: "package/update OpenAI",
+    timeout_minutes: 60,
+    profiles: "beta minimum stable full",
+  },
+  {
+    chunk_id: "package-update-restart-auth",
+    label: "package/update restart auth",
+    timeout_minutes: 55,
     profiles: "beta minimum stable full",
   },
   {
@@ -36,18 +39,6 @@ const DOCKER_E2E_CHUNKS = [
     profiles: "beta minimum stable full",
   },
   {
-    chunk_id: "package-update-self-upgrade",
-    label: "package/update self-upgrade",
-    // Six 3500s first-hop lanes need two waves at npm weight limit 5; the 20m
-    // survivor (weight 3) overlaps. 2 x 3500s + 10m setup/artifacts ~= 127m => 130m.
-    timeout_minutes: 130,
-    // Dropped from stable for 2026.9.7 by the release lead under Peter's 2026-09-29
-    // decision: six-way first-hop contention in one job fails deterministically
-    // (jobs 109446149023, 109482109194) while every lane in it passes as a separate
-    // targeted lane. Restore "stable" with the waves change (5aed4315) and #161257.
-    profiles: "beta minimum full",
-  },
-  {
     chunk_id: "plugins-runtime-plugins",
     label: "plugins/runtime plugins",
     timeout_minutes: 60,
@@ -59,54 +50,12 @@ const DOCKER_E2E_CHUNKS = [
     timeout_minutes: 60,
     profiles: "stable full",
   },
-  {
-    chunk_id: "plugins-runtime-install-a",
-    label: "plugins/runtime install A",
+  ...["a", "b", "c", "d", "e", "f", "g", "h"].map((shard) => ({
+    chunk_id: `plugins-runtime-install-${shard}`,
+    label: `plugins/runtime install ${shard.toUpperCase()}`,
     timeout_minutes: 60,
     profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-b",
-    label: "plugins/runtime install B",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-c",
-    label: "plugins/runtime install C",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-d",
-    label: "plugins/runtime install D",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-e",
-    label: "plugins/runtime install E",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-f",
-    label: "plugins/runtime install F",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-g",
-    label: "plugins/runtime install G",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-h",
-    label: "plugins/runtime install H",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
+  })),
 ];
 
 const LIVE_MODEL_PROVIDERS = [
@@ -140,6 +89,11 @@ const LIVE_MODEL_PROVIDERS = [
   {
     provider_label: "OpenCode",
     providers: "opencode-go",
+    // The release workspace does not enable Global regions, so the default high-signal
+    // selection includes DeepSeek routes that reject every request. Keep this list aligned
+    // with models proven reachable from the release workspace.
+    models: "opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3",
+    max_models: "3",
     profiles: "full",
   },
   {
@@ -448,7 +402,6 @@ export function createReleaseSourceSelection(options = {}) {
   const releaseProfile = options.releaseProfile ?? "stable";
   const includeOpenWebUI = isEnabled(options.includeOpenWebUI);
   const prepareOnly = isEnabled(options.prepareOnly);
-  const consumers = [];
   const codexSuites = [];
   const docker = [];
   const baseline = options.upgradeSurvivorBaseline ?? "";
@@ -503,14 +456,11 @@ export function createReleaseSourceSelection(options = {}) {
       if (row.suite_id.startsWith("live-codex-harness")) {
         codexSuites.push(row.suite_id);
       }
-      if (row.suite_id.startsWith("live-gateway-") || row.suite_id.startsWith("live-cli-")) {
-        consumers.push("live-cli-backend");
-      }
     }
   }
   return {
     docker,
-    consumers: [...new Set(consumers)],
+    consumers: [],
     codexSuites,
     fsSafeNative: prepareOnly || docker.length > 0,
     preparationLanes,
@@ -534,9 +484,6 @@ function planProfileMatrix(entries, profile, enabled, disabledReason, labelForEn
   };
 }
 
-/**
- * Creates the Docker E2E/live model matrix plan for a release profile.
- */
 export function createReleaseWorkflowMatrixPlan(options = {}) {
   const releaseProfile = options.releaseProfile ?? "stable";
   if (!["beta", "minimum", "stable", "full"].includes(releaseProfile)) {

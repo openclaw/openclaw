@@ -1,14 +1,15 @@
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionCreateRequest,
-  RealtimeVoiceProviderCapabilities,
-  RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderPlugin,
+  RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderResolveConfigContext,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice-provider";
+import {
+  type InternalRealtimeVoiceBrowserSessionCreateRequest,
+  type InternalRealtimeVoiceProviderApi,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { projectRealtimeVoicePublicProjection } from "./provider-policy-api.js";
 import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
@@ -17,7 +18,7 @@ import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js"
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instructions.js";
-import type { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
+import type { OpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
 import {
   OPENAI_QUICKSILVER_CAPABILITIES,
   isOpenAIGptLiveModel,
@@ -47,66 +48,12 @@ import {
   type OpenAIRealtimeVoiceProviderConfig,
 } from "./realtime-voice-session-policy.js";
 
-type OpenAIQuicksilverBrowserSessionBroker = ReturnType<
-  typeof createOpenAIQuicksilverBrowserSessionBroker
->["broker"];
-
-type OpenAIInternalRealtimeBrowserSessionCreateRequest =
-  RealtimeVoiceBrowserSessionCreateRequest & {
-    agentId: string;
-    ownerConnId?: string;
-    workspaceDir: string;
-    initialItems: Array<{
-      role: "user" | "assistant";
-      text: string;
-    }>;
-  };
-
-type OpenAIInternalRealtimeVoiceCapabilities = RealtimeVoiceProviderCapabilities & {
-  handlesAgentConsult?: boolean;
-  supportsGatewayControl?: boolean;
-  voices?: readonly string[];
-  voiceSelectionPolicy?: "allowlist-default";
-  voicesByModel?: Record<string, readonly string[]>;
-};
-
-type OpenAIInternalRealtimeVoiceProviderApi = {
-  isBrowserSessionConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
-  resolveBrowserSessionCapabilities?: (
-    ctx: RealtimeVoiceProviderConfiguredContext & {
-      model?: string;
-      clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-    },
-  ) => OpenAIInternalRealtimeVoiceCapabilities;
-  isGatewayRelayConfigured?: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean | undefined;
-  resolveGatewayRelayCapabilities?: (ctx: {
-    cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
-    providerConfig: RealtimeVoiceProviderConfig;
-    model?: string;
-  }) => OpenAIInternalRealtimeVoiceCapabilities;
-  projectPublicProjection?: (ctx: {
-    providerConfig: RealtimeVoiceProviderConfig;
-    config: RealtimeVoiceProviderConfig;
-  }) => {
-    config: RealtimeVoiceProviderConfig;
-    clientHints?: {
-      modelSource?: "gateway";
-      gatewayRelaySupported: boolean;
-    };
-  };
-  validateGatewayRelayLaunch?: (ctx: {
-    cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
-    providerConfig: RealtimeVoiceProviderConfig;
-    model?: string;
-    autoRespondToAudio?: boolean;
-  }) => string | undefined;
-  cancelBrowserSession?: (
-    request: OpenAIInternalRealtimeBrowserSessionCreateRequest,
-    session: RealtimeVoiceBrowserSession,
-  ) => Promise<void> | void;
-};
-
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
+const CUSTOM_ENDPOINT_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
+  ...OPENAI_REALTIME_CAPABILITIES,
+  transports: ["gateway-relay"],
+  supportsBrowserSession: false,
+};
 
 function resolveOpenAIRealtimeVoiceConfig(
   {
@@ -125,6 +72,7 @@ function resolveOpenAIRealtimeVoiceConfig(
   }
   // Live delegates natively; GA still owns manually triggered replies and video.
   if (
+    config.baseUrl ||
     config.azureEndpoint ||
     config.azureDeployment ||
     autoRespondToAudio === false ||
@@ -144,7 +92,7 @@ function resolveOpenAIRealtimeVoiceConfig(
 }
 
 function buildOpenAIRealtimeBrowserSessionConfig(
-  req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
+  req: InternalRealtimeVoiceBrowserSessionCreateRequest,
   config: OpenAIRealtimeVoiceProviderConfig,
   model: string,
   warn: OpenAIRealtimeHost["warn"],
@@ -195,13 +143,23 @@ function buildOpenAIRealtimeBrowserSessionConfig(
 }
 
 async function createOpenAIRealtimeBrowserSession(
-  req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
+  req: InternalRealtimeVoiceBrowserSessionCreateRequest,
   quicksilverBroker: OpenAIQuicksilverBrowserSessionBroker | undefined,
   logger: Pick<PluginLogger, "warn">,
   context: OpenAIRealtimeHost,
 ): Promise<RealtimeVoiceBrowserSession> {
   const { resolveAgentDir } = context;
   const config = normalizeProviderConfig(req.providerConfig);
+  const authParams = {
+    configuredApiKey: config.apiKey,
+    cfg: req.cfg,
+    agentId: req.agentId,
+  };
+  if (config.baseUrl) {
+    throw new Error(
+      "OpenAI realtime baseUrl requires gateway-relay; browser WebRTC is not supported",
+    );
+  }
   if (config.azureEndpoint || config.azureDeployment) {
     throw new Error("OpenAI Realtime browser sessions do not support Azure endpoints yet");
   }
@@ -217,29 +175,14 @@ async function createOpenAIRealtimeBrowserSession(
       instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
       voice: req.voice ?? config.voice,
     };
-    const auth = await resolveOpenAIQuicksilverBridgeAuth(
-      {
-        configuredApiKey: config.apiKey,
-        cfg: req.cfg,
-        agentId: req.agentId,
-        model,
-      },
-      context,
-    );
+    const auth = await resolveOpenAIQuicksilverBridgeAuth({ ...authParams, model }, context);
     return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
   }
   if (req.gatewayControl) {
     if (!quicksilverBroker) {
       throw new Error("OpenAI realtime browser session broker is unavailable");
     }
-    const auth = await requireOpenAIRealtimePlatformAuth(
-      {
-        configuredApiKey: config.apiKey,
-        cfg: req.cfg,
-        agentId: req.agentId,
-      },
-      context,
-    );
+    const auth = await requireOpenAIRealtimePlatformAuth(authParams, context);
     const voice =
       normalizeOpenAIRealtimeVoice(req.voice) ??
       normalizeOpenAIRealtimeVoice(config.voice) ??
@@ -319,7 +262,7 @@ async function createOpenAIRealtimeBrowserSession(
           },
         },
       },
-      { type: "api-key", token: auth.value },
+      { type: "api-key", token: auth },
     );
   }
   const { session, voice } = buildOpenAIRealtimeBrowserSessionConfig(
@@ -328,25 +271,9 @@ async function createOpenAIRealtimeBrowserSession(
     model,
     context.warn,
   );
-  const auth = await resolveOpenAIRealtimePlatformAuth(
-    {
-      configuredApiKey: config.apiKey,
-      cfg: req.cfg,
-      agentId: req.agentId,
-    },
-    context,
-  );
-  if (auth.status === "missing") {
-    if (
-      hasOpenAIRealtimePlatformAuthInput(
-        {
-          configuredApiKey: config.apiKey,
-          cfg: req.cfg,
-          agentId: req.agentId,
-        },
-        context,
-      )
-    ) {
+  const auth = await resolveOpenAIRealtimePlatformAuth(authParams, context);
+  if (!auth) {
+    if (hasOpenAIRealtimePlatformAuthInput(authParams, context)) {
       throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
     }
     const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
@@ -375,7 +302,7 @@ async function createOpenAIRealtimeBrowserSession(
 
   const clientSecret = await createOpenAIRealtimeClientSecret(
     {
-      authToken: auth.value,
+      authToken: auth,
       auditContext: "openai-realtime-browser-session",
       session,
       authRejectedMessage: OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED,
@@ -445,52 +372,45 @@ export function buildOpenAIRealtimeVoiceProvider(
       const config = normalizeProviderConfig(req.providerConfig);
       const model = config.model;
       if (model && isOpenAIGptLiveModel(model)) {
+        if (config.baseUrl) {
+          throw new Error(
+            "OpenAI realtime baseUrl does not support GPT-Live; select a Realtime-compatible model",
+          );
+        }
         if (config.azureEndpoint || config.azureDeployment) {
           throw new Error(
             "GPT-Live backend WebSocket sessions do not support Azure endpoints or deployments",
           );
         }
+        const bridgeConfig = {
+          ...req,
+          model,
+          voice: config.voice,
+          instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
+        };
+        const authParams = {
+          configuredApiKey: config.apiKey,
+          cfg: req.cfg,
+          agentId: req.agentId,
+        };
         if (req.runAgentConsult) {
           return new OpenAIQuicksilverGatewayBridge(
             {
-              ...req,
-              model,
-              voice: config.voice,
-              instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
+              ...bridgeConfig,
               logger: options?.logger ?? { debug: () => undefined, warn: () => undefined },
               resolveAuth: () =>
-                resolveOpenAIQuicksilverBridgeAuth(
-                  {
-                    configuredApiKey: config.apiKey,
-                    cfg: req.cfg,
-                    agentId: req.agentId,
-                    model,
-                  },
-                  context,
-                ),
+                resolveOpenAIQuicksilverBridgeAuth({ ...authParams, model }, context),
             },
             context,
           );
         }
         return new OpenAIQuicksilverVoiceBridge(
           {
-            ...req,
-            model,
-            voice: config.voice,
-            instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
+            ...bridgeConfig,
             logger: options?.logger ?? { warn: () => undefined },
             resolveAuth: async () => ({
               type: "api-key",
-              token: (
-                await requireOpenAIRealtimePlatformAuth(
-                  {
-                    configuredApiKey: config.apiKey,
-                    cfg: req.cfg,
-                    agentId: req.agentId,
-                  },
-                  context,
-                )
-              ).value,
+              token: await requireOpenAIRealtimePlatformAuth(authParams, context),
             }),
           },
           context,
@@ -511,45 +431,39 @@ export function buildOpenAIRealtimeVoiceProvider(
     createBrowserSession: (req) =>
       createOpenAIRealtimeBrowserSession(
         // SAFETY: Talk client creation supplies the private agent/workspace context before this call.
-        req as OpenAIInternalRealtimeBrowserSessionCreateRequest,
+        req as InternalRealtimeVoiceBrowserSessionCreateRequest,
         options?.quicksilverBrowserSessionBroker,
         options?.logger ?? { warn: () => undefined },
         context,
       ),
   };
-  const internalApi: OpenAIInternalRealtimeVoiceProviderApi = {
+  const internalApi: InternalRealtimeVoiceProviderApi = {
     isBrowserSessionConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
-      if (config.azureEndpoint || config.azureDeployment) {
+      if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
         return false;
       }
       const model = config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-      if (isOpenAIGptLiveModel(model)) {
-        return (
-          options?.quicksilverBrowserSessionBroker !== undefined &&
-          (hasOpenAIRealtimePlatformAuthInput(
-            { configuredApiKey: config.apiKey, cfg, agentId },
-            context,
-          ) ||
-            (isOpenAIGptLiveSubscriptionModel(model) &&
-              hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context)))
-        );
+      const isGptLive = isOpenAIGptLiveModel(model);
+      const hasBroker = options?.quicksilverBrowserSessionBroker !== undefined;
+      if (isGptLive && !hasBroker) {
+        return false;
       }
       return (
         hasOpenAIRealtimePlatformAuthInput(
-          {
-            configuredApiKey: config.apiKey,
-            cfg,
-            agentId,
-          },
+          { configuredApiKey: config.apiKey, cfg, agentId },
           context,
         ) ||
-        (options?.quicksilverBrowserSessionBroker !== undefined &&
+        (hasBroker &&
+          (!isGptLive || isOpenAIGptLiveSubscriptionModel(model)) &&
           hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
       );
     },
     resolveBrowserSessionCapabilities: ({ cfg, providerConfig, agentId, model, clientControl }) => {
       const config = normalizeProviderConfig(providerConfig);
+      if (config.baseUrl) {
+        return CUSTOM_ENDPOINT_CAPABILITIES;
+      }
       const effectiveModel = model ?? config.model ?? "";
       if (isOpenAIGptLiveModel(effectiveModel)) {
         // Older hosts do not prepare this control claim, even when they own native delegations.
@@ -583,7 +497,7 @@ export function buildOpenAIRealtimeVoiceProvider(
       if (!isOpenAIGptLiveModel(config.model)) {
         return undefined;
       }
-      if (config.azureEndpoint || config.azureDeployment) {
+      if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
         return false;
       }
       return (
@@ -597,6 +511,9 @@ export function buildOpenAIRealtimeVoiceProvider(
     },
     resolveGatewayRelayCapabilities: ({ providerConfig, model }) => {
       const config = normalizeProviderConfig(providerConfig);
+      if (config.baseUrl) {
+        return CUSTOM_ENDPOINT_CAPABILITIES;
+      }
       if (isOpenAIGptLiveModel(model ?? config.model)) {
         return {
           ...OPENAI_REALTIME_CAPABILITIES,
@@ -609,6 +526,9 @@ export function buildOpenAIRealtimeVoiceProvider(
     projectPublicProjection: projectRealtimeVoicePublicProjection,
     validateGatewayRelayLaunch: ({ providerConfig, model, autoRespondToAudio }) => {
       const config = normalizeProviderConfig(providerConfig);
+      if (config.baseUrl && isOpenAIGptLiveModel(model ?? config.model)) {
+        return "OpenAI realtime baseUrl does not support GPT-Live; select a Realtime-compatible model";
+      }
       if (autoRespondToAudio === false && isOpenAIGptLiveModel(model ?? config.model)) {
         return "GPT-Live gateway-relay sessions cannot use forced agent consult routing; GPT-Live delegates to the agent natively";
       }

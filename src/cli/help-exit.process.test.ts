@@ -10,7 +10,8 @@ import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts"
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   cliMessageExitEntrypoints,
   cliRecoveryEntrypoints,
@@ -130,6 +131,8 @@ async function runCliProcess(params: {
   }
   const expectedExitCode = params.expectedExitCode ?? 0;
   const exit = await runCliProcessChild({
+    nodeExecutable:
+      params.forbidTlsImport || params.failRunMainImport ? resolveTestNodeExecPath() : undefined,
     nodeArgs: [
       // Prepared entrypoints still load source-checkout plugins; keep the same TSX loader.
       "--import",
@@ -387,7 +390,11 @@ describe("models list JSON failure process output", () => {
       args: ["models", "list", "--provider", provider, "--json"],
       entry: preparedCliEntry,
       config: {},
-      env,
+      env: {
+        ...env,
+        OPENCLAW_DEBUG: undefined,
+        OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+      },
       expectedExitCode: 1,
     });
 
@@ -397,7 +404,13 @@ describe("models list JSON failure process output", () => {
       ok: false,
       error: { type: "cli_error", message },
     });
-    expect(result.stderr).toContain(message);
+    if (provider === "autoqa-no-such-provider") {
+      expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+      expect(result.stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
+      expect(result.stderr).not.toContain(message);
+    } else {
+      expect(result.stderr).toContain(message);
+    }
   });
 });
 
@@ -419,6 +432,7 @@ describe("message broadcast process exit", () => {
       const entryPath = path.join(root, "run-message-broadcast.mjs");
       const largePayload = "x".repeat(8_388_608);
       const helpersUrl = resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.helpers);
+      const nodeExecutable = resolveTestNodeExecPath();
       const commandSpecifier = /\.[cm]?ts$/u.test(helpersUrl.pathname)
         ? "../../../commands/message.js"
         : resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.command).href;
@@ -472,9 +486,9 @@ await runCliWithExitFinalization({
       const spawned: { child?: ChildProcess } = {};
       const child = await lifetime.track(
         runNodeScript(
-          [
+          (workerArgv) => [
             ...resolveVitestNodeArgs(),
-            ...resolveRuntimeWorkerArgv(helpersUrl).slice(0, -1),
+            ...workerArgv(helpersUrl).slice(0, -1),
             entryPath,
           ],
           {
@@ -497,6 +511,7 @@ await runCliWithExitFinalization({
           },
           CLI_PROCESS_DEADLOCK_GUARD_MS,
           {
+            executable: nodeExecutable,
             cwd: path.resolve("."),
             maxBuffer,
             signal: AbortSignal.any([signal, finished.signal, overflow.signal]),
@@ -725,8 +740,10 @@ describe("JSON console style process output", () => {
           },
         },
         env: {
+          OPENCLAW_DEBUG: undefined,
           OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
           OPENCLAW_TEST_CONSOLE_STYLE: undefined,
+          OPENCLAW_UPDATE_IN_PROGRESS: undefined,
         },
         failRunMainImport: true,
         stateEnv: () => ({ OPENCLAW_TEST_CONSOLE_STYLE: "json" }),
@@ -742,10 +759,15 @@ describe("JSON console style process output", () => {
           }),
           expect.objectContaining({
             level: "error",
-            message: expect.stringContaining("forced run-main import failure"),
+            message: "[openclaw] Could not start the CLI.",
+          }),
+          expect.objectContaining({
+            level: "error",
+            message: "[openclaw] For help, run `openclaw doctor`.",
           }),
         ]),
       );
+      expect(result.stderr).not.toContain("forced run-main import failure");
     },
     SLOW_DOTENV_TEST_TIMEOUT_MS,
   );
