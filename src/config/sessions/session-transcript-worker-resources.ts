@@ -306,7 +306,8 @@ export async function settleSessionHistoryWorkerEviction(
 ): Promise<void> {
   const resource = historyDatabases.get(JSON.stringify(database));
   if (resource) {
-    await closeDatabaseWorkerResource(resource, lane, true);
+    // Preparing tasks can own input before a worker exists to receive a native close.
+    await closeDatabaseWorkerResource(resource, lane, lane.pool.getSnapshot().activeTasks === 0);
   }
 }
 

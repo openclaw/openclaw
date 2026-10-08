@@ -63,6 +63,7 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
   createOwnedWorkerTaskPool: (poolOptions: WorkerTaskPoolOptions<unknown>) => {
     let worker: ReturnType<NonNullable<typeof poolOptions.prepareWorker>> | undefined;
     const retiring = new Set<NonNullable<typeof worker>>();
+    let activeTasks = 0;
     observed.replaceWorkers.push(() => {
       const previous = worker;
       worker = poolOptions.prepareWorker?.();
@@ -70,10 +71,16 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
     });
     return {
       async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
-        const preparedInput = prepare();
-        worker ??= poolOptions.prepareWorker?.();
-        return await observed.run(preparedInput, options);
+        activeTasks++;
+        try {
+          const preparedInput = prepare();
+          worker ??= poolOptions.prepareWorker?.();
+          return await observed.run(preparedInput, options);
+        } finally {
+          activeTasks--;
+        }
       },
+      getSnapshot: () => ({ activeTasks }),
       async rotate() {
         if (worker) {
           retiring.add(worker);
@@ -381,6 +388,52 @@ it("joins sibling reader cleanup for an eviction reported during discovery clean
     readerReply.resolve({ ok: true, value: false, closedHistoryDatabase: request.database });
     cleanupFinished.resolve();
     await Promise.allSettled([discovery, missingRead]);
+  }
+});
+
+it("joins unfinished reads before accepting a sibling eviction", async () => {
+  const request = input();
+  const preparing = createDeferredCore();
+  const read = createDeferredCore<unknown>();
+  const rotating = createDeferredCore();
+  const retired = createDeferredCore();
+  observed.run
+    .mockImplementationOnce(() => {
+      preparing.resolve();
+      return read.promise;
+    })
+    .mockResolvedValueOnce({ ok: true, value: false, closedHistoryDatabase: request.database });
+  observed.rotate.mockImplementationOnce(() => {
+    rotating.resolve();
+    return retired.promise;
+  });
+  const sibling = withSessionHistoryWorkerDatabase(request.database, (owner) =>
+    owner.readEntryPresence(request.scope),
+  );
+  let evicting: Promise<boolean> | undefined;
+  try {
+    await preparing.promise;
+    evicting = withSessionHistoryWorkerDatabase(request.database, (owner) =>
+      owner.readEntryPresence(request.scope),
+    );
+    await Promise.race([
+      rotating.promise,
+      evicting.then(() => {
+        throw new Error("Eviction released custody while a sibling read was still pending");
+      }),
+    ]);
+    expect(observed.closeResources).not.toHaveBeenCalled();
+    expect(observed.unregister).not.toHaveBeenCalled();
+    read.resolve({ ok: true, value: false });
+    await expect(sibling).resolves.toBe(false);
+    expect(observed.unregister).not.toHaveBeenCalled();
+    retired.resolve();
+    await expect(evicting).resolves.toBe(false);
+    expect(observed.unregister).toHaveBeenCalledOnce();
+  } finally {
+    read.resolve({ ok: true, value: false });
+    retired.resolve();
+    await Promise.allSettled([sibling, evicting]);
   }
 });
 
