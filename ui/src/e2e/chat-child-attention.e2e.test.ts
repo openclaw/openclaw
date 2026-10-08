@@ -5,6 +5,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat child attention" });
 
@@ -100,6 +101,61 @@ suite.define(() => {
           );
         }
       }
+    });
+  });
+
+  it("never flashes a child the parent's child query no longer links", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const parent = {
+        key: "agent:main:dashboard:expired-parent",
+        sessionId: "expired-parent",
+        kind: "direct",
+        status: "done",
+        updatedAt: Date.now(),
+      } satisfies GatewaySessionRow;
+      // The broad roster keeps spawnedBy after the Gateway retires the child link.
+      const expired = {
+        key: "agent:main:subagent:expired",
+        sessionId: "expired-child",
+        kind: "direct",
+        classification: "subagent",
+        label: "Expired diagnostic",
+        spawnedBy: parent.key,
+        status: "timeout",
+        updatedAt: 1,
+        endedAt: 1,
+      } satisfies GatewaySessionRow;
+      await page.addInitScript(() => {
+        const seen = { flashed: false };
+        Object.assign(window, { childAttentionSeen: seen });
+        new MutationObserver(() => {
+          seen.flashed ||= document.querySelector(".chat-child-attention") !== null;
+        }).observe(document, { childList: true, subtree: true });
+      });
+      const gateway = await installMockGateway(page, {
+        sessionKey: parent.key,
+        sessions: [parent, expired],
+        communityInvite: false,
+        historyMessages: [{ role: "assistant", content: "Parent history loaded." }],
+        methodResponses: {
+          "sessions.list": {
+            cases: [
+              { match: { spawnedBy: parent.key }, response: sessionsListResponse([]) },
+              { response: sessionsListResponse([parent, expired]) },
+            ],
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
+      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      await pane.getByText("Parent history loaded.", { exact: true }).waitFor();
+      await gateway.waitForRequest("sessions.list", { match: { spawnedBy: parent.key } });
+      await expect.poll(() => pane.locator("openclaw-chat-child-attention").count()).toBe(1);
+      expect(
+        await page.evaluate(
+          () => (window as { childAttentionSeen?: { flashed: boolean } }).childAttentionSeen,
+        ),
+      ).toEqual({ flashed: false });
     });
   });
 });

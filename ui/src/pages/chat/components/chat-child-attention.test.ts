@@ -39,6 +39,7 @@ function mount(rows: GatewaySessionRow[] = [child]) {
       subagentParentKey: parentKey,
       messages: [{ role: "assistant", content: "The diagnostic is running." }],
       subagentSessions: rows,
+      subagentSessionsRead: true,
       onOpenSubagent: open,
     }),
     container,
@@ -78,6 +79,28 @@ it.each(["failed", "timeout"] as const)(
     expect(notice.querySelector(".chat-child-attention")).toBeNull();
   },
 );
+
+it("waits for the parent's child query before trusting seeded ancestry", () => {
+  // The seed comes from the broad list, which keeps spawnedBy on children whose
+  // gateway link has expired; an unread timeout among them must not flash.
+  const expired = { ...child, status: "timeout" as const, agentStatus: undefined };
+  const container = document.body.appendChild(document.createElement("div"));
+  const show = (subagentSessionsRead: boolean) =>
+    render(
+      renderChatComposerNotices({
+        sessionKey: parentKey,
+        subagentParentKey: parentKey,
+        messages: [],
+        subagentSessions: [expired],
+        subagentSessionsRead,
+      }),
+      container,
+    );
+  show(false);
+  expect(container.querySelector("openclaw-chat-child-attention")).toBeNull();
+  show(true);
+  expect(container.querySelector("openclaw-chat-child-attention")).not.toBeNull();
+});
 
 it("reconciles cleared notes, expiry, and changed parent without retaining stale blockers", async () => {
   const { notice } = mount();
