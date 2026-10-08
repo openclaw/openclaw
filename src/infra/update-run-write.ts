@@ -57,15 +57,18 @@ export function applyUpdateRunPhase(
   if (record.status !== "running") {
     return;
   }
-  const merge = <K extends "origin" | "target" | "before" | "after">(field: K) => {
-    if (patch[field]) {
-      record[field] = { ...record[field], ...patch[field] };
-    }
-  };
-  merge("origin");
-  merge("target");
-  merge("before");
-  merge("after");
+  if (patch.origin) {
+    record.origin = { ...record.origin, ...patch.origin };
+  }
+  if (patch.target) {
+    record.target = { ...record.target, ...patch.target };
+  }
+  if (patch.before) {
+    record.before = { ...record.before, ...patch.before };
+  }
+  if (patch.after) {
+    record.after = { ...record.after, ...patch.after };
+  }
   if (patch.trigger) {
     record.trigger = patch.trigger;
   }

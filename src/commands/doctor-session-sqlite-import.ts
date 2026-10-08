@@ -140,18 +140,22 @@ export async function importLegacySessionRecords(
       await setImmediate();
     }
   } catch (error) {
+    const failures = [error];
     report.issues.push({ code: "sqlite_import_failed", message: formatErrorMessage(error) });
     if (activeRun) {
       activeRun.manifest.failedAt = new Date().toISOString();
       try {
         updateMigrationManifestTarget(activeRun, report, report.issues);
       } catch (recordError) {
-        throw new AggregateError(
-          [error, recordError],
-          `${formatErrorMessage(error)}; could not record session SQLite migration failure: ${formatErrorMessage(recordError)}`,
-          { cause: error },
-        );
+        failures.push(recordError);
       }
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        `${formatErrorMessage(error)}; could not record session SQLite migration failure: ${formatErrorMessage(failures[1])}`,
+        { cause: error },
+      );
     }
     throw error;
   }

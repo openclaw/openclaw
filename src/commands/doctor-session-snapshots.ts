@@ -104,7 +104,7 @@ function collectCachedSnapshotPaths(entry: SessionEntry): CachedSnapshotPath[] {
       isRecord(report) ? collectInjectedWorkspaceFilePaths(report.injectedWorkspaceFiles) : [],
     ],
   ];
-  return sources.flatMap(([field, paths]) => paths.map((path) => ({ field, path })));
+  return sources.flatMap(([field, paths]) => paths.map((location) => ({ field, path: location })));
 }
 
 function isAbsolutePathLike(value: string): boolean {

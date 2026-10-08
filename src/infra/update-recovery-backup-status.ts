@@ -35,10 +35,11 @@ export async function inspectUpdateRecoveryBackups() {
   }
   const inspected = await Promise.all(
     snapshots.map(async ({ ref, manifest, outcome }) => {
-      const capture = { ref, runId: manifest.runId, captureStatus: outcome.status };
       if (forwardResolved.has(ref.manifestSha256)) {
         return {
-          ...capture,
+          ref,
+          runId: manifest.runId,
+          captureStatus: outcome.status,
           status: "forward-resolved" as const,
           terminalOutcome: undefined,
           nextAction: "openclaw update status --json",
@@ -58,7 +59,9 @@ export async function inspectUpdateRecoveryBackups() {
           )
         ) {
           return {
-            ...capture,
+            ref,
+            runId: manifest.runId,
+            captureStatus: outcome.status,
             status: "manual" as const,
             terminalOutcome: undefined,
             nextAction: "openclaw update status --json",
@@ -100,7 +103,9 @@ export async function inspectUpdateRecoveryBackups() {
         ? `stale: its update already ${terminalOutcome === "committed" ? "succeeded" : "restored state"}`
         : (ambiguity ?? "unresolved after a failed update");
       return {
-        ...capture,
+        ref,
+        runId: manifest.runId,
+        captureStatus: outcome.status,
         status,
         terminalOutcome,
         nextAction,

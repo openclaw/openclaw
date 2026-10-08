@@ -144,9 +144,9 @@ export async function runUpdateDoctorLintProcess(
       await new Promise<void>((resolve) => {
         drainProcessOutput(resolve);
       });
-      const reasons = callerRefusalReasons();
-      if (reasons.length > 0) {
-        throw new Error(`Doctor lint output-drain refused: ${reasons.join(",")}.`);
+      const drainReasons = callerRefusalReasons();
+      if (drainReasons.length > 0) {
+        throw new Error(`Doctor lint output-drain refused: ${drainReasons.join(",")}.`);
       }
       return exitCode;
     }

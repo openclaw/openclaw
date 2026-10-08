@@ -63,7 +63,7 @@ export function collectNormalizedToolSchemaFindings(params: {
   normalizationFailureFinding: (error: unknown) => HealthFinding;
 }): readonly HealthFinding[] {
   const preNormalizationFindings: HealthFinding[] = [];
-  const rawToolsByName = buildReadableToolsByName(params.tools);
+  const rawToolInventory = buildReadableToolsByName(params.tools);
 
   const projectDiagnostics = (
     tools: readonly AnyAgentTool[],
@@ -98,7 +98,7 @@ export function collectNormalizedToolSchemaFindings(params: {
     ...projectDiagnostics(
       normalizedTools,
       inspectRuntimeToolInputSchemas(normalizedTools),
-      rawToolsByName,
+      rawToolInventory,
     ),
   ];
 }

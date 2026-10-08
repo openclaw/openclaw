@@ -700,8 +700,8 @@ export async function copyUpdateCandidatePluginTrees(
     onCodeLink: params.onCodeLink,
     onProgress: params.onProgress,
   };
-  for (const target of [...privateAliases, ...copies.map(([, target]) => target)]) {
-    await verifyUpdateCandidatePluginTree(target, verification);
+  for (const treeRoot of [...privateAliases, ...copies.map(([, target]) => target)]) {
+    await verifyUpdateCandidatePluginTree(treeRoot, verification);
   }
   for (const entry of plan.entries) {
     if (entry.kind === "file" && (entry.mode & 0o600) !== 0o600) {
