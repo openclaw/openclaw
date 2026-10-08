@@ -270,6 +270,7 @@ it.each([
           measured[0]?.filter(
             (sql) =>
               !/^pragma data_version\b/i.test(sql) &&
+              !/\bfrom main\.pragma_data_version\(\)\s*$/i.test(sql) &&
               !/^select \* from "session_upstream_links"\s/i.test(sql),
           ),
         ).toEqual([]);
