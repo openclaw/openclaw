@@ -12,7 +12,7 @@ import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import {
-  buildAcpDatabaseSessionKey,
+  buildAcpDatabaseSessionReadKeys,
   resolveReadableAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
 } from "./session-meta-keys.js";
@@ -51,7 +51,11 @@ export async function readAcpSessionMetaForEntries(
     {
       type: "acpSessions.metadata",
       entries: entries.map(({ sessionKey, agentId, entry }) => ({
-        keys: [buildAcpDatabaseSessionKey(sessionKey, agentId)],
+        // Free ACP harness rows are keyed by harness id while callers
+        // increasingly resolve a configured owner (#146365). The worker tries
+        // keys in order, so the explicit key keeps precedence with the harness
+        // key as fallback.
+        keys: buildAcpDatabaseSessionReadKeys(sessionKey, agentId),
         entry,
       })),
     },

@@ -152,6 +152,16 @@ export function resolveRequestedSessionAgentId(
   let ownerKey = key;
   if (parsed?.agentId) {
     const keyAgentId = normalizeAgentId(parsed.agentId);
+    const keyRest = parsed.rest.toLowerCase();
+    // Free ACP harness keys name an execution target, not a configured owner
+    // (#146365). A configured requested agent is admitted as owner while the
+    // key keeps its harness namespace, so transcript targeting is preserved.
+    // Without an explicit owner the harness id must not be admitted either;
+    // resolution falls through to persisted/compatibility inference below.
+    const keyIsFreeHarness =
+      keyRest.startsWith("acp:") &&
+      !keyRest.startsWith("acp:binding:") &&
+      !configuredAgentIds.includes(keyAgentId);
     const keyIsGlobalMainAlias =
       cfg.session?.scope === "global" &&
       (parsed.rest === "main" || parsed.rest === normalizeMainKey(cfg.session?.mainKey));
@@ -159,11 +169,16 @@ export function resolveRequestedSessionAgentId(
       return invalidSessionRequest(`Unknown agent id "${parsed.agentId}"`);
     }
     if (normalizedRequestedAgentId && keyAgentId !== normalizedRequestedAgentId) {
+      if (keyIsFreeHarness) {
+        return admitRequestedAgent(normalizedRequestedAgentId);
+      }
       return invalidSessionRequest(
         `agent "${explicitAgentId}" does not match session key agent "${keyAgentId}"`,
       );
     }
-    if (!keyIsGlobalMainAlias || !normalizedRequestedAgentId) {
+    if (keyIsFreeHarness) {
+      ownerKey = key;
+    } else if (!keyIsGlobalMainAlias || !normalizedRequestedAgentId) {
       return admitRequestedAgent(keyAgentId);
     }
     // Explicit targets must also match the fixed store after losing their prefix.

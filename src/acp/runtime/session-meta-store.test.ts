@@ -113,4 +113,27 @@ describe("ACP session metadata store ownership", () => {
       }),
     ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
   });
+
+  it("admits a configured owner for a free harness key keeping harness storage (#146365)", () => {
+    const result = resolveSessionStorePathForAcp({
+      cfg: explicitFleet(),
+      agentId: "ops",
+      sessionKey: "agent:opencode:acp:94e85a42-5cc5-42d4-931f-8a0af086d97d",
+    });
+    // Identity carries the configured owner for downstream config use...
+    expect(result.agentId).toBe("ops");
+    // ...while storage and key stay harness-scoped so transcripts keep targeting.
+    expect(result.storePath).toBe("/stores/opencode.json");
+    expect(result.storeSessionKey).toBe("agent:opencode:acp:94e85a42-5cc5-42d4-931f-8a0af086d97d");
+  });
+
+  it("still rejects an unrelated owner mismatch", () => {
+    expect(() =>
+      resolveSessionStorePathForAcp({
+        cfg: explicitFleet(),
+        agentId: "ops",
+        sessionKey: "agent:research:work",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+  });
 });

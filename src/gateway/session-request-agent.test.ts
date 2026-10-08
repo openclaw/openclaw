@@ -7,6 +7,7 @@ import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "./session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 
 function fixedStoreConfig(owner: string): OpenClawConfig {
   return {
@@ -128,6 +129,40 @@ describe("requested session agent ownership", () => {
       });
     },
   );
+
+  it("admits a configured owner for a free ACP harness key (#146365)", () => {
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, developer: {} } },
+    };
+    const key = "agent:claude:acp:3f614e05-028c-4ee5-98e9-88186ca604ba";
+    expect(resolveRequestedSessionAgentId(cfg, key, "developer")).toEqual({
+      ok: true,
+      agentId: "developer",
+    });
+    // The harness id alone is still not a configured agent.
+    expect(resolveRequestedSessionAgentId(cfg, key, "claude")).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: 'Unknown agent id "claude"' },
+    });
+    // Transcript targeting keeps the harness namespace under the owner.
+    expect(
+      resolveStoredSessionKeyForAgentStore({ cfg, agentId: "developer", sessionKey: key }),
+    ).toBe(key);
+    // Without an explicit owner the key cannot select one by itself.
+    expect(resolveRequestedSessionAgentId(cfg, key)).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST" },
+    });
+  });
+
+  it("keeps a harness id that matches a configured agent", () => {
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, claude: {} } },
+    };
+    expect(
+      resolveRequestedSessionAgentId(cfg, "agent:claude:acp:3f614e05-028c-4ee5-98e9-88186ca604ba"),
+    ).toEqual({ ok: true, agentId: "claude" });
+  });
 
   it("keeps retired agent-qualified history readable outside global scope", () => {
     const cfg: OpenClawConfig = {

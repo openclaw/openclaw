@@ -27,6 +27,7 @@ import {
   resolveRunModelFallbacksOverride,
   resolveSubagentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
+  resolveSessionAgentIdStrict,
   resolveAgentRunCwd,
   resolveAgentWorkspaceProvisioning,
   resolveAutoFallbackPrimaryProbe,
@@ -1398,6 +1399,54 @@ describe("resolveAgentSkillsFilter", () => {
     };
 
     expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
+  });
+});
+
+describe("resolveSessionAgentIdStrict with free ACP harness keys", () => {
+  const cfg = {
+    agents: {
+      entries: {
+        main: { workspace: "~/openclaw" },
+        developer: { workspace: "~/openclaw-developer" },
+      },
+    },
+  } as OpenClawConfig;
+  const FREE_KEY = "agent:claude:acp:3f614e05-028c-4ee5-98e9-88186ca604ba";
+
+  it("falls back to the explicit agent instead of an unconfigured harness id", () => {
+    expect(
+      resolveSessionAgentIdStrict({ sessionKey: FREE_KEY, config: cfg, agentId: "developer" }),
+    ).toBe("developer");
+  });
+
+  it("falls back to the fallback agent instead of an unconfigured harness id", () => {
+    expect(
+      resolveSessionAgentIdStrict({
+        sessionKey: FREE_KEY,
+        config: cfg,
+        fallbackAgentId: "developer",
+      }),
+    ).toBe("developer");
+  });
+
+  it("keeps a harness id that matches a configured agent", () => {
+    const withHarness = {
+      agents: {
+        entries: {
+          main: { workspace: "~/openclaw" },
+          claude: { workspace: "~/openclaw-claude" },
+        },
+      },
+    } as OpenClawConfig;
+    expect(resolveSessionAgentIdStrict({ sessionKey: FREE_KEY, config: withHarness })).toBe(
+      "claude",
+    );
+  });
+
+  it("keeps ordinary agent-scoped keys unchanged", () => {
+    expect(resolveSessionAgentIdStrict({ sessionKey: "agent:developer:main", config: cfg })).toBe(
+      "developer",
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

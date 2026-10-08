@@ -313,8 +313,19 @@ function resolveSelectedSessionAgentId(params: SessionAgentResolutionParams): st
   const fallbackAgentId = fallbackAgentIdRaw ? normalizeAgentId(fallbackAgentIdRaw) : null;
   const sessionKey = params.sessionKey?.trim();
   const parsed = parseAgentSessionKey(sessionKey);
-  const sessionKeyAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : null;
   const cfg = params.config ?? {};
+  // Free ACP harness keys name an execution target, not a configured owner
+  // (#146365). Never select an unconfigured harness id; fall through to the
+  // persisted, requested, or default owner instead. A harness id that matches
+  // a configured agent keeps the historical behavior.
+  const rawSessionKeyAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : null;
+  const sessionRest = parsed?.rest?.toLowerCase() ?? "";
+  const isFreeHarnessKey =
+    sessionRest.startsWith("acp:") && !sessionRest.startsWith("acp:binding:");
+  const sessionKeyAgentId =
+    rawSessionKeyAgentId && isFreeHarnessKey && !listAgentIds(cfg).includes(rawSessionKeyAgentId)
+      ? null
+      : rawSessionKeyAgentId;
   const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey);
   if (sessionKeyAgentId && explicitAgentId && explicitAgentId !== sessionKeyAgentId) {
     throw new AgentSelectionRequiredError(listAgentIds(cfg), {

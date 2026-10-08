@@ -12,12 +12,13 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
-  buildAcpDatabaseSessionKey,
+  buildAcpDatabaseSessionReadKeys,
   parseAcpDatabaseSessionKey,
   resolveReadableAcpSessionRow,
   selectAcpSessionRowsByKeys,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
+import type { AcpSessionRow } from "./session-meta-read.types.js";
 import { readAcpSessionMetaForEntry, rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import { readSessionEntryFromStore, type AcpSessionStoreEntry } from "./session-meta-store.js";
 import { bindAcpSessionMeta } from "./session-meta-write.kernel.js";
@@ -39,26 +40,42 @@ export function readAcpSessionMetaBatch(params: {
 }): Map<SessionEntry, SessionAcpMeta | undefined> {
   const result = new Map<SessionEntry, SessionAcpMeta | undefined>();
   const entriesByKey = new Map<string, SessionEntry[]>();
+  const keysByEntry = new Map<SessionEntry, string[]>();
   for (const item of params.entries) {
     result.set(item.entry, undefined);
     const sessionKey = normalizeStoreSessionKey(item.sessionKey);
-    const key = buildAcpDatabaseSessionKey(
+    const keys = buildAcpDatabaseSessionReadKeys(
       sessionKey,
       item.agentId ?? parseAgentSessionKey(sessionKey)?.agentId,
     );
-    const entries = entriesByKey.get(key) ?? [];
-    entries.push(item.entry);
-    entriesByKey.set(key, entries);
+    keysByEntry.set(item.entry, keys);
+    for (const key of keys) {
+      const entries = entriesByKey.get(key) ?? [];
+      entries.push(item.entry);
+      entriesByKey.set(key, entries);
+    }
   }
   if (entriesByKey.size === 0) {
     return result;
   }
   withExistingOpenClawStateDatabaseReadOnly(
     ({ db: database }) => {
+      const rowsByKey = new Map<string, AcpSessionRow>();
       for (const row of selectAcpSessionRowsByKeys(database, [...entriesByKey.keys()])) {
-        for (const entry of entriesByKey.get(row.session_key) ?? []) {
+        rowsByKey.set(row.session_key, row);
+      }
+      for (const [entry, keys] of keysByEntry) {
+        // Explicit key first, harness fallback second: the first readable row wins.
+        for (const key of keys) {
+          const row = rowsByKey.get(key);
+          if (!row) {
+            continue;
+          }
           const readable = resolveReadableAcpSessionRow({ row, entry });
-          result.set(entry, readable ? rowToAcpSessionMeta(readable) : undefined);
+          if (readable) {
+            result.set(entry, rowToAcpSessionMeta(readable));
+            break;
+          }
         }
       }
     },

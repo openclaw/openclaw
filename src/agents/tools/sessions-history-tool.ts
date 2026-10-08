@@ -414,7 +414,13 @@ export function createSessionsHistoryTool(opts?: {
         action: "history",
         defaultAgentId:
           resolvedSession.agentId ??
-          resolveSessionAgentId({ config: cfg, sessionKey: resolvedSession.key }),
+          resolveSessionAgentId({
+            config: cfg,
+            sessionKey: resolvedSession.key,
+            // Free ACP harness keys resolve to no configured agent; attribute
+            // them to the requester instead of throwing (#146365).
+            fallbackAgentId: requesterAgentId,
+          }),
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,

@@ -30,7 +30,27 @@ export function resolveSessionStorePathForAcp(params: {
   const parsed = parseAgentSessionKey(sessionKey);
   const requestedAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
   const parsedAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : undefined;
-  if (requestedAgentId && parsedAgentId && requestedAgentId !== parsedAgentId) {
+  const parsedRest = parsed?.rest?.toLowerCase() ?? "";
+  // Free ACP harness keys name an execution target, not a configured owner
+  // (#146365). A configured requested agent is admitted as owner while storage
+  // keeps resolving from the harness id below, so existing harness transcripts
+  // stay targeted and no content migrates stores.
+  const freeHarnessOwner =
+    requestedAgentId &&
+    parsedAgentId &&
+    requestedAgentId !== parsedAgentId &&
+    parsedRest.startsWith("acp:") &&
+    !parsedRest.startsWith("acp:binding:") &&
+    !listAgentIds(cfg).includes(parsedAgentId) &&
+    listAgentIds(cfg).includes(requestedAgentId)
+      ? requestedAgentId
+      : undefined;
+  if (
+    requestedAgentId &&
+    parsedAgentId &&
+    requestedAgentId !== parsedAgentId &&
+    !freeHarnessOwner
+  ) {
     throw new AgentSelectionRequiredError(listAgentIds(cfg), {
       surface: `ACP session key "${params.sessionKey}"`,
       hint: `Agent "${requestedAgentId}" does not own agent-scoped session key "${params.sessionKey}".`,
@@ -78,12 +98,17 @@ export function resolveSessionStorePathForAcp(params: {
       hint: "The canonical fixed-store session has a different or retired owner. Select its recorded owner.",
     });
   }
+  // Storage follows the harness namespace even when a configured owner is
+  // admitted above; existing harness transcripts stay targeted and no content
+  // migrates stores. Identity (agentId) carries the owner for config-gated
+  // downstream use.
+  const storeAgentId = freeHarnessOwner && parsedAgentId ? parsedAgentId : resolvedAgentId;
   return {
     cfg,
     storeSessionKey,
     agentId: resolvedAgentId,
     storePath: resolveSessionStorePathCore(cfg.session?.store, {
-      agentId: resolvedAgentId,
+      agentId: storeAgentId,
       env: params.env,
     }),
   };

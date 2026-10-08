@@ -659,3 +659,33 @@ it("Doctor retains an alias when a competing candidate store cannot be inspected
     expect(db.prepare("SELECT * FROM acp_sessions").all()).toEqual(before);
   });
 });
+
+it("batch reads find harness-keyed metadata through a configured owner (#146365)", async () => {
+  await withOpenClawTestState({ scenario: "empty" }, async ({ env }) => {
+    const sessionKey = "agent:opencode:acp:owner-read-harness";
+    const entry = {
+      sessionId: "owner-read-session",
+      lifecycleRevision: "owner-read-revision",
+      sessionStartedAt: 50,
+      updatedAt: 100,
+    };
+    // Rows are keyed by harness id, as spawn writes them.
+    writeAcpSessionMetaForMigration({
+      env,
+      sessionKey: buildAcpDatabaseSessionKey(sessionKey, "opencode"),
+      lifecycleRevision: entry.lifecycleRevision,
+      meta,
+      now: () => 100,
+    });
+    const byOwner = readAcpSessionMetaBatch({
+      env,
+      entries: [{ agentId: "main", sessionKey, entry }],
+    });
+    expect(byOwner.get(entry)).toEqual(meta);
+    const byHarness = readAcpSessionMetaBatch({
+      env,
+      entries: [{ agentId: "opencode", sessionKey, entry }],
+    });
+    expect(byHarness.get(entry)).toEqual(meta);
+  });
+});

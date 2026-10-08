@@ -173,15 +173,37 @@ export function acpSessionRowMatchesEntry(
   );
 }
 
+/**
+ * Read keys for ACP metadata, explicit key first. Free ACP harness rows are
+ * keyed by harness id while callers increasingly resolve a configured owner
+ * (#146365); the harness key is tried as fallback so owner-scoped reads keep
+ * finding existing metadata. Non-harness keys resolve to the single key.
+ */
+export function buildAcpDatabaseSessionReadKeys(
+  storeSessionKey: string,
+  agentId?: string,
+): string[] {
+  const key = normalizeStoreSessionKey(storeSessionKey);
+  const parsed = parseAgentSessionKey(key);
+  const keys = [buildAcpDatabaseSessionKey(key, agentId ?? parsed?.agentId)];
+  const rest = parsed?.rest?.toLowerCase() ?? "";
+  if (parsed?.agentId && rest.startsWith("acp:") && !rest.startsWith("acp:binding:")) {
+    const harnessKey = buildAcpDatabaseSessionKey(key, parsed.agentId);
+    if (!keys.includes(harnessKey)) {
+      keys.push(harnessKey);
+    }
+  }
+  return keys;
+}
+
 export function selectAcpSessionRowForStoreEntry(
   db: DatabaseSync,
   storeSessionKey: string,
   agentId?: string,
   entry?: AcpSessionEntryBinding,
 ): AcpSessionRow | undefined {
-  const key = normalizeStoreSessionKey(storeSessionKey);
   return selectAcpSessionRowForRead(db, {
-    keys: [buildAcpDatabaseSessionKey(key, agentId ?? parseAgentSessionKey(key)?.agentId)],
+    keys: buildAcpDatabaseSessionReadKeys(storeSessionKey, agentId),
     entry,
   });
 }

@@ -484,6 +484,10 @@ export function createSessionsSearchTool(opts?: {
           sessionKey: candidate.key,
           config: cfg,
           agentId: parseAgentSessionKey(candidate.key) ? undefined : candidate.agentId,
+          // Free ACP harness keys resolve to no configured agent; attribute
+          // them to the requester so multi-agent fleets without a default do
+          // not throw during candidate grouping (#146365).
+          fallbackAgentId: requesterAgentId,
         });
         const candidates = sessionsByAgent.get(agentId) ?? [];
         candidates.push(candidate);
