@@ -241,7 +241,6 @@ export async function resolveSlackThreadHistory(params: {
       for (const msg of response.messages ?? []) {
         const timestamp = resolveSlackTimestampMs(msg.ts);
         const text = resolveSlackMessageText(msg);
-        // Keep messages with text, Slack attachment/block fallback text, or file attachments.
         if (!text && !msg.files?.length) {
           continue;
         }
@@ -284,7 +283,6 @@ export async function resolveSlackThreadHistory(params: {
     }
 
     return retained.map(([message, text]) => ({
-      // For file-only messages, create a placeholder showing attached filenames.
       text: text ?? formatSlackFilePlaceholder(message.files),
       userId: message.user,
       botId: message.bot_id,

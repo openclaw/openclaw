@@ -11,6 +11,7 @@ import {
   runManagedCommand,
   signalExitCode,
 } from "./lib/managed-child-process.mts";
+import { resolveTestRuntime } from "./lib/test-runtime.mts";
 
 const LABEL = "agent-plugin-gateway-e2e";
 const PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
@@ -413,7 +414,7 @@ async function main() {
     await waitForHttp(`http://127.0.0.1:${mockPort}/health`, mock, signal);
 
     const gateway = startCaptured(
-      process.execPath,
+      resolveTestRuntime(childEnv) === "bun" ? "bun" : process.execPath,
       [entryPath, "gateway", "--port", String(gatewayPort), "--bind", "loopback"],
       { cwd: repoRoot, env: childEnv, label: "gateway", signal, onSignal: handleSignal },
     );

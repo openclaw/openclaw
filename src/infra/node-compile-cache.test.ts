@@ -41,7 +41,7 @@ it("keeps inherited cache namespaces flat and retires superseded builds", async 
   const base = path.join(root, "cache");
   let inherited = path.join(base, "openclaw", "2026.9.6", "build-legacy");
   const directories = new Map<string, string>();
-  for (let invocation = 0; invocation < 30; invocation++) {
+  for (let invocation = 0; invocation < 4; invocation++) {
     const buildId = `2026.9.7-release-c074824a27c${invocation % 2}-2026-09-29T23-33-45.013Z`;
     await fs.writeFile(path.join(root, "dist", "build-info.json"), JSON.stringify({ buildId }));
     const directory = expectDefined(

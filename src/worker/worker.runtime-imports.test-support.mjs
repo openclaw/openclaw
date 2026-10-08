@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { stat } from "node:fs/promises";
 import { registerHooks } from "node:module";
-import { setImmediate } from "node:timers/promises";
 import { WebSocketServer } from "ws";
 const [mode, workspaceDir, runtimeUrl, launchDescriptorUrl, admissionUrl, websocketDataUrl] =
   process.argv.slice(2);
@@ -14,10 +13,11 @@ const { rawDataToString } = await import(websocketDataUrl);
 assert(["rejected", "cancelled", "import-error", "accepted"].includes(mode));
 const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-const names = ["embedded", "inference", "bootstrap"];
+const names = ["embedded", "inference"];
 const importsStarted = new Map(names.map((name) => [name, Promise.withResolvers()]));
 const importsFinished = new Map(names.map((name) => [name, Promise.withResolvers()]));
 const work = [];
+const importsRequested = [];
 process.on("worker-import:started", (name) => importsStarted.get(name).resolve());
 process.on("worker-import:finished", (name, stateDir) =>
   importsFinished.get(name).resolve(stateDir),
@@ -25,7 +25,7 @@ process.on("worker-import:finished", (name, stateDir) =>
 process.on("worker-import:work", (name) => work.push(name));
 
 // The runtime, connection, abort controller, and environment cleanup remain real.
-// Controlled preparation proves both imports and workspace reads join admission cleanup.
+// Controlled preparation proves imports wait for admission and join cleanup.
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
     const name =
@@ -33,11 +33,17 @@ const hooks = registerHooks({
         ? {
             "embedded-agent.runtime.js": "embedded",
             "inference-stream.runtime.js": "inference",
-            "workspace.js": "bootstrap",
           }[new URL(specifier, context.parentURL).pathname.split("/").at(-1)]
         : undefined;
     if (!name) {
       return nextResolve(specifier, context);
+    }
+    importsRequested.push(name);
+    if (mode === "rejected" || mode === "cancelled") {
+      return {
+        url: 'data:text/javascript,throw new Error("Unexpected turn import before admission")',
+        shortCircuit: true,
+      };
     }
     const preparation = `
       const released = once(process, "worker-import:release:${name}");
@@ -48,13 +54,10 @@ const hooks = registerHooks({
     `;
     const source =
       `import { once } from "node:events";` +
-      (name === "bootstrap"
-        ? `export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
-         export async function loadWorkspaceBootstrapFiles() { ${preparation} return []; }`
-        : `${preparation}
+      `${preparation}
          export function ${name === "embedded" ? "runWorkerEmbeddedTurn" : "createWorkerInferenceStreamAdapter"}() {
            process.emit("worker-import:work", "${name}");
-         }`);
+         }`;
     return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
   },
 });
@@ -122,28 +125,10 @@ const run = (async () => {
 const release = (name, reject = false) => process.emit(`worker-import:release:${name}`, reject);
 try {
   const { socket, frame } = await connected.promise;
-  await Promise.all([...importsStarted.values()].map(({ promise }) => promise));
   const runtimeStateDir = process.env.OPENCLAW_STATE_DIR;
   assert.notEqual(runtimeStateDir, previousStateDir);
   assert((await stat(runtimeStateDir)).isDirectory());
-  release("embedded", mode !== "accepted");
-  await importsFinished.get("embedded").promise;
-  // Cross an unhandled-rejection checkpoint while hello is still pending.
-  // The child runs with --unhandled-rejections=strict, so an unobserved import is fatal.
-  await setImmediate();
-  assert.equal(settled, false);
-  assert.deepEqual(work, []);
-  if (mode === "accepted") {
-    release("inference");
-    release("bootstrap");
-    await Promise.all([
-      importsFinished.get("inference").promise,
-      importsFinished.get("bootstrap").promise,
-    ]);
-    await setImmediate();
-    assert.deepEqual(work, [], "Resolved imports must not execute the turn before hello");
-    assert.equal(settled, false);
-  }
+  assert.deepEqual(importsRequested, [], "Pending hello must not prepare the turn runtime");
   if (mode === "rejected") {
     socket.send(
       JSON.stringify({
@@ -170,6 +155,28 @@ try {
           type: "worker-hello-ok",
           toolSurface: {
             generation: "import-surface",
+            presentation: {
+              codeMode: {
+                enabled: false,
+                executor: "node",
+                mode: "only",
+                timeoutMs: 10000,
+                memoryLimitBytes: 67108864,
+                maxOutputBytes: 65536,
+                maxSnapshotBytes: 10485760,
+                maxPendingToolCalls: 16,
+                snapshotTtlSeconds: 900,
+                searchDefaultLimit: 8,
+                maxSearchLimit: 50,
+              },
+              toolSearch: {
+                enabled: false,
+                mode: "tools",
+                searchDefaultLimit: 8,
+                maxSearchLimit: 50,
+              },
+              forceDirectMessageTool: false,
+            },
             tools: [],
             policy: {
               workspaceOnly: false,
@@ -190,24 +197,22 @@ try {
       }),
     );
   }
-  await disconnected.promise;
-  if (mode !== "accepted") {
-    await setImmediate();
-    assert.equal(settled, false, "Cleanup must join the second import after the first rejects");
-    assert.equal(
-      process.env.OPENCLAW_STATE_DIR,
-      runtimeStateDir,
-      "Cleanup restored process state while an import is pending",
+  if (mode === "accepted" || mode === "import-error") {
+    await Promise.all([...importsStarted.values()].map(({ promise }) => promise));
+    assert.deepEqual(
+      importsRequested.toSorted((a, b) => a.localeCompare(b)),
+      names.toSorted((a, b) => a.localeCompare(b)),
     );
+    assert.deepEqual(work, []);
+    release("embedded", mode === "import-error");
+    assert.equal(await importsFinished.get("embedded").promise, runtimeStateDir);
+    assert.equal(settled, false, "Cleanup must join both runtime imports");
+    assert.equal(process.env.OPENCLAW_STATE_DIR, runtimeStateDir);
     assert((await stat(runtimeStateDir)).isDirectory());
     release("inference");
     assert.equal(await importsFinished.get("inference").promise, runtimeStateDir);
-    await setImmediate();
-    assert.equal(settled, false, "Cleanup must also join the pending workspace read");
-    assert.equal(process.env.OPENCLAW_STATE_DIR, runtimeStateDir);
-    release("bootstrap");
-    assert.equal(await importsFinished.get("bootstrap").promise, runtimeStateDir);
   }
+  await disconnected.promise;
   const outcome = await run;
   if (mode === "accepted") {
     assert.deepEqual(work, ["inference", "embedded"]);
@@ -227,6 +232,9 @@ try {
         "import-error": "embedded import failed",
       }[mode],
     );
+  }
+  if (mode === "rejected" || mode === "cancelled") {
+    assert.deepEqual(importsRequested, [], "Unadmitted turns must never prepare their runtime");
   }
   assert.equal(process.env.OPENCLAW_STATE_DIR, previousStateDir);
   assert.equal(process.env.OPENCLAW_CONFIG_PATH, previousConfigPath);

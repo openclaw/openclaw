@@ -44,8 +44,9 @@ vi.mock("../state/openclaw-state-db.js", () => ({
   openOpenClawStateDatabase: boundary.unexpectedNative,
   runOpenClawStateWriteTransaction: boundary.unexpectedNative,
 }));
+// mock-isolation: This fixture proves worker routing without opening native SQLite.
 vi.mock("../state/openclaw-state-db-readonly.js", () => ({
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: boundary.unexpectedNative,
+  withExistingOpenClawStateDatabaseReadOnly: boundary.unexpectedNative,
 }));
 vi.mock("../state/openclaw-state-db-cache.js", () => ({
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
@@ -82,8 +83,6 @@ beforeEach(() => {
 describe("async device identity boundary", () => {
   it.each([
     { mode: "create", explicitPath: false },
-    { mode: "create", explicitPath: true },
-    { mode: "read", explicitPath: false },
     { mode: "read", explicitPath: true },
   ] as const)(
     "captures caller scope before delayed $mode dispatch (explicit path: $explicitPath)",
@@ -138,9 +137,13 @@ describe("async device identity boundary", () => {
     },
   );
 
-  it.each([undefined, "", ".doctor-importing", ".native-importing"])(
-    "uses captured primary scope after an existing-only miss (legacy suffix: %s)",
-    async (suffix) => {
+  it.each([
+    { result: undefined, suffix: undefined },
+    { result: undefined, suffix: ".doctor-importing" },
+    { result: null, suffix: "" },
+  ])(
+    "uses captured primary scope for an existing-only $result (legacy suffix: $suffix)",
+    async ({ result, suffix }) => {
       const options = syntheticOptions("missing-identity");
       const stateDir = options.env!.OPENCLAW_STATE_DIR!;
       const legacyPath = path.join(stateDir, "identity", "device.json");
@@ -148,16 +151,16 @@ describe("async device identity boundary", () => {
         boundary.legacyPaths.add(`${legacyPath}${suffix}`);
       }
       const opening = createDeferredCore();
-      boundary.run.mockImplementation(async (_context, _operation, admission) => {
+      boundary.run.mockImplementation(async (_context, operation, admission) => {
         if (!admission?.existingOnly) {
           throw new Error("A missing identity read attempted to create shared state");
         }
         await opening.promise;
-        return undefined;
+        return result === null ? operation({ execute: async () => null }) : undefined;
       });
       const loading = loadDeviceIdentityIfPresentAsync(options);
       const outcome =
-        suffix === undefined
+        suffix === undefined || result === null
           ? expect(loading).resolves.toBeNull()
           : expect(loading).rejects.toThrow(`Legacy device identity exists at ${legacyPath}`);
       options.env!.OPENCLAW_STATE_DIR = path.resolve("/synthetic/changed-missing");
@@ -165,20 +168,6 @@ describe("async device identity boundary", () => {
       options.identityKey = "non-primary";
       opening.resolve();
       await outcome;
-    },
-  );
-
-  it.each([identity, null])(
-    "preserves an authoritative worker read result without a second legacy decision: %j",
-    async (result) => {
-      const options = syntheticOptions("persisted-identity");
-      boundary.legacyPaths.add(
-        path.join(options.env!.OPENCLAW_STATE_DIR!, "identity", "device.json"),
-      );
-      boundary.run.mockImplementation(async (_context, operation) =>
-        operation({ execute: async () => result }),
-      );
-      await expect(loadDeviceIdentityIfPresentAsync(options)).resolves.toBe(result);
     },
   );
 

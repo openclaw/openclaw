@@ -6,15 +6,13 @@ import { appendAssistantMessageToSessionTranscript } from "../config/sessions/tr
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureDeliveryQueueStateContext,
-  resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../infra/update-run-ledger.js";
+import { renderUpdateRunNotice, type UpdateRunNoticeKind } from "../infra/update-run-notice.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
-import { readUpdateRunReportHealth } from "../infra/update-run-report-health.js";
-import { renderUpdateRunNotice, type UpdateRunNoticeKind } from "../infra/update-run-report.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sendGatewayLifecycleNotice } from "./server-restart-sentinel-notice.js";
 import {
@@ -58,17 +56,7 @@ export async function createUpdateRunNotifier(
       if (recorded) {
         return { delivered: false, owned: recorded };
       }
-      const message = renderUpdateRunNotice(
-        run,
-        kind,
-        kind === "finished" && run.status === "failed"
-          ? {
-              currentHealth: await readUpdateRunReportHealth(run.verification, {
-                env: resolveDeliveryQueueStateEnv(undefined, context),
-              }),
-            }
-          : {},
-      );
+      const message = renderUpdateRunNotice(run, kind);
       if (!message) {
         return { delivered: false, owned: false };
       }

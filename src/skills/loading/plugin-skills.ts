@@ -46,9 +46,7 @@ export function resolvePluginSkillRoots(params: {
 }): PluginSkillRoot[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir || params.config?.plugins?.enabled === false) {
-    publishPluginSkills([], {
-      pluginSkillsDir: params.pluginSkillsDir,
-    });
+    publishPluginSkills([], params.pluginSkillsDir);
     return [];
   }
   const metadataSnapshot = resolvePluginMetadataSnapshot({
@@ -76,7 +74,7 @@ function resolvePluginSkillRootsInOwner(
   const workspaceDir = (params.workspaceDir ?? "").trim();
   const metadataSnapshot = params.metadataSnapshot;
   if (!workspaceDir || metadataSnapshot.manifestRegistry.plugins.length === 0) {
-    publishPluginSkills([], { pluginSkillsDir: params.pluginSkillsDir });
+    publishPluginSkills([], params.pluginSkillsDir);
     return [];
   }
   const config = params.config ?? {};
@@ -123,9 +121,7 @@ function resolvePluginSkillRootsInOwner(
 
   publishPluginSkills(
     resolved.map((root) => root.dir),
-    {
-      pluginSkillsDir: params.pluginSkillsDir,
-    },
+    params.pluginSkillsDir,
   );
 
   return resolved;
@@ -281,8 +277,8 @@ function hasPublishableSkillFile(params: { skillDir: string; rootDir: string }):
  * The plugin-skills directory is fully owned by OpenClaw — every entry is
  * a generated symlink. Cleanup of stale links is therefore safe.
  */
-function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: string }): void {
-  const pluginSkillsDir = opts?.pluginSkillsDir ?? resolvePluginSkillsDir();
+function publishPluginSkills(skillDirs: string[], directory?: string): void {
+  const pluginSkillsDir = directory ?? resolvePluginSkillsDir();
   const managedTargets = new Map<string, string>();
 
   for (const dir of skillDirs) {
@@ -290,7 +286,7 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
   }
 
   if (
-    opts?.pluginSkillsDir === undefined &&
+    directory === undefined &&
     lastDefaultPluginSkillsPublication?.directory === pluginSkillsDir &&
     lastDefaultPluginSkillsPublication.targets.size === managedTargets.size &&
     [...managedTargets].every(
@@ -352,7 +348,7 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
     const linkPath = path.join(pluginSkillsDir, entry.name);
     removeGeneratedPluginSkillEntry(linkPath);
   }
-  if (opts?.pluginSkillsDir === undefined) {
+  if (directory === undefined) {
     lastDefaultPluginSkillsPublication = { directory: pluginSkillsDir, targets: managedTargets };
   }
 }

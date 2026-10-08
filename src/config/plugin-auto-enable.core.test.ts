@@ -19,6 +19,12 @@ import {
   makeRegistry,
   resetPluginAutoEnableTestState,
 } from "./plugin-auto-enable.test-helpers.js";
+import {
+  createConfigResolutionFacts,
+  getConfigResolutionFacts,
+  hasUnresolvedConfigPath,
+  setConfigResolutionFacts,
+} from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObject } from "./validation.js";
 
@@ -604,51 +610,31 @@ describe("applyPluginAutoEnable core", () => {
     expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalledTimes(2);
   });
 
-  it("fingerprints identical metadata snapshots once per plugin metadata lifecycle", () => {
-    const traversals = { candidates: 0, plugins: 0 };
+  it("refreshes same-turn auto-enable results when metadata arrays are replaced", () => {
     const config: OpenClawConfig = {};
-    const envSnapshot = makeIsolatedEnv();
-    const discovery: PluginDiscoveryResult = {
-      candidates: new Proxy([], {
-        get: (target, property, receiver) => {
-          if (property === "map") {
-            traversals.candidates += 1;
-          }
-          return Reflect.get(target, property, receiver);
-        },
+    const configuredEnv = makeIsolatedEnv({ CACHE_CHANNEL_TOKEN: "configured" });
+    const discovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
+    const manifestRegistry = makeRegistry([
+      { id: "cache-channel-plugin", channels: ["cache-channel"] },
+    ]);
+    const params = { config, discovery, env: configuredEnv, manifestRegistry };
+
+    const first = applyPluginAutoEnable(params);
+    expect(first.config.plugins?.entries?.["cache-channel-plugin"]).toBeUndefined();
+
+    discovery.candidates = [
+      makeBundledChannelCandidate({
+        pluginId: "cache-channel-plugin",
+        channelId: "cache-channel",
       }),
-      diagnostics: [],
-    };
-    const manifestRegistry = makeRegistry([]);
-    manifestRegistry.plugins = new Proxy(manifestRegistry.plugins, {
-      get: (target, property, receiver) => {
-        if (property === "map") {
-          traversals.plugins += 1;
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
+    ];
+    const second = applyPluginAutoEnable(params);
+    expect(second.config.plugins?.entries?.["cache-channel-plugin"]?.enabled).toBe(true);
 
-    const first = applyPluginAutoEnable({
-      config,
-      discovery,
-      env: envSnapshot,
-      manifestRegistry,
-    });
-    const firstTraversalCounts = { ...traversals };
-
-    for (let index = 0; index < 20; index += 1) {
-      expect(applyPluginAutoEnable({ config, discovery, env: envSnapshot, manifestRegistry })).toBe(
-        first,
-      );
-    }
-    expect(traversals).toEqual(firstTraversalCounts);
-
-    clearPluginMetadataLifecycleCaches();
-    applyPluginAutoEnable({ config, discovery, env: envSnapshot, manifestRegistry });
-
-    expect(traversals.candidates).toBeGreaterThan(firstTraversalCounts.candidates);
-    expect(traversals.plugins).toBeGreaterThan(firstTraversalCounts.plugins);
+    manifestRegistry.plugins = [];
+    const third = applyPluginAutoEnable(params);
+    expect(third.config.plugins?.entries?.["cache-channel-plugin"]).toBeUndefined();
+    expect(applyPluginAutoEnable(params)).toBe(third);
   });
 
   it("does not reuse same-turn results for omitted metadata after current snapshot replacement", () => {
@@ -771,5 +757,54 @@ describe("applyPluginAutoEnable core", () => {
 
     expect(result.config.plugins?.entries?.slack?.enabled).toBeUndefined();
     expect(result.changes).toStrictEqual([]);
+  });
+
+  it("carries loader resolution facts onto a config the auto-enable rewrite rebuilt", () => {
+    const unresolvedPath = "channels.a2a.peers.hermes.outboundToken";
+    const config: OpenClawConfig = {
+      channels: {
+        slack: { botToken: "x" },
+        a2a: {
+          peers: { hermes: { token: "inbound-secret", outboundToken: "${A2A_UNSET_OUT}" } },
+        },
+      },
+    };
+    setConfigResolutionFacts(
+      config,
+      createConfigResolutionFacts([{ varName: "A2A_UNSET_OUT", configPath: unresolvedPath }]),
+    );
+
+    const result = applyPluginAutoEnable({ config, env });
+
+    // The rewrite enabled Slack, so the caller receives a different object than it passed in.
+    expect(result.config).not.toBe(config);
+    expect(result.config.channels?.slack?.enabled).toBe(true);
+    expect(hasUnresolvedConfigPath(result.config, unresolvedPath)).toBe(true);
+    expect(hasUnresolvedConfigPath(result.config, "channels.a2a.peers.hermes.token")).toBe(false);
+  });
+
+  it("keeps a fact for a sibling value the rewrite left untouched", () => {
+    const config: OpenClawConfig = {
+      channels: { slack: { botToken: "${SLACK_UNSET_TOKEN}" } },
+    };
+    setConfigResolutionFacts(
+      config,
+      createConfigResolutionFacts([
+        { varName: "SLACK_UNSET_TOKEN", configPath: "channels.slack.botToken" },
+      ]),
+    );
+
+    const result = applyPluginAutoEnable({ config, env });
+
+    // Untouched sibling values keep their fact; only the rewritten path may lose it.
+    expect(result.config.channels?.slack?.botToken).toBe("${SLACK_UNSET_TOKEN}");
+    expect(hasUnresolvedConfigPath(result.config, "channels.slack.botToken")).toBe(true);
+  });
+
+  it("leaves a config without loader facts without facts", () => {
+    const config: OpenClawConfig = { channels: { slack: { botToken: "x" } } };
+    const result = applyPluginAutoEnable({ config, env });
+    expect(result.config).not.toBe(config);
+    expect(getConfigResolutionFacts(result.config)).toBeNull();
   });
 });

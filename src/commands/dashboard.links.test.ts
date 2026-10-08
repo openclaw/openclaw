@@ -12,7 +12,7 @@ const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
 const copyToClipboardMock = vi.hoisted(() => vi.fn());
 const issueDeviceBootstrapTokenMock = vi.hoisted(() => vi.fn());
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
-const ensureGatewayReadyForOperationMock = vi.hoisted(() => vi.fn());
+const ensureDashboardGatewayReadyMock = vi.hoisted(() => vi.fn());
 const waitForControlUiDocumentMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", () => ({
@@ -36,7 +36,7 @@ vi.mock("../infra/device-bootstrap.js", () => ({
 }));
 
 vi.mock("./gateway-readiness.js", () => ({
-  ensureGatewayReadyForOperation: ensureGatewayReadyForOperationMock,
+  ensureDashboardGatewayReady: ensureDashboardGatewayReadyMock,
 }));
 
 vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
@@ -112,8 +112,8 @@ describe("dashboardCommand", () => {
       token: "browser-bootstrap",
       expiresAtMs: 123_456,
     });
-    ensureGatewayReadyForOperationMock.mockReset();
-    ensureGatewayReadyForOperationMock.mockResolvedValue({
+    ensureDashboardGatewayReadyMock.mockReset();
+    ensureDashboardGatewayReadyMock.mockResolvedValue({
       ready: true,
       status: {},
       recovered: false,
@@ -132,12 +132,10 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime);
 
-    expect(ensureGatewayReadyForOperationMock).toHaveBeenCalledWith({
+    expect(ensureDashboardGatewayReadyMock).toHaveBeenCalledWith({
       runtime,
-      operation: "open the dashboard",
       yes: undefined,
       probeUrl: "ws://127.0.0.1:18789",
-      readyWhenReachable: true,
     });
     expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
       port: 18789,
@@ -379,7 +377,7 @@ describe("dashboardCommand", () => {
 
   it("does not copy or open when gateway readiness fails", async () => {
     mockSnapshot("abc");
-    ensureGatewayReadyForOperationMock.mockResolvedValueOnce({
+    ensureDashboardGatewayReadyMock.mockResolvedValueOnce({
       ready: false,
       status: {},
       reason: "Gateway is not running.",

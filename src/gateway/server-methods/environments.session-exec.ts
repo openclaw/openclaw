@@ -54,6 +54,8 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
             sessionEntry: target.entry,
           });
         };
+        const requiresApproval = (policy: ReturnType<typeof resolvePolicy>) =>
+          policy.security !== "full" || policy.ask === "always" || toolPolicy.cronExecAskAlways;
         const assertCurrent = () => {
           toolPolicy.assertAllowed();
           service.assertSessionAttachment(binding);
@@ -73,35 +75,23 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
           }
         };
         assertCurrent();
-        if (action === "run" || action === "start") {
-          const policy = resolvePolicy();
-          if (
-            policy.security !== "full" ||
-            policy.ask === "always" ||
-            toolPolicy.cronExecAskAlways
-          ) {
-            await approveSessionEnvironmentCommand({
-              options,
-              binding,
-              argv: command.argv,
-              input: command.input,
-              background: action === "start",
-              assertCurrent,
-              signal: caller.signal,
-            });
-            approved = true;
-          }
+        if ((action === "run" || action === "start") && requiresApproval(resolvePolicy())) {
+          await approveSessionEnvironmentCommand({
+            options,
+            binding,
+            argv: command.argv,
+            input: command.input,
+            background: action === "start",
+            assertCurrent,
+            signal: caller.signal,
+          });
+          approved = true;
         }
         const assertDispatch = () => {
           assertCurrent();
           if (action === "run" || action === "start") {
             const policy = resolvePolicy();
-            if (
-              !approved &&
-              (policy.security !== "full" ||
-                policy.ask === "always" ||
-                toolPolicy.cronExecAskAlways)
-            ) {
+            if (!approved && requiresApproval(policy)) {
               throw new Error(
                 "Environment execution policy now requires approval; retry the command",
               );

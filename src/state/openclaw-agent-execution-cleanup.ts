@@ -24,11 +24,13 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   const context = {
     environment: params.context.environment,
     existingSchemaPath: params.context.existingSchemaPath,
+    stateIntegrity: params.context.stateIntegrity,
   };
   const store = await openOpenClawStateWorkerCleanupStore(
     params.lease.sharedStatePath,
     context,
     () => params.assertOwned(),
+    observed,
   ).catch((error: unknown) => {
     if (error instanceof Error) {
       error.message += ` (leaseId=${params.lease.leaseId}, path=${params.lease.path})`;

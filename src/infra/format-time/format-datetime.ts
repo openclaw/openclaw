@@ -75,9 +75,6 @@ export function resolveTimeZoneDayStartMs(dayKey: string, timeZone: string): num
     return undefined;
   }
   const naiveUtcMs = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  if (!Number.isFinite(naiveUtcMs)) {
-    return undefined;
-  }
 
   const formatDayKey = createTimeZoneDayKeyFormatter(timeZone);
   const searchWindowMs = 2 * 24 * 60 * 60 * 1000;

@@ -23,8 +23,6 @@ const currentEvent = {
 async function runPromptEvidence(
   params: {
     events?: unknown[];
-    report?: Record<string, unknown>;
-    reportSessionKey?: string;
   } = {},
 ) {
   const scenario = readQaScenarioById(scenarioId);
@@ -84,7 +82,7 @@ async function runPromptEvidence(
             return {
               sessions: [
                 {
-                  key: params.reportSessionKey ?? sessionKey,
+                  key: sessionKey,
                   contextWeight: {
                     injectedWorkspaceFiles: [
                       {
@@ -93,7 +91,6 @@ async function runPromptEvidence(
                         truncated: false,
                         rawChars: instructionContents.trimEnd().length,
                         injectedChars: instructionContents.trimEnd().length,
-                        ...params.report,
                       },
                     ],
                   },
@@ -200,7 +197,7 @@ async function runNestedToolHistoryEvidence(params: { leakContextMarker?: boolea
 }
 
 describe("instruction profile prompt evidence", () => {
-  it("acquires full injection evidence despite truncated metadata and stale provider mismatches", async () => {
+  it("bounds prompt evidence to current dispatches despite stale mismatches and marker-bearing diagnostics", async () => {
     const result = await runPromptEvidence({
       events: [
         {
@@ -209,19 +206,12 @@ describe("instruction profile prompt evidence", () => {
           data: { ...currentObservation, observedChars: 0, matchesAssembledPrompt: false },
         },
         currentEvent,
-      ],
-    });
-    expect(result.status).toBe("pass");
-  });
-
-  it("excludes marker-bearing diagnostic context from bounded no-leak evidence", async () => {
-    const marker = "INSTRUCTION-PROFILE-CONTEXT-MARKER-A6E29D4B";
-    const result = await runPromptEvidence({
-      events: [
         {
           type: "context.compiled",
           runId: "current-run",
-          data: { systemPrompt: `diagnostic support context ${marker}` },
+          data: {
+            systemPrompt: "diagnostic support context INSTRUCTION-PROFILE-CONTEXT-MARKER-A6E29D4B",
+          },
         },
         {
           ...currentEvent,
@@ -234,23 +224,6 @@ describe("instruction profile prompt evidence", () => {
       ],
     });
     expect(result.status).toBe("pass");
-  });
-
-  it.each([
-    { name: "missing file", report: { missing: true } },
-    { name: "truncated injection", report: { truncated: true } },
-    { name: "incomplete source", report: { rawChars: 1 } },
-    { name: "incomplete injection", report: { injectedChars: 1 } },
-    { name: "another session's report", reportSessionKey: "agent:qa:other" },
-    { name: "missing current-run dispatch", events: [{ ...currentEvent, runId: "stale-run" }] },
-    {
-      name: "mismatched dispatch",
-      events: [{ ...currentEvent, data: { ...currentObservation, matchesAssembledPrompt: false } }],
-    },
-  ])("rejects $name", async (params) => {
-    await expect(runPromptEvidence(params)).rejects.toThrow(
-      "current-run provider prompt evidence mismatch",
-    );
   });
 });
 

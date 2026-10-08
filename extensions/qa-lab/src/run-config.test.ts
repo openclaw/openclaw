@@ -1,52 +1,18 @@
 // Qa Lab tests cover run config plugin behavior.
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const { defaultQaRuntimeModelForMode, resolveQaRuntimeModelPair } = vi.hoisted(() => ({
-  defaultQaRuntimeModelForMode:
-    vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
-  resolveQaRuntimeModelPair: vi.fn(),
-}));
-
-vi.mock("./model-selection.runtime.js", () => ({
-  defaultQaRuntimeModelForMode,
-  resolveQaRuntimeModelPair,
-}));
-import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
+import { describe, expect, it, vi } from "vitest";
 import { resolveQaRunProfileExecutionSelection } from "./profile-planning.js";
-import { resolveQaLiveFrontierAlternateModel } from "./providers/live-frontier/model-selection.runtime.js";
 import {
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
   normalizeQaRunSelection,
   resolveQaLabRunPlan,
-  type QaProviderModeInput,
 } from "./run-config.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import {
   readQaScorecardTaxonomyReport,
   type QaScorecardTaxonomyReport,
 } from "./scorecard-taxonomy.js";
-
-function resolveMockQaRuntimeModelPair(params: {
-  providerMode: string;
-  primaryModel?: string;
-  alternateModel?: string;
-  resolveDefaultModel?: (mode: string, alternate?: boolean) => string;
-}) {
-  const resolveDefaultModel =
-    params.resolveDefaultModel ??
-    ((mode: string, alternate = false) =>
-      defaultQaRuntimeModelForMode(mode, alternate ? { alternate: true } : undefined));
-  const primaryModel = params.primaryModel?.trim() || resolveDefaultModel(params.providerMode);
-  const alternateModel =
-    params.alternateModel?.trim() ||
-    (params.providerMode === "live-frontier"
-      ? (resolveQaLiveFrontierAlternateModel(primaryModel) ??
-        resolveDefaultModel(params.providerMode, true))
-      : resolveDefaultModel(params.providerMode, true));
-  return { primaryModel, alternateModel };
-}
 
 const profiles: QaScorecardTaxonomyReport["profiles"] = [
   {
@@ -108,14 +74,6 @@ const scenarios = [
 describe("qa run config", () => {
   const catalog = readQaScenarioPack();
   const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
-
-  beforeEach(() => {
-    defaultQaRuntimeModelForMode.mockImplementation(
-      (mode: string, options?: { alternate?: boolean }) =>
-        defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
-    );
-    resolveQaRuntimeModelPair.mockImplementation(resolveMockQaRuntimeModelPair);
-  });
 
   it("creates a canonical smoke-profile request without copying profile membership", () => {
     const expected = {
@@ -639,15 +597,11 @@ describe("qa run config", () => {
     ).toThrow("unknown QA channel driver: renamed-cli-policy");
   });
 
-  it("keeps idle snapshots on static defaults so startup does not inspect auth profiles", () => {
-    defaultQaRuntimeModelForMode.mockReturnValue("openai/gpt-5.6-luna");
-    defaultQaRuntimeModelForMode.mockClear();
-
+  it("keeps idle snapshots on the canonical mock defaults", () => {
     const selection = createIdleQaRunnerSnapshot(profiles).selection;
     expect(selection.providerMode).toBe("mock-openai");
     expect(selection.primaryModel).toBe("mock-openai/gpt-5.6-luna");
     expect(selection.alternateModel).toBe("mock-openai/gpt-5.6-luna-alt");
-    expect(defaultQaRuntimeModelForMode).not.toHaveBeenCalled();
   });
 
   it("fails closed when required canonical profiles are missing", () => {
@@ -687,14 +641,7 @@ describe("qa run config", () => {
     }
   });
 
-  it("prefers the Codex OAuth default when the runtime resolver says it is available", () => {
-    defaultQaRuntimeModelForMode.mockImplementation((mode, options) => {
-      if (mode === "live-frontier" && !options?.alternate) {
-        return "openai/gpt-5.6-luna";
-      }
-      return defaultQaProviderModelForMode(mode as QaProviderModeInput, options);
-    });
-
+  it("resolves omitted live models through the provider defaults", () => {
     expect(normalizeQaRunSelection({ profile: "release" }, scenarios, profiles)).toEqual({
       profile: "release",
       channel: null,

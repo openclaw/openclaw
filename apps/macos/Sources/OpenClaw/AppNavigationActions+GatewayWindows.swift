@@ -23,7 +23,7 @@ extension AppNavigationActions {
                 alert.addButton(withTitle: "Open Window")
                 alert.addButton(withTitle: "Manage Gateways…")
                 alert.addButton(withTitle: "Cancel")
-                switch alert.runModal() {
+                switch await AppActivation.shared.response(to: alert) {
                 case .alertFirstButtonReturn:
                     guard generation == self.presentationGeneration,
                           entries.indices.contains(popup.indexOfSelectedItem),
@@ -39,7 +39,7 @@ extension AppNavigationActions {
                 guard generation == self.presentationGeneration else { return }
                 let alert = NSAlert(error: error)
                 alert.messageText = "Could Not Open Gateway Window"
-                alert.runModal()
+                AppActivation.shared.presentAlert(alert)
             }
         }
     }

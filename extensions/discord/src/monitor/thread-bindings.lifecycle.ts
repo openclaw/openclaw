@@ -1,4 +1,11 @@
-import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
+import {
+  readAcpSessionEntry,
+  prepareAcpSessionEntryRead,
+  rethrowIncognitoSessionError,
+  type AcpSessionEntryPreparer,
+  type AcpSessionStoreEntry,
+  type PreparedAcpSessionEntryRead,
+} from "openclaw/plugin-sdk/acp-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -90,6 +97,13 @@ export async function autoBindSpawnedDiscordSubagent(params: {
     return null;
   }
   const managerToken = getThreadBindingToken(manager.accountId);
+  const resolveChannel = (threadId: string) =>
+    resolveChannelIdForBinding({
+      cfg: params.cfg,
+      accountId: manager.accountId,
+      token: managerToken,
+      threadId,
+    });
 
   const requesterThreadId = normalizeOptionalStringifiedId(params.threadId);
   let channelId = "";
@@ -98,13 +112,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
     if (existing?.channelId?.trim()) {
       channelId = existing.channelId.trim();
     } else {
-      channelId =
-        (await resolveChannelIdForBinding({
-          cfg: params.cfg,
-          accountId: manager.accountId,
-          token: managerToken,
-          threadId: requesterThreadId,
-        })) ?? "";
+      channelId = (await resolveChannel(requesterThreadId)) ?? "";
     }
   }
   if (!channelId) {
@@ -117,13 +125,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
       if (!target || target.kind !== "channel") {
         return null;
       }
-      channelId =
-        (await resolveChannelIdForBinding({
-          cfg: params.cfg,
-          accountId: manager.accountId,
-          token: managerToken,
-          threadId: target.id,
-        })) ?? "";
+      channelId = (await resolveChannel(target.id)) ?? "";
     } catch {
       return null;
     }
@@ -161,10 +163,6 @@ export function unbindThreadBindingsBySessionKey(params: {
   farewellText?: string;
 }): ThreadBindingRecord[] {
   const ids = resolveBindingIdsForTargetSession(params);
-  if (ids.length === 0) {
-    return [];
-  }
-
   const removed: ThreadBindingRecord[] = [];
   for (const bindingKey of ids) {
     const record = BINDINGS_BY_THREAD_ID.get(bindingKey);
@@ -206,12 +204,29 @@ export async function unbindThreadBindingsBySessionKeyAsync(
   );
 }
 
-export async function reconcileAcpThreadBindingsOnStartup(params: {
+type AcpThreadBindingReconciliationParams = {
   cfg: OpenClawConfig;
   accountId?: string;
   sendFarewell?: boolean;
   healthProbe?: AcpThreadBindingHealthProbe;
-}): Promise<AcpThreadBindingReconciliationResult> {
+  prepareSession?: AcpSessionEntryPreparer;
+};
+
+export async function reconcileAcpThreadBindingsOnStartup(
+  params: AcpThreadBindingReconciliationParams,
+): Promise<AcpThreadBindingReconciliationResult> {
+  const preparations = new Map<ThreadBindingRecord, PreparedAcpSessionEntryRead>();
+  try {
+    return await reconcileAcpThreadBindings(params, preparations);
+  } finally {
+    preparations.forEach((prepared) => prepared.release());
+  }
+}
+
+async function reconcileAcpThreadBindings(
+  params: AcpThreadBindingReconciliationParams,
+  preparations: Map<ThreadBindingRecord, PreparedAcpSessionEntryRead>,
+): Promise<AcpThreadBindingReconciliationResult> {
   const manager = getThreadBindingManager(params.accountId);
   if (!manager) {
     return {
@@ -240,11 +255,18 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
       staleBindings.push(binding);
       continue;
     }
-    const session = readAcpSessionEntry({
+    const input = {
       cfg: params.cfg,
       sessionKey,
       agentId: binding.agentId,
-    });
+    };
+    const preparation = (params.prepareSession ?? prepareAcpSessionEntryRead)(input);
+    const prepared = preparation ? await preparation : undefined;
+    if (prepared) {
+      preparations.set(binding, prepared);
+      prepared.assertCurrent();
+    }
+    const session = prepared ? prepared.session : readAcpSessionEntry(input);
     if (!session) {
       staleBindings.push(binding);
       continue;
@@ -276,16 +298,11 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
             binding,
             session,
           });
-          return {
-            binding,
-            status: result?.status ?? ("uncertain" satisfies AcpThreadBindingHealthStatus),
-          };
-        } catch {
+          return result?.status === "stale" ? binding : undefined;
+        } catch (error) {
+          rethrowIncognitoSessionError(error);
           // Treat probe failures as uncertain and keep the binding.
-          return {
-            binding,
-            status: "uncertain" satisfies AcpThreadBindingHealthStatus,
-          };
+          return undefined;
         }
       }),
       limit: ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT,
@@ -293,19 +310,11 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
       throwOnError: true,
     });
 
-    for (const probeResult of probeResults) {
-      if (probeResult.status === "stale") {
-        staleBindings.push(probeResult.binding);
+    for (const binding of probeResults) {
+      if (binding) {
+        staleBindings.push(binding);
       }
     }
-  }
-
-  if (staleBindings.length === 0) {
-    return {
-      checked: acpBindings.length,
-      removed: 0,
-      staleSessionKeys: [],
-    };
   }
 
   const staleSessionKeys: string[] = [];
@@ -318,14 +327,28 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
     ) {
       continue;
     }
-    const unbound = await manager.unbindThread({
-      threadId: binding.threadId,
-      expected: binding,
-      reason: "stale-session",
-      sendFarewell: params.sendFarewell ?? false,
-    });
-    if (unbound) {
-      removed += 1;
+    let sourceFailure: unknown;
+    try {
+      const unbound = await manager.unbindThread({
+        threadId: binding.threadId,
+        expected: binding,
+        assertCurrent() {
+          try {
+            preparations.get(binding)?.assertCurrent();
+          } catch (error) {
+            sourceFailure = error;
+            throw error;
+          }
+        },
+        reason: "stale-session",
+        sendFarewell: params.sendFarewell ?? false,
+      });
+      if (unbound) {
+        removed += 1;
+      }
+    } finally {
+      // Persistence may acknowledge removal before later source revalidation fails.
+      rethrowIncognitoSessionError(sourceFailure);
     }
   }
 

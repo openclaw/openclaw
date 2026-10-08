@@ -10,7 +10,7 @@ export function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfi
 }
 
 function createDefaultMemoryToolConfig(): OpenClawConfig {
-  return asOpenClawConfig({ agents: { list: [{ id: "main", default: true }] } });
+  return asOpenClawConfig({ agents: { entries: { main: {} } } });
 }
 
 export function createMemorySearchToolOrThrow(params?: {

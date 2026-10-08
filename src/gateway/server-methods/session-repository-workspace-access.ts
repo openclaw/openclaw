@@ -9,6 +9,7 @@ import {
 } from "../../worker/workspace-inspection-protocol.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type LoadedSession = ReturnType<typeof loadGatewaySessionEntryReadOnly>;
@@ -61,10 +62,10 @@ export async function resolveRepositoryWorkspaceAccess(
       loadGatewaySessionEntryReadOnly(loaded.canonicalKey, { agentId: repository.agentId }).entry,
       expectedRevision,
     );
-  assertSession(repository.revision);
   const placements = context?.workerSessionPlacementService;
   const environments = context?.workerEnvironmentService;
-  const placement = placements?.getMany([sessionId]).get(sessionId);
+  const placement = await readSessionWorkerPlacementAsync({ context: context ?? {}, sessionId });
+  assertSession(repository.revision);
   if (placement?.state !== "active" || !environments) {
     return {
       kind: "stored" as const,
@@ -145,7 +146,7 @@ export async function resolveRepositoryWorkspaceAccess(
       if (!mutationService) {
         throw new Error("Cloud repository editing is unavailable; restart the Gateway and retry.");
       }
-      return await runExclusiveSessionLifecycleMutation({
+      return await runExclusiveSessionLifecycleMutation("workspace-edit", {
         scope: loaded.storePath,
         identities: [loaded.canonicalKey, ...loaded.storeKeys, sessionId],
         run: () => {

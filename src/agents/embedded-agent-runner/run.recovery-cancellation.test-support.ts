@@ -594,7 +594,7 @@ describe("recovery cancellation through the public run owner", () => {
     const { SessionManager: PersistentSessionManager } =
       await import("../sessions/session-manager.js");
     const state = await createOpenClawTestState({ label: "fresh-persistent-recovery" });
-    let manager: ReturnType<typeof PersistentSessionManager.open> | undefined;
+    let manager: Awaited<ReturnType<typeof PersistentSessionManager.openAsync>> | undefined;
     let firstKeptEntryId: string | undefined;
     const runParams = {
       sessionId: "fresh-plugin-task",
@@ -619,8 +619,8 @@ describe("recovery cancellation through the public run owner", () => {
             storePath: target.storePath,
           };
           expect(sessionAccessor.loadSessionEntry(durableTarget)).toBeUndefined();
-          manager = PersistentSessionManager.open(durableTarget, state.workspaceDir);
-          firstKeptEntryId = manager.appendMessage({
+          manager = await PersistentSessionManager.openAsync(durableTarget, state.workspaceDir);
+          firstKeptEntryId = await manager.appendMessageAsync({
             role: "user",
             content: "hello",
             timestamp: 1,
@@ -635,7 +635,7 @@ describe("recovery cancellation through the public run owner", () => {
         if (!manager || !firstKeptEntryId) {
           throw new Error("First attempt must persist its real user turn before recovery");
         }
-        manager.appendCompaction("Fresh session summary", firstKeptEntryId, 180_000);
+        await manager.appendCompactionAsync("Fresh session summary", firstKeptEntryId, 180_000);
         return makeCompactionSuccess({ summary: "Fresh session summary", tokensAfter: 40 });
       });
 

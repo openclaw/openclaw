@@ -26,11 +26,12 @@ vi.mock("../../plugins/management-service.js", async (importOriginal) => ({
 
 const { pluginsHandlers } = await import("./plugins.js");
 
-it.each(
-  (["same Gateway", "other Gateway", "same registry"] as const).flatMap((publication) =>
-    (["before handler", "during catalog"] as const).map((timing) => ({ publication, timing })),
-  ),
-)(
+it.each([
+  { publication: "same Gateway", timing: "before handler" },
+  { publication: "same Gateway", timing: "during catalog" },
+  { publication: "other Gateway", timing: "during catalog" },
+  { publication: "same registry", timing: "during catalog" },
+] as const)(
   "pairs request runtime health with its generation across $publication publication $timing",
   async ({ publication, timing }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

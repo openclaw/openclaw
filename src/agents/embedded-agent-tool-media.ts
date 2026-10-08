@@ -1,11 +1,13 @@
-/** Extracts and trust-filters media from embedded-agent tool results. */
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { extractToolResultText } from "./embedded-agent-tool-results.js";
+import { mapAgentHarnessMessagingMediaValues } from "./harness/messaging-media.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
@@ -18,73 +20,33 @@ function pushUniqueMessagingMediaUrl(urls: Set<string>, value: unknown): void {
   }
 }
 
-/** Collects messaging attachment references from tool-call arguments or result records. */
 export function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
   const urls = new Set<string>();
-  const pushAttachment = (value: unknown) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return;
-    }
-    const attachment = value as Record<string, unknown>;
-    for (const candidate of [
-      attachment.media,
-      attachment.mediaUrl,
-      attachment.path,
-      attachment.filePath,
-      attachment.fileUrl,
-      attachment.url,
-    ]) {
-      pushUniqueMessagingMediaUrl(urls, candidate);
-    }
-  };
-
-  for (const candidate of [
-    record.media,
-    record.mediaUrl,
-    record.path,
-    record.filePath,
-    record.fileUrl,
-  ]) {
-    pushUniqueMessagingMediaUrl(urls, candidate);
-  }
-  if (Array.isArray(record.mediaUrls)) {
-    for (const mediaUrl of record.mediaUrls) {
-      pushUniqueMessagingMediaUrl(urls, mediaUrl);
-    }
-  }
-  if (Array.isArray(record.attachments)) {
-    for (const attachment of record.attachments) {
-      pushAttachment(attachment);
-    }
-  }
+  mapAgentHarnessMessagingMediaValues(
+    record,
+    (value) => {
+      pushUniqueMessagingMediaUrl(urls, value);
+      return value;
+    },
+    false,
+  );
   return [...urls];
 }
 
-/** Collects messaging attachment references from a completed tool result. */
 export function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
-  const urls = new Set<string>();
-  const appendFromRecord = (value: unknown) => {
-    if (!value || typeof value !== "object") {
-      return;
-    }
-    for (const url of collectMessagingMediaUrlsFromRecord(value as Record<string, unknown>)) {
-      urls.add(url);
-    }
-  };
-
-  appendFromRecord(result);
-  if (result && typeof result === "object") {
-    appendFromRecord((result as Record<string, unknown>).details);
-  }
+  const records = [result, asOptionalObjectRecord(result)?.details];
   const outputText = extractToolResultText(result);
   if (outputText) {
-    try {
-      appendFromRecord(JSON.parse(outputText));
-    } catch {
-      // Ignore non-JSON tool output.
-    }
+    records.push(safeParseJson(outputText));
   }
-  return [...urls];
+  return [
+    ...new Set(
+      records.flatMap((value) => {
+        const record = asOptionalObjectRecord(value);
+        return record ? collectMessagingMediaUrlsFromRecord(record) : [];
+      }),
+    ),
+  ];
 }
 
 const TRUSTED_TOOL_RESULT_MEDIA = new Set([

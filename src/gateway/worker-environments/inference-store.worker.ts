@@ -1,40 +1,48 @@
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+} from "../../state/worker-operation-registry.js";
 import { createWorkerInferenceStoreKernel } from "./inference-store.kernel.js";
-import type { WorkerInferenceStoreOperations } from "./inference-store.worker-contract.js";
+import type { WorkerInferenceRetentionPolicy } from "./inference-store.types.js";
 
-export function executeWorkerInferenceStoreCommand(
-  command: SqliteWorkerCommand<WorkerInferenceStoreOperations>,
-  database: OpenClawStateDatabase,
+type Kernel = ReturnType<typeof createWorkerInferenceStoreKernel>;
+
+function operation<Input, Output>(
+  type: string,
+  select: (store: Kernel) => (input: Input) => Output,
 ) {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const store = createWorkerInferenceStoreKernel({
-        db,
-        now: () => command.input.nowMs,
-        retention: command.input.retention,
-      });
-      const result = (() => {
-        switch (command.type) {
-          case "workerInference.begin":
-            return store.begin(command.input.input);
-          case "workerInference.complete":
-            return store.complete(command.input.input);
-          case "workerInference.cancelPending":
-            return store.cancelPending(command.input.input);
-          case "workerInference.recoverPending":
-            return store.recoverPending(command.input.input);
-        }
-      })();
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      return result;
-    },
-    { database },
-    { operationLabel: command.type },
-  );
+  return (
+    input: { input: Input; nowMs: number; retention: Partial<WorkerInferenceRetentionPolicy> },
+    { open }: WorkerOperationContext,
+  ) =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const store = createWorkerInferenceStoreKernel({
+          db,
+          now: () => input.nowMs,
+          retention: input.retention,
+        });
+        const result = select(store)(input.input);
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        return result;
+      },
+      { database: open() },
+      { operationLabel: type },
+    );
 }
+
+export const workerInferenceOperations = {
+  "workerInference.begin": operation("workerInference.begin", (store) => store.begin),
+  "workerInference.complete": operation("workerInference.complete", (store) => store.complete),
+  "workerInference.cancelPending": operation(
+    "workerInference.cancelPending",
+    (store) => store.cancelPending,
+  ),
+  "workerInference.recoverPending": operation(
+    "workerInference.recoverPending",
+    (store) => store.recoverPending,
+  ),
+} satisfies WorkerOperationHandlers;

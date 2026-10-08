@@ -34,6 +34,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
+import { livePresentation, type PresentationValue } from "../../lit/presentation-binding.ts";
 import { renderPluginSurface } from "../../plugins/control-ui-view.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -120,7 +121,7 @@ export type ChatProps = Omit<
       itemId?: string,
       sourceMessageId?: string,
     ) => Promise<boolean>;
-    presented?: boolean;
+    presented?: PresentationValue;
     historyState?: ChatState;
     startupStatus?: ChatRunStartupStatus | null;
     providerPolicyNotice?: ProviderPolicyNotice | null;
@@ -166,9 +167,11 @@ export type ChatProps = Omit<
     pullRequestsGateway?: ApplicationGateway;
     pullRequestsSessionId?: string;
     pullRequestsBranch?: ControlUiSessionBranch;
+    pullRequestsBranchDismissed?: boolean;
     pullRequestsStatus?: ControlUiSessionPullRequestSnapshot["status"];
     onOpenSessionDiff?: () => void;
     onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
+    onDismissPullRequestsBranch?: (branch: ControlUiSessionBranch) => void;
     githubPublication?: import("../../lib/sessions/github-publication-controller.ts").GitHubPublicationView;
   };
 
@@ -412,12 +415,13 @@ export function renderChat(props: ChatProps) {
       pullRequests: props.pullRequests ?? [],
       gateway: props.pullRequestsGateway,
       sessionId: props.pullRequestsSessionId,
-      basePath: props.basePath,
       sessionKey: scopedSessionArtifactKey(props.sessionKey, props.currentAgentId ?? undefined),
       presented: props.presented ?? true,
       branch: props.pullRequestsBranch,
+      branchDismissed: props.pullRequestsBranchDismissed,
       status: props.pullRequestsStatus ?? "ready",
       onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
+      onDismissBranch: props.onDismissPullRequestsBranch,
       onOpenSessionDiff: props.onOpenSessionDiff,
       publication: props.githubPublication,
     })}
@@ -435,7 +439,7 @@ export function renderChat(props: ChatProps) {
       .kind=${"composer"}
       .sessionKey=${props.sessionKey}
       .agentId=${props.currentAgentId}
-      .presented=${props.presented ?? true}
+      .presented=${livePresentation(props.presented ?? true)}
     ></openclaw-plugin-contributions>`;
   // The composer keeps the outbox queue; only the transcript includes the
   // placement initial turn, whose retry action belongs to startup.
@@ -497,6 +501,7 @@ export function renderChat(props: ChatProps) {
           ? nothing
           : renderChatSelectionAnnotations({ ...props, disabled: !canCompose })
       }
+      ${props.composerRecovery ?? nothing}
     </div>`,
   );
   const taskSuggestionTray = renderChatTaskSuggestionTray(props);
@@ -614,7 +619,7 @@ export function renderChat(props: ChatProps) {
               .props=${props}
               .disabled=${!canCompose}
               .sessionKey=${props.sessionKey}
-              .presented=${props.presented ?? true}
+              .presented=${livePresentation(props.presented ?? true)}
             ></openclaw-chat-comment-controller>`
       }
       <div class="chat-workbench" ${shellLayoutTraits({ workbench: true })}>
@@ -627,7 +632,7 @@ export function renderChat(props: ChatProps) {
                   .kind=${"header"}
                   .sessionKey=${props.sessionKey}
                   .agentId=${props.currentAgentId}
-                  .presented=${props.presented ?? true}
+                  .presented=${livePresentation(props.presented ?? true)}
                 ></openclaw-plugin-contributions>
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation-frame">

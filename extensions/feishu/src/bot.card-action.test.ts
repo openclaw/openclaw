@@ -100,19 +100,6 @@ describe("Feishu Card Action Handler", () => {
     });
   });
 
-  it("routes quick command actions with operator and conversation context", async () => {
-    await dispatch(cardEvent(quickAction(), { open_message_id: "om_card_message" }));
-    expect(vi.mocked(handleFeishuMessage).mock.calls[0]?.[0].event).toMatchObject({
-      sender: { sender_id: { open_id: "u123", user_id: "uid1", union_id: "un1" } },
-      message: {
-        chat_id: "chat1",
-        content: '{"text":"/help"}',
-        reply_target_message_id: "om_card_message",
-        typing_target_message_id: "om_card_message",
-      },
-    });
-  });
-
   it("opens approval cards with resolved DM type and preserved interaction context", async () => {
     getChat.mockResolvedValueOnce({ code: 0, data: { chat_mode: "p2p" } });
     await dispatch(cardEvent(approvalAction()), { accountId: "main" });
@@ -163,12 +150,25 @@ describe("Feishu Card Action Handler", () => {
   });
 
   it("marks synthetic group card callbacks as mentioning the bot", async () => {
-    await dispatch(cardEvent(quickAction({ a: FEISHU_APPROVAL_CONFIRM_ACTION, q: "/new" })), {
-      botOpenId: "ou_bot",
-    });
+    await dispatch(
+      cardEvent(quickAction({ a: FEISHU_APPROVAL_CONFIRM_ACTION, q: "/new" }), {
+        open_message_id: "om_card_message",
+      }),
+      {
+        botOpenId: "ou_bot",
+      },
+    );
     expect(message()).toMatchObject({
+      chat_id: "chat1",
       chat_type: "group",
+      reply_target_message_id: "om_card_message",
+      typing_target_message_id: "om_card_message",
       content: '{"text":"/new"}',
+    });
+    expect(vi.mocked(handleFeishuMessage).mock.calls[0]?.[0].event.sender.sender_id).toEqual({
+      open_id: "u123",
+      user_id: "uid1",
+      union_id: "un1",
     });
     expect(message()?.mentions).toEqual([
       { key: "mention_bot", id: { open_id: "ou_bot" }, name: "bot" },

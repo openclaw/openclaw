@@ -540,20 +540,18 @@ describe("doctor stale plugin config helpers", () => {
             every: "30m",
           },
         },
-        list: [
-          {
-            id: "openclaw",
+        entries: {
+          openclaw: {
             heartbeat: {
               target: "missing-chat-plugin",
             },
           },
-          {
-            id: "ops",
+          ops: {
             heartbeat: {
               target: "telegram",
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig);
 
@@ -576,8 +574,8 @@ describe("doctor stale plugin config helpers", () => {
       },
     });
     expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
-    expect(result.config.agents?.list?.[0]?.heartbeat).toStrictEqual({});
-    expect(result.config.agents?.list?.[1]?.heartbeat).toEqual({ target: "telegram" });
+    expect(result.config.agents?.entries?.openclaw?.heartbeat).toStrictEqual({});
+    expect(result.config.agents?.entries?.ops?.heartbeat).toEqual({ target: "telegram" });
   });
 
   it("lists only the actually removed ids in heartbeat and modelByChannel change entries", () => {

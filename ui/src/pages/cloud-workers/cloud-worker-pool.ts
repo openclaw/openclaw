@@ -56,9 +56,8 @@ class CloudWorkerPool extends OpenClawLightDomElement {
 
   @state() private result: EnvironmentsListResult | null = null;
   @state() private error: string | null = null;
-  @state() private loading = false;
   @state() private updatedAt: number | null = null;
-  private request: AbortController | undefined;
+  @state() private request: AbortController | undefined;
   private readonly polling = new PollController(
     this,
     10_000,
@@ -75,7 +74,6 @@ class CloudWorkerPool extends OpenClawLightDomElement {
       this.polling.stop();
       this.result = null;
       this.error = null;
-      this.loading = false;
       this.updatedAt = null;
     },
     ensureInitialData: () => {
@@ -91,6 +89,10 @@ class CloudWorkerPool extends OpenClawLightDomElement {
     return canCallGatewayMethod(this.gateway.snapshot, "environments.list", "operator.admin");
   }
 
+  private get loading() {
+    return this.request !== undefined;
+  }
+
   private async load() {
     const scope = this.gateway.capture();
     if (!scope || !this.canRead() || this.loading || document.visibilityState === "hidden") {
@@ -98,7 +100,6 @@ class CloudWorkerPool extends OpenClawLightDomElement {
     }
     const request = new AbortController();
     this.request = request;
-    this.loading = true;
     try {
       const result = await scope.client.request<EnvironmentsListResult>(
         "environments.list",
@@ -116,7 +117,6 @@ class CloudWorkerPool extends OpenClawLightDomElement {
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
-        this.loading = false;
         this.request = undefined;
       }
     }

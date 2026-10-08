@@ -14,6 +14,7 @@ import type {
   QaTransportPolicy,
   QaTransportReportParams,
 } from "./qa-transport.js";
+import { waitForCompletedQaReply } from "./suite-runtime-transport.js";
 
 const QA_CHANNEL_ID = "qa-channel";
 const QA_CHANNEL_ACCOUNT_ID = "default";
@@ -94,6 +95,8 @@ export function createQaChannelTransport(state: QaBusState, transportPolicy?: Qa
     accountId: QA_CHANNEL_ACCOUNT_ID,
     requiredPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
     supportedActions: ["delete", "edit", "react", "thread-create"],
+    waitForCompletedReply: ({ inbound, timeoutMs }) =>
+      waitForCompletedQaReply(state, inbound, timeoutMs),
     async reset() {
       await waitForQaTransportCondition(() => {
         if (

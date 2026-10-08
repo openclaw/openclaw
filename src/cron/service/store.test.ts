@@ -492,10 +492,11 @@ describe("cron service store seam coverage", () => {
     }
   });
 
-  it("uses the normalized stable id for job rows and companion authority", async () => {
+  it("uses the trimmed canonical id for job rows and companion authority", async () => {
     const { storePath } = await makeStorePath();
     const rawJob = {
-      jobId: "repro-stable-id",
+      id: "  repro-stable-id  ",
+      jobId: "ignored-obsolete-alias",
       name: "handed",
       enabled: true,
       createdAtMs: STORE_TEST_NOW - 60_000,

@@ -26,7 +26,6 @@ export class ModelCatalogReader {
   };
   private controller?: AbortController;
   private unsubscribe?: () => void;
-  pending = false;
   failed = false;
 
   constructor(
@@ -37,6 +36,10 @@ export class ModelCatalogReader {
       onError?: () => void;
     } = {},
   ) {}
+
+  get pending(): boolean {
+    return this.controller !== undefined;
+  }
 
   get snapshot(): ModelCatalogPresentation {
     const binding = this.binding;
@@ -120,7 +123,6 @@ export class ModelCatalogReader {
     this.controller = undefined;
     const cached = peekModelCatalog(binding.client, binding.scope);
     if (cached) {
-      this.pending = false;
       this.failed = false;
       this.options.onResult?.(cached);
       this.notify();
@@ -128,7 +130,6 @@ export class ModelCatalogReader {
     }
     const controller = new AbortController();
     this.controller = controller;
-    this.pending = true;
     this.failed = false;
     this.notify();
     return loadModelCatalog(binding.client, {
@@ -141,7 +142,6 @@ export class ModelCatalogReader {
           return undefined;
         }
         this.controller = undefined;
-        this.pending = false;
         this.options.onResult?.(result);
         this.notify();
         return result;
@@ -151,7 +151,6 @@ export class ModelCatalogReader {
           return undefined;
         }
         this.controller = undefined;
-        this.pending = false;
         this.failed = true;
         this.options.onError?.();
         this.notify();
@@ -166,7 +165,6 @@ export class ModelCatalogReader {
     this.controller = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
-    this.pending = false;
     this.failed = false;
   }
 }

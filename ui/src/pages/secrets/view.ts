@@ -56,6 +56,31 @@ type SecretsStoreViewProps = {
 const DOCS_URL = "https://docs.openclaw.ai/gateway/secrets#shared-secret-store";
 const SECRET_MASK = "••••••••";
 
+function renderTextAreaField(props: SecretsStoreViewProps, field: "value" | "hosts" | "bulk") {
+  const [name, value, onInput] = (
+    {
+      value: ["value", props.draft.value, props.onDraftValueChange],
+      hosts: ["allowed-hosts", props.draft.allowedHosts, props.onDraftAllowedHostsChange],
+      bulk: ["bulk-values", props.bulkRaw, props.onBulkRawChange],
+    } as const
+  )[field];
+  return html`<label class="secrets-store-field">
+    <span>${t(field === "hosts" ? "secretsStore.allowedHosts" : "secretsStore.value")}</span>
+    <textarea
+      class="settings-input secrets-store-dialog__${field}${field === "hosts" ? " mono" : ""}"
+      name=${name}
+      autocomplete="off"
+      spellcheck="false"
+      ?autofocus=${field === "bulk"}
+      placeholder=${field === "hosts" ? t("secretsStore.allowedHostsPlaceholder") : nothing}
+      ?disabled=${props.busy}
+      .value=${value}
+      @input=${(event: Event) => onInput((event.currentTarget as HTMLTextAreaElement).value)}
+    ></textarea>
+    ${field === "hosts" ? html`<small>${t("secretsStore.allowedHostsHint")}</small>` : nothing}
+  </label>`;
+}
+
 function updatedLabel(entry: SecretStoreEntry): string {
   const relative = formatRelativeTimestamp(entry.updatedAtMs, { fallback: t("common.unknown") });
   return entry.updatedBy
@@ -230,19 +255,7 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
               props.onDraftNameChange((event.currentTarget as HTMLInputElement).value)}
           />
         </label>
-        <label class="secrets-store-field">
-          <span>${t("secretsStore.value")}</span>
-          <textarea
-            class="settings-input secrets-store-dialog__value"
-            name="value"
-            autocomplete="off"
-            spellcheck="false"
-            ?disabled=${props.busy}
-            .value=${props.draft.value}
-            @input=${(event: Event) =>
-              props.onDraftValueChange((event.currentTarget as HTMLTextAreaElement).value)}
-          ></textarea>
-        </label>
+        ${renderTextAreaField(props, "value")}
         <fieldset class="secrets-store-modes">
           <legend>${t("secretsStore.accessMode")}</legend>
           ${(["secret", "env"] as const).map((kind) => {
@@ -272,29 +285,7 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
             </label>`;
           })}
         </fieldset>
-        ${
-          props.draft.kind === "secret"
-            ? html`
-                <label class="secrets-store-field">
-                  <span>${t("secretsStore.allowedHosts")}</span>
-                  <textarea
-                    class="settings-input secrets-store-dialog__hosts mono"
-                    name="allowed-hosts"
-                    autocomplete="off"
-                    spellcheck="false"
-                    placeholder=${t("secretsStore.allowedHostsPlaceholder")}
-                    ?disabled=${props.busy}
-                    .value=${props.draft.allowedHosts}
-                    @input=${(event: Event) =>
-                      props.onDraftAllowedHostsChange(
-                        (event.currentTarget as HTMLTextAreaElement).value,
-                      )}
-                  ></textarea>
-                  <small>${t("secretsStore.allowedHostsHint")}</small>
-                </label>
-              `
-            : nothing
-        }
+        ${props.draft.kind === "secret" ? renderTextAreaField(props, "hosts") : nothing}
         ${renderDialogActions(props, props.onCloseDialog)}
       </form>
     </openclaw-modal-dialog>
@@ -318,20 +309,7 @@ function renderBulkDialog(props: SecretsStoreViewProps): TemplateResult | typeof
         <div class="secrets-store-dialog__header">
           <h2>${t("secretsStore.bulk")}</h2>
         </div>
-        <label class="secrets-store-field">
-          <span>${t("secretsStore.value")}</span>
-          <textarea
-            class="settings-input secrets-store-dialog__bulk"
-            name="bulk-values"
-            autocomplete="off"
-            spellcheck="false"
-            autofocus
-            ?disabled=${props.busy}
-            .value=${props.bulkRaw}
-            @input=${(event: Event) =>
-              props.onBulkRawChange((event.currentTarget as HTMLTextAreaElement).value)}
-          ></textarea>
-        </label>
+        ${renderTextAreaField(props, "bulk")}
         <div class="secrets-store-bulk__summary" aria-live="polite">
           ${t(props.bulkSecretCount === 1 ? "secretsStore.detectedOne" : "secretsStore.detected", {
             count: String(props.bulkSecretCount),

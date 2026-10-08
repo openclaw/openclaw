@@ -1,7 +1,3 @@
-/**
- * Ciao process-error classifier. It recognizes known noisy ciao failures so
- * the Bonjour plugin can suppress or repair expected mDNS lifecycle issues.
- */
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { formatBonjourError } from "./errors.js";
 
@@ -12,12 +8,10 @@ const CIAO_NETMASK_ASSERTION_MESSAGE_RE =
 // Node surfaces this as a SystemError mentioning the libuv syscall by name.
 const CIAO_INTERFACE_ENUMERATION_FAILURE_RE = /\bUV_INTERFACE_ADDRESSES\b/u;
 
-/** Known ciao process-level errors that OpenClaw handles specially. */
 type CiaoProcessErrorClassification =
   | { kind: "netmask-assertion"; formatted: string }
   | { kind: "interface-enumeration-failure"; formatted: string };
 
-/** Classify a ciao error/rejection chain into a known category. */
 export function classifyCiaoProcessError(reason: unknown): CiaoProcessErrorClassification | null {
   for (const candidate of collectErrorGraphCandidates(reason, (current) => [
     current.cause,

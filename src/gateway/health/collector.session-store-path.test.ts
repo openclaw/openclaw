@@ -13,10 +13,11 @@ import { historyLane } from "../../config/sessions/session-transcript-worker-res
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   buildHealthAgentSummaries,
@@ -40,10 +41,11 @@ async function summarizeStore(storePath: string, agentId: string) {
 describe("health session store paths", () => {
   const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-health-session-store-");
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
   });
 
   it("reports the SQLite database that supplied the session count", async () => {
@@ -57,7 +59,8 @@ describe("health session store paths", () => {
       { agentId, env, sessionKey: `agent:${agentId}:main`, storePath },
       { sessionId: "session-1", updatedAt: 10 },
     );
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(stateDir);
+    closeOpenClawAgentDatabasesForTest(stateDir);
 
     const summary = await summarizeStore(storePath, agentId);
 
@@ -80,8 +83,7 @@ describe("health session store paths", () => {
       for (const agentId of agentIds) {
         for (const timestamp of [30, 70, 10, 60, 40, 20, 50]) {
           const updatedAt = timestamp + (agentId === "other" ? 100 : 0);
-          now.mockReturnValue(updatedAt);
-          await sessionAccessor.upsertSessionEntryCore(
+          await sessionAccessor.replaceSessionEntry(
             { agentId, env, sessionKey: `agent:${agentId}:session-${timestamp}`, storePath },
             {
               sessionId: `session-${agentId}-${timestamp}`,
@@ -163,7 +165,8 @@ describe("health session store paths", () => {
         },
         { sessionId: "session-1", updatedAt: 10 },
       );
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(stateDir);
+      closeOpenClawAgentDatabasesForTest(stateDir);
 
       const populated = await summarizeStore(populatedStorePath, populatedAgentId);
       const emptyAgentId = "third";

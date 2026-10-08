@@ -84,9 +84,11 @@ invoke this hook and continues to preserve native thread continuity.
 Official harnesses use the JavaScript-only private
 `openclaw/plugin-sdk/agent-harness-session-runtime`; it is not a third-party
 Plugin SDK contract. Binding mutations use action-bound plugin-state observations
-and conditional writes in the shared-state worker. Synchronous reads still serve
-native lease assertions, and synchronous deletion/rollback remains part of the
-host's existing transaction contract.
+and conditional writes in the shared-state worker. Durable bundled session
+deletion and conditional rollback settle in the executing agent worker.
+Synchronous reads still serve native lease assertions; opaque released deletion
+callbacks, incognito sessions, and message-cut transactions keep their existing
+native ownership.
 `createNativeSessionBindingLifecycle` owns exact-token lease acquisition,
 renewal, mutation fences, and transactional deletion/rollback. The backend
 supplies matching synchronous and asynchronous views of the same plugin-state
@@ -113,6 +115,22 @@ link, then invokes backend cleanup. Queue selection, native protocol/policy,
 and resource cleanup remain with the backend; core owns host session lifecycle.
 
 ## Tool and media results
+
+### Same-turn retry context
+
+The optional `params.continuation` carries host-owned recovery context when a
+transient failure retries the same task. Its `prompt` is the original current
+request; its `messages` contains settled attempt snapshots in order, including
+completed assistant/tool messages and tool results. Keep the request visible
+outside bounded history projections and retain completed tool evidence when
+rendering the snapshots. These facts describe completed work; they do not grant
+execution authority or ask the harness to execute those tools again.
+
+Codex consumes this carrier even when the admission-fenced transcript ends
+before the current request, using its existing bounded context projection.
+The continuation instruction stays model-only and is not persisted as another
+user turn. Harnesses that ignore the optional field retain their existing
+transcript-based recovery behavior.
 
 `inferToolMetaFromArgs` from `openclaw/plugin-sdk/agent-harness-runtime` returns
 compact, lossy display metadata. Array values deeper than 64 levels are omitted;
@@ -171,6 +189,18 @@ also appear in `toolMediaUrls`. Never include model-selected dynamic-tool or
 OpenClaw-tool media. On `message_tool_only` routes, this narrow provenance lets
 native runtime artifacts survive source-reply suppression; normal send policy
 and ambient-room admission still apply.
+
+## Harness delivery defaults
+
+Set `deliveryDefaults.visibleReplies` to `"automatic"` or `"message_tool"`
+when a harness needs a default visible-reply policy. Explicit message config
+still takes precedence.
+
+The deprecated `sourceVisibleReplies` field remains supported for published
+harness plugins, including July 2026 versions of `@openclaw/codex`. When both
+fields are present, `visibleReplies` takes precedence. Plugin authors should
+migrate to that field. The October 1 removal date does not retire a contract
+while supported published plugins still produce it.
 
 ## Terminal tool outcomes
 

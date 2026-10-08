@@ -551,7 +551,7 @@ describe("openclaw path CLI", () => {
       const filePath = join(workspaceDir, "openclaw.json");
       writeFileSync(
         filePath,
-        '{ "agents": { "list": [{ "tools": { "exec": { "security": "deny" } } }] }, "gateway": { "auth": { "token": "${TOKEN}" } } }\n',
+        '{ "agents": { "entries": { "main": { "tools": { "exec": { "security": "deny" } } } } }, "gateway": { "auth": { "token": "${TOKEN}" } } }\n',
         "utf-8",
       );
       const rt = createTestRuntime();
@@ -572,16 +572,16 @@ describe("openclaw path CLI", () => {
 
       const rt2 = createTestRuntime();
       await pathSetCommand(
-        "oc://openclaw.json/agents/list/0/tools/exec/security",
+        "oc://openclaw.json/agents/entries/main/tools/exec/security",
         "allowlist",
         { cwd: workspaceDir, json: true },
         rt2,
       );
 
       expect(rt2.exitCode).toBe(0);
-      expect(JSON.parse(readFileSync(filePath, "utf8")).agents.list[0].tools.exec.security).toBe(
-        "allowlist",
-      );
+      expect(
+        JSON.parse(readFileSync(filePath, "utf8")).agents.entries.main.tools.exec.security,
+      ).toBe("allowlist");
     });
 
     it("writes literal dollar replacement text through the registered Markdown command", async () => {

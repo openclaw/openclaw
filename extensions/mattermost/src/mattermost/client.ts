@@ -8,6 +8,7 @@ import {
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   captureChannelReadAuthority,
+  captureEffectAuthority,
   responseWithRelease,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -31,6 +32,7 @@ import {
   readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import type { MattermostAccountConfig } from "../types.js";
 
 const MATTERMOST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const MATTERMOST_REQUEST_TIMEOUT_MS = 30_000;
@@ -54,16 +56,7 @@ type MattermostRequestInit = RequestInit & {
   isMessagePost?: boolean;
 };
 
-export type MattermostClient = {
-  baseUrl: string;
-  apiBaseUrl: string;
-  token: string;
-  /** Operation-local sender fence, independent of ambient read authority. */
-  assertRequestCurrent?: () => void;
-  request: <T>(path: string, init?: MattermostRequestInit) => Promise<T>;
-  /** Guarded fetch implementation; use in place of raw fetch for outbound requests. */
-  fetchImpl: MattermostFetch;
-};
+export type MattermostClient = ReturnType<typeof createMattermostClient>;
 
 export type MattermostUser = {
   id: string;
@@ -202,7 +195,7 @@ export function createMattermostClient(params: {
   /** Allow requests to private/internal IPs (self-hosted/LAN deployments). */
   allowPrivateNetwork?: boolean;
   assertRequestCurrent?: () => void;
-}): MattermostClient {
+}) {
   const baseUrl = normalizeMattermostBaseUrl(params.baseUrl);
   if (!baseUrl) {
     throw new Error("Mattermost baseUrl is required");
@@ -265,10 +258,9 @@ export function createMattermostClient(params: {
     return responseWithRelease(response, release);
   };
 
-  const timedExternalFetchImpl:
-    | ((input: RequestInfo | URL, init?: MattermostRequestInit) => Promise<Response>)
-    | undefined = externalFetchImpl
+  const timedExternalFetchImpl: typeof guardedFetchImpl | undefined = externalFetchImpl
     ? async (input, init) => {
+        const effect = captureEffectAuthority();
         const assertReadAuthority = captureChannelReadAuthority();
         assertReadAuthority?.();
         const url =
@@ -286,11 +278,15 @@ export function createMattermostClient(params: {
             ? AbortSignal.any([callerSignal, timeoutSignal])
             : (callerSignal ?? timeoutSignal);
         try {
-          assertRequestCurrent?.();
-          if (isMessagePost) {
-            postDispatchStarted = true;
-          }
-          const response = await externalFetchImpl(input, { ...requestInit, signal });
+          const response = await effect.initiate(() => {
+            assertReadAuthority?.();
+            assertRequestCurrent?.();
+            signal?.throwIfAborted();
+            if (isMessagePost) {
+              postDispatchStarted = true;
+            }
+            return externalFetchImpl(input, { ...requestInit, signal });
+          });
           // Match guarded production fetches: retain cancellation and the
           // request deadline until the custom response body is consumed.
           return responseWithRelease(response, async () => cleanup());
@@ -455,16 +451,7 @@ export async function sendMattermostTyping(
   });
 }
 
-export type CreateDmChannelRetryOptions = {
-  /** Maximum number of retry attempts (default: 3) */
-  maxRetries?: number;
-  /** Initial delay in milliseconds (default: 1000) */
-  initialDelayMs?: number;
-  /** Maximum delay in milliseconds (default: 10000) */
-  maxDelayMs?: number;
-  /** Timeout for each individual request in milliseconds (default: 30000) */
-  timeoutMs?: number;
-  /** Optional logger for retry events */
+export type CreateDmChannelRetryOptions = NonNullable<MattermostAccountConfig["dmChannelRetry"]> & {
   onRetry?: (attempt: number, delayMs: number, error: Error) => void;
 };
 

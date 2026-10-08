@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -16,7 +17,10 @@ import {
   requestChatSend,
   resolveDisplayedLeafEntryId,
 } from "./chat-send-request.ts";
-import { formatTerminalChatSendAckError } from "./chat-send-support.ts";
+import {
+  formatTerminalChatSendAckError,
+  UNCONFIRMED_CHAT_SEND_ERROR,
+} from "./chat-send-support.ts";
 import { formatConnectError } from "./connect-error.ts";
 
 export async function sendDetachedCommandMessage(
@@ -44,7 +48,11 @@ export async function sendDetachedCommandMessage(
         const activeLeafChanged = isActiveLeafChangedError(err);
         setChatError(
           host,
-          activeLeafChanged ? t("chat.sendErrors.activeLeafChanged") : formatConnectError(err),
+          activeLeafChanged
+            ? t("chat.sendErrors.activeLeafChanged")
+            : err instanceof GatewayProtocolRequestTimeoutError && err.requestSent
+              ? UNCONFIRMED_CHAT_SEND_ERROR
+              : formatConnectError(err),
         );
         if (activeLeafChanged) {
           void Promise.all([loadChatHistory(host), loadChatBranches(host)]);

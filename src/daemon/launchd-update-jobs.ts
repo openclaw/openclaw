@@ -1,4 +1,3 @@
-/** Discovery and shutdown of stale OpenClaw launchd updater jobs. */
 import path from "node:path";
 import {
   parseStrictInteger,
@@ -83,14 +82,6 @@ function resolveCurrentOpenClawUpdateLaunchdJobLabel(
     }
   }
   return null;
-}
-
-export function parseLaunchctlListOpenClawUpdateJobs(
-  output: string,
-): StaleOpenClawUpdateLaunchdJob[] {
-  return parseLaunchctlListOpenClawUpdateJobCandidates(output)
-    .filter((job) => !job.requiresMetadata)
-    .map(({ requiresMetadata: _requiresMetadata, ...job }) => job);
 }
 
 function parseLaunchctlListOpenClawUpdateJobCandidates(
@@ -193,58 +184,26 @@ export async function findStaleOpenClawUpdateLaunchdJobs(
   return jobs;
 }
 
-async function disableOpenClawUpdateLaunchdJobCandidate(params: {
-  candidate: OpenClawUpdateLaunchdLabelCandidate;
-  env: NodeJS.ProcessEnv;
-  trustCurrentEnvMarker: boolean;
-}): Promise<boolean> {
-  if (process.platform !== "darwin") {
-    return false;
-  }
-  if (
-    params.candidate.requiresMetadata &&
-    !(
-      (params.trustCurrentEnvMarker && hasOpenClawUpdateLaunchdMarker(params.env)) ||
-      (await isLaunchdJobConfirmedOpenClawUpdater({
-        label: params.candidate.label,
-        env: params.env,
-      }))
-    )
-  ) {
-    return false;
-  }
-  const serviceTarget = `${resolveLaunchAgentGuiDomain()}/${assertValidLaunchAgentLabel(params.candidate.label)}`;
-  const result = await execLaunchctl(["disable", serviceTarget]);
-  return result.code === 0;
-}
-
-export async function disableOpenClawUpdateLaunchdJob(
-  label: string,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<boolean> {
-  const candidate = normalizeOpenClawUpdateLaunchdLabelCandidate(label);
-  if (!candidate) {
-    return false;
-  }
-  return await disableOpenClawUpdateLaunchdJobCandidate({
-    candidate,
-    env,
-    trustCurrentEnvMarker: false,
-  });
-}
-
 export async function disableCurrentOpenClawUpdateLaunchdJob(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
   const candidate = resolveCurrentOpenClawUpdateLaunchdJobLabel(env);
-  if (!candidate) {
+  if (!candidate || process.platform !== "darwin") {
     return false;
   }
-  return await disableOpenClawUpdateLaunchdJobCandidate({
-    candidate,
-    env,
-    // Detached handoffs preserve the configured label, so only launchd-backed
-    // current-process identity may turn the ambient marker into proof.
-    trustCurrentEnvMarker: isCurrentProcessLaunchdServiceLabel(candidate.label, env),
-  });
+  // Detached handoffs preserve the configured label, so only launchd-backed
+  // current-process identity may turn the ambient marker into proof.
+  const trustCurrentEnvMarker = isCurrentProcessLaunchdServiceLabel(candidate.label, env);
+  if (
+    candidate.requiresMetadata &&
+    !(
+      (trustCurrentEnvMarker && hasOpenClawUpdateLaunchdMarker(env)) ||
+      (await isLaunchdJobConfirmedOpenClawUpdater({ label: candidate.label, env }))
+    )
+  ) {
+    return false;
+  }
+  const serviceTarget = `${resolveLaunchAgentGuiDomain()}/${assertValidLaunchAgentLabel(candidate.label)}`;
+  const result = await execLaunchctl(["disable", serviceTarget]);
+  return result.code === 0;
 }

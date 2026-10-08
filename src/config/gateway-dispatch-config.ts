@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
-import { applyConfigEnvVars } from "./config-env-vars.js";
-import { resolveConfigEnvVars } from "./env-substitution.js";
 import { resolveConfigIncludes } from "./includes.js";
+import { resolveConfigForRead } from "./io.read-helpers.js";
 import { resolveConfigPath, resolveIncludeRoots } from "./paths.js";
+import { setConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const GATEWAY_DISPATCH_SHELL_ENV_EXPECTED_KEYS = [
@@ -33,9 +33,6 @@ function resolveGatewayDispatchConfig(value: unknown, env: NodeJS.ProcessEnv): O
   if (!isRecord(value)) {
     return {};
   }
-  if (Object.hasOwn(value, "env")) {
-    applyConfigEnvVars(value as OpenClawConfig, env);
-  }
   const projected: Record<string, unknown> = {};
   for (const key of GATEWAY_DISPATCH_TOP_LEVEL_KEYS) {
     if (Object.hasOwn(value, key)) {
@@ -44,18 +41,14 @@ function resolveGatewayDispatchConfig(value: unknown, env: NodeJS.ProcessEnv): O
   }
   // Substitution owns the fresh nested containers; discarded branches need neither
   // substitution nor another deep copy after the complete include graph is resolved.
-  return resolveConfigEnvVars(projected, env, { onMissing: () => undefined }) as OpenClawConfig;
-}
-
-// Main session keys are process-local; Gateway dispatch always sees the canonical main key.
-function applyGatewayDispatchSessionDefaults(config: OpenClawConfig): OpenClawConfig {
-  if (config.session?.mainKey === undefined) {
-    return config;
+  const { resolvedConfigRaw, resolutionFacts } = resolveConfigForRead(projected, env);
+  const config = resolvedConfigRaw as OpenClawConfig;
+  // Process-local main-key aliases resolve to the Gateway's canonical key.
+  if (config.session?.mainKey !== undefined) {
+    config.session.mainKey = "main";
   }
-  return {
-    ...config,
-    session: { ...config.session, mainKey: "main" },
-  };
+  setConfigResolutionFacts(config, resolutionFacts);
+  return config;
 }
 
 function readRawGatewayDispatchConfig(options: GatewayDispatchConfigReadOptions = {}): {
@@ -73,9 +66,8 @@ function readRawGatewayDispatchConfig(options: GatewayDispatchConfigReadOptions 
   const resolvedIncludes = resolveConfigIncludes(parsed, configPath, undefined, {
     allowedRoots: resolveIncludeRoots(env),
   });
-  const resolvedConfig = resolveGatewayDispatchConfig(resolvedIncludes, env);
   return {
-    config: applyGatewayDispatchSessionDefaults(resolvedConfig),
+    config: resolveGatewayDispatchConfig(resolvedIncludes, env),
     configPath,
   };
 }
@@ -100,13 +92,19 @@ export async function readGatewayDispatchConfigWithShellEnvFallback(
   const enabled =
     shouldEnableShellEnvFallback(env) || firstRead.config.env?.shellEnv?.enabled === true;
   if (enabled && !shouldDeferShellEnvFallback(env)) {
-    loadShellEnvFallback({
+    const { applied } = loadShellEnvFallback({
       enabled: true,
       env,
       expectedKeys: [...GATEWAY_DISPATCH_SHELL_ENV_EXPECTED_KEYS],
       logger: options.logger ?? console,
       timeoutMs: firstRead.config.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(env),
     });
+    if (applied.length > 0) {
+      return readGatewayDispatchConfig({
+        ...options,
+        configPath: path.resolve(firstRead.configPath),
+      });
+    }
   }
-  return readGatewayDispatchConfig({ ...options, configPath: path.resolve(firstRead.configPath) });
+  return firstRead.config;
 }

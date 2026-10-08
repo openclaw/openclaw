@@ -53,20 +53,20 @@ async function fetchBrowserManagement<T>(
 async function runBrowserToggle(
   parent: BrowserParentOpts,
   params: {
-    profile?: string;
     path: string;
     query?: Record<string, string | number | boolean | undefined>;
   },
 ) {
+  const profile = parent.browserProfile;
   await callBrowserRequest(parent, {
     method: "POST",
     path: params.path,
-    query: resolveProfileQuery(params.profile, params.query),
+    query: resolveProfileQuery(profile, params.query),
   });
   const status = await fetchBrowserManagement<BrowserStatus>(
     parent,
     "/",
-    resolveProfileQuery(params.profile),
+    resolveProfileQuery(profile),
   );
   if (printJsonResult(parent, status)) {
     return;
@@ -317,7 +317,7 @@ export function registerBrowserManageCommands(
   browser
     .command("doctor")
     .description("Check browser plugin readiness")
-    .option("--deep", "Run a live snapshot probe")
+    .option("--deep", "Run a live snapshot check")
     .action(async (opts: { deep?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -338,10 +338,8 @@ export function registerBrowserManageCommands(
     .option("--headless", "Launch a local managed browser headless for this start")
     .action(async (opts: { headless?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
         await runBrowserToggle(parent, {
-          profile,
           path: "/start",
           query: opts.headless ? { headless: true } : undefined,
         });
@@ -353,9 +351,8 @@ export function registerBrowserManageCommands(
     .description("Stop the browser (best-effort)")
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        await runBrowserToggle(parent, { profile, path: "/stop" });
+        await runBrowserToggle(parent, { path: "/stop" });
       });
     });
 

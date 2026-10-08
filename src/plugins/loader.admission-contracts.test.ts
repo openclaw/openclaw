@@ -1,11 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, expect, it, onTestFinished } from "vitest";
+import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  createRuntimeConfigReader,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { drainSystemEvents } from "../infra/system-events.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { activatePluginRegistry } from "./loader-shared.js";
-import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
+import {
+  loadOpenClawPluginCliRegistry,
+  loadOpenClawPlugins,
+  loadPluginRegistryHandle,
+} from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
@@ -22,7 +34,8 @@ import {
   getActivePluginRegistry,
   setActivePluginRegistry,
 } from "./runtime.js";
-import { startPluginServices } from "./services.js";
+import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
+import { startPluginServices } from "./services.test-support.js";
 
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
@@ -270,3 +283,129 @@ it.each(["cached-discovery", "retained-discovery"] as const)(
     }
   },
 );
+
+describe("registry load modes", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetPluginStateStoreForTests();
+    clearRuntimeConfigSnapshot();
+  });
+
+  it("keeps validation and full registry caches separate", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cached-load-mode",
+      registration: 'api.registerProvider({ id: "mode-provider", label: "Mode", auth: [] });',
+    });
+    const options = {
+      config: {
+        plugins: {
+          allow: [plugin.id],
+          load: { paths: [plugin.file] },
+          slots: { memory: "none" },
+        },
+      },
+    };
+    const validation = loadPluginRegistryHandle({ ...options, mode: "validate" });
+    const full = loadPluginRegistryHandle(options);
+
+    expect(full.providers.map(({ provider }) => provider.id)).toEqual(["mode-provider"]);
+    expect(validation.plugins).toContainEqual(
+      expect.objectContaining({ id: plugin.id, status: "loaded" }),
+    );
+    expect(validation.providers).toEqual([]);
+    expect(loadPluginRegistryHandle(options)).toBe(full);
+    expect(loadPluginRegistryHandle({ ...options, mode: "full" })).toBe(full);
+    expect(loadPluginRegistryHandle({ ...options, mode: "validate" })).toBe(validation);
+  });
+});
+
+describe("registration config snapshot", () => {
+  afterEach(resetConfigRuntimeState);
+
+  it("keeps registered callbacks on their captured config while explicit runtime readers follow refresh", async () => {
+    const root = makePluginLoaderTempDir();
+    const event = `config-capture:${root}`;
+    let registeredConfig: OpenClawConfig | undefined;
+    const onRegistered = (config: OpenClawConfig) => {
+      registeredConfig = config;
+    };
+    const plugin = writePlugin({
+      id: "config-capture",
+      dir: path.join(root, "plugin"),
+      body: `module.exports = { id: 'config-capture', register(api) {
+      process.emit(${JSON.stringify(event)}, api.config);
+      api.registerTool(() => ({
+        name: 'config_capture',
+        description: api.config.agents.entries.ops.name,
+        parameters: { type: 'object', properties: {} },
+        execute() { return { content: [] }; }
+      }), { name: 'config_capture' });
+    } };`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: plugin.id,
+        configSchema: { type: "object", additionalProperties: false },
+        contracts: { tools: ["config_capture"] },
+      }),
+    );
+    const source: OpenClawConfig = {
+      agents: { entries: { ops: { name: "registration snapshot" } } },
+      gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },
+      plugins: {
+        allow: [plugin.id],
+        load: { paths: [plugin.file] },
+        slots: { memory: "none" },
+      },
+    };
+    const runtime = structuredClone(source);
+    runtime.gateway!.auth!.token = "synthetic-resolved-token";
+    setRuntimeConfigSnapshot(runtime, source);
+    process.on(event, onRegistered);
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_HOME: root,
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        },
+        async () => {
+          const registry = loadOpenClawPlugins({
+            config: runtime,
+            cache: false,
+            activate: false,
+            runtimeSideEffects: true,
+            throwOnLoadError: true,
+          });
+          try {
+            expect(registeredConfig).toBe(getPluginRuntimeLoadContext(registry)?.config);
+            if (!registeredConfig) {
+              throw new Error("Expected fixture plugin registration");
+            }
+            const readCurrent = createRuntimeConfigReader(registeredConfig);
+            expect(readCurrent()).toBe(runtime);
+            runtime.agents!.entries!.ops!.name = "caller mutation";
+            expect(registry.tools[0]?.factory({})).toMatchObject({
+              description: "registration snapshot",
+            });
+
+            const replacement: OpenClawConfig = { ...runtime, gateway: { port: 19002 } };
+            setRuntimeConfigSnapshot(replacement, source);
+            expect(readCurrent()).toBe(replacement);
+            expect(registry.tools[0]?.factory({})).toMatchObject({
+              description: "registration snapshot",
+            });
+            expect(getPluginRuntimeLoadContext(registry)?.rawConfig).toBe(runtime);
+          } finally {
+            await disposePluginRegistryInstances(registry);
+          }
+        },
+      );
+    } finally {
+      process.off(event, onRegistered);
+    }
+  });
+});

@@ -38,7 +38,8 @@ import {
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
-import { captureSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   normalizeResolvedMaintenanceConfigInput,
@@ -249,6 +250,15 @@ async function readSessionTranscriptJsonlBytes(
   sessionIds: readonly string[],
   isCurrent: () => boolean,
 ): Promise<Map<string, number>> {
+  const binding = captureIncognitoSessionBinding({ ...scope, storePath: scope.path });
+  if (binding) {
+    binding.admissionSignal?.throwIfAborted();
+    binding.actor.assertReadable();
+    if (sessionIds.length) {
+      throw new Error("Incognito session maintenance cannot archive transcripts");
+    }
+    return new Map<string, number>();
+  }
   const bytesBySessionId = new Map<string, number>();
   const options = resolveSessionReclamationDatabaseOptions(toDatabaseOptions(scope));
   for (let offset = 0; offset < sessionIds.length; offset += SESSION_TRANSCRIPT_BYTE_QUERY_BATCH) {
@@ -310,11 +320,12 @@ export function applySessionEntryMaintenance(
     archiveDirectory: string;
     forceMaintenance?: boolean;
     maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
-    skipMaintenance?: boolean;
+    preservation?: () => SessionMaintenancePreservationSnapshot;
+    refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot;
     storePath: string;
   },
 ): SessionEntryMaintenancePlan {
-  if (params.skipMaintenance) {
+  if (!params.preservation) {
     return emptySessionEntryMaintenancePlan();
   }
   const maintenance = params.maintenanceConfig
@@ -323,8 +334,12 @@ export function applySessionEntryMaintenance(
   if (maintenance.mode === "warn") {
     return emptySessionEntryMaintenancePlan();
   }
-  return applySessionEntryMaintenanceInDatabase(database, { ...params, maintenance }, () =>
-    captureSessionMaintenancePreservation(params.storePath),
+  return applySessionEntryMaintenanceInDatabase(
+    database,
+    { ...params, maintenance },
+    params.preservation,
+    undefined,
+    params.refreshCandidates,
   );
 }
 
@@ -351,15 +366,6 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
   const emptyResult = () => ({ archivedTranscripts: [], ...committedCounts });
   if (!isCurrent()) {
     return emptyResult();
-  }
-  const archivedWorktrees = plans.flatMap((plan) => plan.archivedWorktrees ?? []);
-  if (archivedWorktrees.length) {
-    const { cleanUpAutomaticallyArchivedWorktrees } =
-      await import("../../sessions/session-worktree-lifecycle.js");
-    if (!isCurrent()) {
-      return emptyResult();
-    }
-    await cleanUpAutomaticallyArchivedWorktrees(scope, archivedWorktrees);
   }
   const entryRemovals = plans.flatMap((plan) => plan.entryRemovals);
   const stateDeletePlans = plans.flatMap((plan) => plan.stateDeletePlans);

@@ -64,9 +64,6 @@ export function createMatrixDraftStream(params: {
       );
       return false;
     }
-    if (sendFailed) {
-      return false;
-    }
     if (preparedText.trimmedText === lastSentText) {
       return true;
     }

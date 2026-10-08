@@ -8,19 +8,9 @@ import { createLineSendReceipt } from "./send-receipt.js";
 
 const mediaSend = vi.hoisted(() => vi.fn());
 
-// outbound.runtime re-exports each of these from send.js, and the module fails to
-// load if the mock leaves one out.
-vi.mock("./send.js", () => ({
-  createFlexMessage: vi.fn(),
-  createLocationMessage: vi.fn(),
-  createQuickReplyItems: vi.fn(),
-  pushFlexMessage: vi.fn(),
-  pushLocationMessage: vi.fn(),
-  pushMessageLine: vi.fn(),
-  pushMessagesLine: vi.fn(),
-  pushTemplateMessage: vi.fn(),
-  pushTextMessageWithQuickReplies: vi.fn(),
-  sendMessageLine: mediaSend,
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
+  pushMessageLine: mediaSend,
 }));
 
 const cfg = { channels: { line: {} } } as OpenClawConfig;

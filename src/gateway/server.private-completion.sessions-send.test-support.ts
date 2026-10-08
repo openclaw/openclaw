@@ -26,6 +26,17 @@ type PrivateCompletionFixture = {
   agentCommandMock: typeof gatewayAgentCommandMock;
 };
 
+export function readPrivateCompletionRecorder(
+  input: unknown,
+  sessionId: string,
+): UserTurnTranscriptRecorder {
+  const command = input as AgentCommandOpts;
+  expect(command.deliver).toBe(false);
+  expect(command.privateCompletion).toBe(true);
+  expect(command.sessionId).toBe(sessionId);
+  return expectDefined(command.userTurnTranscriptRecorder, "Expected real private input recorder");
+}
+
 export function registerSessionsSendPrivateCompletionTests(
   getFixture: () => PrivateCompletionFixture,
 ) {

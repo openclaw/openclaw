@@ -7,6 +7,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Pair with a Gateway using a QR code, setup code, or manual connection. Gateway credentials are stored encrypted.
 - Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The draft has its own full-width row above one control row: **+**, model, and reasoning on the left; microphone and Talk/send on the right. Session permissions are inside the **+** menu, with the current access mode shown. The model name opens a compact searchable provider menu above the composer; the configured default is marked on its model row, without settings buttons in the picker. The top-right **Chat actions** menu includes **Context** with its live usage ring, which opens context usage, latest tokens, and the cost breakdown. Tap the microphone for dictation. While listening, a Stop icon replaces the microphone; tap it to finish listening. While starting or transcribing, a Close icon cancels that attempt. Long-press for voice messages or Talk, or use the Talk button beside the microphone when the draft is empty. The effort dial opens the live-preview slider and Fast mode.
 - Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history. Native sessions keep their runtime-owned model: Android shows that ownership instead of offering a model change. New session starts independently of the current native thread. Generic child-session forks and new worktrees are unavailable for those sessions; supported message-level forks remain available.
+- Session group renames and deletions stay on the Gateway where they started. Switching Gateways never carries unfinished group changes or their error messages to the replacement Gateway.
 - Search from Overview or Settings to find settings by their displayed name or category, alongside quick actions and recent threads. Local destinations such as Appearance, Profile, and Licenses work without connecting a Gateway. Back from a settings detail returns to the screen that opened search; Desktop appears only when the connected Gateway supports it.
 - Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
 - Choose **Text size** in **Settings → Appearance**: 90%, 100% (default), 110%, 125%, or 140%. This device-local choice survives restarting the app and does not sync to your profile. It combines with Android system font scaling, including nonlinear scaling, without changing spacing or typefaces.
@@ -16,7 +17,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Setup offers optional notifications, microphone, camera, and location access; other permissions are under **Additional features**. **Request all** asks for the available runtime permissions without enabling the camera or location features; Android handles consent through its system prompts. Notification access stays separate under **Special access**. Continue without granting access, or enable phone capabilities individually or later in Settings. Blocked individual setup requests offer Android Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
 - SMS is available only in third-party builds on supported telephony devices. Setup distinguishes partial read/send access. Android Settings can recover user denial, but installer or device-policy restrictions may leave SMS unavailable; OpenClaw cannot override them. Returning from Settings rereads the actual grants without restarting Gateway setup.
 - View the phone's memory and disk meters on the Control UI Devices page. Connected Android nodes report host resource stats immediately and every 60 seconds; disk meters require an available storage sample and a Gateway that supports host stats.
-- Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
+- Manage installed skills and Gateway-verified ClawHub releases, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
 
 ## Open in Android Studio
@@ -26,6 +27,14 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 Gradle sync generates the native localization lookup and resources before IDE
 indexing. Use the repository's supported Node.js version on your PATH, as for
 the build commands below; no separate localization generation step is required.
+
+## Tool icons
+
+Chat tool activity uses the shared tool display icons with native Android glyphs.
+Command, read, edit, write, search, and fetch rows take precedence over the tool's
+configured icon; unknown tools use a puzzle piece. Tool Search calls use the
+called tool's icon. Failed rows retain their error mark, and progress cards keep
+their receipt presentation.
 
 ## Session colors
 

@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
+  type AgentAssistantSourceReceipt,
   type AgentEventPayload,
   type AgentEventRuntimePayload,
   captureAgentRunLifecycleGeneration,
   emitAgentAuditEvent,
   emitAgentEventIfCurrent,
+  emitAgentEventWithAssistantSourceIfCurrent,
   emitAgentEventForOwner,
   emitAgentRunOutputTokens,
   getAgentEventLifecycleGeneration,
@@ -221,28 +223,6 @@ test("reserves exclusive run ids for owner-only delivery and cleanup", () => {
   expect(seen).toEqual(["worker"]);
 });
 
-test("explicitly adopts only an unowned same-generation context", () => {
-  const context = {
-    agentId: "main",
-    isControlUiVisible: false,
-    lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    sessionId: "session-adopted",
-    sessionKey: "agent:main:adopted",
-  };
-  registerAgentRunContext("run", context);
-  const options = {
-    adoptExistingUnowned: true,
-    exclusive: true,
-    ownsContext: true,
-    trackOwner: true,
-  };
-  const claim = claimAgentRunContext("run", context, options);
-  expect(claim).toBeDefined();
-  expect(claimAgentRunContext("run", context, options)).toBeUndefined();
-  releaseAgentRunContext("run", claim);
-  expect(getAgentRunContext("run")).toBeUndefined();
-});
-
 test("drops stale explicit-generation events before shared listeners", () => {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   registerAgentRunContext("run", { sessionKey: "main", lifecycleGeneration });
@@ -265,6 +245,12 @@ test("rejects inherited stale ownership and cannot reclaim the admitted replacem
   withAgentRunLifecycleGeneration(oldGeneration, () => {
     expect(captureAgentRunLifecycleGeneration("descendant")).toBe(oldGeneration);
     emit("run");
+    expect(
+      emitAgentEventWithAssistantSourceIfCurrent(
+        { runId: "run", stream: "assistant", data: { text: "stale" } },
+        {},
+      ),
+    ).toBe(false);
   });
   claimAgentRunContext("run", { sessionKey: "new-session", lifecycleGeneration });
   registerAgentRunContext("run", {
@@ -367,11 +353,35 @@ test("keeps hidden routing private while preserving lifecycle persistence identi
   });
   const received: AgentEventRuntimePayload[] = [];
   onAgentRuntimeEvent((event) => received.push(event));
-  emit("run", "assistant", { text: "private" }, { sessionKey: "main" });
+  const data = { text: "private" };
+  const assistantSource: AgentAssistantSourceReceipt = {};
+  const assistantProjection = { itemId: "item", text: "display", replace: false };
+  emitAgentEventWithAssistantSourceIfCurrent(
+    { runId: "run", stream: "assistant", data, sessionKey: "main" },
+    assistantSource,
+    assistantProjection,
+  );
+  const native = {
+    runId: "run",
+    stream: "assistant",
+    data,
+    sessionKey: "main",
+    assistantSource,
+    assistantProjection,
+  };
+  emitAgentEventIfCurrent(native);
   emit("run", "lifecycle", { phase: "start", startedAt: 1_234 }, { sessionKey: "main" });
   emit("run", "lifecycle", { phase: "error" });
-  expect(received.map((event) => event.sessionKey)).toEqual([undefined, "main", "main"]);
-  const event = received[1]!;
+  expect(received.map((event) => event.sessionKey)).toEqual([undefined, undefined, "main", "main"]);
+  expect(received[0]?.assistantSource).toBe(assistantSource);
+  expect(received[0]?.assistantProjection).toBe(assistantProjection);
+  expect({ ...received[0] }).not.toHaveProperty("assistantSource");
+  expect({ ...received[0] }).not.toHaveProperty("assistantProjection");
+  expect(received[1]?.assistantSource).toBeUndefined();
+  expect(received[1]?.assistantProjection).toBeUndefined();
+  expect({ ...received[1] }).not.toHaveProperty("assistantSource");
+  expect({ ...received[1] }).not.toHaveProperty("assistantProjection");
+  const event = received[2]!;
   expect(event).toMatchObject({
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
     projectSessionLifecycle: false,

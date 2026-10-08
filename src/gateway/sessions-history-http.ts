@@ -38,11 +38,11 @@ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { resolveSessionHistoryUnavailableMessage } from "./session-history-error.js";
-import { resolveCursorSeq } from "./session-history-snapshot.js";
 import {
   readSessionHistorySnapshotAsync,
   SessionHistorySseState,
 } from "./session-history-state.js";
+import { resolveCursorSeq } from "./session-history-tail.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
 import {
@@ -164,7 +164,6 @@ export async function handleSessionHistoryHttpRequest(
     req,
     res,
     operatorMethod: "chat.history",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;
@@ -551,16 +550,19 @@ export async function handleSessionHistoryHttpRequest(
     pendingRefresh = undefined;
     queueStreamWork(async () => {
       let refresh = false;
+      const append = sseState.shouldRefreshForTranscriptPath(updatePath)
+        ? undefined
+        : await sseState.prepareInlineMessage({
+            message: update.message,
+            messageId: update.messageId,
+            messageSeq: update.messageSeq,
+          });
       await publishStream((presentation) => {
-        refresh = sseState.shouldRefreshForTranscriptPath(updatePath);
-        if (refresh) {
+        if (!append) {
+          refresh = true;
           return;
         }
-        const nextEvent = sseState.appendInlineMessage({
-          message: update.message,
-          messageId: update.messageId,
-          messageSeq: update.messageSeq,
-        });
+        const nextEvent = append();
         refresh = nextEvent?.shouldRefresh === true;
         if (refresh || nextEvent?.message === undefined) {
           return;

@@ -19,7 +19,7 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
@@ -87,6 +87,9 @@ export function transcriptWriteScopeIsCurrent(
   return (
     entry !== undefined &&
     entry.sessionId === sessionId &&
+    (scope.expectedOwner === undefined ||
+      (entry.lifecycleRevision === scope.expectedOwner.lifecycleRevision &&
+        entry.activeWriterRunId === scope.expectedOwner.activeWriterRunId)) &&
     (scope.expectedLifecycleRevision === undefined ||
       entry.lifecycleRevision === scope.expectedLifecycleRevision) &&
     (scope.expectedWriterRunId === undefined ||
@@ -126,7 +129,7 @@ export function withSqliteSessionDatabase<T>(
       diagnostics.admissionMode = "async";
     }
     // The caller keeps its FIFO section while the existing owner joins the integrity child.
-    const result = withOpenClawAgentDatabaseAsync(options, admittedOperation, assertCurrent);
+    const result = withOpenClawAgentDatabaseRuntime(options, admittedOperation, assertCurrent);
     return finishAdmission ? result.finally(finishAdmission) : result;
   } catch (error) {
     finishAdmission?.();
@@ -160,7 +163,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
   fn: () => Promise<T>,
   operation: SqliteSessionWriteOperation,
   diagnostics?: SqliteSessionWriteDiagnostics,
-  writer: "foreground" | "worker" = "foreground",
+  writer: "foreground" | "foreground-reentrant" | "worker" = "foreground",
   signal?: AbortSignal,
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
@@ -207,7 +210,13 @@ export async function runExclusiveSqliteSessionWrite<T>(
       () =>
         writer === "worker"
           ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing, signal)
-          : runOpenClawAgentWriteAdmission(databaseOptions, fn, false, timing, signal),
+          : runOpenClawAgentWriteAdmission(
+              databaseOptions,
+              fn,
+              writer === "foreground-reentrant",
+              timing,
+              signal,
+            ),
     );
   try {
     const result = await owned();
@@ -332,19 +341,16 @@ function resolveCachedSqliteStoreTarget(
   },
   targetCache: SessionSqliteTargetResolutionCache | undefined,
 ): ReturnType<typeof resolveSqliteTargetFromSessionStorePath> {
-  if (!targetCache) {
-    return resolveSqliteTargetFromSessionStorePath(params.storePath, {
-      agentId: params.agentId,
-      defaultAgentId: params.defaultAgentId,
-      ...(params.env ? { env: params.env } : {}),
-    });
-  }
   // Store ownership is stable for this batch. Scope the cache to the caller so later requests
   // still observe owner changes after migration, install, or doctor flows.
-  const envCache = targetCache.get(params.env) ?? new Map();
-  targetCache.set(params.env, envCache);
-  const cacheKey = JSON.stringify([params.storePath, params.agentId, params.defaultAgentId]);
-  const cached = envCache.get(cacheKey);
+  const envCache = targetCache && (targetCache.get(params.env) ?? new Map());
+  if (envCache) {
+    targetCache?.set(params.env, envCache);
+  }
+  const cacheKey = envCache
+    ? JSON.stringify([params.storePath, params.agentId, params.defaultAgentId])
+    : "";
+  const cached = envCache?.get(cacheKey);
   if (cached) {
     return cached;
   }
@@ -353,7 +359,7 @@ function resolveCachedSqliteStoreTarget(
     defaultAgentId: params.defaultAgentId,
     ...(params.env ? { env: params.env } : {}),
   });
-  envCache.set(cacheKey, resolved);
+  envCache?.set(cacheKey, resolved);
   return resolved;
 }
 

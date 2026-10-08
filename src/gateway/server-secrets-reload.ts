@@ -4,7 +4,6 @@ import {
   getRuntimeConfigSourceSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import {
   isTrustedSecretSurfaceUnavailableError,
   listActiveCredentialDegradedOwners,
@@ -29,6 +28,7 @@ import {
   type SharedGatewaySessionGenerationOwnership,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
+import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
 import type { ActivateRuntimeSecrets } from "./server-startup-config.types.js";
 
 type ReloadSecretsResult = { warningCount: number };
@@ -270,10 +270,7 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
         );
         if (restartTargets.length > 0) {
           const restartChannels = [...new Set(restartTargets.map(({ channel }) => channel))];
-          if (
-            isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-            isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
-          ) {
+          if (isChannelStartupSuppressedByEnvironment()) {
             throw new Error(
               `secrets.reload requires restarting channels: ${restartChannels.join(", ")}`,
             );

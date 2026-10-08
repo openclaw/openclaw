@@ -401,6 +401,7 @@ export async function collectCheckoutDiff(
     ? await applySessionDiffBaseline({
         baseline: params.baseline,
         diff,
+        scope,
         sessionId: params.sessionId,
       })
     : diff;
@@ -538,6 +539,22 @@ async function collectBaselineCandidates(params: {
   };
 }
 
+export async function collectCheckoutDiffBaseline(params: {
+  cwd: string;
+}): Promise<GitReadOperations["checkout.baseline"]["output"]> {
+  const collected = await collectBaselineCandidates(params);
+  if (!collected) {
+    return undefined;
+  }
+  const fingerprinted = await fingerprintBaselineCandidates(collected);
+  return {
+    version: 1,
+    root: collected.root,
+    files: fingerprinted.files,
+    ...(collected.truncated || fingerprinted.truncated ? { truncated: true } : {}),
+  };
+}
+
 async function fingerprintBaselineCandidates(params: {
   candidates: BaselineCandidate[];
   root: string;
@@ -562,28 +579,10 @@ async function fingerprintBaselineCandidates(params: {
   return { files, truncated: files.length !== params.candidates.length };
 }
 
-export async function collectCheckoutDiffBaseline(params: {
-  cwd: string;
-}): Promise<GitReadOperations["checkout.baseline"]["output"]> {
-  const collected = await collectBaselineCandidates({ cwd: params.cwd });
-  if (!collected) {
-    return undefined;
-  }
-  const fingerprinted = await fingerprintBaselineCandidates({
-    candidates: collected.candidates,
-    root: collected.root,
-  });
-  return {
-    version: 1,
-    root: collected.root,
-    files: fingerprinted.files,
-    ...(collected.truncated || fingerprinted.truncated ? { truncated: true } : {}),
-  };
-}
-
 async function applySessionDiffBaseline(params: {
   baseline: SessionDiffBaseline | undefined;
   diff: CheckoutDiffResult;
+  scope: NonNullable<GitCheckoutDiffInput["scope"]>;
   sessionId: string;
 }): Promise<CheckoutDiffResult> {
   const { baseline, diff } = params;
@@ -596,10 +595,17 @@ async function applySessionDiffBaseline(params: {
     return diff;
   }
   const fingerprints = new Map(baseline.files.map((file) => [file.path, file.fingerprint]));
+  const candidates =
+    params.scope === "uncommitted"
+      ? ((await collectBaselineCandidates({ cwd: diff.root }))?.candidates ?? [])
+      : diff.files;
+  const visiblePaths = new Set(diff.files.map((file) => file.path));
   // New paths cannot match the baseline; hashing them can exhaust the budget
   // before an unchanged pre-session file is compared.
   const current = await fingerprintBaselineCandidates({
-    candidates: diff.files.filter((file) => fingerprints.has(file.path)),
+    candidates: candidates.filter(
+      (file) => fingerprints.has(file.path) && visiblePaths.has(file.path),
+    ),
     root: diff.root,
   });
   const currentFingerprints = new Map(current.files.map((file) => [file.path, file.fingerprint]));

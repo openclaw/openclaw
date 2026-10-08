@@ -9,6 +9,7 @@ import {
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 } from "../daemon/constants.js";
+import * as taskProbe from "../daemon/schtasks-state-probe.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
@@ -17,6 +18,7 @@ import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -105,6 +107,7 @@ import {
   pluginSyncResult,
 } from "./update-cli/update-cli-config.test-support.js";
 import { reportUpdateCliHomeCleanupFailure } from "./update-cli/update-cli-failure-recovery.test-support.js";
+import { getNodeRuntimeFixture } from "./update-cli/update-command-runtime-recovery.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -145,6 +148,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
 
   const invocationCwd = process.cwd();
   beforeEach(async () => {
+    vi.spyOn(taskProbe, "probeScheduledTaskUpdateAccess").mockReturnValue({ status: "allowed" });
     // Default install roots use cwd; artifact admission must own the fixture, not the checkout.
     process.chdir(path.join(fixtureRoot, "checkout"));
     process.exitCode = undefined;
@@ -299,7 +303,6 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
       version: "9999.0.0",
     });
     vi.mocked(fetchNpmPackageTargetStatus).mockImplementation(async ({ target }) => ({
-      target,
       version: /^\d/u.test(target) ? target : "9999.0.0",
       nodeEngine: ">=22.19.0",
     }));
@@ -311,12 +314,19 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     });
     primeNpmChannelTag("latest", "9999.0.0");
     nodeVersionSatisfiesEngine.mockReturnValue(true);
+    const nodeRuntime = getNodeRuntimeFixture();
     resolveNodeRuntimeInfo.mockResolvedValue({
       status: "supported",
-      version: process.versions.node,
-      sqliteVersion: "3.51.3",
+      version: nodeRuntime.versions.node,
+      sqliteVersion: nodeRuntime.versions.sqlite,
       nodeSharedSqlite: false,
-      sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
+      sqliteProbe: {
+        available: true,
+        version: nodeRuntime.versions.sqlite,
+        text: true,
+        blob: true,
+        json: true,
+      },
     });
     vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
     vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({
@@ -427,6 +437,8 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     setTty(false);
     setStdoutTty(false);
     initializeExistingUpdateProfile();
+    // Keep guard reads on the fixture connection instead of booting snapshots per read.
+    openOpenClawStateDatabase();
   });
 
   afterAll(async () => {
