@@ -71,7 +71,9 @@ it.each(["snapshot", "requested", "shared", "absent"] as const)(
     vi.spyOn(sqliteRead, "readSharedAuthProfileRows").mockResolvedValue(
       readableRows(store(source === "absent" ? undefined : "shared")),
     );
-    if (source === "snapshot") setRuntimeAuthProfileStoreSnapshot(store("snapshot"), agentDir);
+    if (source === "snapshot") {
+      setRuntimeAuthProfileStoreSnapshot(store("snapshot"), agentDir);
+    }
     const syncRead = vi
       .spyOn(persistedStore, "loadPersistedAuthProfileStore")
       .mockImplementation(() => {
@@ -84,7 +86,9 @@ it.each(["snapshot", "requested", "shared", "absent"] as const)(
     });
     expect(syncRead).not.toHaveBeenCalled();
     expect(overlay).not.toHaveBeenCalled();
-    if (source === "snapshot") expect(reader.read).not.toHaveBeenCalled();
+    if (source === "snapshot") {
+      expect(reader.read).not.toHaveBeenCalled();
+    }
   },
 );
 

@@ -940,16 +940,28 @@ it.each(["pin", "source", "provider", "session", "authority"] as const)(
       scopes: ["operator.write"],
       modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { sourceAgent: "main" } }),
       assertCurrent: () => {
-        if (!current) throw new Error("authority revoked");
+        if (!current) {
+          throw new Error("authority revoked");
+        }
       },
     });
     authProfileStoreMock.prepareAuthProfileProvider.mockImplementationOnce(async () => {
       await Promise.resolve();
-      if (change === "pin") entry.authProfileOverride = "openai:replacement";
-      if (change === "source") entry.authProfileOverrideSource = "auto";
-      if (change === "provider") entry.providerOverride = "anthropic";
-      if (change === "session") sessionStore[sessionKey] = { ...entry, sessionId: "replacement" };
-      if (change === "authority") current = false;
+      if (change === "pin") {
+        entry.authProfileOverride = "openai:replacement";
+      }
+      if (change === "source") {
+        entry.authProfileOverrideSource = "auto";
+      }
+      if (change === "provider") {
+        entry.providerOverride = "anthropic";
+      }
+      if (change === "session") {
+        sessionStore[sessionKey] = { ...entry, sessionId: "replacement" };
+      }
+      if (change === "authority") {
+        current = false;
+      }
       return { provider: "anthropic" };
     });
     await expect(
