@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
+import { prepareSkillBundle } from "../library/bundle.js";
 import { escapeSkillXml, formatSkillsCompactForPrompt } from "../loading/skill-contract.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
@@ -321,6 +322,73 @@ describe("prepared workspace skill resources", () => {
     },
   );
 
+  it("stamps retained delivery identities on resolved entries and keeps them across source edits", async () => {
+    const workspace = await fs.realpath(temps.make("skill-fingerprint-"));
+    const directory = await writeSkill(workspace, "guide");
+    const scriptPath = path.join(directory, "scripts/check.sh");
+    await fs.mkdir(path.dirname(scriptPath));
+    await fs.writeFile(scriptPath, "#!/bin/sh\nprintf before\n");
+    const snapshot = await loadSnapshot(workspace);
+    const first = (await prepareSkillResourceDelivery(snapshot, () => {}))!;
+    // Discovery's SKILL.md-only content hash and the delivered bundle revision
+    // are distinct semantics: neither may be compared against the other.
+    expect(snapshot.resolvedSkills![0]!.contentHash).not.toBe(first.skills[0]!.revision);
+    const retained = await materializeSkillResources(first, () => {}, {
+      sessionId: "fingerprint-session",
+      workspaceDir: workspace,
+    });
+    try {
+      const skill = retained.snapshot.resolvedSkills![0]!;
+      // Worker identity equals the supplied revision, by the integrity check.
+      expect(skill.bundleFingerprint).toBe(first.skills[0]!.revision);
+      expect(skill.bundleFingerprint).toBe(skill.contentHash);
+      // Discovery A / deliver B / disk C: source edits after delivery never
+      // re-identify the retained generation. The edit touches only a support
+      // file so the next delivery's new identity is attributable to it alone.
+      await fs.writeFile(scriptPath, "#!/bin/sh\nprintf after\n");
+      expect(await fs.readFile(path.join(directory, "SKILL.md"), "utf8")).toBe(markdown);
+      expect(skill.bundleFingerprint).toBe(first.skills[0]!.revision);
+      // A support-file-only edit (SKILL.md unchanged) still produces a new
+      // bundle identity next delivery.
+      const supportEdited = (await prepareSkillResourceDelivery(
+        structuredClone(snapshot),
+        () => {},
+      ))!;
+      expect(supportEdited.skills[0]!.revision).not.toBe(first.skills[0]!.revision);
+      const refreshed = await materializeSkillResources(supportEdited, () => {});
+      try {
+        expect(refreshed.snapshot.resolvedSkills![0]!.bundleFingerprint).toBe(
+          supportEdited.skills[0]!.revision,
+        );
+        expect(refreshed.snapshot.resolvedSkills![0]!.bundleFingerprint).not.toBe(
+          skill.bundleFingerprint,
+        );
+      } finally {
+        await refreshed.cleanup();
+      }
+    } finally {
+      await retained.cleanup();
+    }
+  });
+
+  it("identifies deliveries whose SKILL.md has no instruction bytes", async () => {
+    const files = [{ path: "SKILL.md", content: "", encoding: "utf8" as const }];
+    const revision = prepareSkillBundle(files).revision;
+    const materialized = await materializeSkillResources(
+      { version: 1, skills: [{ name: "empty", description: "Empty skill", revision, files }] },
+      () => {},
+    );
+    try {
+      const skill = materialized.snapshot.resolvedSkills![0]!;
+      // Bundle identity covers the whole tree: zero-instruction deliveries still
+      // settle a qualifying delivery identity.
+      expect(skill.bundleFingerprint).toBe(revision);
+      expect(await fs.readFile(skill.filePath, "utf8")).toBe("");
+    } finally {
+      await materialized.cleanup();
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "omits a discovered skill whose root becomes a broken symlink between turns",
     async () => {
@@ -329,6 +397,16 @@ describe("prepared workspace skill resources", () => {
       const staleDir = await writeSkill(workspace, "stale");
       const snapshot = await loadSnapshot(workspace);
       expect((await prepareSkillResourceDelivery(snapshot, () => {}))?.skills).toHaveLength(2);
+      const healthy = await materializeSkillResources(
+        (await prepareSkillResourceDelivery(structuredClone(snapshot), () => {}))!,
+        () => {},
+      );
+      try {
+        // The tolerated skip keeps the surviving delivery's retained identity intact.
+        expect(healthy.snapshot.resolvedSkills![0]!.bundleFingerprint).toBeDefined();
+      } finally {
+        await healthy.cleanup();
+      }
 
       await fs.rm(staleDir, { recursive: true });
       await fs.symlink(path.join(workspace, "missing-stale-target"), staleDir, "dir");
@@ -342,6 +420,13 @@ describe("prepared workspace skill resources", () => {
         version: 1,
         skills: [],
       });
+      // A delivery-time bundle-read failure rejects the delivery prep that runs
+      // in turn/run setup (worker-turn-execution / claude-skill-session): the
+      // turn aborts before any tool call exists, so no skill.used can fire and
+      // the failed prep leaves no retained generation to rescan. An explicit
+      // emission-absence test would mirror that structural setup boundary
+      // rather than protect observable behavior; this rejection is the
+      // observable half of the contract.
       await expect(
         prepareSkillResourceDelivery(snapshot, () => {}, [
           { name: "stale", path: path.join(staleDir, "SKILL.md") },

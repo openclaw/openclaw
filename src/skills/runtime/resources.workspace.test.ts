@@ -8,11 +8,13 @@ import {
   skillCommandsToExplicitSelections,
 } from "../discovery/chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
+import { prepareSkillBundle } from "../library/bundle.js";
 import type { Skill } from "../loading/skill-contract.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { recordSkillFileHost } from "../skill-file-host.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { ExplicitSkillSelection } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import {
@@ -20,6 +22,7 @@ import {
   prepareSkillResourceDelivery,
   readSkillResourceFiles,
   resolveExplicitSkillResource,
+  stampLocalSkillBundleIdentities,
 } from "./resources.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -365,3 +368,146 @@ it.each([false, true])(
     }
   },
 );
+
+it("stamps each host's bundle identity when Gateway and workspace skills share one path", async () => {
+  const f = await fixture();
+  try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    const gatewaySkill = recordSkillFileHost(
+      { ...workspaceSkill, name: "zeta-gateway-guide" },
+      "gateway",
+    );
+    f.snapshot.skills.push({ name: gatewaySkill.name });
+    f.snapshot.resolvedSkills?.push(gatewaySkill);
+    f.skillResources.readSkillFiles.mockClear();
+    const stamped = await stampLocalSkillBundleIdentities({
+      snapshot: f.snapshot,
+      libraryEntries: [],
+      workspaceDir: f.gateway,
+    });
+    const gatewayEntry = stamped.snapshot?.resolvedSkills?.find(
+      (skill) => skill.name === gatewaySkill.name,
+    );
+    const workspaceEntry = stamped.snapshot?.resolvedSkills?.find(
+      (skill) => skill.name === workspaceSkill.name,
+    );
+    if (!gatewayEntry || !workspaceEntry) {
+      throw new Error("missing stamped collision fixture");
+    }
+    const gatewayIdentity = prepareSkillBundle(
+      (await readSkillResourceFiles(gatewaySkill, { allowMissingRoot: false }))!,
+    ).revision;
+    const hostBaseDir = path.join(f.host, "skills", "guide");
+    const workspaceIdentity = prepareSkillBundle(
+      (await readSkillResourceFiles(
+        { ...workspaceSkill, baseDir: hostBaseDir, filePath: path.join(hostBaseDir, "SKILL.md") },
+        { allowMissingRoot: false },
+      ))!,
+    ).revision;
+    // Same absolute path, different hosts and bytes: each entry carries its own
+    // host's identity, and the workspace bundle was hashed through the owning
+    // remote reader rather than the Gateway-local filesystem.
+    expect(gatewayEntry.bundleFingerprint).toBe(gatewayIdentity);
+    expect(workspaceEntry.bundleFingerprint).toBe(workspaceIdentity);
+    expect(workspaceEntry.bundleFingerprint).not.toBe(gatewayEntry.bundleFingerprint);
+    expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(1);
+    // Delivery-time acquisition stays host-aware: each entry's acquirer
+    // re-describes its own host's served bytes.
+    expect(await stamped.deliveredIdentityAcquirers.get(gatewayEntry)?.()).toBe(gatewayIdentity);
+    expect(await stamped.deliveredIdentityAcquirers.get(workspaceEntry)?.()).toBe(
+      workspaceIdentity,
+    );
+  } finally {
+    f.release();
+  }
+});
+
+it("reads remote-hosted bundle identities through the owning reader when the path is absent on the Gateway", async () => {
+  const f = await fixture();
+  try {
+    const hostOnlyDir = path.join(f.host, "skills", "hostonly");
+    await fs.mkdir(hostOnlyDir, { recursive: true });
+    await fs.writeFile(
+      path.join(hostOnlyDir, "SKILL.md"),
+      "---\nname: hostonly\ndescription: Host only\n---\nRemote instructions.\n",
+    );
+    await fs.writeFile(path.join(hostOnlyDir, "run.sh"), "echo remote");
+    const gatewayPath = path.join(f.gateway, "skills", "hostonly", "SKILL.md");
+    const remoteSkill = recordSkillFileHost(
+      createCanonicalFixtureSkill({
+        name: "hostonly",
+        description: "Host only",
+        filePath: gatewayPath,
+        baseDir: path.dirname(gatewayPath),
+        source: "openclaw-workspace",
+      }),
+      "workspace",
+    );
+    f.snapshot.skills.push({ name: "hostonly" });
+    f.snapshot.resolvedSkills?.push(remoteSkill);
+    f.skillResources.readSkillFiles.mockClear();
+    const stamped = await stampLocalSkillBundleIdentities({
+      snapshot: f.snapshot,
+      libraryEntries: [],
+      workspaceDir: f.gateway,
+    });
+    const entry = stamped.snapshot?.resolvedSkills?.find((skill) => skill.name === "hostonly");
+    expect(entry?.bundleFingerprint).toBe(
+      prepareSkillBundle(
+        (await readSkillResourceFiles(
+          {
+            ...remoteSkill,
+            baseDir: hostOnlyDir,
+            filePath: path.join(hostOnlyDir, "SKILL.md"),
+          },
+          { allowMissingRoot: false },
+        ))!,
+      ).revision,
+    );
+    expect(
+      f.skillResources.readSkillFiles.mock.calls.filter(([skill]) => skill.name === "hostonly"),
+    ).toHaveLength(1);
+  } finally {
+    f.release();
+  }
+});
+
+it("omits remote-hosted identities without failing when the owning reader is unavailable", async () => {
+  const gateway = temps.make("fingerprint-reader-unavailable-");
+  await fs.mkdir(path.join(gateway, "skills", "guide"), { recursive: true });
+  await fs.writeFile(
+    path.join(gateway, "skills", "guide", "SKILL.md"),
+    "---\nname: guide\ndescription: Guide\n---\nLocal guide.\n",
+  );
+  const release = registerAgentWorkspaceAccess(gateway, {
+    bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+    loadSkills: async () => ({
+      entries: [],
+      executionEntries: [],
+      runtime: { platform: process.platform, bins: [] },
+    }),
+  });
+  try {
+    const snapshot = await buildSkillSnapshot(gateway, {
+      entries: loadWorkspaceSkills(gateway, { workspaceOnly: true }),
+    });
+    const remote = recordSkillFileHost({ ...snapshot.resolvedSkills![0]! }, "workspace");
+    snapshot.resolvedSkills![0] = remote;
+    // Resource delivery fails hard here (WorkspaceAccessUnavailableError); the
+    // telemetry-only producer degrades to omit instead.
+    const stamped = await stampLocalSkillBundleIdentities({
+      snapshot,
+      libraryEntries: [],
+      workspaceDir: gateway,
+    });
+    const entry = stamped.snapshot?.resolvedSkills?.[0];
+    expect(entry?.bundleFingerprint).toBeUndefined();
+    expect(await stamped.deliveredIdentityAcquirers.get(entry!)?.()).toBeUndefined();
+  } finally {
+    release();
+  }
+});

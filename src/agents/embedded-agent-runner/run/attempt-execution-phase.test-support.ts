@@ -1,5 +1,9 @@
 import { expect, onTestFinished, vi } from "vitest";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import {
+  createSkillInstructionDeliveryCache,
+  createSkillInstructionDeliveryMarkers,
+} from "../../agent-tools.read.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import type { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
@@ -100,7 +104,9 @@ export async function createFixture(
     terminal: { kind: "ok" as const },
     trajectoryEndRecorded: false,
   };
-  const skillInstructionDeliveryCache = new Map([["skill", Promise.resolve(true)]]);
+  const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
+  const skillInstructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
+  skillInstructionDeliveryCache.set("skill", Promise.resolve(true));
   const sessionRuntime = {
     agentSession: {
       activeSession,
@@ -153,6 +159,7 @@ export async function createFixture(
       systemPrompt: { runtimeChannel: "telegram" },
       toolBase: {
         skillInstructionDeliveryCache,
+        skillInstructionDeliveryMarkers,
         nestedToolActivityState: createAttemptNestedToolActivityState(),
       },
       toolCatalog: {
@@ -251,6 +258,7 @@ export async function createFixture(
     sessionManager,
     setContextReplacementHook,
     skillInstructionDeliveryCache,
+    skillInstructionDeliveryMarkers,
     setToolSearchCatalogExecutor,
     state,
     streamResult,

@@ -286,6 +286,7 @@ describe("diagnostic-events", () => {
           skillName: "Daily Brief",
           skillSource: "workspace",
           activation: "read",
+          skillFingerprint: "0f4c2a1b3d5e7f9a",
         },
         {
           skillUsage: {
@@ -298,10 +299,12 @@ describe("diagnostic-events", () => {
       await waitForDiagnosticEventsDrained();
 
       expect(JSON.stringify(publicEvents)).not.toContain(skillFile);
+      expect(JSON.stringify(publicEvents)).not.toContain("0f4c2a1b3d5e7f9a");
       expect(JSON.stringify(sharedEvents)).not.toContain(skillFile);
       expect(JSON.stringify(trustedEvents[0]?.event)).not.toContain(skillFile);
       expect(trustedEvents).toHaveLength(1);
       expect(trustedEvents[0]?.event).not.toHaveProperty("skillFile");
+      expect(trustedEvents[0]?.event).toMatchObject({ skillFingerprint: "0f4c2a1b3d5e7f9a" });
       expect(trustedEvents[0]?.privateData.skillUsage?.skillFile).toBe(skillFile);
       expect(readSkillFile).toHaveBeenCalledOnce();
       expect(metadataOnly).toHaveBeenCalledExactlyOnceWith(

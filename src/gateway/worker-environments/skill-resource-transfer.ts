@@ -4,9 +4,14 @@ import {
   prepareSkillBundle,
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
 } from "../../skills/library/bundle.js";
+import type { Skill } from "../../skills/loading/skill-contract.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import {
+  isWorkspaceSkillReadPath,
+  resolveSkillReadPath,
+} from "../../skills/workspace-skill-read-path.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -201,6 +206,12 @@ export async function transferSkillResources(params: {
     const resolvedSkills = structuredClone(params.snapshot.resolvedSkills ?? []).filter(
       (skill) => skill.filePath.startsWith("node://") || deliveredSourcePaths.has(skill.filePath),
     );
+    // Consumer catalogs (installed-skill catalog, skill.used matcher) prefer the
+    // discovery projection over resolved entries, so transferred identities must
+    // reach it too. Cloning keeps the pre-transfer snapshot untouched.
+    const discoverySkills = params.snapshot.discoverySkills
+      ? structuredClone(params.snapshot.discoverySkills)
+      : undefined;
     const skippedSkillNames = new Set(
       (params.snapshot.resolvedSkills ?? [])
         .filter(
@@ -217,6 +228,21 @@ export async function transferSkillResources(params: {
       (skill) => !skippedSkillNames.has(skill.name) || retainedSkillNames.has(skill.name),
     );
     const mounts: Array<{ hostPath: string; containerPath: string }> = [];
+    // Delivery prep disambiguates same-path Gateway/workspace collisions by
+    // rewriting the workspace skill's source path to a workspace-skill:// read
+    // path, so a raw-path match cannot tell the two identities apart and would
+    // map one bundle onto the other's entry. Match the immutable admitted
+    // identity — name plus the same host-aware source/read path delivery prep
+    // used — in every catalog projection, never a raw path alone.
+    const matchesDeliveryIdentity = (
+      candidate: Skill,
+      skill: (typeof delivery.skills)[number],
+    ): boolean =>
+      candidate.name === skill.name &&
+      Boolean(skill.sourcePath) &&
+      (isWorkspaceSkillReadPath(skill.sourcePath!)
+        ? resolveSkillReadPath(candidate) === skill.sourcePath
+        : candidate.filePath === skill.sourcePath);
     for (const [index, skill] of delivery.skills.entries()) {
       const bundle = prepareSkillBundle(skill.files);
       for (const file of bundle.files) {
@@ -250,7 +276,9 @@ export async function transferSkillResources(params: {
           }
         } while (offset < file.bytes.length);
       }
-      const selected = resolvedSkills.find((candidate) => candidate.filePath === skill.sourcePath);
+      const selected = resolvedSkills.find((candidate) =>
+        matchesDeliveryIdentity(candidate, skill),
+      );
       const sourceBase =
         selected?.baseDir ?? (skill.sourcePath ? path.dirname(skill.sourcePath) : undefined);
       if (!sourceBase) {
@@ -261,11 +289,30 @@ export async function transferSkillResources(params: {
       if (selected) {
         selected.filePath = `${remoteBase}/SKILL.md`;
         selected.baseDir = remoteBase;
+        // Carry the retained delivery identity identically to local materialization.
+        selected.bundleFingerprint = bundle.revision;
         // Code Mode reads the same verified instructions even when the node has no filesystem bridge.
         selected.readContent = bundle.files
           .find((file) => file.path === "SKILL.md")!
           .bytes.toString("utf8");
         delete selected.locationNote;
+      }
+      // Map the transferred bundle onto the discovery projection entry consumers
+      // prefer (installed-skill catalog, skill.used matcher): the matching entry
+      // becomes an entry of the transferred bundle — path, instructions, identity —
+      // so its reader serves the transferred bytes. Matching is by admitted
+      // identity; an identity is never borrowed onto an entry serving other bytes.
+      const discoverySkill = discoverySkills?.find((candidate) =>
+        matchesDeliveryIdentity(candidate, skill),
+      );
+      if (discoverySkill) {
+        discoverySkill.filePath = `${remoteBase}/SKILL.md`;
+        discoverySkill.baseDir = remoteBase;
+        discoverySkill.bundleFingerprint = bundle.revision;
+        discoverySkill.readContent = bundle.files
+          .find((file) => file.path === "SKILL.md")!
+          .bytes.toString("utf8");
+        delete discoverySkill.locationNote;
       }
     }
     await flush();
@@ -276,6 +323,7 @@ export async function transferSkillResources(params: {
         ...params.snapshot,
         skills,
         resolvedSkills,
+        ...(discoverySkills ? { discoverySkills } : {}),
         prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
       },
       mounts,

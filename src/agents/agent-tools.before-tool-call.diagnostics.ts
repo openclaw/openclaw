@@ -300,6 +300,8 @@ export function resolveToolDiagnosticIdentity(tool: AnyAgentTool): ToolDiagnosti
 
 export type SkillUsageMatch = {
   skillFile?: string;
+  /** Retained bundle identity associated with this invocation's delivery, when established. */
+  skillFingerprint?: string;
   skillName: string;
   skillSource: SkillTelemetrySource;
   activation: "command" | "read";
@@ -314,7 +316,11 @@ function canonicalSkillFile(value: string | undefined): string | undefined {
 
 function resolvedSkillUsageMatch(params: {
   activation: SkillUsageMatch["activation"];
-  skill: Pick<Skill, "name" | "filePath"> & Partial<Pick<Skill, "source" | "sourceInfo">>;
+  // Delivery producers stamp the retained bundle identity on the projection
+  // entries consumers read, so the matcher accepts it alongside the identifying
+  // fields main's narrowed contract already carries.
+  skill: Pick<Skill, "name" | "filePath"> &
+    Partial<Pick<Skill, "source" | "sourceInfo" | "bundleFingerprint">>;
 }): SkillUsageMatch {
   const skillFile = canonicalSkillFile(params.skill.filePath);
   return {
@@ -322,6 +328,11 @@ function resolvedSkillUsageMatch(params: {
     skillSource: resolveSkillTelemetrySource(params.skill),
     activation: params.activation,
     ...(skillFile ? { skillFile } : {}),
+    // Entry-carried identity is the retained generation stamped by a delivery
+    // producer: the local/worker materialization routes, the transfer adapter,
+    // and the tracing-gated ordinary-local preparation stamp the projection
+    // entries consumers actually read.
+    ...(params.skill.bundleFingerprint ? { skillFingerprint: params.skill.bundleFingerprint } : {}),
   };
 }
 
@@ -399,6 +410,7 @@ export function findSkillUsageMatch(params: {
   toolName: string;
   toolParams: unknown;
   ctx?: HookContext;
+  toolCallId?: string;
 }): SkillUsageMatch | undefined {
   const command = params.ctx?.skillCommand;
   if (command) {
@@ -417,6 +429,11 @@ export function findSkillUsageMatch(params: {
         skillSource,
         activation: "command",
         ...(skillFile ? { skillFile } : {}),
+        // Command dispatch attributes the retained generation only when the
+        // resolved entry carries one; a name/source match alone is not identity.
+        ...(snapshotMatch?.skillFingerprint
+          ? { skillFingerprint: snapshotMatch.skillFingerprint }
+          : {}),
       };
     }
   }
@@ -442,6 +459,9 @@ export function findSkillUsageMatch(params: {
           skillName: usage.skillName,
           skillSource: usage.skillSource,
           activation: "read",
+          // The actual retained resource generation serves these bytes; the
+          // entry identity is attributed only when a delivery producer stamped it.
+          ...(skill.bundleFingerprint ? { skillFingerprint: skill.bundleFingerprint } : {}),
         }
       : resolvedSkillUsageMatch({ activation: "read", skill });
   }
@@ -453,7 +473,18 @@ export function findSkillUsageMatch(params: {
     return undefined;
   }
   if (params.ctx?.skillsSnapshot?.resolvedSkills?.length) {
-    return findSkillInstructionMatch(params.ctx.skillsSnapshot, candidate);
+    const instructionMatch = findSkillInstructionMatch(params.ctx.skillsSnapshot, candidate);
+    if (!instructionMatch) {
+      return undefined;
+    }
+    // Read activations attribute this invocation's delivery marker, never the
+    // current snapshot: an already-served generation outlives later materializations.
+    const marker =
+      typeof params.toolCallId === "string"
+        ? params.ctx?.skillInstructionDeliveryMarkers?.takeInvocationFingerprint(params.toolCallId)
+        : undefined;
+    const { skillFingerprint: _entryFingerprint, ...readMatch } = instructionMatch;
+    return marker ? { ...readMatch, skillFingerprint: marker } : readMatch;
   }
   const match = params.ctx?.skillUsagePaths?.findLast(
     (entry) => path.resolve(entry.readPath) === candidate,
@@ -501,6 +532,7 @@ export function recordSkillUsed(params: {
       skillName: params.match.skillName,
       skillSource: params.match.skillSource,
       activation: params.match.activation,
+      ...(params.match.skillFingerprint && { skillFingerprint: params.match.skillFingerprint }),
       toolName: params.toolName,
       ...(params.toolCallId && { toolCallId: params.toolCallId }),
     },

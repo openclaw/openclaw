@@ -19,10 +19,16 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
+import {
+  materializeSkillResources,
+  prepareSkillResourceDelivery,
+} from "../skills/runtime/resources.js";
+import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-identity.test-support.js";
@@ -30,6 +36,8 @@ import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   createOpenClawReadTool,
   createSandboxedReadTool,
+  createSkillInstructionDeliveryCache,
+  createSkillInstructionDeliveryMarkers,
   wrapReadToolWithSkillContent,
 } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
@@ -1381,6 +1389,8 @@ describe("createOpenClawCodingTools read behavior", () => {
 
   it("deduplicates sequential and concurrent successful skill reads within one attempt", async () => {
     const locator = "/skills/pond/SKILL.md";
+    // SDK Map contract: a plugin-supplied bare Map owns delivery dedupe with no
+    // fingerprint marker surface. Marker-less reads must settle without throwing.
     const instructionDeliveryCache = new Map<string, Promise<boolean>>();
     const instructionDeliveryOptions = { instructionDeliveryCache };
     const fullResult = {
@@ -1400,7 +1410,7 @@ describe("createOpenClawCodingTools read behavior", () => {
         parameters: {},
         execute,
       } as never,
-      [{ filePath: locator }],
+      [{ filePath: locator, bundleFingerprint: "fp-generation-b" }],
       instructionDeliveryOptions,
     );
 
@@ -1417,10 +1427,52 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps per-invocation markers when a failing read races a succeeding read of the same path", async () => {
+    const locator = "/skills/pond/SKILL.md";
+    const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
+    const instructions = "# Pond\ncomplete instructions";
+    const fullResult = {
+      content: [{ type: "text", text: instructions }],
+      details: { kind: "text", content: instructions },
+    } as AgentToolResult<unknown>;
+    const execute = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("flaky skill read"))
+      .mockResolvedValueOnce(fullResult);
+    const tool = wrapReadToolWithSkillContent(
+      {
+        name: "read",
+        label: "read",
+        description: "read a file",
+        parameters: {},
+        execute,
+      } as never,
+      [{ filePath: locator, bundleFingerprint: "fp-generation-b" }],
+      { instructionDeliveryCache, instructionDeliveryMarkers },
+    );
+
+    const failing = tool.execute("failing-skill-read", { path: locator });
+    const succeeding = tool.execute("succeeding-skill-read", { path: locator });
+    await expect(failing).rejects.toThrow("flaky skill read");
+    expect(extractToolText(await succeeding)).toBe(instructions);
+    expect(execute).toHaveBeenCalledTimes(2);
+    // The failing invocation resets only its own association: the succeeding
+    // delivery settles through the retry and keeps the identity it established.
+    expect(
+      instructionDeliveryMarkers.takeInvocationFingerprint("failing-skill-read"),
+    ).toBeUndefined();
+    expect(instructionDeliveryMarkers.takeInvocationFingerprint("succeeding-skill-read")).toBe(
+      "fp-generation-b",
+    );
+    expect(instructionDeliveryMarkers.settledFingerprint(locator)).toBe("fp-generation-b");
+  });
+
   it("retries skill reads after failures, whole-read refusals, and optional misses", async () => {
     const locator = "/skills/pond/SKILL.md";
-    const instructionDeliveryCache = new Map<string, Promise<boolean>>();
-    const instructionDeliveryOptions = { instructionDeliveryCache };
+    const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
+    const instructionDeliveryOptions = { instructionDeliveryCache, instructionDeliveryMarkers };
     const fullResult = {
       content: [{ type: "text", text: "# Pond\ncomplete instructions" }],
       details: { kind: "text", content: "# Pond\ncomplete instructions" },
@@ -1447,7 +1499,7 @@ describe("createOpenClawCodingTools read behavior", () => {
         parameters: {},
         execute,
       } as never,
-      [{ filePath: locator }],
+      [{ filePath: locator, bundleFingerprint: "fp-generation-b" }],
       instructionDeliveryOptions,
     );
 
@@ -1462,10 +1514,229 @@ describe("createOpenClawCodingTools read behavior", () => {
         await tool.execute("optional-missing-skill-read", { path: locator, optional: true }),
       ),
     ).toContain("Optional file not found");
+    // Failed, oversized, and non-text outcomes are never qualifying deliveries:
+    // each invocation's marker is deleted with its reset settlement.
+    expect(
+      instructionDeliveryMarkers.takeInvocationFingerprint("failed-skill-read"),
+    ).toBeUndefined();
+    expect(
+      instructionDeliveryMarkers.takeInvocationFingerprint("oversized-skill-read"),
+    ).toBeUndefined();
+    expect(
+      instructionDeliveryMarkers.takeInvocationFingerprint("optional-missing-skill-read"),
+    ).toBeUndefined();
     expect(extractToolText(await tool.execute("retried-skill-read", { path: locator }))).toBe(
       "# Pond\ncomplete instructions",
     );
     expect(execute).toHaveBeenCalledTimes(4);
+    expect(instructionDeliveryMarkers.takeInvocationFingerprint("retried-skill-read")).toBe(
+      "fp-generation-b",
+    );
+  });
+
+  it("binds within-generation already-served re-reads and fresh materializations to their own markers", async () => {
+    // Real producer routes: materialization is revision-keyed and scoped, so a
+    // support-file edit yields a new keyed path per generation — cross-generation
+    // re-reads are fresh deliveries or real ENOENTs, never already-served hits.
+    const workspace = tempDirs.make("openclaw-skill-materialization-");
+    const baseDir = path.join(workspace, "skills", "pond");
+    await fs.mkdir(path.join(baseDir, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(baseDir, "SKILL.md"),
+      "---\nname: pond\ndescription: Pond skill\n---\n# Pond\ncomplete instructions\n",
+    );
+    const scope = { sessionId: "coding-tools-skill-materialization", workspaceDir: workspace };
+    const materialize = async (checkScript: string) => {
+      await fs.writeFile(path.join(baseDir, "scripts/check.sh"), checkScript);
+      const snapshot: SkillSnapshot = {
+        prompt: "",
+        skills: [{ name: "pond" }],
+        resolvedSkills: [
+          createCanonicalFixtureSkill({
+            name: "pond",
+            description: "Pond skill",
+            filePath: path.join(baseDir, "SKILL.md"),
+            baseDir,
+            source: "openclaw-workspace",
+          }),
+        ],
+      };
+      const delivery = await prepareSkillResourceDelivery(snapshot, () => {}, [], workspace);
+      return await materializeSkillResources(delivery!, () => {}, scope);
+    };
+    const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
+    const readFileExecute = vi.fn(async (_toolCallId: unknown, params: unknown) => {
+      const text = await fs.readFile((params as { path?: string }).path!, "utf8");
+      return {
+        content: [{ type: "text" as const, text }],
+        details: { kind: "text" as const, content: text },
+      } as AgentToolResult<unknown>;
+    });
+    const wrapMaterialized = (
+      materialized: Awaited<ReturnType<typeof materializeSkillResources>>,
+    ) =>
+      wrapReadToolWithSkillContent(
+        {
+          name: "read",
+          label: "read",
+          description: "read a file",
+          parameters: {},
+          execute: readFileExecute,
+        } as never,
+        (materialized.snapshot.resolvedSkills ?? []).map((skill) => ({
+          filePath: skill.filePath,
+          ...(skill.bundleFingerprint ? { bundleFingerprint: skill.bundleFingerprint } : {}),
+        })),
+        { instructionDeliveryCache, instructionDeliveryMarkers },
+      );
+
+    const first = await materialize("#!/bin/sh\nprintf pond-one\n");
+    try {
+      const entryB = first.snapshot.resolvedSkills![0]!;
+      const turnOne = wrapMaterialized(first);
+      expect(
+        extractToolText(await turnOne.execute("turn-one-read", { path: entryB.filePath })),
+      ).toContain("complete instructions");
+      expect(instructionDeliveryMarkers.takeInvocationFingerprint("turn-one-read")).toBe(
+        entryB.bundleFingerprint,
+      );
+      // Within the generation, the delivery-cache short-circuit serves the
+      // transcript-preserved bytes without touching the reader.
+      expect(
+        extractToolText(
+          await turnOne.execute("turn-one-already-served", { path: entryB.filePath }),
+        ),
+      ).toContain("already served whole");
+      expect(instructionDeliveryMarkers.takeInvocationFingerprint("turn-one-already-served")).toBe(
+        entryB.bundleFingerprint,
+      );
+      expect(readFileExecute).toHaveBeenCalledTimes(1);
+
+      // Turn N+1 releases the scoped materialization and delivers a newer
+      // generation through a real second materialization at a new keyed path.
+      await first.cleanup();
+      const second = await materialize("#!/bin/sh\nprintf pond-two\n");
+      try {
+        const entryC = second.snapshot.resolvedSkills![0]!;
+        expect(entryC.bundleFingerprint).not.toBe(entryB.bundleFingerprint);
+        expect(entryC.filePath).not.toBe(entryB.filePath);
+        const turnTwo = wrapMaterialized(second);
+        expect(
+          extractToolText(await turnTwo.execute("turn-two-fresh", { path: entryC.filePath })),
+        ).toContain("complete instructions");
+        expect(instructionDeliveryMarkers.takeInvocationFingerprint("turn-two-fresh")).toBe(
+          entryC.bundleFingerprint,
+        );
+        // The stale path is outside this wrapper's entry set and gone from disk:
+        // the read ENOENTs and no marker is established for the invocation.
+        await expect(
+          turnTwo.execute("turn-two-stale", { path: entryB.filePath }),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(
+          instructionDeliveryMarkers.takeInvocationFingerprint("turn-two-stale"),
+        ).toBeUndefined();
+        expect(readFileExecute).toHaveBeenCalledTimes(3);
+      } finally {
+        await second.cleanup();
+      }
+    } finally {
+      await first.cleanup().catch(() => undefined);
+    }
+  });
+
+  it("drops unconsumed invocation markers and settled identities when compaction clears the epoch", async () => {
+    const locator = "/skills/pond/SKILL.md";
+    const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
+    const instructions = "# Pond\ncomplete instructions";
+    const fullResult = {
+      content: [{ type: "text", text: instructions }],
+      details: { kind: "text", content: instructions },
+    } as AgentToolResult<unknown>;
+    const truncatedResult = {
+      content: [{ type: "text", text: "partial" }],
+      details: { kind: "truncated" },
+    } as AgentToolResult<unknown>;
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(fullResult)
+      .mockResolvedValueOnce(truncatedResult)
+      .mockResolvedValue(fullResult);
+    const tool = wrapReadToolWithSkillContent(
+      {
+        name: "read",
+        label: "read",
+        description: "read a file",
+        parameters: {},
+        execute,
+      } as never,
+      [{ filePath: locator, bundleFingerprint: "fp-generation-b" }],
+      { instructionDeliveryCache, instructionDeliveryMarkers },
+    );
+    await tool.execute("cleared-read", { path: locator });
+    expect(instructionDeliveryMarkers.takeInvocationFingerprint("cleared-read")).toBe(
+      "fp-generation-b",
+    );
+    await tool.execute("in-flight-read", { path: locator });
+    // An epoch clear drops settled identities and in-flight unconsumed markers alike.
+    // The compaction owner clears this delivery cache and the marker state
+    // together (attempt-execution-phase), so post-clear attribution waits for a
+    // fresh qualifying delivery below; retained-generation identity across
+    // materializations is pinned by the cross-materialization test above.
+    instructionDeliveryCache.clear();
+    instructionDeliveryMarkers.clear();
+    expect(instructionDeliveryMarkers.settledFingerprint(locator)).toBeUndefined();
+    expect(instructionDeliveryMarkers.takeInvocationFingerprint("in-flight-read")).toBeUndefined();
+    // Post-clear, an oversized re-read has no qualifying delivery to inherit: omit.
+    expect(
+      extractToolText(await tool.execute("post-clear-oversized", { path: locator })),
+    ).toContain("cannot be partially served");
+    expect(
+      instructionDeliveryMarkers.takeInvocationFingerprint("post-clear-oversized"),
+    ).toBeUndefined();
+    // A fresh qualifying delivery re-establishes the marker; an identical value is allowed.
+    expect(extractToolText(await tool.execute("post-clear-fresh", { path: locator }))).toBe(
+      instructions,
+    );
+    expect(instructionDeliveryMarkers.takeInvocationFingerprint("post-clear-fresh")).toBe(
+      "fp-generation-b",
+    );
+  });
+
+  it("settles a qualifying delivery for empty skill instructions and omits identities for node locators", async () => {
+    const emptyLocator = "node://node-1/skills/pond/SKILL.md";
+    const plainLocator = "node://node-1/skills/plain/SKILL.md";
+    const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
+    const tool = wrapReadToolWithSkillContent(
+      {
+        name: "read",
+        label: "read",
+        description: "read a file",
+        parameters: {},
+        execute: vi.fn(),
+      } as never,
+      [
+        { filePath: emptyLocator, readContent: "", bundleFingerprint: "fp-generation-b" },
+        { filePath: plainLocator, readContent: "# Plain\n" },
+      ],
+      { instructionDeliveryCache, instructionDeliveryMarkers },
+    );
+    // Bundle identity covers the whole tree: zero-instruction deliveries still settle.
+    expect(extractToolText(await tool.execute("empty-skill-read", { path: emptyLocator }))).toBe(
+      "File is empty (0 bytes).",
+    );
+    expect(instructionDeliveryMarkers.takeInvocationFingerprint("empty-skill-read")).toBe(
+      "fp-generation-b",
+    );
+    // node:// locators run no bundle preparation, so no identity is established.
+    expect(extractToolText(await tool.execute("plain-skill-read", { path: plainLocator }))).toBe(
+      "# Plain\n",
+    );
+    expect(
+      instructionDeliveryMarkers.takeInvocationFingerprint("plain-skill-read"),
+    ).toBeUndefined();
   });
 
   it("applies sandbox path guards to canonical path", async () => {

@@ -81,7 +81,13 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       if (!runtime.tracesEnabled) {
         return;
       }
-      const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
+      const spanAttrs: Record<string, string | number | boolean> = {
+        ...attrs,
+        // Span-only bundle provenance: counters and metrics stay fingerprint-free.
+        ...(evt.skillFingerprint
+          ? { "openclaw.skill.fingerprint": normalizeDiagnosticValue(evt.skillFingerprint) }
+          : {}),
+      };
       runtime.addRunAttrs(spanAttrs, evt);
       const span = runtime.spanWithDuration("openclaw.skill.used", spanAttrs, 0, {
         parentContext: runtime.activeTrustedParentContext(evt, metadata),

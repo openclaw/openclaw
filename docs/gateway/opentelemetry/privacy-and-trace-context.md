@@ -57,6 +57,22 @@ bounded event metadata (mode, transport, provider, event type) - no
 transcripts, audio payloads, session ids, turn ids, call ids, room ids, or
 handoff tokens.
 
+Skill usage spans may carry `openclaw.skill.fingerprint`, a deterministic content
+fingerprint of the loaded skill bundle (SKILL.md plus support files). It is
+derived from bundle content and metadata (relative paths, sizes, executable
+bits, per-file hashes), not a random or anonymized id: identical bundles share
+it across runs and installations, so it enables correlation and
+candidate-match recognition rather than anonymization. The inclusion boundary
+is the bundle tree under the resource-reader sync policy (only `.git` and
+`node_modules` are excluded), so it covers support files even when the model
+never read them. The digest inputs are metadata and content-derived hashes,
+never raw content, but they still leak information about private inputs and
+edits. The fingerprint is exported with `captureContent` off, only on trace
+spans — never on counters or metrics — and reaches internal trusted diagnostic
+listeners only — including any in-process plugin subscribed through
+`onInternalDiagnosticEvent` in the Plugin SDK — not the public untrusted
+diagnostic projection.
+
 When `diagnostics-otel` tracing is active, outbound model requests may include
 a W3C `traceparent` header from the actual exporter-owned model-call span.
 Diagnostic trace IDs and span IDs only correlate events to that span; they are
