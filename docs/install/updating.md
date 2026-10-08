@@ -532,6 +532,15 @@ update. They are not silently migrated or deleted. Preserve them and use their
 original recovery owner; do not recreate the journal or remove them to bypass
 the refusal.
 
+For an external-helper operation stuck at `publication-complete`, run
+`openclaw update repair` from an independent terminal. Repair verifies the
+installed candidate's dist content inventory, manifest, launchers, sealed helper,
+and current update ownership before settling the operation. It archives the
+original helper and retained package evidence, including a changed previous
+tree, without restoring or deleting that tree. Failed verification leaves
+recovery armed and blocks the next update. Older updater versions without this
+settlement path still require their original recovery owner.
+
 SQLite recovery and rollback custody verify file identity, size, and content.
 Timestamp-only changes are accepted after verifying identical bytes; replaced
 files or changed database or journal bytes still require recovery by their owner.

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
@@ -22,7 +23,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
-import * as workerContext from "../../../state/openclaw-state-worker-context.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import {
@@ -35,6 +35,7 @@ import { mutateRequesterCompletionBatch } from "../completion/subagent-completio
 import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
+  assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
   SubagentRegistryMutationRejectedError,
@@ -104,6 +105,34 @@ async function register(...entries: SubagentRunRecord[]) {
     }),
   );
 }
+
+it("revalidates the live registry source without enumerating the process environment", () => {
+  const context = captureOpenClawStateWorkerContext();
+  const originalEnv = process.env;
+  let stateDir = originalEnv.OPENCLAW_STATE_DIR;
+  let enumerations = 0;
+  process.env = new Proxy(originalEnv, {
+    get(target, key) {
+      return key === "OPENCLAW_STATE_DIR" ? stateDir : Reflect.get(target, key);
+    },
+    ownKeys(target) {
+      enumerations++;
+      return Reflect.ownKeys(target);
+    },
+  });
+  try {
+    for (let index = 0; index < 30; index++) {
+      assertSubagentRegistryWriteSourceCurrent(context);
+    }
+    stateDir = path.join(state.stateDir, "replacement");
+    expect(() => assertSubagentRegistryWriteSourceCurrent(context)).toThrow(
+      "Queued registry write lost its original database",
+    );
+  } finally {
+    process.env = originalEnv;
+  }
+  expect(enumerations).toBe(0);
+});
 
 it("streams bounded restore batches in one read and retains snapshot row versions", async () => {
   const entries = [3, 1, 2].map((createdAt, index) =>
@@ -753,20 +782,13 @@ it.each(["before ACK", "inside callback", "inside failing callback"] as const)(
   "keeps an old-source commit from notifying a replacement database (%s)",
   async (transition) => {
     await register(entry("source"));
-    const original = captureOpenClawStateWorkerContext();
     const reached = createDeferredCore();
     const release = createDeferredCore();
     const observed = vi.fn();
     const stop = subscribeSubagentRunChanges("persistence", observed);
     const revision = getSubagentRegistryPublicationRevision();
     const replaceSource = () => {
-      vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockReturnValue({
-        ...original,
-        admission: {
-          ...original.admission,
-          identity: { ...original.admission.identity, key: "replacement" },
-        },
-      });
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(state.stateDir, "replacement"));
     };
     interceptWrites(async (phase) => {
       if (phase === "after" && transition === "before ACK") {
@@ -802,6 +824,7 @@ it.each(["before ACK", "inside callback", "inside failing callback"] as const)(
         outcome: "committed",
         publication: transition === "before ACK" ? "superseded" : "published",
       });
+      vi.unstubAllEnvs();
       // Callback retirement cannot undo old-source rows that were already installed.
       expect(subagentRuns.get("source")?.label).toBe(
         transition === "before ACK" ? undefined : "old database commit",

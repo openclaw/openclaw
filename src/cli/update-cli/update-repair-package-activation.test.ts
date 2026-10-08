@@ -166,7 +166,7 @@ async function prepareNextPackage(
   });
 }
 
-async function interruptedPublication() {
+async function interruptedPublication(phase: "publishing" | "publication-complete" = "publishing") {
   const f = await createPackageSwapFixture(fixtureRoot);
   const stageRoot = f.params.stage.packageRoot;
   fs.writeFileSync(
@@ -231,7 +231,7 @@ async function interruptedPublication() {
     const rename = fsp.rename.bind(fsp);
     const interruption = vi.spyOn(fsp, "rename").mockImplementation(async (source, destination) => {
       await rename(source, destination);
-      if (destination === f.launcher) {
+      if (destination === f.launcher && phase === "publishing") {
         const file = path.join(f.packageRoot, "dist/index.js");
         const original = fs.readFileSync(file);
         fs.writeFileSync(`${file}.bak`, original);
@@ -241,14 +241,17 @@ async function interruptedPublication() {
       }
     });
     try {
-      await expect(
-        createPublicationOwner(
-          preparation.anchor,
-          preparation.journal,
-          fence.assertCurrent,
-          preparation.initial,
-        ).publish(false),
-      ).rejects.toThrow("external write during publication");
+      const publication = createPublicationOwner(
+        preparation.anchor,
+        preparation.journal,
+        fence.assertCurrent,
+        preparation.initial,
+      ).publish(false);
+      if (phase === "publishing") {
+        await expect(publication).rejects.toThrow("external write during publication");
+      } else {
+        await publication;
+      }
     } finally {
       interruption.mockRestore();
     }
@@ -256,20 +259,55 @@ async function interruptedPublication() {
   });
   mocks.root.mockResolvedValue(f.packageRoot);
   const record = prepared.journal.read();
-  expect(record.phase).toBe("publishing");
-  await expect(
-    runPackageActivationRecovery(prepared.anchor, "repair", record.descriptor.operationId),
-  ).rejects.toThrow("Package publication object changed");
-  await expect(
-    runPackageActivationRecovery(prepared.anchor, "retire", record.descriptor.operationId),
-  ).rejects.toThrow("Package evidence cannot be retired (publishing)");
+  expect(record.phase).toBe(phase);
+  if (phase === "publishing") {
+    await expect(
+      runPackageActivationRecovery(prepared.anchor, "repair", record.descriptor.operationId),
+    ).rejects.toThrow("Package publication object changed");
+    await expect(
+      runPackageActivationRecovery(prepared.anchor, "retire", record.descriptor.operationId),
+    ).rejects.toThrow("Package evidence cannot be retired (publishing)");
+  }
   expect(
     await readPackageActivationStatus(prepared.anchor, record.descriptor.operationId),
-  ).toMatchObject({ phase: "publishing" });
+  ).toMatchObject({ phase });
   return { ...f, ...prepared, record };
 }
 
 describe.skipIf(process.platform === "win32")("public package repair of obsolete recovery", () => {
+  it("settles a completed publication while preserving changed previous-package evidence", async () => {
+    const f = await interruptedPublication("publication-complete");
+    const previousFile = path.join(f.anchor, "previous/dist/index.js");
+    const link = path.join(fixtureRoot, "retained-runtime-link");
+    fs.linkSync(previousFile, link);
+    fs.unlinkSync(link);
+    fs.appendFileSync(previousFile, "// preserved recovery evidence\n");
+    const previousIdentity = packageActivationIdentity(path.join(f.anchor, "previous"), true);
+    const previousBytes = fs.readFileSync(previousFile);
+    const liveBytes = fs.readFileSync(path.join(f.packageRoot, "dist/index.js"));
+    const helper = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
+    const launcherIdentity = packageActivationIdentity(f.launcher, "launcher");
+
+    await repair();
+
+    const retained = `${f.anchor}.superseded-${f.record.descriptor.operationId}`;
+    expect(f.journal.read()).toMatchObject({
+      phase: "superseded",
+      intent: { kind: "publication-settled-external-change", settled: true },
+      descriptor: f.record.descriptor,
+    });
+    expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
+    expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+    expect(packageActivationIdentity(path.join(retained, "previous"), true)).toBe(previousIdentity);
+    expect(fs.readFileSync(path.join(retained, "previous/dist/index.js"))).toEqual(previousBytes);
+    expect(fs.readFileSync(path.join(retained, "recovery.mjs"))).toEqual(helper);
+    expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"))).toEqual(liveBytes);
+    expect(packageActivationIdentity(f.launcher, "launcher")).toBe(launcherIdentity);
+    await prepareNextPackage(f);
+    expect(f.journal.read().phase).toBe("prepared");
+    expect(fs.readFileSync(path.join(retained, "previous/dist/index.js"))).toEqual(previousBytes);
+  });
+
   it("settles the npm layout with dependency manifests and an external dist backup", async () => {
     const f = await interruptedPublication();
     fs.symlinkSync("missing-extra-target", path.join(f.packageRoot, "dist/extra-link"));
@@ -480,15 +518,21 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     },
   );
 
-  it.each([
-    "content mismatch",
-    "inventoried symlink",
-    "unsupported launcher synchronization",
-    "live executor",
-    "helper changed",
-    "wrong version",
-  ] as const)("preserves a publishing operation with %s", async (failure) => {
-    const f = await interruptedPublication();
+  it.each(
+    (["publishing", "publication-complete"] as const).flatMap((phase) =>
+      (
+        [
+          "content mismatch",
+          "inventoried symlink",
+          "unsupported launcher synchronization",
+          "live executor",
+          "helper changed",
+          "wrong version",
+        ] as const
+      ).map((failure) => ({ phase, failure })),
+    ),
+  )("preserves a $phase operation with $failure", async ({ phase, failure }) => {
+    const f = await interruptedPublication(phase);
     if (failure === "content mismatch") {
       fs.writeFileSync(path.join(f.packageRoot, "dist/index.js"), "// still patched\n");
     }

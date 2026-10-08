@@ -21,8 +21,10 @@ export type SessionSourcePredicateFacts = {
 export type PreparedSessionSourceAuthority = {
   /** Process-held sources require native atomicity when writing a durable target. */
   nativeSource?: boolean;
+  /** Wrapper checks need a native transaction unless the caller owns a prepared commit hook. */
+  hasOpaqueCheck?: boolean;
   assertCurrent: () => void;
-  /** Prepared components only; opaque callbacks still require the full native fence. */
+  /** Prepared components only; the owning commit boundary must also run opaque checks. */
   assertPreparedCurrent?: () => void;
   checks: {
     predicate: SessionSourcePredicate;
@@ -90,7 +92,10 @@ export function createDynamicSessionSourceAssertion(
 export function composeSessionSourceAssertion(
   sources: readonly (SessionSourceAssertion | undefined)[],
   check: (assertSources: () => void) => void = (assertSources) => assertSources(),
-  options?: { preparedCheck: (assertSources: () => void) => void },
+  options?: {
+    preparedCheck: (assertSources: () => void) => void;
+    hasOpaqueCheck?: boolean;
+  },
 ): SessionSourceAssertion {
   return Object.assign(() => check(() => sources.forEach((source) => source?.())), {
     async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
@@ -102,6 +107,8 @@ export function composeSessionSourceAssertion(
         }
         return {
           nativeSource: prepared.some((source) => source.nativeSource),
+          hasOpaqueCheck:
+            options?.hasOpaqueCheck || prepared.some((source) => source.hasOpaqueCheck),
           assertCurrent: () => check(() => prepared.forEach((source) => source.assertCurrent())),
           assertPreparedCurrent: () =>
             (options?.preparedCheck ?? check)(() => {
