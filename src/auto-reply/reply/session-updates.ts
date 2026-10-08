@@ -176,11 +176,17 @@ export async function ensureSkillSnapshot(params: {
       return result;
     });
   const persistSnapshot = (
-    sessionKey: string,
+    key: string,
     currentEntry: SessionEntry,
     skillsSnapshot: SessionEntry["skillsSnapshot"],
   ) =>
-    persistSkillSnapshot({ ...params, expectedSession, sessionKey, currentEntry, skillsSnapshot });
+    persistSkillSnapshot({
+      ...params,
+      expectedSession,
+      sessionKey: key,
+      currentEntry,
+      skillsSnapshot,
+    });
   const createEntry = (): SessionEntry => ({
     sessionId: sessionId ?? crypto.randomUUID(),
     updatedAt: Date.now(),

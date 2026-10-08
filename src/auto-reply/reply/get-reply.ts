@@ -290,7 +290,7 @@ export async function getReplyFromConfig(
       !resolveCommandAuthorization({
         ctx: finalized,
         cfg,
-        commandAuthorized: finalized.CommandAuthorized === true,
+        commandAuthorized: finalized.CommandAuthorized,
       }).isAuthorizedSender
     ) {
       runState.replyCompletion = resolveReplyCompletion("optional", "empty");

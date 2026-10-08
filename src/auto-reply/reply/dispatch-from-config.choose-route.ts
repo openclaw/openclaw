@@ -435,8 +435,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
       return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
     }
-    const routeFinalPayload = (payload: ReplyPayload) =>
-      state.routeReplyToOriginating(payload, {
+    const routeFinalPayload = (finalPayload: ReplyPayload) =>
+      state.routeReplyToOriginating(finalPayload, {
         abortSignal,
         kind: "final",
         ...(hasTranscriptOwner ? { mirror: false } : {}),

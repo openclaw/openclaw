@@ -134,8 +134,8 @@ export function resolveReplyMessageToolAvailability(params: {
     agentId: params.sessionAgentId,
   });
   const profileAlsoAllowed = params.prefersMessageToolDelivery ? ["message"] : [];
-  const resolveProfile = (profile: string | undefined, alsoAllow?: string[]) =>
-    mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
+  const resolveProfile = (profileId: string | undefined, alsoAllow?: string[]) =>
+    mergeAlsoAllowPolicy(resolveToolProfilePolicy(profileId), [
       ...(alsoAllow ?? []),
       ...profileAlsoAllowed,
     ]);
