@@ -507,7 +507,6 @@ async function agentCommandInternal(
         lifecycleGeneration,
         ingress: admissionIngress,
         suppressVisibleSessionEffects,
-        preserveUserFacingSessionModelState,
         onCommittedSessionId: (committedSessionId) => {
           runOwnedSessionId = committedSessionId;
           compactionSessionIdReporter.onCompactionCommitted(committedSessionId);
