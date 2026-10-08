@@ -9,7 +9,7 @@ import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-conte
 import { openExistingSqliteWorkerBackend } from "./openclaw-state.worker.js";
 
 vi.mock("./openclaw-state-worker-runtime.js", () => {
-  throw new Error("Cold preparation must not load unrelated shared-state commands");
+  throw new Error("Plugin-state preparation must not load unrelated shared-state commands");
 });
 
 it.each(["restartLifecycle.consumeIntent", "restartLifecycle.writeHandoff"] as const)(
