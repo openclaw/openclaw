@@ -11,6 +11,7 @@ import {
   resolveBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
+import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
@@ -39,7 +40,7 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { hashTextSha256 } from "./hash.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
 import { readRegisteredSandboxRuntimeIds } from "./registry.js";
-import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { resolveSandboxRuntimeStatus, withSandboxRuntimeStatusInWorker } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import { captureSandboxStateOwner, SandboxStateOwnerRequiredError } from "./state-owner.js";
@@ -560,29 +561,39 @@ export async function ensureSandboxWorkspaceForSession(params: {
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxWorkspaceInfo | null> {
-  const resolved = resolveSandboxSession(params);
-  if (!resolved) {
-    return null;
-  }
-  assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
-  const selected = await prepareSandboxWorkspaceSelection(params, resolved);
-  const { rawSessionKey, cfg } = selected;
+  const readAuthority = captureChannelReadAuthority();
+  const assertCurrent = () => readAuthority?.();
+  const ownedParams = { ...params, assertCurrent };
+  return withSandboxRuntimeStatusInWorker(
+    { cfg: params.config, agentId: params.agentId, sessionKey: params.sessionKey },
+    { env: process.env, cwd: process.cwd(), assertCurrent },
+    async (preparedRuntimeStatus) => {
+      const resolved = resolveSandboxSession({ ...params, preparedRuntimeStatus });
+      if (!resolved) {
+        return null;
+      }
+      assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
+      const selected = await prepareSandboxWorkspaceSelection(ownedParams, resolved);
+      assertCurrent();
+      const { rawSessionKey, cfg } = selected;
 
-  const { agentWorkspaceDir, scopeKey, workspaceDir, ...workspace } =
-    await ensureSandboxWorkspaceLayout(params, selected);
-
-  const containerWorkdir = getSandboxBackendWorkdirResolver(cfg.backend)?.({
-    cfg,
-    sessionKey: rawSessionKey,
-    scopeKey,
-    workspaceDir,
-    agentWorkspaceDir,
-    skillsWorkspaceDir: workspace.skillsWorkspaceDir,
-  });
-  return {
-    workspaceDir,
-    ...(containerWorkdir ? { containerWorkdir } : {}),
-    ...workspace,
-    workspaceAccess: cfg.workspaceAccess,
-  };
+      const { agentWorkspaceDir, scopeKey, workspaceDir, ...workspace } =
+        await ensureSandboxWorkspaceLayout(ownedParams, selected);
+      assertCurrent();
+      const containerWorkdir = getSandboxBackendWorkdirResolver(cfg.backend)?.({
+        cfg,
+        sessionKey: rawSessionKey,
+        scopeKey,
+        workspaceDir,
+        agentWorkspaceDir,
+        skillsWorkspaceDir: workspace.skillsWorkspaceDir,
+      });
+      return {
+        workspaceDir,
+        ...(containerWorkdir ? { containerWorkdir } : {}),
+        ...workspace,
+        workspaceAccess: cfg.workspaceAccess,
+      };
+    },
+  );
 }
