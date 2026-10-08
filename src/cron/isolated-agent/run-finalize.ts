@@ -136,7 +136,7 @@ export async function finalizeCronRun(params: {
       resolvedContextTokensSource:
         resolution?.contextTokensSource ??
         (resolution?.source === "model" ? "resolved-v1" : "resolved"),
-      authoredContextTokens: resolution?.authoredContextTokens,
+      configuredContextTokenLimits: resolution?.configuredContextTokenLimits,
     });
   let projected = projectBudget();
   if (contextRuntime) {

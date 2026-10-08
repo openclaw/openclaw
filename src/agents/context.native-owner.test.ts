@@ -634,7 +634,10 @@ it.each([
             model,
             agentHarnessId: "openclaw",
             resolvedContextTokens: undefined,
-            authoredContextTokens: authored,
+            configuredContextTokenLimits: {
+              effectiveConfiguredTokens: authored,
+              authoredContextTokenCap: authored,
+            },
           }),
         ).toEqual(
           declaredOptions && authored === undefined && runtime === undefined

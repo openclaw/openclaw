@@ -13,6 +13,7 @@ import {
   createConfiguredProviderModelResolver,
   resolveMergedModelProviderConfig,
 } from "../config/model-provider-config.js";
+import type { SessionContextTokenLimits } from "../config/sessions/context-token-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   lookupCachedContextTokens,
@@ -46,7 +47,7 @@ export type ContextTokenResolutionParams = {
 
 export type ModelContextTokenProjection = {
   contextTokens: number | undefined;
-  authoredContextTokens: number | undefined;
+  configuredContextTokenLimits: SessionContextTokenLimits | undefined;
   source: "model" | "configured" | "fallback";
   contextTokensSource?: "synthetic" | "resolved";
 };
@@ -112,25 +113,6 @@ function resolveConfiguredRuntimeModel(
   return resolveConfiguredProviderModel(cfg, canonicalProvider, model);
 }
 
-/** Returns the authored context cap within its configured native-window contract. */
-export function resolveAuthoredModelContextTokens(
-  params: Pick<
-    ContextTokenResolutionParams,
-    "cfg" | "provider" | "modelProvider" | "model" | "nativeRuntime"
-  >,
-): number | undefined {
-  const ref = resolveProviderModelRef(params);
-  const explicitProvider = params.provider?.trim();
-  if (!ref || !explicitProvider) {
-    return undefined;
-  }
-  return resolveConfiguredContextTokenLimits({
-    ...params,
-    provider: explicitProvider,
-    model: ref.model,
-  }).authoredContextTokens;
-}
-
 function resolveModelFamilyId(modelId: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
@@ -169,23 +151,29 @@ export function resolveAnthropicFixedContextWindow(
 export function resolveConfiguredContextTokenLimits(
   params: Pick<
     ContextTokenResolutionParams,
-    "cfg" | "modelProvider" | "modelContextWindow" | "modelContextWindowSource" | "nativeRuntime"
-  > & {
-    provider: string;
-    model: string;
-  },
+    | "cfg"
+    | "provider"
+    | "model"
+    | "modelProvider"
+    | "modelContextWindow"
+    | "modelContextWindowSource"
+    | "nativeRuntime"
+  >,
   // Guards require whole finite tokens; cache lookup retains its existing numeric projection.
   normalize: (
     value: number | undefined,
   ) => number | null | undefined = normalizePositiveContextTokens,
 ): {
   effectiveConfiguredTokens?: number;
-  authoredContextTokens?: number;
+  authoredContextTokenCap?: number;
   configuredContextWindow?: number;
   fixedContextWindow?: number;
 } {
-  const provider = params.provider.trim();
-  const model = params.model.trim();
+  const provider = params.provider?.trim();
+  const model = params.model?.trim();
+  if (!provider || !model) {
+    return {};
+  }
   const configuredModel = resolveConfiguredRuntimeModel(
     params.cfg,
     provider,
@@ -242,7 +230,7 @@ function resolveConfiguredContextTokenLimitsForModel(
     configuredContextWindow,
     fixedContextWindow,
     effectiveConfiguredTokens,
-    authoredContextTokens:
+    authoredContextTokenCap:
       effectiveConfiguredTokens ??
       (fixedContextWindow === undefined ? configuredContextWindow : undefined),
   };
@@ -269,7 +257,7 @@ export function resolveModelContextTokenProjectionFromCache(
   const useApiCapacity = !nativeRuntime || nativeRuntime === "openclaw";
   const ref = resolveProviderModelRef(params);
   const explicitProvider = params.provider?.trim();
-  let authoredContextTokens: number | undefined;
+  let configuredContextTokenLimits: SessionContextTokenLimits | undefined;
 
   if (ref && explicitProvider) {
     const configuredModel = resolveConfiguredRuntimeModel(
@@ -278,21 +266,18 @@ export function resolveModelContextTokenProjectionFromCache(
       params.modelProvider,
       ref.model,
     );
-    const {
-      effectiveConfiguredTokens,
-      configuredContextWindow,
-      fixedContextWindow,
-      authoredContextTokens: configuredAuthoredTokens,
-    } = resolveConfiguredContextTokenLimitsForModel(
+    const configuredLimits = resolveConfiguredContextTokenLimitsForModel(
       { ...params, provider: explicitProvider, model: ref.model },
       configuredModel,
       normalizePositiveContextTokens,
     );
-    authoredContextTokens = configuredAuthoredTokens;
+    configuredContextTokenLimits = configuredLimits;
+    const { effectiveConfiguredTokens, configuredContextWindow, fixedContextWindow } =
+      configuredLimits;
     if (effectiveConfiguredTokens !== undefined) {
       return {
         contextTokens: effectiveConfiguredTokens,
-        authoredContextTokens,
+        configuredContextTokenLimits,
         source: "configured",
       };
     }
@@ -302,7 +287,7 @@ export function resolveModelContextTokenProjectionFromCache(
           fixedContextWindow,
           normalizePositiveContextTokens(params.modelContextTokens),
         ),
-        authoredContextTokens,
+        configuredContextTokenLimits,
         source: "model",
       };
     }
@@ -330,7 +315,7 @@ export function resolveModelContextTokenProjectionFromCache(
           configuredContextWindow === undefined
             ? discoveredCap
             : Math.min(discoveredCap, configuredContextWindow),
-        authoredContextTokens,
+        configuredContextTokenLimits,
         source:
           configuredContextWindow !== undefined && configuredContextWindow <= discoveredCap
             ? "configured"
@@ -340,7 +325,7 @@ export function resolveModelContextTokenProjectionFromCache(
     if (configuredContextWindow !== undefined) {
       return {
         contextTokens: configuredContextWindow,
-        authoredContextTokens,
+        configuredContextTokenLimits,
         source: "configured",
       };
     }
@@ -355,7 +340,7 @@ export function resolveModelContextTokenProjectionFromCache(
   if (!useApiCapacity || params.allowUnscopedModelLookup === false) {
     return {
       contextTokens: fallbackContextTokens,
-      authoredContextTokens,
+      configuredContextTokenLimits,
       source: "fallback",
       ...(contextTokensSource ? { contextTokensSource } : {}),
     };
@@ -367,7 +352,7 @@ export function resolveModelContextTokenProjectionFromCache(
   const bareCap = minPositiveContextTokens(bareResult, bareWindow);
   return {
     contextTokens: bareCap ?? fallbackContextTokens,
-    authoredContextTokens,
+    configuredContextTokenLimits,
     source: bareCap === undefined ? "fallback" : "model",
     ...(bareCap === undefined && contextTokensSource ? { contextTokensSource } : {}),
   };

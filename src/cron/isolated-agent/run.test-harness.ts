@@ -1,5 +1,5 @@
 // Isolated run test harness builds cron run inputs, mocks, and assertions.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
 import type { ContextTokenResolutionParams } from "../../agents/context-resolution.js";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
@@ -38,17 +38,6 @@ type SessionAccessorModule = typeof import("../../config/sessions/session-access
 
 let actualReplaceSessionEntry: SessionAccessorModule["replaceSessionEntry"];
 let actualLoadSessionEntry: SessionAccessorModule["loadSessionEntry"];
-
-function normalizeModelSelectionForTest(value: unknown): string | undefined {
-  const direct = normalizeOptionalString(value);
-  if (direct) {
-    return direct;
-  }
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return normalizeOptionalString((value as { primary?: unknown }).primary);
-}
 
 function usesRealAccessorStore(storePath?: string): boolean {
   return Boolean(storePath && storePath !== "/tmp/store.json");
@@ -233,7 +222,8 @@ vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
   },
 }));
 
-vi.mock("./run-model-selection.runtime.js", () => ({
+vi.mock("./run-model-selection.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./run-model-selection.runtime.js")>()),
   DEFAULT_MODEL: "gpt-5.4",
   DEFAULT_PROVIDER: "openai",
   loadPreparedModelCatalogSnapshot: async (params: unknown) => ({
@@ -247,7 +237,7 @@ vi.mock("./run-model-selection.runtime.js", () => ({
   resolveAgentConfig: resolveAgentConfigMock,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   getModelRefStatus: getModelRefStatusMock,
-  normalizeModelSelection: normalizeModelSelectionForTest,
+  normalizeModelSelection: resolvePrimaryStringValue,
   resolveAllowedModelRefCore: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
@@ -263,7 +253,7 @@ vi.mock("./run-model-selection.runtime.js", () => ({
       { raw: cfg?.agents?.defaults?.subagents?.model, source: "default-subagent" as const },
       { raw: agentConfigOverride?.model, source: "agent" as const },
     ]) {
-      if (normalizeModelSelectionForTest(candidate.raw)) {
+      if (resolvePrimaryStringValue(candidate.raw)) {
         return candidate;
       }
     }
@@ -492,7 +482,7 @@ function resetRunConfigMocks(): void {
       | { model?: unknown; subagents?: { model?: unknown } }
       | undefined;
     const resolveOverride = (raw: unknown): string[] | undefined => {
-      const primary = normalizeModelSelectionForTest(raw);
+      const primary = resolvePrimaryStringValue(raw);
       if (!raw) {
         return undefined;
       }
@@ -519,7 +509,7 @@ function resetRunConfigMocks(): void {
       (cfg as { agents?: { defaults?: { subagents?: { model?: unknown } } } })?.agents?.defaults
         ?.subagents?.model,
       agentConfig?.model,
-    ].find((raw) => normalizeModelSelectionForTest(raw));
+    ].find((raw) => resolvePrimaryStringValue(raw));
     return resolveOverride(selectedConfig);
   });
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);

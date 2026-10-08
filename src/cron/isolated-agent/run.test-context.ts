@@ -1,7 +1,7 @@
 import {
   type ContextTokenResolutionParams,
   type ModelContextTokenProjection,
-  resolveAuthoredModelContextTokens,
+  resolveConfiguredContextTokenLimits,
 } from "../../agents/context-resolution.js";
 
 export function createCronContextRuntimeFixture(
@@ -12,7 +12,7 @@ export function createCronContextRuntimeFixture(
 ) {
   const project = (params: ContextTokenResolutionParams) => ({
     contextTokens: lookup(params),
-    authoredContextTokens: resolveAuthoredModelContextTokens(params),
+    configuredContextTokenLimits: resolveConfiguredContextTokenLimits(params),
     source: "model" as const,
   });
   return {

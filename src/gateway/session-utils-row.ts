@@ -210,7 +210,7 @@ export function readSessionRowInputs(params: {
     agentHarnessId: thinkingProjection.agentRuntime.id,
     resolvedContextTokens:
       modelContext.source === "fallback" ? undefined : resolvedModelContextTokens,
-    authoredContextTokens: asPositiveFiniteNumber(modelContext.authoredContextTokens),
+    configuredContextTokenLimits: modelContext.configuredContextTokenLimits,
   });
   const selectedContextTokens = contextWindowProfile.contextWindow
     ? asPositiveFiniteNumber(contextWindowProfile.contextTokens)

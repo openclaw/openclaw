@@ -80,7 +80,7 @@ export async function resolveFollowupContextTokens(
     ...selection,
     resolvedContextTokens: projection.source === "fallback" ? undefined : projection.contextTokens,
     resolvedContextTokensSource: projection.contextTokensSource,
-    authoredContextTokens: projection.authoredContextTokens,
+    configuredContextTokenLimits: projection.configuredContextTokenLimits,
   });
   const budget =
     projected !== undefined && selectedContextTokens !== undefined

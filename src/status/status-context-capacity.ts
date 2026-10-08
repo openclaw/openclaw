@@ -1,7 +1,7 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveAuthoredModelContextTokens,
+  resolveConfiguredContextTokenLimits,
   resolveModelContextTokenProjectionFromCache,
   type ContextTokenResolutionParams,
 } from "../agents/context-resolution.js";
@@ -111,7 +111,7 @@ export function resolveStatusContextCapacity(params: {
       activeContextProjection.source === "fallback"
         ? undefined
         : activeContextProjection.contextTokens,
-    authoredContextTokens: resolveAuthoredModelContextTokens({
+    configuredContextTokenLimits: resolveConfiguredContextTokenLimits({
       cfg: contextConfig,
       provider: contextLookupProvider,
       modelProvider: activeModelProvider,

@@ -11,7 +11,7 @@ import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import {
-  resolveAuthoredModelContextTokens,
+  resolveConfiguredContextTokenLimits,
   resolveContextTokensForModelFromCache as resolveContextTokensForModel,
   resolveModelContextTokenProjectionFromCache as resolveModelContextTokenProjection,
 } from "../agents/context-resolution.js";
@@ -245,7 +245,7 @@ export const statusSummaryRuntime = {
   getPublishedPreparedModelCatalogOwnerSnapshot,
   createStatusModelResolver,
   waitForContextWindowCacheLoad,
-  resolveAuthoredModelContextTokens,
+  resolveConfiguredContextTokenLimits,
   resolveContextTokensForModel,
   resolveModelContextTokenProjection,
   classifySessionKey: classifySessionKind,

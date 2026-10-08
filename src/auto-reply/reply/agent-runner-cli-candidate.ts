@@ -44,6 +44,7 @@ import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.
 export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
+    candidateAgentRuntime: string;
     lifecycleGeneration: string;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
@@ -57,9 +58,7 @@ export async function runCliFallbackCandidate(
   const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
   const selectedModelEntry = findModelInCatalog(
     (params.candidateRun.thinkingCatalog ?? []).filter(
-      (entry) =>
-        Boolean(params.agentHarnessRuntimeOverride) &&
-        entry.nativeRuntime === params.agentHarnessRuntimeOverride,
+      (entry) => entry.nativeRuntime === params.candidateAgentRuntime,
     ),
     params.provider,
     params.model,
@@ -383,7 +382,7 @@ export async function runCliFallbackCandidate(
             modelProvider: params.provider,
             requesterModel: { provider: params.provider, model: params.model },
             modelHasVision,
-            nativeRuntime: params.agentHarnessRuntimeOverride,
+            nativeRuntime: params.candidateAgentRuntime,
             modelContextWindow: selectedModelEntry?.contextWindow,
             modelContextWindowSource: selectedModelEntry?.contextWindowSource,
             modelContextTokens: selectedModelEntry?.contextTokens,

@@ -303,7 +303,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       resolvedContextTokensSource:
         resolution?.contextTokensSource ??
         (resolution?.source === "model" ? "resolved-v1" : "resolved"),
-      authoredContextTokens: resolution?.authoredContextTokens,
+      configuredContextTokenLimits: resolution?.configuredContextTokenLimits,
     });
   let projected = projectBudget();
   if (runtimeContextTokens === undefined) {

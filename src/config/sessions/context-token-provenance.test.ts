@@ -106,7 +106,10 @@ describe("resolveProjectedSessionContextTokens", () => {
         entry: matchingRuntimeEntry,
         ...currentSelection,
         resolvedContextTokens: 1_000_000,
-        authoredContextTokens: 1_000_000,
+        configuredContextTokenLimits: {
+          effectiveConfiguredTokens: 1_000_000,
+          authoredContextTokenCap: 1_000_000,
+        },
       }),
     ).toBe(1_000_000);
   });
@@ -188,7 +191,10 @@ describe("resolveProjectedSessionContextTokens", () => {
         },
         ...currentSelection,
         resolvedContextTokens: 272_000,
-        authoredContextTokens: 272_000,
+        configuredContextTokenLimits: {
+          effectiveConfiguredTokens: 272_000,
+          authoredContextTokenCap: 272_000,
+        },
       }),
     ).toBe(1_000_000);
   });
@@ -319,7 +325,10 @@ describe("source-bearing synthetic fallback budgets", () => {
           ...currentSelection,
           resolvedContextTokens: 128_000,
           resolvedContextTokensSource: "synthetic",
-          authoredContextTokens,
+          configuredContextTokenLimits: {
+            effectiveConfiguredTokens: authoredContextTokens,
+            authoredContextTokenCap: authoredContextTokens,
+          },
         }),
       ).toEqual({ contextTokens, contextTokensSource });
     },

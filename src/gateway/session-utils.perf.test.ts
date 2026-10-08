@@ -294,8 +294,10 @@ describe("session list resolver cache", () => {
         }),
       );
       writeResidentEntries(store);
+      const acpSessionKeys = new Set<string>();
       for (const [index, [sessionKey, entry]] of Object.entries(store).entries()) {
         if (index % 8 < 2) {
+          acpSessionKeys.add(sessionKey);
           seedCanonicalAcpSessionMeta({
             sessionKey,
             sessionId: entry.sessionId,
@@ -342,6 +344,12 @@ describe("session list resolver cache", () => {
           );
           expect(catalogRows).toHaveLength(40);
           for (const row of catalogRows) {
+            if (acpSessionKeys.has(row.key)) {
+              expect(row.contextTokens).toBeUndefined();
+              expect(row.agentRuntime?.id).toBe("acpx");
+              expect(row).not.toHaveProperty("catalogEntry");
+              continue;
+            }
             expect(row.contextTokens).toBe(
               revision *
                 (row.model === "Model-Hit" ? 2 : 1) *

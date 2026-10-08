@@ -16,13 +16,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../agents/context.js", () => ({
   resolveModelContextTokenProjection: () => ({
     contextTokens: mocks.scalarContextTokens,
-    authoredContextTokens: undefined,
+    configuredContextTokenLimits: undefined,
     source: mocks.scalarContextTokens === undefined ? "fallback" : "model",
   }),
   resolveContextTokenBudgetForModel: async () => ({
     contextTokensSource: mocks.preparedContextTokensSource,
     contextTokens: mocks.resolveContextTokensForModel(),
-    authoredContextTokens: undefined,
+    configuredContextTokenLimits: undefined,
     source: "model",
   }),
 }));

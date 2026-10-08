@@ -388,7 +388,7 @@ export async function sessionsCommand(
           ownerCapacity,
           resolvedContextTokens:
             modelContext.source === "fallback" ? undefined : modelContext.contextTokens,
-          authoredContextTokens: modelContext.authoredContextTokens,
+          configuredContextTokenLimits: modelContext.configuredContextTokenLimits,
         }) ?? (entry.contextTokensSource === "synthetic" ? undefined : configContextTokens);
       return Object.assign(row, {
         agentId,

@@ -1,6 +1,6 @@
 import type { Model } from "../../../llm/types.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agent-runtime-id.js";
-import { resolveAuthoredModelContextTokens } from "../../context-resolution.js";
+import { resolveConfiguredContextTokenLimits } from "../../context-resolution.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import type { AgentHarnessPreparedModelProvider } from "../../harness/selection-decision.js";
 import {
@@ -54,12 +54,12 @@ export function resolveEmbeddedRunEffectiveModel(
   const authoredContextTokenCap =
     params.nativeModelOwned || params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
       ? undefined
-      : resolveAuthoredModelContextTokens({
+      : resolveConfiguredContextTokenLimits({
           cfg: params.runParams.config,
           provider: contextConfigProvider,
           model: params.modelId,
           nativeRuntime: params.agentHarnessId,
-        });
+        }).authoredContextTokenCap;
   return {
     ...resolved,
     ...(authoredContextTokenCap === undefined ? {} : { authoredContextTokenCap }),

@@ -132,7 +132,12 @@ describe("context token resolution", () => {
     };
     expect(resolveModelContextTokenProjection(params)).toEqual({
       contextTokens: 128_000,
-      authoredContextTokens: 128_000,
+      configuredContextTokenLimits: {
+        effectiveConfiguredTokens: 128_000,
+        authoredContextTokenCap: 128_000,
+        configuredContextWindow: 128_000,
+        fixedContextWindow: undefined,
+      },
       source: "configured",
     });
     expect(resolve(params)).toBe(128_000);
@@ -239,7 +244,16 @@ describe("native owner isolation", () => {
         allowAsyncLoad: false,
         allowUnscopedModelLookup: false,
       }),
-    ).toEqual({ contextTokens: undefined, authoredContextTokens: undefined, source: "fallback" });
+    ).toEqual({
+      contextTokens: undefined,
+      configuredContextTokenLimits: {
+        effectiveConfiguredTokens: undefined,
+        authoredContextTokenCap: undefined,
+        configuredContextWindow: undefined,
+        fixedContextWindow: undefined,
+      },
+      source: "fallback",
+    });
   });
 });
 

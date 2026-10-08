@@ -13,7 +13,7 @@ import {
   writeExistingCopilotTokenProfile,
   nonInteractiveContext,
   runDeviceAuthWithFakeTimers,
-} from "./index.test-support.js";
+} from "./index.test-utils.js";
 import { runGitHubCopilotDeviceFlow } from "./login.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";

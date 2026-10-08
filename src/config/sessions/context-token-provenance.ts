@@ -115,10 +115,17 @@ function resolveTrustedSessionContextTokens(params: SessionContextSelection): nu
   return isExactProducerSelection(params) ? contextTokens : undefined;
 }
 
+export type SessionContextTokenLimits = {
+  /** Explicit configured prompt capacity may replace current model telemetry. */
+  effectiveConfiguredTokens?: number;
+  /** Native-window constraints also bound recovery and prevent permanent retention. */
+  authoredContextTokenCap?: number;
+};
+
 type SessionContextTokenProjectionParams = SessionContextSelection & {
   resolvedContextTokens: number | null | undefined;
   resolvedContextTokensSource?: "resolved" | "resolved-v1" | "synthetic";
-  authoredContextTokens?: number | null | undefined;
+  configuredContextTokenLimits?: SessionContextTokenLimits;
   ownerCapacity?:
     | {
         state: "ready";
@@ -133,8 +140,10 @@ type SessionContextTokenProjectionParams = SessionContextSelection & {
 export function resolveProjectedSessionContextTokenBudget(
   params: SessionContextTokenProjectionParams,
 ): { contextTokens: number; contextTokensSource: SessionEntry["contextTokensSource"] } | undefined {
-  const authored = asPositiveFiniteNumber(params.authoredContextTokens);
   if (params.ownerCapacity && params.entry?.contextTokensSource === "synthetic") {
+    const authored = asPositiveFiniteNumber(
+      params.configuredContextTokenLimits?.authoredContextTokenCap,
+    );
     const owned =
       params.ownerCapacity.state === "ready"
         ? asPositiveFiniteNumber(params.ownerCapacity.contextTokens)
@@ -160,6 +169,9 @@ export function resolveProjectedSessionContextTokenBudget(
                   : "resolved-v1",
         };
   }
+  const authored = asPositiveFiniteNumber(
+    params.configuredContextTokenLimits?.effectiveConfiguredTokens,
+  );
   // An estimated window is a last resort, never a constraint on real authority.
   const estimate =
     params.resolvedContextTokensSource === "synthetic"

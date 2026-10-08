@@ -130,7 +130,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
     getPublishedPreparedModelCatalogOwnerSnapshot,
     createStatusModelResolver,
     resolveConfiguredStatusModelRef,
-    resolveAuthoredModelContextTokens,
+    resolveConfiguredContextTokenLimits,
     resolveContextTokensForModel,
     resolveModelContextTokenProjection,
     resolveSessionRuntime,
@@ -332,7 +332,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
             ownerCapacity,
             resolvedContextTokens:
               contextProjection.source === "fallback" ? undefined : contextProjection.contextTokens,
-            authoredContextTokens: resolveAuthoredModelContextTokens({
+            configuredContextTokenLimits: resolveConfiguredContextTokenLimits({
               cfg,
               provider: lookupModel.provider,
               modelProvider: contextModelProvider,

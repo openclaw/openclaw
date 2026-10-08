@@ -406,7 +406,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     lookupModelContextTokensMock.mockReturnValue(1_000_000);
     lookupModelContextBudgetTokensMock.mockReturnValue({
       contextTokens: 200_000,
-      authoredContextTokens: undefined,
+      configuredContextTokenLimits: undefined,
       source: "model",
       contextTokensSource: "resolved",
     });
