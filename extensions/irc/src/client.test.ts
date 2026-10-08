@@ -443,8 +443,8 @@ describe("irc client PRIVMSG chunking on the wire", () => {
     },
     {
       name: "joined emoji at the byte cap",
-      text: `${"漢".repeat(162)}👨‍👩‍👧‍👦tail`,
-      bodies: ["漢".repeat(162), "👨‍👩‍👧‍👦tail"],
+      text: `${"漢".repeat(133)}👨‍👩‍👧‍👦tail`,
+      bodies: ["漢".repeat(133), "👨‍👩‍👧‍👦tail"],
     },
     {
       name: "combining mark at the character cap",
