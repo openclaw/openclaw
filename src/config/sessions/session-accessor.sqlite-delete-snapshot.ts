@@ -1,7 +1,11 @@
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 
 export function sqliteSessionStateDeleteSnapshotsEqual(
   left: SessionStateDeleteSnapshot,
@@ -81,5 +85,32 @@ export function readSessionStateDeleteSnapshot(
     sessionUpdatedAt: snapshot?.updated_at ?? null,
     trajectoryLastSeq: snapshot?.trajectory_last_seq ?? null,
     transcriptUpdatedAt: snapshot?.transcript_updated_at ?? null,
+  };
+}
+
+export function planSessionStateDeleteIfUnreferenced(params: {
+  archiveTranscript?: boolean;
+  archiveDirectory: string;
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
+  reason?: "deleted" | "reset";
+  referencedSessionIds: ReadonlySet<string>;
+  sessionId: string;
+}): SessionStateDeletePlan | null {
+  if (
+    params.referencedSessionIds.has(params.sessionId) ||
+    readSessionColdTranscript(params.database.db, params.sessionId)
+  ) {
+    return null;
+  }
+  return {
+    agentId: params.database.agentId,
+    archiveDirectory: params.archiveDirectory,
+    archiveTranscript:
+      params.archiveTranscript !== false &&
+      typeof readOpenClawAgentDatabaseIdentity(params.database).identity === "string",
+    databasePath: params.database.path,
+    reason: params.reason ?? "deleted",
+    sessionId: params.sessionId,
+    snapshot: readSessionStateDeleteSnapshot(params.database.db, params.sessionId),
   };
 }

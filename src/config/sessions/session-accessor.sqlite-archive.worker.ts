@@ -48,12 +48,12 @@ import type {
   SqliteCanonicalValidationWorkerTask,
 } from "./session-accessor.sqlite-canonical-worker-pool.js";
 import {
+  planSessionStateDeleteIfUnreferenced,
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
-import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
+import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-history-recency.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
-import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
 import type {
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
