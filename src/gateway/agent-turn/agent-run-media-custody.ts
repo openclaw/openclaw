@@ -84,6 +84,7 @@ export function createAgentRunMediaCustody(
           ) {
             throw new SessionTranscriptWriterClaimReboundError();
           }
+          const databaseIdentity = `file:${source.databaseIdentity}`;
           const scope = {
             ...session,
             sessionEntry: selected.entry,
@@ -92,7 +93,7 @@ export function createAgentRunMediaCustody(
           };
           const expected = webchatReplyMediaAuthority(scope);
           predicate = retainPreparedSessionEntryPredicate({
-            databaseIdentity: `file:${source.databaseIdentity}`,
+            databaseIdentity,
             sessionKey: selected.legacyKey ?? selected.canonicalKey,
             entry: selected.entry,
             matches: (_before, after) =>
@@ -115,7 +116,7 @@ export function createAgentRunMediaCustody(
               assertCurrent();
               assertExistingDatabaseIdentity(
                 source.path,
-                `file:${source.databaseIdentity}`,
+                databaseIdentity,
                 source.databaseBirthtime,
               );
               if (
@@ -200,7 +201,9 @@ export function createAgentRunMediaCustody(
     }
   };
   return {
-    run: commentary.run,
+    run<T>(operation: () => Promise<T>): Promise<T> {
+      return commentary.run(operation);
+    },
     prepareAssistantTranscriptMessage: commentary.prepareAssistantTranscriptMessage,
     finalize,
   };
