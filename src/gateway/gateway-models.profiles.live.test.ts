@@ -6433,7 +6433,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                   sessionKey,
                   idempotencyKey: `idem-${runId2}-2`,
                   modelKey,
-                  message: `Now answer: what are the values of testMarkerA and testMarkerB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
+                  message:
+                    `Now answer: what are the values of testMarkerA and testMarkerB in "${toolProbePath}"? ` +
+                    "Copy the complete marker values from the read result byte for byte, preserving every character and hyphen. " +
+                    "Reply with only the following line, with one space between the values and no extra text:\n" +
+                    `${nonceA} ${nonceB}`,
                   thinkingLevel,
                   context: `${progressLabel}: tool-only-regression-second`,
                 });
@@ -6444,7 +6448,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                   label: params.label,
                 });
                 if (!reply.includes(nonceA) || !reply.includes(nonceB)) {
-                  throw new Error(`unexpected reply: ${reply}`);
+                  throw new Error(
+                    `tool-only followup marker mismatch: expected ${JSON.stringify(`${nonceA} ${nonceB}`)}, observed ${JSON.stringify(reply)}`,
+                  );
                 }
               }
 
