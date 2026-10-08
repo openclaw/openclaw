@@ -490,9 +490,7 @@ describe("spawnAcpDirect", () => {
   registerAcpSpawnOwnerTests({
     spawn,
     state: hoisted.state,
-    initializeSessionMock: hoisted.initializeSessionMock,
     registerSubagentRunMock: hoisted.registerSubagentRunMock,
-    callGatewayMock: hoisted.callGatewayMock,
     readAcpResumeSessionOwnerMock: hoisted.readAcpResumeSessionOwnerMock,
     expectAcceptedSpawn,
     expectInitializeSessionFields,

@@ -3,6 +3,7 @@ import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/ty
 import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import { assertAcpSpawnResumeOwnership } from "../runtime/session-meta-resume-authorization.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { closeSupersededRuntimeHandle } from "./manager.runtime-handle-ensure.js";
 import {
@@ -63,8 +64,11 @@ export async function runManagerInitializeSession(params: {
       assertCurrent,
     })
   )?.acp;
+  const assertResumeCurrent = input.resumeSessionId
+    ? await assertAcpSpawnResumeOwnership(sessionKey)
+    : undefined;
   assertCurrent();
-  input.assertActive?.();
+  assertResumeCurrent?.();
   const ensured = await withAcpRuntimeErrorBoundary({
     run: async () =>
       await runtime.ensureSession({

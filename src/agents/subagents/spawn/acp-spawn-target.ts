@@ -39,7 +39,8 @@ export function resolveTargetAcpAgentId(params: {
   if (normalizedRequest && !normalizedRequest.ok) {
     return { ok: false, error: `agentId "${params.requestedAgentId}" was not found` };
   }
-  const requested = normalizedRequest?.value;
+  const requested =
+    normalizedRequest?.value ?? normalizeOptionalAgentId(params.cfg.acp?.defaultAgent);
   if (requested) {
     const configuredAgent = resolveAgentEntry(params.cfg, requested);
     if (configuredAgent?.runtime?.type === "acp") {
@@ -66,17 +67,6 @@ export function resolveTargetAcpAgentId(params: {
     });
   }
 
-  const configuredDefault = normalizeOptionalAgentId(params.cfg.acp?.defaultAgent);
-  if (configuredDefault) {
-    const configuredAgent = resolveAgentEntry(params.cfg, configuredDefault);
-    return resolveAcpAgentTarget({
-      cfg: params.cfg,
-      agentId: configuredDefault,
-      agentBackend:
-        configuredAgent?.runtime?.type === "acp" ? configuredAgent.runtime.acp?.backend : undefined,
-    });
-  }
-
   return {
     ok: false,
     error:
@@ -88,14 +78,6 @@ function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): bool
   return (cfg.acp?.allowedAgents ?? []).some(
     (entry) => entry.trim() === "*" || normalizeOptionalAgentId(entry) === agentId,
   );
-}
-
-/** OpenClaw session/store/gateway owner for an ACP spawn. Raw harness ids stay runtime-only. */
-export function resolveAcpSpawnOpenClawOwnerAgentId(params: {
-  requesterAgentId: string;
-  configAgentId?: string;
-}): string {
-  return params.configAgentId ?? params.requesterAgentId;
 }
 
 export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {

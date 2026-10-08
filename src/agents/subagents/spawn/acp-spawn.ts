@@ -3,6 +3,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { AcpTurnAttachment } from "../../../acp/control-plane/manager.types.js";
 import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../../../acp/policy.js";
+import {
+  validateAcpResumeSessionOwnership,
+  withAcpSpawnResumeOwnership,
+} from "../../../acp/runtime/session-meta-resume-authorization.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
@@ -67,7 +71,6 @@ import {
   readAcpSpawnParentDeliveryContext,
   resolveRequesterInternalSessionKey,
   shouldStreamAcpSpawnToParent,
-  validateAcpResumeSessionOwnership,
 } from "./acp-spawn-requester.js";
 import {
   buildAcpSpawnError,
@@ -83,7 +86,6 @@ import {
   type AcpSpawnInitializedRuntime,
 } from "./acp-spawn-runtime.js";
 import {
-  resolveAcpSpawnOpenClawOwnerAgentId,
   resolveConfiguredAcpSubagentTargetIds,
   resolveTargetAcpAgentId,
 } from "./acp-spawn-target.js";
@@ -245,10 +247,7 @@ export async function spawnAcpDirect(
     );
   }
   const { agentId: targetAgentId, configAgentId, backendId } = targetAgentResult;
-  const ownerAgentId = resolveAcpSpawnOpenClawOwnerAgentId({
-    requesterAgentId,
-    configAgentId,
-  });
+  const ownerAgentId = configAgentId ?? requesterAgentId;
   const senderRestricted = ctx.inheritedToolPolicySource === "sender";
   const requesterRoot = ctx.sessionPermissionPolicy?.root ?? ctx.workspaceDir;
   const requesterPolicyError = resolveAcpSenderSpawnError({
@@ -503,20 +502,33 @@ export async function spawnAcpDirect(
           },
           { assertCommitAllowed: ctx.assertActive },
         )) ?? undefined;
-      const initializedSession = await initializeAcpSpawnRuntime({
-        assertActive: ctx.assertActive,
-        cfg,
-        sessionKey,
-        ownerAgentId,
-        runtimeAgentId: targetAgentId,
-        runtimeMode: spawnMode === "session" ? "persistent" : "oneshot",
-        backendId,
-        resumeSessionId: params.resumeSessionId,
-        runtimeOptions: runtimeOptionsResult.runtimeOptions,
-        modelExplicit: runtimeOptionsResult.modelExplicit,
-        thinkingExplicit: runtimeOptionsResult.thinkingExplicit,
-        cwd: runtimeCwd,
-      });
+      const initializedSession = await withAcpSpawnResumeOwnership(
+        {
+          cfg,
+          sessionKey,
+          ownerAgentId,
+          runtimeAgentId: targetAgentId,
+          backendId,
+          requesterSessionKey: requesterInternalKey,
+          resumeSessionId: params.resumeSessionId,
+          assertCurrent: ctx.assertActive,
+        },
+        () =>
+          initializeAcpSpawnRuntime({
+            assertActive: ctx.assertActive,
+            cfg,
+            sessionKey,
+            ownerAgentId,
+            runtimeAgentId: targetAgentId,
+            runtimeMode: spawnMode === "session" ? "persistent" : "oneshot",
+            backendId,
+            resumeSessionId: params.resumeSessionId,
+            runtimeOptions: runtimeOptionsResult.runtimeOptions,
+            modelExplicit: runtimeOptionsResult.modelExplicit,
+            thinkingExplicit: runtimeOptionsResult.thinkingExplicit,
+            cwd: runtimeCwd,
+          }),
+      );
       closeRuntimeOnFailure = initializedSession.initialized.closeRuntimeOnFailure;
       ctx.assertActive?.();
       const binding = preparedBinding

@@ -13,6 +13,7 @@ export async function readAcpResumeSessionOwner(
     backendId?: string;
     resumeSessionId: string;
     runtimeAgentId: string;
+    onCandidate?: (sessionKey: string) => void;
   },
 ) {
   const { agentId, backendId, resumeSessionId } = params;
@@ -45,6 +46,7 @@ export async function readAcpResumeSessionOwner(
     if (normalizeOptionalAgentId(row.agent) !== runtimeAgentId) {
       continue;
     }
+    params.onCandidate?.(row.sessionKey);
     const owner = await withSessionEntryReadOnlyInWorker(
       { agentId, storePath, sessionKey: row.sessionKey, env, clone: false },
       assertCurrent,
@@ -60,7 +62,7 @@ export async function readAcpResumeSessionOwner(
         return current &&
           acpSessionRowMatchesEntry(current, read.value) &&
           normalizeOptionalAgentId(current.agent) === runtimeAgentId
-          ? { sessionKey: row.sessionKey, entry: read.value, runtimeAgent: runtimeAgentId }
+          ? { sessionKey: row.sessionKey, entry: read.value }
           : undefined;
       },
     );

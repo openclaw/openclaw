@@ -19,20 +19,24 @@ describe("resolveTargetAcpAgentId", () => {
     ).toEqual({ ok: true, agentId: "codex" });
   });
 
-  it("keeps a configured ACP alias as the runtime mapping without making the harness the owner", () => {
-    expect(
-      resolveTargetAcpAgentId({
-        requestedAgentId: "reviewer",
-        cfg: {
-          agents: {
-            entries: {
-              reviewer: { runtime: { type: "acp", acp: { agent: "codex" } } },
+  it.each(["reviewer", undefined])(
+    "resolves configured alias ownership for explicit or default targets (%s)",
+    (requestedAgentId) => {
+      expect(
+        resolveTargetAcpAgentId({
+          requestedAgentId,
+          cfg: {
+            acp: { defaultAgent: "reviewer" },
+            agents: {
+              entries: {
+                reviewer: { runtime: { type: "acp", acp: { agent: "codex" } } },
+              },
             },
           },
-        },
-      }),
-    ).toMatchObject({ ok: true, agentId: "codex", configAgentId: "reviewer" });
-  });
+        }),
+      ).toMatchObject({ ok: true, agentId: "codex", configAgentId: "reviewer" });
+    },
+  );
 
   it("leaves a raw harness without a configured OpenClaw owner id", () => {
     expect(
@@ -40,12 +44,6 @@ describe("resolveTargetAcpAgentId", () => {
         requestedAgentId: "cursor",
         cfg: { agents: { entries: { main: {} } } },
       }),
-    ).toMatchObject({ ok: true, agentId: "cursor" });
-    expect(
-      resolveTargetAcpAgentId({
-        requestedAgentId: "cursor",
-        cfg: { agents: { entries: { main: {} } } },
-      }),
-    ).not.toHaveProperty("configAgentId");
+    ).toEqual({ ok: true, agentId: "cursor" });
   });
 });
