@@ -47,6 +47,7 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
+import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessions/auth-profile-preservation.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import * as storedModelOverrides from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -517,10 +518,18 @@ export async function createModelSelectionState(params: {
           credential: profile,
         }),
       );
-    // Admission rejects a missing personal account; clearing its pin here would bill the next participant.
-    const missingPersonalProfile =
-      !profile && isUserModelAuthProfileId(sessionEntry.authProfileOverride);
-    if (!overrideStillEligible && !missingPersonalProfile) {
+    // Keep missing personal accounts and compatible explicit pins for authentication admission.
+    const preserveUnavailableSelection =
+      (!profile && isUserModelAuthProfileId(sessionEntry.authProfileOverride)) ||
+      shouldPreserveUnavailableSessionAuthProfileOverride({
+        store,
+        cfg: authConfig,
+        agentDir: resolveAgentDir(cfg, params.agentId),
+        entry: sessionEntry,
+        currentProvider: sessionEntry.providerOverride ?? defaultProvider,
+        provider,
+      });
+    if (!overrideStillEligible && !preserveUnavailableSelection) {
       await clearSessionAuthProfileOverride({
         agentId: params.agentId,
         sessionEntry,

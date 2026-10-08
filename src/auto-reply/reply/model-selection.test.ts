@@ -864,6 +864,57 @@ describe("automatic fallback provenance", () => {
   });
 });
 
+it.each(["user", "user-link", undefined] as const)(
+  "keeps a missing explicit auth pin through credential restoration (source=%s)",
+  async (source) => {
+    authProfileStoreMock.store = {
+      version: 1,
+      profiles: {
+        "openai:account-a": { type: "api_key", provider: "openai", key: "test-key-a" },
+      },
+    };
+    const entry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      modelOverrideSource: "user",
+      authProfileOverride: "openai:account-b",
+      authProfileOverrideSource: source,
+    });
+    const before = { ...entry };
+    const sessionStore = { [sessionKey]: entry };
+    const missing = await selectSession({}, "openai", "gpt-4o", entry, { sessionStore });
+    expect(missing).toMatchObject({ provider: "openai", model: "gpt-4o" });
+    expect(entry).toEqual(before);
+    expect(sessionStore[sessionKey]).toBe(entry);
+
+    authProfileStoreMock.store.profiles["openai:account-b"] = {
+      type: "api_key",
+      provider: "openai",
+      key: "test-key-b",
+    };
+    const restored = await selectSession({}, "openai", "gpt-4o", entry, { sessionStore });
+    expect(restored).toMatchObject({ provider: "openai", model: "gpt-4o" });
+    expect(entry).toEqual(before);
+    expect(sessionStore[sessionKey]).toBe(entry);
+  },
+);
+
+it.each([
+  { profileId: "openai:missing", source: "auto" },
+  { profileId: "anthropic:missing", source: "user" },
+] as const)(
+  "clears an ineligible $source auth pin for $profileId",
+  async ({ profileId, source }) => {
+    const entry = makeEntry({
+      authProfileOverride: profileId,
+      authProfileOverrideSource: source,
+    });
+    await selectSession({}, "openai", "gpt-4o", entry);
+    expect(entry.authProfileOverride).toBeUndefined();
+    expect(entry.authProfileOverrideSource).toBeUndefined();
+  },
+);
+
 it("keeps alias-compatible Anthropic auth for a CLI session", async () => {
   authProfileStoreMock.store = {
     version: 1,
