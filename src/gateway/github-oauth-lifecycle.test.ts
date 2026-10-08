@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ToolsGitHubStatusResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -98,12 +97,14 @@ import {
 import {
   ACCOUNT,
   configForScope,
+  configWithSelectedIdentity,
   identity,
   NEW_PROFILE,
   NOW,
   oauthRecord,
   OLD_PROFILE,
   OTHER_PROFILE,
+  statusResult,
   TOKENS,
 } from "./github-oauth-lifecycle.test-support.js";
 
@@ -132,38 +133,7 @@ function setSelectedIdentity(
   agentId: string,
   nextIdentity: GitHubToolIdentityConfig,
 ): void {
-  const next = structuredClone(currentConfig);
-  if (scope === "system") {
-    next.tools ??= {};
-    next.tools.github = structuredClone(nextIdentity);
-  } else {
-    next.agents ??= {};
-    next.agents.entries ??= {};
-    const entry = (next.agents.entries[agentId] ??= {});
-    entry.tools ??= {};
-    entry.tools.github = structuredClone(nextIdentity);
-  }
-  currentConfig = next;
-}
-
-function statusResult(scope: GitHubIdentityScope): ToolsGitHubStatusResult {
-  return {
-    agentId: "main",
-    selectedScope: scope,
-    selected: { scope, configured: true, identity: null },
-    effective: {
-      source: scope === "agent" ? "agent-override" : "system-configured",
-      credentialKind: "managed-oauth",
-      credentialState: "available",
-      account: { login: ACCOUNT.login },
-      gitAuthor: { name: ACCOUNT.login, email: null },
-      evidence: "github-api",
-      accessExpiresAtMs: NOW + TOKENS.expiresInSeconds * 1_000,
-      refreshState: "available",
-      oauthScopes: [...TOKENS.scopes],
-      repositoryGrants: "unknown",
-    },
-  };
+  currentConfig = configWithSelectedIdentity(currentConfig, scope, agentId, nextIdentity);
 }
 
 function createLifecycle(
