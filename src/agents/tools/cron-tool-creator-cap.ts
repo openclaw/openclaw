@@ -404,7 +404,19 @@ export function planCronJobUpdatePatch(params: {
   const existingPayloadRecord = isRecord(existingPayload) ? existingPayload : undefined;
   const existingPayloadKind = readCronPayloadKind(existingPayload);
   const payloadKind = explicitPayloadKind ?? existingPayloadKind;
+  if (payload && typeof payload.text === "string" && payloadKind === undefined) {
+    throw new Error("Cannot read the stored job type; retry after fixing the job.");
+  }
   if (payload && payloadKind !== undefined) {
+    // A kindless text edit inherits the stored kind instead of changing the job.
+    if (explicitPayloadKind === undefined && typeof payload.text === "string") {
+      if (payloadKind === "agentTurn") {
+        payload.message = payload.text;
+        delete payload.text;
+      } else if (payloadKind !== "systemEvent") {
+        throw new Error("text edits need a reminder or task job.");
+      }
+    }
     payload.kind = payloadKind;
     patch.payload = payload;
   }

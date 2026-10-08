@@ -228,7 +228,10 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
   }
 }
 
-function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
+function canonicalizeCronToolPayload(
+  value: Record<string, unknown>,
+  inferTextPayloadKind: boolean,
+): void {
   const payload = isRecord(value.payload) ? { ...value.payload } : {};
 
   for (const key of CRON_FLAT_PAYLOAD_KEYS) {
@@ -256,7 +259,7 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
         (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
       if (hasAgentTurnSignal) {
         payload.kind = "agentTurn";
-      } else if (isNonEmptyString(payload.text)) {
+      } else if (inferTextPayloadKind && isNonEmptyString(payload.text)) {
         payload.kind = "systemEvent";
       }
     }
@@ -342,13 +345,14 @@ function nestDottedCronKey(
 /** Converts model-friendly cron tool shorthands into the nested gateway job/patch shape. */
 export function canonicalizeCronToolObject(
   value: Record<string, unknown>,
+  inferTextPayloadKind = true,
 ): Record<string, unknown> {
   const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
   const next = { ...unwrapped };
   repairPaddedCronKeys(next);
   repairConcatenatedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
-  canonicalizeCronToolPayload(next);
+  canonicalizeCronToolPayload(next, inferTextPayloadKind);
   return next;
 }
 
@@ -393,7 +397,10 @@ export function isEmptyRecoveredCronPatch(value: unknown): boolean {
 }
 
 /** Recovers cron job or patch fields that a model flattened beside the action arguments. */
-export function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
+export function recoverCronObjectFromFlatParams(
+  params: Record<string, unknown>,
+  inferTextPayloadKind = true,
+): {
   found: boolean;
   value: Record<string, unknown>;
 } {
@@ -417,7 +424,10 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
       value[key] = params[key];
     }
   }
-  return { found: Object.keys(value).length > 0, value: canonicalizeCronToolObject(value) };
+  return {
+    found: Object.keys(value).length > 0,
+    value: canonicalizeCronToolObject(value, inferTextPayloadKind),
+  };
 }
 
 /** Checks whether a recovered flat object has enough schedule/payload signal to create a job. */
