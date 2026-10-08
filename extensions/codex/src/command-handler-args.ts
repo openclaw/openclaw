@@ -38,6 +38,12 @@ type ParsedCodexCliSessionsArgs = {
   host?: string;
   filter: string;
   limit?: number;
+  /**
+   * Opt out of the bounded rollout scan so a filter reaches every record of every rollout under the
+   * codex-home. Only a filtered request is a search; an unfiltered listing is a newest-first page
+   * and is unaffected.
+   */
+  searchAll?: boolean;
   help?: boolean;
 };
 
@@ -196,11 +202,12 @@ export function parseBindArgs(args: string[]): ParsedBindArgs {
 }
 
 export function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
-  const { parsed, values, filter } = parseConnectionArgs(args, "sessions");
+  const { parsed, values, filter, searchAll } = parseConnectionArgs(args, "sessions");
   return {
     ...parsed,
     host: normalizeOptionalString(values.get("host")),
     filter: filter.join(" ").trim(),
+    searchAll,
   };
 }
 
@@ -217,6 +224,7 @@ function parseConnectionArgs(args: string[], kind: keyof typeof CONNECTION_OPTIO
   const parsed: Pick<ParsedResumeArgs, "threadId" | "help"> & { limit?: number } = {};
   const values = new Map<string, string>();
   const filter: string[] = [];
+  let searchAll = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = expectDefined(
       args[index],
@@ -224,6 +232,10 @@ function parseConnectionArgs(args: string[], kind: keyof typeof CONNECTION_OPTIO
     );
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
+      continue;
+    }
+    if (kind === "sessions" && arg === "--search-all") {
+      searchAll = true;
       continue;
     }
     const option = CONNECTION_OPTIONS[kind].get(arg);
@@ -260,7 +272,7 @@ function parseConnectionArgs(args: string[], kind: keyof typeof CONNECTION_OPTIO
   if (kind !== "sessions") {
     parsed.threadId = normalizeOptionalString(parsed.threadId);
   }
-  return { parsed, values, filter };
+  return { parsed, values, filter, searchAll };
 }
 
 export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
