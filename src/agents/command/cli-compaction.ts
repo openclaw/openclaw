@@ -436,7 +436,8 @@ export async function runCliTurnCompactionLifecycle(
       return params.sessionEntry;
     }
 
-    const resolvedBackend = resolveCliBackendConfig(params.provider, params.cfg);
+    const cliBackendId = params.cliBackendId?.trim() || params.provider;
+    const resolvedBackend = resolveCliBackendConfig(cliBackendId, params.cfg);
     const nativeSessionEntry = isNativeHarnessCompactionSession(
       params.sessionEntry,
       params.provider,
@@ -454,7 +455,7 @@ export async function runCliTurnCompactionLifecycle(
       throw new Error("CLI compaction cannot replace a model-locked native harness runtime");
     }
     if (resolvedBackend?.ownsNativeCompaction && !nativeSessionEntry) {
-      log.info(`CLI backend "${params.provider}" owns native compaction — deferring to backend`);
+      log.info(`CLI backend "${cliBackendId}" owns native compaction — deferring to backend`);
       return params.sessionEntry;
     }
 

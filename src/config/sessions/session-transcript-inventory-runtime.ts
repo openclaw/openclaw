@@ -50,7 +50,7 @@ export async function listSessionTranscriptArchivesInWorker(input: SessionArchiv
 export async function readSessionTranscriptCorpusInWorker(
   scope: SessionTranscriptCorpusScope,
   options: SessionTranscriptCorpusOptions,
-  artifacts: readonly SessionTranscriptCorpusArtifact[],
+  prepareArtifacts: () => Promise<readonly SessionTranscriptCorpusArtifact[]>,
 ) {
   const input = { agentId: scope.normalizedAgentId, storePath: scope.storePath, env: scope.env };
   return withSessionStoreReaderInWorker(
@@ -63,6 +63,8 @@ export async function readSessionTranscriptCorpusInWorker(
       onRegistryChange,
       revalidateTarget,
     }) => {
+      const artifacts = await prepareArtifacts();
+      assertCurrent();
       if (options.readOnly !== true && !continuation) {
         // Default corpus discovery retains its historical writable-open admission.
         await readSessionEntryInWorker(
@@ -82,7 +84,11 @@ export async function readSessionTranscriptCorpusInWorker(
       assertCurrent();
       return entries;
     },
-    { backing: true, dataOnly: true },
+    {
+      backing: true,
+      dataOnly: true,
+      capturePhysicalSource: true,
+    },
   );
 }
 

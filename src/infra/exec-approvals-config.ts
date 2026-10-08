@@ -121,8 +121,8 @@ export function resolveExecApprovalsPath(env: NodeJS.ProcessEnv = process.env): 
   return path.join(resolveExecApprovalsStateDir(env).path, EXEC_APPROVALS_FILE);
 }
 
-export function resolveExecApprovalsSocketPath(): string {
-  return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_SOCKET);
+export function resolveExecApprovalsSocketPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveExecApprovalsStateDir(env).path, EXEC_APPROVALS_SOCKET);
 }
 
 export function resolveExecApprovalsDisplayPath(env: NodeJS.ProcessEnv = process.env): string {

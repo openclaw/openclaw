@@ -66,10 +66,8 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       runKind: attempt.bootstrapContextRunKind,
     });
   let completedBootstrapTurn: boolean | undefined;
-  const hasCompletedBootstrapTurnForAttempt = async () => {
-    completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget);
-    return completedBootstrapTurn;
-  };
+  const hasCompletedBootstrapTurnForAttempt = async () =>
+    (completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget));
   const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
     resolveWorkspaceBootstrapRouting({
       ...attempt,

@@ -65,7 +65,10 @@ export type TelegramPreparedSendPart = {
 type TextFallback = { index: number; count: number };
 type AcceptedPart = TelegramPreparedSendPart & { messageId: number; hasInlineKeyboard: boolean };
 type ObservePart = (part: AcceptedPart) => Promise<void>;
-type PartialDeliveryResult = Parameters<typeof mergeTelegramPartialDeliveryError>[1];
+type PartialDeliveryResult = Omit<
+  Parameters<typeof mergeTelegramPartialDeliveryError>[1],
+  "messageIds" | "visibleReplySent"
+>;
 type AcceptOptions = {
   partialDeliveryResult?: () => PartialDeliveryResult;
   start?: number;
@@ -83,8 +86,7 @@ export function createTelegramPreparedSender(config: {
   chatId: string;
   request: PreparedRequest;
   warn: (message: string) => void;
-  beforeTextPage?: () => Promise<void>;
-  beforeMedia?: () => Promise<void>;
+  beforeSend?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;
   onMediaAccepted?: (mediaUrls: readonly string[]) => void;
 }) {
@@ -200,7 +202,7 @@ export function createTelegramPreparedSender(config: {
     for (const [index, page] of params.pages.entries()) {
       let prepared: ReturnType<typeof params.preparePage>;
       try {
-        await config.beforeTextPage?.();
+        await config.beforeSend?.();
         prepared = params.preparePage(index, acceptedPages);
       } catch (error) {
         reject(error);
@@ -304,7 +306,7 @@ export function createTelegramPreparedSender(config: {
     if (parts.length === start && firstSilentSkipError !== undefined) {
       fail(firstSilentSkipError, start);
     }
-    return parts.slice(start);
+    return parts[start]?.messageId;
   };
 
   const sendMedia = async (params: {
@@ -314,7 +316,7 @@ export function createTelegramPreparedSender(config: {
     plainCaption?: string;
   }) => {
     const send = async (sender: TelegramOutboundMediaSender) => {
-      await config.beforeMedia?.();
+      await config.beforeSend?.();
       return sendTelegramCaptionedMediaWithFallback({
         operation: sender.operation,
         requestParams: params.requestParams,
@@ -353,7 +355,7 @@ export function createTelegramPreparedSender(config: {
     requestParams: Record<string, unknown>;
     plainCaption?: string;
   }) => {
-    await config.beforeMedia?.();
+    await config.beforeSend?.();
     const delivery = await sendTelegramCaptionedMediaWithFallback({
       operation: "sendMediaGroup",
       requestParams: params.requestParams,

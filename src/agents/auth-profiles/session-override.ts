@@ -264,6 +264,7 @@ export async function clearSessionAuthProfileOverride(params: {
   sessionKey: string;
   storePath?: string;
   assertCommitAllowed?: () => void;
+  expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
 }) {
   await persistSessionAuthProfileOverrideState({
     ...params,
@@ -543,10 +544,8 @@ async function resolveSessionAuthProfileOverride(params: {
   let next = current;
   if (retryableHigherPriorityProfile) {
     next = retryableHigherPriorityProfile;
-  } else if (isNewSession || shouldRotateCurrent) {
+  } else if (isNewSession || shouldRotateCurrent || !current) {
     next = pickAvailable(currentUnavailable ? undefined : current);
-  } else if (!current) {
-    next = pickAvailable();
   }
 
   if (!next) {

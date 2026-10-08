@@ -2,6 +2,7 @@ import path from "node:path";
 import { beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -226,6 +227,95 @@ it("preserves a stopped source claim when generation retires before post-run per
   });
   expect(loadSessionEntry(target)?.restartRecoveryTerminalRunIds ?? []).not.toContain(runId);
 });
+
+it.each(["command", "cleanup"] as const)(
+  "retains the %s failure when completion source-release also fails",
+  async (phase) => {
+    const sessionKey = `agent:main:completion-settlement-${phase}`;
+    const sessionId = `completion-settlement-${phase}`;
+    const runId = `announce:completion-settlement-${phase}`;
+    const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+    const claim: HarnessCompletionRecovery = {
+      taskId: "completed-child",
+      taskRunId: "completed-child-run",
+      taskStatus: "succeeded",
+      sourceRunId: runId,
+      requesterSessionKey: sessionKey,
+      requesterAgentId: "main",
+      sessionId,
+      lifecycleRevision: "initial",
+    };
+    await replaceSessionEntry(target, {
+      sessionId,
+      updatedAt: Date.now(),
+      lifecycleRevision: claim.lifecycleRevision,
+      restartRecoveryHarnessCompletion: claim,
+      restartRecoveryDeliveryRunId: runId,
+      restartRecoveryDeliverySourceRunId: runId,
+      restartRecoverySourceIngress: "internal",
+    });
+    const primary = new Error(`${phase} failed before source release`);
+    const releaseFailure = new Error("completion source release failed");
+    const enteredCleanup = createDeferred();
+    const finishCleanup = createDeferred();
+    const sourceRelease = vi.fn(async () => {
+      throw releaseFailure;
+    });
+    const prepareSource = vi.fn(async () => ({
+      assertCurrent: () => {},
+      checks: [],
+      release: sourceRelease,
+    }));
+    const beforeTerminalDelivery = vi.fn(async () => {
+      enteredCleanup.resolve();
+      await finishCleanup.promise;
+      if (phase === "cleanup") {
+        throw primary;
+      }
+    });
+    if (phase === "command") {
+      state.runAgentAttemptMock.mockRejectedValue(primary);
+    } else {
+      state.runAgentAttemptMock.mockResolvedValue(
+        makeCompactionResult({ sessionId, text: "done", runner: "embedded" }),
+      );
+      beforeTerminalDelivery.mockResolvedValueOnce(undefined);
+    }
+    const run = agentCommandFromGatewayIngress(
+      {
+        sessionKey,
+        sessionId,
+        runId,
+        message: "Finish the saved completion",
+        allowModelOverride: false,
+        assertSourceCurrent: Object.assign(() => {}, { prepareSessionSourceScope: prepareSource }),
+        beforeTerminalDelivery,
+      },
+      ...GATEWAY_INGRESS_ARGS,
+    );
+    const rejected = expect(run).rejects.toMatchObject({
+      name: "AggregateError",
+      cause: primary,
+      errors: [primary, releaseFailure],
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        enteredCleanup.promise,
+        run,
+        "command skipped terminal cleanup",
+      );
+      expect(sourceRelease).not.toHaveBeenCalled();
+      finishCleanup.resolve();
+      await rejected;
+      expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
+      expect(prepareSource).toHaveBeenCalledOnce();
+      expect(sourceRelease).toHaveBeenCalledOnce();
+    } finally {
+      finishCleanup.resolve();
+      await run.catch(() => {});
+    }
+  },
+);
 
 it.each([false, true])(
   "queues image follow-up and revalidates session replacement=%s",

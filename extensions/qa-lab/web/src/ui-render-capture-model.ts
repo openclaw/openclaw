@@ -365,15 +365,12 @@ export function buildCaptureViewModel(state: UiState) {
       overviewView.recommended = true;
     }
   }
-  const preferredDetailView = state.capturePreferredDetailView;
   const effectiveDetailView = availableDetailViews.some(
-    (view) => view.value === preferredDetailView && view.available,
+    (view) => view.value === state.captureDetailView && view.available,
   )
-    ? (preferredDetailView ?? "overview")
-    : availableDetailViews.some((view) => view.value === state.captureDetailView && view.available)
-      ? state.captureDetailView
-      : (availableDetailViews.find((view) => view.recommended && view.available)?.value ??
-        "overview");
+    ? state.captureDetailView
+    : (availableDetailViews.find((view) => view.recommended && view.available)?.value ??
+      "overview");
   const effectiveFlowLayout =
     state.captureFlowDetailLayout ??
     ((selectedEvent?.kind === "request" || selectedEvent?.kind === "response") && pairedEvent

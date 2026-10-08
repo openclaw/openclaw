@@ -110,7 +110,9 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       return exec(statement);
     });
     const sql = trackSqliteStatementExecutions(database.db, ["fresh"], (statement) =>
-      /^PRAGMA data_version$/iu.test(statement.trim()) ? "fresh" : null,
+      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(statement.trim())
+        ? "fresh"
+        : null,
     );
     try {
       const standalone = operations["session.entry.read"]({ sessionKey }, context);

@@ -5,7 +5,6 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
 type LiveTerminalIdentity = {
   runId: string;
-  afterBoundaryRunId?: string;
   disposition?: "aborted" | "error" | "timeout";
 };
 
@@ -25,13 +24,11 @@ type AuthoritativeTerminal = {
 export function rememberLiveTerminalRun(
   message: unknown,
   runId: string | null | undefined,
-  afterBoundaryRunId?: string,
   disposition?: LiveTerminalIdentity["disposition"],
 ): unknown {
   if (runId && message && typeof message === "object") {
     liveTerminalIdentities.set(message, {
       runId,
-      ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
       ...(disposition ? { disposition } : {}),
     });
     liveTerminalRevision += 1;
@@ -53,10 +50,6 @@ function readLiveTerminalIdentity(message: unknown): LiveTerminalIdentity | unde
 
 export function readLiveTerminalRunId(message: unknown): string | null {
   return readLiveTerminalIdentity(message)?.runId ?? null;
-}
-
-export function readLiveTerminalAfterBoundaryRunId(message: unknown): string | null {
-  return readLiveTerminalIdentity(message)?.afterBoundaryRunId ?? null;
 }
 
 export function readLiveTerminalDisposition(

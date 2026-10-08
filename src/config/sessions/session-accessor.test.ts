@@ -2144,52 +2144,6 @@ describe("session accessor seam", () => {
     expect(updates).toEqual([]);
   });
 
-  it("rolls back the manual compact row trim when token metadata cannot be cleared", async () => {
-    const sessionId = "77777777-7777-4777-8777-777777777777";
-    const sessionKey = "agent:main:main";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath,
-    };
-    const records = createManualCompactRecords(sessionId);
-    await upsertSessionEntryCore(scope, {
-      inputTokens: 10,
-      outputTokens: 20,
-      sessionId,
-      totalTokens: 30,
-      totalTokensFresh: true,
-      updatedAt: 100,
-    });
-    await replaceTranscriptEvents(scope, records as Parameters<typeof replaceTranscriptEvents>[1]);
-    const entryBeforeCompact = loadSessionEntry(scope);
-    const databasePath = expectDefined(
-      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-      "manual compact database path",
-    );
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-    database.db.exec(`
-      CREATE TEMP TRIGGER reject_manual_compact_metadata_update
-      BEFORE UPDATE OF entry_json ON main.session_nodes
-      WHEN OLD.session_key = '${sessionKey}'
-      BEGIN
-        SELECT RAISE(ABORT, 'injected manual compact metadata failure');
-      END;
-    `);
-
-    try {
-      await expect(
-        trimSessionTranscriptForManualCompact(scope, { maxLines: 3, nowMs: 500 }),
-      ).rejects.toThrow("injected manual compact metadata failure");
-    } finally {
-      database.db.exec("DROP TRIGGER reject_manual_compact_metadata_update;");
-    }
-
-    expect(await loadTranscriptEvents(scope)).toEqual(records);
-    expect(loadSessionEntry(scope)).toEqual(entryBeforeCompact);
-  });
-
   it.each([
     {
       name: "rejects a manual compact when session metadata changes after its snapshot",

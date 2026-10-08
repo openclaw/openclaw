@@ -278,10 +278,10 @@ export async function resolveRuntimeWebProviderSelection(
       }
     }
 
-    const recordUnresolvedNoFallback = (unresolved: {
-      path: string;
-      reason: SecretDegradationReason;
-    }) => {
+    const failUnresolvedNoFallback = (
+      unresolved: UnresolvedProvider,
+      related: UnresolvedProvider[] = [unresolved],
+    ): never => {
       const diagnostic: RuntimeWebDiagnostic = {
         code: noFallbackCode,
         message: unresolved.reason,
@@ -294,12 +294,6 @@ export async function resolveRuntimeWebProviderSelection(
         path: unresolved.path,
         message: unresolved.reason,
       });
-    };
-    const failUnresolvedNoFallback = (
-      unresolved: UnresolvedProvider,
-      related: UnresolvedProvider[] = [unresolved],
-    ): never => {
-      recordUnresolvedNoFallback(unresolved);
       const relatedUnavailableProviders = related.filter(hasProviderRef);
       if (relatedUnavailableProviders.length > 0) {
         const error = new RuntimeWebProviderUnavailableError(

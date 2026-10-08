@@ -175,8 +175,6 @@ export function adoptStartedChatRun(
   setChatRunOwner(host, runId);
   if (!adoptedStream) {
     host.chatStream = "";
-    host.chatStreamItemId = undefined;
-    host.chatStreamItemStartOffset = undefined;
     host.chatStreamStartedAt = startedAt;
   }
 }
@@ -498,8 +496,6 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   }
   if (options.clearChatStream) {
     host.chatStream = null;
-    host.chatStreamItemId = undefined;
-    host.chatStreamItemStartOffset = undefined;
     host.chatStreamStartedAt = null;
   }
   if (options.clearLocalRun) {

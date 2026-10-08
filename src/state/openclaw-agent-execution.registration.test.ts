@@ -79,7 +79,11 @@ vi.mock("node:child_process", () => ({
   execFileSync: edge.forbidden,
   fork: edge.forbidden,
 }));
-vi.mock("../infra/node-sqlite.js", () => ({ openNodeSqliteDatabase: edge.forbidden }));
+// mock-isolation: Native database opening must remain forbidden in the worker registration fixture.
+vi.mock("../infra/node-sqlite.js", () => ({
+  openNodeSqliteDatabase: edge.forbidden,
+  captureSqliteNativeRuntimeAdmission: () => undefined,
+}));
 vi.mock("../logging/console.js", () => ({ routeLogsToStderr() {} }));
 vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: (done: () => void) => done() }));
 vi.mock("../infra/sqlite-worker-identity.js", async () => ({

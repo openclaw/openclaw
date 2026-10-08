@@ -34,7 +34,10 @@ import {
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
-import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  type InternalSessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   createLazyPromise,
@@ -169,6 +172,11 @@ export function startGatewayEventSubscriptions(params: {
     sessionEventSubscribers: params.sessionEventSubscribers,
     broadcastToConnIds: params.broadcastToConnIds,
   });
+  const unsubscribeObserverEvents = onAgentRuntimeEvent((evt) => {
+    void sessionObserver
+      .handleEventAsync(evt)
+      .catch((error: unknown) => params.log.warn("Session observer event failed", { error }));
+  });
   const sessionCompanion = createSessionCompanion({
     scheduler: params.scheduler,
     contextReader: defaultSessionCompanionContextReader,
@@ -179,6 +187,8 @@ export function startGatewayEventSubscriptions(params: {
   // Auxiliary model calls can inherit request work; cancel before that work drains.
   const stopSessionBackgroundWork = (): void => {
     if (!sessionBackgroundStop) {
+      // Chat and terminal persistence still consume events while the observer drains.
+      unsubscribeObserverEvents();
       sessionCompanion.dispose();
       sessionBackgroundStop = Promise.all([
         sessionObserver.disposeAsync(),
@@ -443,9 +453,6 @@ export function startGatewayEventSubscriptions(params: {
     let failedDispatchCleanup: (() => void) | undefined;
     let terminalPreparation: Promise<void> | undefined;
     let terminalEntries: Map<string, ChatAbortControllerEntry> | undefined;
-    void sessionObserver
-      .handleEventAsync(evt)
-      .catch((error: unknown) => params.log.warn("Session observer event failed", { error }));
     sessionActivitySummaries.handleEvent(evt);
     auditRecorder.record(evt);
     const lifecyclePhase =
@@ -633,6 +640,10 @@ export function startGatewayEventSubscriptions(params: {
       ?.then((handler) => handler.dispose())
       .catch(() => undefined);
     await sessionLifecyclePersistence.drain();
+    // Terminal persistence can publish further committed transcript updates.
+    while (agentEventDispatches.size > 0) {
+      await Promise.allSettled(agentEventDispatches);
+    }
     await auditRecorder.stop();
   };
 
@@ -642,13 +653,27 @@ export function startGatewayEventSubscriptions(params: {
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
     sessionActivitySummaries.handleTranscript(evt);
-    void dispatchEventHandler({
-      loadHandler: getTranscriptUpdateHandler,
-      event: evt,
-      log: params.log,
-      failureMessage: "Transcript update dispatch failed",
-      context: { sessionKey: evt.sessionKey },
-    });
+    // Share the agent queue so a later cumulative update cannot outrun retirement.
+    const agentHandler = agentEventHandlerLoader.peek();
+    const dispatch = runOutsideAsyncWorkScope(() =>
+      dispatchEventHandler<InternalSessionTranscriptUpdate>({
+        loadHandler: agentHandler
+          ? () =>
+              agentHandler
+                .then(
+                  (handler) => handler.retireTranscript(evt),
+                  () => undefined,
+                )
+                .then(getTranscriptUpdateHandler)
+          : getTranscriptUpdateHandler,
+        event: evt,
+        log: params.log,
+        failureMessage: "Transcript update dispatch failed",
+        context: { sessionKey: evt.sessionKey },
+      }),
+    );
+    agentEventDispatches.add(dispatch);
+    void dispatch.then(() => agentEventDispatches.delete(dispatch));
   });
 
   // Committed resets/rotations can change access after the originating run is gone.

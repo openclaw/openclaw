@@ -7,6 +7,7 @@ import { codeModeToolSurfaceObserver } from "../provider-options.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
 import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -14,7 +15,7 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
-import { emitModelTransportDebug } from "./model-transport-debug.js";
+import { emitModelTransportDebug, emitModelTransportError } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
 import { isOpenAICodexResponsesModel } from "./openai-completions-compat.js";
 import { postOpenAIResponsesCompaction } from "./openai-responses-compact-client.js";
@@ -225,6 +226,8 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           compact: Boolean(compactRequest),
           stream: config.streamRequest,
           lifecycle: requestLifecycle,
+          // The SDK replaces the fetch signal; retain the watchdog caller signal.
+          onSseComment: () => notifyLlmRequestActivity(options?.signal, false),
         });
         const client = config.createClient(model, apiKey, httpHeaders, fetchOverride);
         const nativeAstra =
@@ -592,10 +595,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         const incompleteReason = output.diagnostics?.find(
           ({ type }) => type === "openai_responses_terminal",
         )?.details?.incompleteReason;
-        log.warn(
-          `[responses] error provider=${model.provider} api=${model.api} model=${model.id} ` +
+        emitModelTransportError(
+          log,
+          "responses",
+          `provider=${model.provider} api=${model.api} model=${model.id} ` +
             summarizeOpenAITransportError(error) +
             (typeof incompleteReason === "string" ? ` incompleteReason=${incompleteReason}` : ""),
+          options?.signal,
         );
         failTransportStream({ stream, output, signal: options?.signal, error });
       } finally {

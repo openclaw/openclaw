@@ -18,6 +18,19 @@ session lifecycles, or host-owned leases safe across Gateway instances.
 
 ### Keep operations at the owning store
 
+Session cleanup reads entry metadata and missing-transcript classifications in one
+request to the existing history worker. The read transaction keeps each positive
+classification with its deletion snapshot; transcripts containing messages need
+no deletion snapshot. Preview and apply retain the selected physical database,
+and the lifecycle writer rereads the entry and snapshot before deleting anything.
+If a store first appears during reading, its native read receipt binds later
+phases to that physical identity.
+Foreign appends or rewrites invalidate stale removal plans. The Gateway retains
+caller authority, and released synchronous commit callbacks keep their native
+transaction boundary. Explicit process-held incognito selectors retain their
+native database incarnation and share the same classification kernel. Schemas,
+archived bytes, retention, and update behavior are unchanged.
+
 Deferred transcript projection reconciliation publishes bounded active-event and
 FTS chunks through the canonical agent database worker. The host captures the
 existing execution owner before scheduling, and revalidates it at each native
@@ -52,8 +65,9 @@ Foreign commits invalidate readiness without resetting
 an in-progress cursor. Maintenance reaches later keys before starting another pass,
 and only a full pass at a stable foreign revision can certify a clean store.
 The planner consumes this owner's pending list.
-Search also verifies that its original reader connection and revision remain current
-after readiness returns; a changed hit snapshot keeps the indexing hint. Read-only
+Search keeps its hit read, host readiness exchange, and original-connection
+revision check in one worker task while independent searches remain parallel.
+A changed hit snapshot keeps the indexing hint. Read-only
 searches also retain their results with that conservative hint when writable
 maintenance is unavailable.
 Clean status reads reuse these facts without entering a write transaction or
@@ -389,11 +403,14 @@ authority after waiting, without copying the live database for each observation.
 Cold sources and unavailable or replaced native paths retain artifact-preserving
 snapshot preparation. Schema, permissions, and update behavior are unchanged.
 
-Default project recents reuse the Gateway's resident session-row projection after
-readiness, including archived metadata. The combined-store loader retains physical
-store selection, sentinel precedence, and process-local incognito reads. Observed
-checkout requests prepare durable session listings through the existing
-session-transcript worker. Federation captures physical targets,
+Project recents and observed checkout requests consume the Gateway's prepared
+session-row metadata, including archived rows. The existing selection owner maintains
+physical-store and sentinel precedence through committed row and topology publications;
+listings do not reread or rebuild the durable session stores. Recent-project ties retain
+physical-store and SQLite binary key order. Process-local incognito entries remain with
+their native snapshot owner and never enter the resident selection.
+Other combined-store listings use the existing session-transcript worker.
+Federation captures physical targets,
 options, and a transferable environment before waiting, preserving canonical
 keys, ordering, and admission diagnostics; unavailable reads remain errors.
 The Gateway resolves current profile aliases and disclosure
@@ -1286,7 +1303,15 @@ No schema, stored format, migration, or updater behavior changes.
 
 Model-context reads and session transcript preparation use the session-transcript
 worker with separate bounded queues. Background preparation cannot occupy the
-foreground context queue. Session exports read events, statistics, and session
+foreground context queue. Foreground history and model-context pools each use up
+to eight read-only workers, each capped at half the host computation budget
+(rounded up). A single-CPU host keeps one worker in each pool. Each worker
+retains its own SQLite connections and snapshots; writer admission and final
+snapshot validation preserve ordered reads. Database closure joins every reader
+in the pool, and idle retirement releases their retained state. Background
+maintenance, exports, and SQLite writers keep their existing capacity. No schema,
+stored format, or update migration changes are required.
+Session exports read events, statistics, and session
 classification from one read-only SQLite snapshot, then prepare text and
 provenance off the Gateway thread. The caller carries its current exact-secret
 redaction snapshot and rejects results prepared against an obsolete registry.

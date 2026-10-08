@@ -1,5 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
@@ -10,7 +11,11 @@ import {
 import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "../../state/github-personal-publication-lifecycle.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import {
+  createOpenClawAgentDatabaseClaim,
+  readOpenClawAgentDatabaseIdentity,
+} from "../../state/openclaw-agent-db-identity.js";
+import { retainAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   deferOpenClawAgentPostCommitPublication,
@@ -190,7 +195,29 @@ export async function resetSessionEntryLifecycle(
               sessionKeys: [params.target.canonicalKey],
             },
           });
-          await params.afterEntryMutation?.(mutation);
+          const identity = readOpenClawAgentDatabaseIdentity(database);
+          const claim = createOpenClawAgentDatabaseClaim(
+            database,
+            retainAgentDatabase(database.db),
+          );
+          try {
+            await params.afterEntryMutation?.(mutation, {
+              env: Object.freeze({ ...resolved.env }),
+              source: { agentId: resolved.agentId, path: database.path },
+              assertCurrent() {
+                claim.assertCurrent();
+                if (typeof identity.identity === "string") {
+                  assertExistingDatabaseIdentity(
+                    database.path,
+                    `file:${identity.identity}`,
+                    identity.birthtime,
+                  );
+                }
+              },
+            });
+          } finally {
+            claim.release();
+          }
           return {
             ...mutation,
             archivedTranscripts: [],

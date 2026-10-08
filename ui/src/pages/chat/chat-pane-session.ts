@@ -13,6 +13,7 @@ import { collectUnreadHiddenRunRows } from "../../components/app-sidebar-session
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
+import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectsForGateway } from "../../lib/projects.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -29,7 +30,7 @@ import {
 } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
-import { isPermanentUnreadAckFailure } from "../../lib/sessions/unread.ts";
+import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
@@ -56,12 +57,21 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   private deferredSessionHydrationActive = false;
   private pendingDeferredSessionHydration: (() => void) | null = null;
   /** Hidden-run acknowledgements in flight or sent, keyed by run and activity revision. */
-  private readonly hiddenRunReadRequests = new Map<string, number | null>();
+  private readonly hiddenRunReadRequests = new Map<
+    string,
+    { revision: number | null; guard: SessionUnreadPatchGuard }
+  >();
+
+  protected resetSessionReadAcknowledgements(): void {
+    this.unreadPatchGuard.beginActivation(this.state?.sessionKey ?? "");
+    this.hiddenRunReadRequests.clear();
+  }
 
   protected secondarySessionReadsReady(explicit = false): boolean {
     const state = this.state;
     return Boolean(
       state?.connected &&
+      isGatewayAvailable(this.context.gateway.snapshot) &&
       this.presented &&
       document.visibilityState !== "hidden" &&
       (explicit ||
@@ -315,7 +325,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
-    if (!state?.connected || !row) {
+    if (!state?.connected || !row || !isGatewayAvailable(this.context.gateway.snapshot)) {
       return;
     }
     const failureAt = row.endedAt ?? row.updatedAt ?? 0;
@@ -352,7 +362,15 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     if (!unread || !this.unreadPatchGuard.shouldPatch(state.sessionKey, true, row.markedUnreadAt)) {
       return;
     }
-    const guardKey = state.sessionKey;
+    this.acknowledgeSessionRead(row, this.unreadPatchGuard, agentId);
+  }
+
+  private acknowledgeSessionRead(
+    row: GatewaySessionRow,
+    guard: SessionUnreadPatchGuard,
+    agentId: string | undefined,
+  ) {
+    const settle = guard.settlePatch();
     void this.context.sessions
       .patch(
         row.key,
@@ -360,18 +378,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         { agentId, expectedMarkedUnreadAt: row.markedUnreadAt ?? null },
       )
       .then(
-        (result) => {
-          // A null result means no request was sent (connection scope lost);
-          // unlatch like a failure or the badge stays lit until navigation.
-          if (result === null) {
-            this.unreadPatchGuard.patchFailed(guardKey);
-          }
-        },
-        (error: unknown) => {
-          // The capability publishes the error once; only transient failures
-          // may send another acknowledgement on the next snapshot.
-          this.unreadPatchGuard.patchFailed(guardKey, error);
-        },
+        (result) => settle(result !== null),
+        (error: unknown) => settle(false, error),
       );
   }
 
@@ -384,11 +392,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     for (const run of runs) {
       const revision = run.updatedAt ?? null;
       // Manual unread markers stay until the run itself is acknowledged.
-      if (
-        run.markedUnreadAt != null ||
-        run.sharingRole === "viewer" ||
-        this.hiddenRunReadRequests.get(run.key) === revision
-      ) {
+      if (run.markedUnreadAt != null || run.sharingRole === "viewer") {
         continue;
       }
       const agentId = parseAgentSessionKey(run.key)?.agentId ?? resolveChatAgentId(state);
@@ -399,29 +403,14 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       if (!access.allowed) {
         continue;
       }
-      this.hiddenRunReadRequests.set(run.key, revision);
-      const retry = () => {
-        if (this.hiddenRunReadRequests.get(run.key) === revision) {
-          this.hiddenRunReadRequests.delete(run.key);
-        }
-      };
-      // The null expectation lets the Gateway keep a marker set after this snapshot.
-      // Permanent rejections stay latched until the run changes; the capability
-      // reports them once. Transient failures retry on the next read.
-      void this.context.sessions
-        .patch(run.key, { unread: false }, { agentId, expectedMarkedUnreadAt: null })
-        .then(
-          (result) => {
-            if (result === null) {
-              retry();
-            }
-          },
-          (error: unknown) => {
-            if (!isPermanentUnreadAckFailure(error)) {
-              retry();
-            }
-          },
-        );
+      let request = this.hiddenRunReadRequests.get(run.key);
+      if (!request || request.revision !== revision) {
+        request = { revision, guard: new SessionUnreadPatchGuard() };
+        this.hiddenRunReadRequests.set(run.key, request);
+      }
+      if (request.guard.shouldPatch(run.key, true)) {
+        this.acknowledgeSessionRead(run, request.guard, agentId);
+      }
     }
   }
 

@@ -8,11 +8,7 @@ import {
   stagedInputPathDirectory,
 } from "../../media/staged-inputs.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
-import {
-  activeWorkspaceHashContext,
-  withWorkspaceHashContext,
-  withWorkspaceHashMemo,
-} from "./workspace-hash-memo.js";
+import { withWorkspaceHashContext } from "./workspace-hash-memo.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
@@ -26,6 +22,7 @@ import {
   assertActualWorkspaceManifest,
   changedPaths,
   ConcurrentWorkspacePathError,
+  createWorkspaceManifestVerifier,
   hasReplacedBaseEntryAncestor,
   manifestNodes,
   preflightWorkspaceApply,
@@ -65,7 +62,6 @@ export async function applyStagedWorkerWorkspace(params: {
     | { kind: "exact-target"; verify: () => Promise<void> };
 }): Promise<WorkerWorkspaceApplyResult> {
   return await withWorkspaceHashContext(async (): Promise<WorkerWorkspaceApplyResult> => {
-    const { memo: hashMemo, metrics } = activeWorkspaceHashContext()!;
     const root = await fs.realpath(params.root);
     const stagedInputDirectories = stagedInputDirectoriesFromEntries(params.current.entries);
     const baseNodes = manifestNodes(params.base);
@@ -124,26 +120,6 @@ export async function applyStagedWorkerWorkspace(params: {
     const includePaths = params.current.baseCommit
       ? new Set([...baseNodes.keys(), ...currentNodes.keys()])
       : undefined;
-    const createApplyResult = (
-      actual: Awaited<ReturnType<typeof captureWorkspaceManifest>>,
-      conflictPaths: string[],
-    ): WorkerWorkspaceApplyResult => ({
-      ...actual,
-      conflictPaths,
-      verifyLocalStable: async () =>
-        await withWorkspaceHashMemo(
-          hashMemo,
-          async () =>
-            await assertActualWorkspaceManifest({
-              root,
-              expectedRef: actual.manifestRef,
-              baseCommit: actual.manifest.baseCommit,
-              preserveDirectories,
-              includePaths,
-            }),
-          metrics,
-        ),
-    });
     const inspectPaths = () =>
       preflightWorkspaceApply({ root, base: params.base, current: params.current });
     const preflight = await inspectPaths();
@@ -170,7 +146,17 @@ export async function applyStagedWorkerWorkspace(params: {
       await reconcile.publish?.({ ...actual, conflictPaths });
       params.assertCurrent?.();
       await params.journal.commit(actual.manifestRef);
-      return createApplyResult(actual, conflictPaths);
+      return {
+        ...actual,
+        conflictPaths,
+        verifyLocalStable: createWorkspaceManifestVerifier({
+          root,
+          expectedRef: actual.manifestRef,
+          baseCommit: actual.manifest.baseCommit,
+          preserveDirectories,
+          includePaths,
+        }),
+      };
     };
     if (changed.size === 0) {
       return acceptance.kind === "exact-target"

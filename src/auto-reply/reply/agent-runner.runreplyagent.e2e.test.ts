@@ -388,6 +388,7 @@ function createMinimalRun(params?: {
   bindActiveAuthority?: boolean;
   attachSteerBackend?: boolean;
   activeBackendRunId?: string;
+  runtimePolicySessionKey?: string;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -521,6 +522,7 @@ function createMinimalRun(params?: {
         sessionEntry: params?.sessionEntry,
         sessionStore: params?.sessionStore,
         sessionKey,
+        runtimePolicySessionKey: params?.runtimePolicySessionKey,
         storePath: params?.storePath,
         sessionCtx,
         defaultModel: "anthropic/claude-opus-4-6",
@@ -1371,12 +1373,12 @@ describe("runReplyAgent active steering", () => {
       resolvedQueueMode: "steer",
     });
 
-    await expect(run()).resolves.toBeUndefined();
+    await expect(run()).resolves.toMatchObject({ isError: true, text: "receipt unavailable" });
 
     expect(onAdopted).toHaveBeenCalledOnce();
-    expect(state.activeBackendCancelMock).toHaveBeenCalledOnce();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
-    expect(runState.messageInjectionAborted).toBe(true);
+    expect(state.activeBackendCancelMock).not.toHaveBeenCalled();
+    expect(runState.admission).toMatchObject({ reason: "question-response-indeterminate" });
+    expect(runState.messageInjectionAborted).toBeUndefined();
     expect(parkedSteer.consume).toHaveBeenCalledOnce();
     expect(parkedSteer.fallback).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
@@ -1384,7 +1386,7 @@ describe("runReplyAgent active steering", () => {
     active.complete();
   });
 
-  it("unconfirmed steer commit aborts only the captured operation, never a same-key successor", async () => {
+  it("unconfirmed steer commit cancels neither the captured operation nor a same-key successor", async () => {
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "session-a",
@@ -1419,13 +1421,13 @@ describe("runReplyAgent active steering", () => {
       resolvedQueueMode: "steer",
     });
 
-    await expect(run()).resolves.toBeUndefined();
+    await expect(run()).resolves.toMatchObject({ isError: true, text: "receipt unavailable" });
     if (!successor || !successorAbortByUser) {
       throw new Error("expected same-key successor operation");
     }
     try {
       expect(successorAbortByUser).not.toHaveBeenCalled();
-      expect(activeAbortByUser).toHaveBeenCalledOnce();
+      expect(activeAbortByUser).not.toHaveBeenCalled();
     } finally {
       successor.complete();
     }

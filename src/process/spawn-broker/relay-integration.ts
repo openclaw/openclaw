@@ -9,6 +9,7 @@ import { createServiceChildCleanup } from "../supervisor/service-child-cleanup.j
 import {
   encodeServiceChildMessage,
   type ServiceChildControlMessage,
+  type ServiceChildControlPayload,
 } from "../supervisor/service-child-protocol.js";
 import { BrokerChild } from "./child.js";
 
@@ -18,8 +19,14 @@ export function createServiceChildControlSender(params: {
   useWindowsJobAnchor: boolean;
   startup: Promise<void>;
   cleanup: Promise<void>;
+  generation: string;
+  nextSequence: () => number;
 }) {
-  return (message: ServiceChildControlMessage, initiate?: SpawnInitiation): Promise<void> => {
+  return (payload: ServiceChildControlPayload, initiate?: SpawnInitiation): Promise<void> => {
+    const message: ServiceChildControlMessage = Object.assign(
+      { type: payload.type, generation: params.generation, sequence: params.nextSequence() },
+      payload,
+    );
     // Failed startup releases launch custody only after confirmed containment cleanup.
     const settlement = initiate ? params.startup.catch(() => params.cleanup) : undefined;
     void settlement?.catch(() => {});

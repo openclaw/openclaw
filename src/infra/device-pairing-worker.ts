@@ -155,10 +155,11 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
   const operation = withDevicePairingLock(async () => {
     context.admission.assertCurrent();
     options.assertCurrent?.();
-    // Join codes never change paired records or their live authority projection.
+    // Join codes and retained setup cleanup cannot change paired-device authority.
     const publication =
       captured.type === "devicePairing.registerJoinCode" ||
-      captured.type === "devicePairing.redeemJoinCode"
+      captured.type === "devicePairing.redeemJoinCode" ||
+      captured.type === "bootstrap.prune"
         ? undefined
         : captureDevicePairingPublication(context.admission);
     // Runtime facts preserve pairing identity; publishing them must not interrupt live node work.
@@ -204,7 +205,12 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         context,
         async (scope) => {
           try {
-            return await scope.execute(captured);
+            const result = await scope.execute(captured);
+            if (captured.type === "bootstrap.prune" && result === 0) {
+              context.admission.assertCurrent();
+              options.assertCurrent?.();
+            }
+            return result;
           } finally {
             install();
           }

@@ -131,18 +131,27 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           className: "chat-controls__trigger-provider-icon",
         })
       : nothing;
-  const providerGroups = new Map<string, ChatModelPickerOption[]>();
+  // Default restores inheritance; it stays ahead of ranked model choices. When a
+  // provider recommends models, they follow, and the rest collapse under "All models".
+  const recommendingProviders = new Set(
+    params.modelOptions.filter((option) => option.recommended).map((option) => option.provider),
+  );
+  const providerGroups = new Map<
+    string,
+    { lead: ChatModelPickerOption[]; more: ChatModelPickerOption[] }
+  >();
   for (const option of params.modelOptions) {
-    const existing = providerGroups.get(option.provider) ?? [];
-    // Default restores inheritance; it stays ahead of ranked model choices.
+    const group = providerGroups.get(option.provider) ?? { lead: [], more: [] };
     if (option.isDefault) {
-      existing.unshift(option);
+      group.lead.unshift(option);
     } else if (option === leadingModelOption) {
-      existing.splice(existing[0]?.isDefault ? 1 : 0, 0, option);
+      group.lead.splice(group.lead[0]?.isDefault ? 1 : 0, 0, option);
+    } else if (option.recommended || !recommendingProviders.has(option.provider)) {
+      group.lead.push(option);
     } else {
-      existing.push(option);
+      group.more.push(option);
     }
-    providerGroups.set(option.provider, existing);
+    providerGroups.set(option.provider, group);
   }
   const orderedProviderGroups = [...providerGroups];
   const selectedProviderIndex = orderedProviderGroups.findIndex(
@@ -151,10 +160,21 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   if (selectedProviderIndex > 0) {
     orderedProviderGroups.unshift(...orderedProviderGroups.splice(selectedProviderIndex, 1));
   }
-  const orderedOptions = orderedProviderGroups.flatMap(([, options]) => options);
+  const orderedOptions = orderedProviderGroups.flatMap(([, { lead, more }]) => [...lead, ...more]);
   const optionIndex = new Map(
     orderedOptions.map((option, index) => [modelPickerOptionKey(option), index]),
   );
+  const renderModelOption = (entry: ChatModelPickerOption) =>
+    renderChatModelPickerOption({
+      disabled: params.disabled,
+      entry,
+      index: optionIndex.get(modelPickerOptionKey(entry)) ?? 0,
+      selectedModelValue: params.selectedModelValue,
+      selectedAgentRuntime: params.selectedAgentRuntime,
+      sessionModelPinned: params.sessionModelPinned,
+      onSelect: selectModel,
+      onModelSetup: params.onModelSetup,
+    });
   const targetGroups = params.targetGroups ?? [];
   const targetOptionCount = targetGroups.reduce((count, group) => count + group.options.length, 0);
   const hasOptions =
@@ -363,7 +383,8 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                             ${repeat(
                               orderedProviderGroups,
                               ([provider]) => provider,
-                              ([provider, options]) => {
+                              ([provider, { lead, more }]) => {
+                                const options = [...lead, ...more];
                                 const providerLabel = providerDisplayLabel(provider);
                                 const groupLabel = t("chat.modelControls.providerModels", {
                                   provider: providerLabel,
@@ -444,19 +465,47 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                       role="listbox"
                                       aria-label=${groupLabel}
                                     >
-                                      ${repeat(options, modelPickerOptionKey, (entry) =>
-                                        renderChatModelPickerOption({
-                                          disabled: params.disabled,
-                                          entry,
-                                          index: optionIndex.get(modelPickerOptionKey(entry)) ?? 0,
-                                          selectedModelValue: params.selectedModelValue,
-                                          selectedAgentRuntime: params.selectedAgentRuntime,
-                                          sessionModelPinned: params.sessionModelPinned,
-                                          onSelect: selectModel,
-                                          onModelSetup: params.onModelSetup,
-                                        }),
-                                      )}
+                                      ${repeat(lead, modelPickerOptionKey, renderModelOption)}
                                     </div>
+                                    ${
+                                      more.length > 0
+                                        ? html`
+                                            <button
+                                              class="chat-controls__inline-select-option chat-controls__model-more-toggle"
+                                              type="button"
+                                              data-chat-model-more-toggle
+                                              aria-expanded="false"
+                                              hidden
+                                              ?disabled=${params.disabled}
+                                              @click=${toggleModelProviderGroup}
+                                            >
+                                              <span
+                                                class="chat-controls__model-option-provider"
+                                                aria-hidden="true"
+                                              ></span>
+                                              <span class="chat-controls__model-more-label"
+                                                >${t("chat.modelControls.allModels", {
+                                                  count: String(more.length),
+                                                })}</span
+                                              >
+                                              <span
+                                                class="chat-controls__inline-select-chevron"
+                                                aria-hidden="true"
+                                                >${icons.chevronDown}</span
+                                              >
+                                            </button>
+                                            <div
+                                              class="chat-controls__provider-model-list"
+                                              data-chat-model-list="true"
+                                              data-chat-model-more
+                                              role="listbox"
+                                              aria-label=${groupLabel}
+                                            >
+                                              ${repeat(more, modelPickerOptionKey, renderModelOption)}
+                                            </div>
+                                          `
+                                        : nothing
+                                    }
                                   </section>
                                 `;
                               },

@@ -88,7 +88,8 @@ export function projectAgentActivityItem<
     facts.nativeOperation === "process.poll" ||
     isAgentPlanProgressToolName(name) ||
     name === "sessions_yield" ||
-    (name === "process" && asRecord(facts.args)?.action === "poll");
+    (name === "process" && asRecord(facts.args)?.action === "poll") ||
+    (name === "message" && asRecord(facts.args)?.action === "react");
   return routine && (item.status === "running" || item.status === "completed")
     ? { ...item, hideFromChannelProgress: true }
     : item;

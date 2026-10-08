@@ -1,5 +1,6 @@
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
@@ -10,7 +11,10 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
 import * as sessionPersistence from "./session-entry-persistence.js";
@@ -45,7 +49,15 @@ vi.mock("./commands-status.js", () => ({
 const { maybeResolveNativeSlashCommandFastReply } =
   await import("./get-reply-native-slash-fast-path.js");
 
-const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-native-slash-");
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const root of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(root);
+      closeOpenClawAgentDatabasesForTest(root);
+    }
+    cleanup();
+  }),
+);
 afterEach(() => cliBackendsTesting.resetDepsForTest());
 
 const runtimeCliBackends = [
@@ -168,7 +180,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       config ??
       ({
         session: {
-          store: path.join(tempDirs.make(), "sessions.json"),
+          store: path.join(tempDirs.make("openclaw-native-directive-"), "sessions.json"),
         },
       } as OpenClawConfig);
     const result = await runTestNativeSlashFastReply({
@@ -248,7 +260,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
   });
 
   it("applies native /model runtime and session options", async () => {
-    const storePath = path.join(tempDirs.make(), "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-native-model-options-"), "sessions.json");
     const { result } = await resolveNativeDirectiveCommand(
       `/model openai/gpt-5.5 --runtime codex -s`,
       {
@@ -273,7 +285,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
 
   it("applies native model selections using the admitted catalog without rediscovery", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-    const storePath = path.join(tempDirs.make(), "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-native-prepared-model-"), "sessions.json");
     vi.mocked(preparedModelCatalog.loadPreparedModelCatalogSnapshot).mockRejectedValue(
       new Error("native selection must not rediscover the prepared catalog"),
     );
@@ -338,7 +350,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       { provider: "openai", id: "gpt-5.5", name: "Default model", reasoning: false },
       { provider: "fixture", id: "selected-model", name: "Selected model", reasoning: true },
     ]);
-    const storePath = path.join(tempDirs.make(), "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-native-status-thinking-"), "sessions.json");
     const sessionKey = "agent:main:telegram:123";
     await replaceSessionEntry(
       { agentId: "main", sessionKey, storePath },
@@ -401,7 +413,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       reply: { text: "⚙️ Compacted" },
     });
 
-    const storePath = path.join(tempDirs.make(), "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-native-override-"), "sessions.json");
     await replaceSessionEntry(
       { agentId: "main", sessionKey: "agent:main:main", storePath },
       {
@@ -542,7 +554,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         ("targetAgentId" in testCase ? testCase.targetAgentId : undefined) ?? "main";
       const resolvedModel = "resolvedModel" in testCase ? testCase.resolvedModel : undefined;
       const targetSessionKey = `agent:${targetAgentId}:main`;
-      const storePath = path.join(tempDirs.make(), "sessions.json");
+      const storePath = path.join(tempDirs.make("openclaw-native-source-"), "sessions.json");
       await replaceSessionEntry(
         { agentId: targetAgentId, sessionKey: targetSessionKey, storePath },
         {
@@ -682,7 +694,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         `/${commandName}`,
         {
           session: {
-            store: path.join(tempDirs.make(), "sessions.json"),
+            store: path.join(tempDirs.make("openclaw-native-recovery-"), "sessions.json"),
           },
           agents: {
             defaults: {
@@ -729,7 +741,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       ctx,
       cfg: markCompleteReplyConfig({
         session: {
-          store: path.join(tempDirs.make(), "sessions.json"),
+          store: path.join(tempDirs.make("openclaw-text-slash-"), "sessions.json"),
         },
       } as OpenClawConfig),
       agentId: "dev",
@@ -776,7 +788,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       ctx,
       cfg: markCompleteReplyConfig({
         session: {
-          store: path.join(tempDirs.make(), "sessions.json"),
+          store: path.join(tempDirs.make("openclaw-external-text-slash-"), "sessions.json"),
         },
       } as OpenClawConfig),
       agentId: "dev",
@@ -795,7 +807,10 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     { commandName: "compact", authorized: true, deniedByPolicy: true },
   ])("rejects unauthorized native /$commandName before model selection", async (testCase) => {
     const { commandName, authorized } = testCase;
-    const storePath = path.join(tempDirs.make(), "sessions.json");
+    const storePath = path.join(
+      tempDirs.make("openclaw-native-slash-unauthorized-"),
+      "sessions.json",
+    );
     const sessionKey = "agent:main:telegram:slash:unauthorized";
     handleCommandsMock.mockResolvedValueOnce({
       shouldContinue: false,
@@ -856,7 +871,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
   });
 
   it("adopts a supported legacy alias before native command initialization", async () => {
-    const storePath = path.join(tempDirs.make(), "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-native-slash-alias-"), "sessions.json");
     const sessionKey = "agent:main:main";
     await replaceSessionEntry({ sessionKey: "Agent:main:main", storePath }, {
       sessionId: "legacy-session",
@@ -885,7 +900,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
   });
 
   it("does not mutate an archived session during native command initialization", async () => {
-    const storePath = path.join(tempDirs.make(), "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-native-slash-archived-"), "sessions.json");
     const sessionKey = "agent:main:main";
     const archivedEntry = {
       sessionId: "archived-session",
@@ -917,7 +932,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
   });
 
   it("persists fast-path session initialization before command mutation", async () => {
-    const storePath = path.join(tempDirs.make(), "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-native-slash-init-"), "sessions.json");
     const sessionKey = "agent:main:main";
     await replaceSessionEntry({ sessionKey, storePath }, {
       sessionId: "session-1",

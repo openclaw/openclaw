@@ -712,95 +712,66 @@ async function runOperatorInstallPolicy(
     params.logger.warn?.(omittedMessage);
   };
 
-  const result = await evaluatePolicy();
-  const policyFailure = formatInstallPolicyFailure({
-    result,
-    targetName: params.targetName,
-    targetType: params.targetType,
-  });
-  if (policyFailure) {
-    return policyFailure;
-  }
-  if (!result?.warning) {
-    logPolicyResult(result);
-    return undefined;
-  }
-  const installPolicyWarning: InstallPolicyWarningDetails = {
-    targetName: params.targetName,
-    targetType: params.targetType,
-    requestMode: params.requestMode,
-    reason: result.warning.reason,
-    ...(result.findings?.length ? { findings: result.findings } : {}),
-  };
-  if (!params.onInstallPolicyWarning) {
-    return {
-      blocked: {
-        code: "security_scan_blocked",
-        installPolicyWarning,
-        reason: formatInstallPolicyNotice({
-          decision: "warn",
-          findings: result.findings,
-          guidance: INSTALL_POLICY_REVIEW_GUIDANCE,
-          reason: result.warning.reason,
-          targetName: params.targetName,
-          targetType: params.targetType,
-        }),
-      },
-    };
-  }
-  logPolicyResult(result);
-  const acknowledgement = await params.onInstallPolicyWarning({
-    ...installPolicyWarning,
-  });
-  if (acknowledgement.status === "approved") {
-    const reevaluated = await evaluatePolicy();
-    const reevaluatedFailure = formatInstallPolicyFailure({
-      result: reevaluated,
+  let approvedWarning: { fingerprint: string } | undefined;
+  while (true) {
+    const result = await evaluatePolicy();
+    const policyFailure = formatInstallPolicyFailure({
+      result,
       targetName: params.targetName,
       targetType: params.targetType,
     });
-    if (reevaluatedFailure) {
-      return reevaluatedFailure;
+    if (policyFailure) {
+      return policyFailure;
     }
-    if (reevaluated?.warning) {
-      const warningUnchanged = reevaluated.warning.fingerprint === result.warning.fingerprint;
-      if (!warningUnchanged) {
-        return {
-          blocked: {
-            code: "security_scan_blocked",
-            installPolicyWarning: {
-              targetName: params.targetName,
-              targetType: params.targetType,
-              requestMode: params.requestMode,
-              reason: reevaluated.warning.reason,
-              ...(reevaluated.findings?.length ? { findings: reevaluated.findings } : {}),
-            },
-            reason: formatInstallPolicyNotice({
-              decision: "warn",
-              findings: reevaluated.findings,
-              guidance: [
-                "The policy warning changed after approval.",
-                "Review the current warning and try again.",
-              ],
-              reason: reevaluated.warning.reason,
-              targetName: params.targetName,
-              targetType: params.targetType,
-            }),
-          },
-        };
-      }
-    } else {
-      logPolicyResult(reevaluated);
+    if (!result?.warning) {
+      logPolicyResult(result);
+      return undefined;
     }
-    return undefined;
+    const installPolicyWarning: InstallPolicyWarningDetails = {
+      targetName: params.targetName,
+      targetType: params.targetType,
+      requestMode: params.requestMode,
+      reason: result.warning.reason,
+      ...(result.findings?.length ? { findings: result.findings } : {}),
+    };
+    // Approval admits only the warning just reviewed; a changed second result is terminal.
+    if (approvedWarning && approvedWarning.fingerprint === result.warning.fingerprint) {
+      return undefined;
+    }
+    if (approvedWarning || !params.onInstallPolicyWarning) {
+      return {
+        blocked: {
+          code: "security_scan_blocked",
+          installPolicyWarning,
+          reason: formatInstallPolicyNotice({
+            decision: "warn",
+            findings: result.findings,
+            guidance: approvedWarning
+              ? [
+                  "The policy warning changed after approval.",
+                  "Review the current warning and try again.",
+                ]
+              : INSTALL_POLICY_REVIEW_GUIDANCE,
+            reason: result.warning.reason,
+            targetName: params.targetName,
+            targetType: params.targetType,
+          }),
+        },
+      };
+    }
+    logPolicyResult(result);
+    const acknowledgement = await params.onInstallPolicyWarning({ ...installPolicyWarning });
+    if (acknowledgement.status !== "approved") {
+      return {
+        blocked: {
+          code: "security_scan_blocked",
+          installPolicyWarning,
+          reason: "Install cancelled: the install policy warning was not approved.",
+        },
+      };
+    }
+    approvedWarning = result.warning;
   }
-  return {
-    blocked: {
-      code: "security_scan_blocked",
-      installPolicyWarning,
-      reason: "Install cancelled: the install policy warning was not approved.",
-    },
-  };
 }
 
 type InstallPolicyAndHookRequest = Omit<
@@ -852,86 +823,72 @@ function pluginInstallPolicyRequest(params: PluginInstallPolicyParams, targetNam
   };
 }
 
-export async function scanBundleInstallSourceRuntime(
-  params: PluginInstallPolicyParams &
-    InstallSafetyOverrides & {
-      pluginId: string;
-      sourceDir: string;
-      requestKind?: PluginInstallRequestKind;
-      version?: string;
-    },
-): Promise<InstallSecurityScanResult | undefined> {
-  const requestKind = params.requestKind ?? "plugin-dir";
-  const source = params.source ?? resolvePolicySource({ requestKind });
-  const plugin = {
-    contentType: "bundle" as const,
-    pluginId: params.pluginId,
-    manifestId: params.pluginId,
-    ...(params.version ? { version: params.version } : {}),
+type PluginArtifactScanParams = PluginInstallPolicyParams &
+  InstallSafetyOverrides & {
+    pluginId: string;
+    requestKind?: PluginInstallRequestKind;
+    version?: string;
   };
-  await validatePackageDependencyBoundaries({
-    rootDir: params.sourceDir,
-  });
-  return await runInstallPolicyAndHook({
-    ...pluginInstallPolicyRequest(params, params.pluginId),
-    policyOrigin: {
-      type: "plugin-bundle",
-      ...(params.version ? { version: params.version } : {}),
-    },
-    hookOrigin: "plugin-bundle",
-    installLabel: `Bundle "${params.pluginId}" installation`,
-    source,
-    sourcePath: params.sourceDir,
-    sourcePathKind: "directory",
-    requestKind,
-    plugin,
-    skipHook: shouldBypassOpenClawInstallFriction({ source: params.source }),
-  });
-}
 
-export async function scanPackageInstallSourceRuntime(
-  params: PluginInstallPolicyParams &
-    InstallSafetyOverrides & {
-      extensions: string[];
-      packageDir: string;
-      pluginId: string;
-      requestKind?: PluginInstallRequestKind;
-      packageName?: string;
-      manifestId?: string;
-      version?: string;
-    },
+async function scanPluginArtifact(
+  params: PluginArtifactScanParams & { packageName?: string },
+  sourceDir: string,
+  plugin: PluginHookBeforeInstallPlugin & { contentType: "bundle" | "package" },
 ): Promise<InstallSecurityScanResult | undefined> {
   const requestKind = params.requestKind ?? "plugin-dir";
   const source = params.source ?? resolvePolicySource({ requestKind });
-  const plugin = {
-    contentType: "package" as const,
-    pluginId: params.pluginId,
-    ...(params.packageName ? { packageName: params.packageName } : {}),
-    ...(params.manifestId ? { manifestId: params.manifestId } : {}),
-    ...(params.version ? { version: params.version } : {}),
-    extensions: params.extensions.slice(),
-  };
-  await validatePackageDependencyBoundaries({
-    rootDir: params.packageDir,
-  });
+  const bundle = plugin.contentType === "bundle";
+  const origin = bundle ? "plugin-bundle" : "plugin-package";
+  await validatePackageDependencyBoundaries({ rootDir: sourceDir });
   return await runInstallPolicyAndHook({
     ...pluginInstallPolicyRequest(params, params.pluginId),
     policyOrigin: {
-      type: "plugin-package",
-      ...(params.packageName ? { packageName: params.packageName } : {}),
+      type: origin,
+      ...(!bundle && params.packageName ? { packageName: params.packageName } : {}),
       ...(params.version ? { version: params.version } : {}),
     },
-    hookOrigin: "plugin-package",
-    installLabel: `Plugin "${params.pluginId}" installation`,
+    hookOrigin: origin,
+    installLabel: `${bundle ? "Bundle" : "Plugin"} "${params.pluginId}" installation`,
     source,
-    sourcePath: params.packageDir,
+    sourcePath: sourceDir,
     sourcePathKind: "directory",
     requestKind,
     plugin,
     skipHook: shouldBypassOpenClawInstallFriction({
       source: params.source,
-      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+      trustedSourceLinkedOfficialInstall: bundle
+        ? undefined
+        : params.trustedSourceLinkedOfficialInstall,
     }),
+  });
+}
+
+export async function scanBundleInstallSourceRuntime(
+  params: PluginArtifactScanParams & { sourceDir: string },
+): Promise<InstallSecurityScanResult | undefined> {
+  return await scanPluginArtifact(params, params.sourceDir, {
+    contentType: "bundle",
+    pluginId: params.pluginId,
+    manifestId: params.pluginId,
+    ...(params.version ? { version: params.version } : {}),
+  });
+}
+
+export async function scanPackageInstallSourceRuntime(
+  params: PluginArtifactScanParams & {
+    extensions: string[];
+    packageDir: string;
+    packageName?: string;
+    manifestId?: string;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
+  return await scanPluginArtifact(params, params.packageDir, {
+    contentType: "package",
+    pluginId: params.pluginId,
+    ...(params.packageName ? { packageName: params.packageName } : {}),
+    ...(params.manifestId ? { manifestId: params.manifestId } : {}),
+    ...(params.version ? { version: params.version } : {}),
+    extensions: params.extensions.slice(),
   });
 }
 
@@ -967,18 +924,12 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
     });
   }
   return await runOperatorInstallPolicy({
-    config: params.config,
-    logger: params.logger,
-    onInstallPolicyWarning: params.onInstallPolicyWarning,
+    ...pluginInstallPolicyRequest(params, params.pluginId),
     origin: { type: "plugin-dependency-tree" },
     source: params.source ?? resolvePolicySource({ requestKind }),
     sourcePath: params.dependencyScanRootDir ?? params.packageDir,
     sourcePathKind: "directory",
-    targetName: params.pluginId,
-    targetType: "plugin",
     requestKind,
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
     plugin: {
       contentType: "dependency-tree",
       pluginId: params.pluginId,

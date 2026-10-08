@@ -17,6 +17,7 @@ import {
 import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
+import type { SkillEntry } from "../../skills/types.js";
 import {
   getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
@@ -64,7 +65,7 @@ import {
   resolveAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
-import { bindHostSkillCatalog } from "./host-skills.js";
+import { bindHostSkillCatalog, prepareHostSkillLibraryResources } from "./host-skills.js";
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 import {
   bindHarnessHostSourceAuthority,
@@ -81,6 +82,9 @@ type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
 type AgentHarnessHostApprovalResult = NonNullable<
   Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>
 >;
+type HostToolSurfaceOptions = Parameters<
+  NonNullable<AgentHarnessHostCapabilities["createToolSurfaceAsync"]>
+>[0];
 
 /** Creates a closure-bound capability before plugin invocation. */
 export function createAgentHarnessHostCapabilities(params: {
@@ -391,10 +395,21 @@ export function createAgentHarnessHostCapabilities(params: {
     nativeModelPolicySupported
       ? (model) => bindHarnessModelExecution(attempt.admittedRunContext, model, assertActive)
       : undefined;
+  // Sandboxes use their materialized snapshot paths, never host library pins.
+  const skillResourceSnapshot = (options: HostToolSurfaceOptions) =>
+    !requiredWorkspace &&
+    !hostSandboxEnabled &&
+    !options?.sandbox?.enabled &&
+    options?.includeCoreTools !== false &&
+    options?.toolConstructionPlan?.includeBaseCodingTools !== false
+      ? skillsSnapshot
+      : undefined;
   const toolConstructionInputs = (
-    options: Parameters<NonNullable<AgentHarnessHostCapabilities["createToolSurfaceAsync"]>>[0],
+    options: HostToolSurfaceOptions,
+    libraryEntries?: readonly SkillEntry[],
+    assertCurrent: () => void = assertActive,
   ) => {
-    assertActive();
+    assertCurrent();
     const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
     return {
       options: {
@@ -410,15 +425,10 @@ export function createAgentHarnessHostCapabilities(params: {
         skillUsagePaths: options?.skillUsagePaths ?? skillUsagePaths,
         operationalRunInstance,
       },
-      // Sandboxes use their materialized snapshot paths, never host library pins.
-      skillReadResources:
-        !requiredWorkspace &&
-        !hostSandboxEnabled &&
-        !options?.sandbox?.enabled &&
-        options?.includeCoreTools !== false &&
-        options?.toolConstructionPlan?.includeBaseCodingTools !== false
-          ? resolveSkillResourceCandidates(skillsSnapshot)
-          : undefined,
+      skillReadResources: resolveSkillResourceCandidates(
+        skillResourceSnapshot(options),
+        libraryEntries,
+      ),
     };
   };
   const bindCreatedTools = (
@@ -494,7 +504,15 @@ export function createAgentHarnessHostCapabilities(params: {
       );
     },
     createToolSurfaceAsync: async (options, bindingOptions) => {
-      const inputs = toolConstructionInputs(options);
+      const librarySelections = skillResourceSnapshot(options)?.librarySelections ?? [];
+      const library = librarySelections.length
+        ? await prepareHostSkillLibraryResources(librarySelections, assertActive)
+        : undefined;
+      const inputs = toolConstructionInputs(
+        options,
+        library?.entries ?? [],
+        library?.assertCurrent,
+      );
       const sourceTools = await withToolConstructionScope(() =>
         createOpenClawCodingToolsInternalAsync(
           inputs.options,
@@ -502,11 +520,12 @@ export function createAgentHarnessHostCapabilities(params: {
           undefined,
           undefined,
           {
-            assertCurrent: assertActive,
+            assertCurrent: library?.assertCurrent ?? assertActive,
             signal: bindAbortSignal(attemptSignal),
           },
         ),
       );
+      library?.assertPublicationCurrent();
       return bindCreatedTools(sourceTools, bindingOptions);
     },
     prepareMutableFileApproval: async (request) => {

@@ -173,6 +173,13 @@ export function createReplyRestartRecoveryClaimController(params: {
       ? entry.restartRecoveryDeliveryRunId === recoveryRunId &&
         normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) === recoverySourceRunId
       : entry.restartRecoveryRuns?.some(isExecutionFence) === true);
+  const recordAdmittedClaim = (entry: SessionEntry, exactRunId?: string) => {
+    params.setEntry(entry);
+    recoveryRunId = exactRunId ?? recoveryRunId;
+    recoverySourceRunId = normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId);
+    trackedSessionId = entry.sessionId;
+    tracked = exactRunId !== undefined || isTrackedClaim(entry);
+  };
   const assertReadCurrent = () => {
     if (params.lifecycleGeneration) {
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
@@ -203,7 +210,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       if (!result?.sessionEntry) {
         throw new Error("session changed before durable user-turn admission");
       }
-      return result.sessionEntry as SessionEntry;
+      return result.sessionEntry;
     }
     let didCommit = false;
     const persisted = await applySessionEntryTargetOperation(
@@ -342,11 +349,7 @@ export function createReplyRestartRecoveryClaimController(params: {
         sessionKey: params.sessionKey,
         storePath: params.storePath,
       });
-      params.setEntry(adopted);
-      recoveryRunId = admissionRunId;
-      recoverySourceRunId = normalizeOptionalString(adopted.restartRecoveryDeliverySourceRunId);
-      trackedSessionId = adopted.sessionId;
-      tracked = true;
+      recordAdmittedClaim(adopted, admissionRunId);
       return "admitted";
     }
 
@@ -467,10 +470,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     });
-    params.setEntry(persisted);
-    recoverySourceRunId = normalizeOptionalString(persisted.restartRecoveryDeliverySourceRunId);
-    trackedSessionId = persisted.sessionId;
-    tracked = isTrackedClaim(persisted);
+    recordAdmittedClaim(persisted);
     return "admitted";
   };
 

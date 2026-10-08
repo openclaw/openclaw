@@ -284,7 +284,9 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
           env: undefined,
           sessionKey: "agent:foreign:dashboard:incognito-wired-history",
         }),
-      ).rejects.toThrow("another incognito actor");
+      ).rejects.toThrow(
+        "Explicit incognito database target does not match its agent and state root",
+      );
       expect(
         await loadTranscriptEvents({
           ...scope,

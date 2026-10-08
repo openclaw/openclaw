@@ -163,6 +163,8 @@ function makeDispatchInput(
       },
     },
     preparedRuntime: {
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
       requestedModelId: "gpt-5.6-luna",
       nativeModelOwned: true,
       authStorage: {},
@@ -186,8 +188,6 @@ function makeDispatchInput(
       suppressNextUserMessagePersistence: false,
     },
     terminalRetryState: { beforeFinalizeRevisionAttempts: 0 },
-    provider: "openai",
-    modelId: "gpt-5.6-luna",
     replayState,
     startupStagesEmitted: false,
     bootstrapPromptWarningSignaturesSeen: [],
