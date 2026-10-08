@@ -4,7 +4,9 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { spawnAcpDirect } from "./acp-spawn.js";
 import { expectRegisteredSubagentRun } from "./subagent-spawn.test-helpers.js";
 
-type SpawnFn = typeof spawnAcpDirect;
+type SpawnFn = (
+  request: Partial<Parameters<typeof spawnAcpDirect>[0]>,
+) => ReturnType<typeof spawnAcpDirect>;
 type SpawnResult = Awaited<ReturnType<SpawnFn>>;
 
 export function registerAcpSpawnOwnerTests(fixture: {
