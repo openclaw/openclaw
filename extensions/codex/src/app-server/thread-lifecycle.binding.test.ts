@@ -52,6 +52,7 @@ import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
 import { registerThreadPolicyRefreshTests } from "./thread-lifecycle-policy-refresh.test-support.js";
 import { registerRequiredRootThreadPolicyTests } from "./thread-lifecycle-rooted.test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
+import { registerThreadWebSearchBindingTests } from "./thread-lifecycle-web-search.test-support.js";
 import {
   createLeasedCodexLifecycleHarness,
   startOrResumeAttemptThreadWithoutSkills as startOrResumeAttemptThread,
@@ -781,6 +782,15 @@ describe("Codex app-server thread lifecycle bindings", () => {
     }
   });
 
+  registerThreadWebSearchBindingTests({
+    createPaths,
+    createParams,
+    createSequentialLifecycleHarness,
+    startOrResumeThread,
+    createDeferredNamedDynamicTool,
+    preflightMethods: PREFLIGHT_METHODS,
+  });
+
   registerThreadPolicyRefreshTests({
     createParams,
     createThreadLifecycleAppServerOptions,
@@ -837,7 +847,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         params,
         userMcpServersEnabled: false,
         abandonClient,
-        nativeHookRelayGeneration: "original-relay",
+        buildFinalConfigPatch: () => ({ nativeHookRelayGeneration: "original-relay" }),
         pluginThreadConfig: {
           enabled: true,
           requiresCurrentPolicyCheck: true,
@@ -873,7 +883,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       warming = true;
       const pending = startOrResumeThread({
         ...common,
-        nativeHookRelayGeneration: "stale-refresh",
+        buildFinalConfigPatch: () => ({ nativeHookRelayGeneration: "stale-refresh" }),
       });
       await entered.promise;
       expect(isCodexAppServerLiveThreadClaimed(client, started.threadId)).toBe(true);
@@ -2757,57 +2767,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding.modelProvider).toBe("lmstudio");
   });
 
-  it("uses a transient Codex thread when runtime toolsAllow denies web_search", async () => {
-    const { sessionFile, workspaceDir } = createPaths();
-    const params = createParams(sessionFile, workspaceDir);
-    params.disableTools = false;
-
-    const fixture = await createSequentialLifecycleHarness(() => threadStartResult("thread-1"));
-    const { client, request } = fixture;
-
-    await startOrResumeThread({
-      client,
-      params,
-      dynamicTools: [createDeferredNamedDynamicTool("web_search")],
-      webSearchAllowed: true,
-    });
-    params.toolsAllow = ["message"];
-    await fixture.endTurn("thread-1");
-    const restrictedBinding = await startOrResumeThread({
-      client,
-      params,
-      dynamicTools: [createDeferredNamedDynamicTool("web_search")],
-      webSearchAllowed: false,
-    });
-    const savedAfterRestriction = await readCodexAppServerBinding(sessionFile);
-    params.toolsAllow = undefined;
-    await fixture.endTurn("thread-2");
-    const resumedBinding = await startOrResumeThread({
-      client,
-      params,
-      dynamicTools: [createDeferredNamedDynamicTool("web_search")],
-      webSearchAllowed: true,
-    });
-
-    expect(restrictedBinding.threadId).toBe("thread-2");
-    expect(restrictedBinding).not.toHaveProperty("liveThreadConfigFingerprint");
-    expect(savedAfterRestriction?.threadId).toBe("thread-1");
-    expect(resumedBinding.threadId).toBe("thread-1");
-    expect(request.mock.calls.map(([method]) => method)).toEqual(
-      twoStartsThenResumeMethods(PREFLIGHT_METHODS),
-    );
-    expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toMatchObject({
-      config: { web_search: "cached" },
-    });
-    expect(
-      request.mock.calls.filter(
-        ([method]) => method === "thread/start" || method === "thread/resume",
-      )[1]?.[1],
-    ).toMatchObject({
-      config: { web_search: "disabled" },
-    });
-  });
-
   it("keeps the retained primary subscribed across a transient report-only turn", async () => {
     const { sessionFile, workspaceDir } = createPaths();
     const params = createParams(sessionFile, workspaceDir);
@@ -2917,58 +2876,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ).toMatchObject({
       config: { web_search: "disabled" },
     });
-  });
-
-  it("persists config-denied search when runtime toolsAllow also excludes web_search", async () => {
-    const { sessionFile, workspaceDir } = createPaths();
-    const params = createParams(sessionFile, workspaceDir);
-
-    const fixture = await createSequentialLifecycleHarness((requestParams) =>
-      threadStartResult((requestParams as { threadId: string }).threadId),
-    );
-    const { client, request } = fixture;
-
-    await startOrResumeThread({
-      client,
-      params,
-      dynamicTools: [createDeferredNamedDynamicTool("web_search")],
-      persistentWebSearchAllowed: true,
-      webSearchAllowed: true,
-    });
-    params.config = { tools: { deny: ["web_search"] } };
-    params.toolsAllow = ["message"];
-    await fixture.endTurn("thread-1");
-    const restrictedBinding = await startOrResumeThread({
-      client,
-      params,
-      nativeCodeModeEnabled: false,
-      persistentWebSearchAllowed: false,
-      webSearchAllowed: false,
-    });
-    await fixture.endTurn("thread-2");
-    const resumedRestrictedBinding = await startOrResumeThread({
-      client,
-      params,
-      nativeCodeModeEnabled: false,
-      persistentWebSearchAllowed: false,
-      webSearchAllowed: false,
-    });
-
-    expect(restrictedBinding.threadId).toBe("thread-2");
-    expect(resumedRestrictedBinding.threadId).toBe("thread-2");
-    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-2");
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      ...PREFLIGHT_METHODS,
-      "thread/start",
-      "thread/unsubscribe",
-      "config/read",
-      "thread/start",
-      "thread/unsubscribe",
-      "config/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-    ]);
   });
 
   it("starts a fresh Codex thread for hosted search restrictions on a legacy binding", async () => {

@@ -197,11 +197,7 @@ export function createDiscordGatewaySupervisor(params: {
       phase = "teardown";
     },
     drainPending: (handler) => {
-      if (pending.length === 0) {
-        return "continue";
-      }
-      const queued = [...pending];
-      pending.length = 0;
+      const queued = pending.splice(0);
       for (const event of queued) {
         if (handler(event) === "stop") {
           return "stop";

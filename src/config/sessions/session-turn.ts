@@ -111,6 +111,7 @@ export async function appendSessionTurnInWorker(
         undefined,
         options.keyFormat === "agent-qualified"
           ? {
+              kind: "turn",
               agentId: scope.agentId,
               sessionKey: scope.sessionKey,
               options: {

@@ -4,7 +4,12 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { normalizeUiAppearancePreference } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import {
+  normalizeTabIconPreference,
+  normalizeUiAppearancePreference,
+  type TabIconPreference,
+} from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../../../src/shared/control-ui-storage.js";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
@@ -33,7 +38,6 @@ const NAV_WIDTH_DEFAULT = 258;
 const CURRENT_GATEWAY_SELECTION_KEY_PREFIX = "openclaw.control.currentGateway.v1:";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
-const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
 
 export function settingsKeyForGateway(gatewayUrl: string): string {
@@ -187,6 +191,7 @@ export type UiSettings = {
   // Browser typeface overrides; undefined = theme default.
   fontUi?: TypefaceId;
   fontChat?: TypefaceId;
+  tabIcon?: TabIconPreference;
   // Device-local: custom terminal faces must be installed on the browser computer.
   terminalFontFamily?: string;
   chatShowThinking: boolean;
@@ -317,7 +322,7 @@ function readSettingsForGateway(
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
-  return `${TOKEN_SESSION_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
+  return `${CONTROL_UI_TOKEN_SESSION_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
 }
 
 function resolveScopedSessionSelection(
@@ -503,6 +508,7 @@ export function loadUiPreferences(
       accent: normalizeAccentColor(parsed.accent),
       fontUi: normalizeTypefaceOverride(parsed.fontUi),
       fontChat: normalizeTypefaceOverride(parsed.fontChat),
+      tabIcon: normalizeTabIconPreference(parsed.tabIcon),
       terminalFontFamily: normalizeTerminalFontFamily(parsed.terminalFontFamily),
       chatShowThinking: normalizeBooleanSetting(parsed.chatShowThinking, defaults.chatShowThinking),
       chatShowToolCalls: normalizeBooleanSetting(
@@ -658,6 +664,7 @@ export function saveSettings(next: UiSettings, options: { selectGateway?: boolea
     accent: normalizeAccentColor(next.accent),
     fontUi: normalizeTypefaceOverride(next.fontUi),
     fontChat: normalizeTypefaceOverride(next.fontChat),
+    tabIcon: normalizeTabIconPreference(next.tabIcon),
     terminalFontFamily: normalizeTerminalFontFamily(next.terminalFontFamily),
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,

@@ -2,28 +2,22 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 
 const DISCORD_VIDEO_MEDIA_EXTENSIONS = [".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"];
 
-function normalizeMediaPathForExtension(mediaUrl: string): string {
+export function isLikelyDiscordVideoMedia(mediaUrl: string): boolean {
   const trimmed = mediaUrl.trim();
   if (!trimmed) {
-    return "";
+    return false;
   }
+  let path: string;
   try {
-    const parsed = new URL(trimmed);
-    const fileName = parsed.pathname.slice(parsed.pathname.lastIndexOf("/") + 1);
-    // Mirror media-loader filename decoding without reinterpreting escapes in
-    // earlier URL path segments, which are irrelevant to the file extension.
+    const { pathname } = new URL(trimmed);
+    path = pathname.slice(pathname.lastIndexOf("/") + 1);
+    // Decode only the filename; malformed escapes in earlier path segments are irrelevant.
     try {
-      return normalizeLowercaseStringOrEmpty(decodeURIComponent(fileName));
-    } catch {
-      return normalizeLowercaseStringOrEmpty(fileName);
-    }
+      path = decodeURIComponent(path);
+    } catch {}
   } catch {
-    const withoutSuffix = trimmed.split(/[?#]/, 1)[0] ?? trimmed;
-    return normalizeLowercaseStringOrEmpty(withoutSuffix);
+    path = trimmed.split(/[?#]/, 1)[0] ?? trimmed;
   }
-}
-
-export function isLikelyDiscordVideoMedia(mediaUrl: string): boolean {
-  const normalized = normalizeMediaPathForExtension(mediaUrl);
+  const normalized = normalizeLowercaseStringOrEmpty(path);
   return DISCORD_VIDEO_MEDIA_EXTENSIONS.some((ext) => normalized.endsWith(ext));
 }

@@ -3,6 +3,7 @@ import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/n
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../../../talk/agent-run-control-shared.js";
 import { createClientVoiceConfirmationReadiness } from "../../../talk/client-voice-confirmation-readiness.js";
+import type { ClientVoiceSessionSource } from "../../../talk/client-voice-session-source.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceAudioClearReason,
@@ -30,13 +31,13 @@ import {
   adoptTalkRealtimeRelaySession,
   cancelTalkRealtimeRelayProviderToolCall,
   closeRelaySession,
-  pruneInactiveRelayAgentRuns,
   registerTalkRealtimeRelayAgentRun,
-  resetTalkRealtimeRelayContinuity,
   prepareTalkRealtimeRelayAgentControl,
 } from "./operations.js";
 import { submitFinalProviderToolResult, suppressedToolResultOptions } from "./provider-results.js";
 import {
+  pruneInactiveRelayAgentRuns,
+  resetTalkRealtimeRelayContinuity,
   RELAY_SESSION_TTL_MS,
   RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
   adoptRelayProviderToolCallId,
@@ -426,7 +427,14 @@ export function createTalkRealtimeRelaySession(
         confirmationReadiness.observeUserTranscript(text, false);
       }
       const previousTranscriptSeq = relay.voiceTranscriptSeq;
-      if (final && !enqueueRelayVoiceTranscript(relay, role, text)) {
+      const enqueueTranscript = (source?: ClientVoiceSessionSource) =>
+        enqueueRelayVoiceTranscript(relay, role, text, source);
+      if (
+        final &&
+        !(relay.closing?.runTranscript
+          ? relay.closing.runTranscript(enqueueTranscript)
+          : enqueueTranscript())
+      ) {
         return;
       }
       const transcriptIdentity =

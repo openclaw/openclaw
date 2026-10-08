@@ -282,20 +282,15 @@ final class CameraCaptureSessionStopper: @unchecked Sendable {
 
     func stop() {
         self.condition.lock()
-        switch self.state {
-        case .stopped:
-            self.condition.unlock()
-            return
-        case .stopping:
-            while self.state == .stopping {
-                self.condition.wait()
-            }
-            self.condition.unlock()
-            return
-        case .running:
-            self.state = .stopping
-            self.condition.unlock()
+        while self.state == .stopping {
+            self.condition.wait()
         }
+        guard self.state == .running else {
+            self.condition.unlock()
+            return
+        }
+        self.state = .stopping
+        self.condition.unlock()
 
         self.stopAction()
 

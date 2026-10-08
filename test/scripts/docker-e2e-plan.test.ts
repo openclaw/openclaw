@@ -455,16 +455,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(supported.lanes.map((lane) => lane.name)).toEqual(["update-corrupt-plugin"]);
   });
 
-  it("runs Fleet host proof only when explicitly selected", () => {
-    expect(planFor().lanes.map((lane) => lane.name)).not.toContain("fleet-cache");
-    const selected = planFor({ selectedLaneNames: ["fleet-cache"] });
-    expect(selected.lanes.map((lane) => lane.name)).toEqual(["fleet-cache"]);
-    expect(selected.needs.package).toBe(true);
-    expect(selected.needs.e2eImage).toBe(false);
-    expect(selected.needs.prepublishPluginRegistry).toBe(false);
-    expect(findLaneByName("fleet-cache")?.name).toBe("fleet-cache");
-  });
-
   it("routes trusted Docker scripts through the nested release harness", () => {
     const trustedScripts = new Map([
       ["live-codex-npm-plugin", "e2e/codex-npm-plugin-live-docker.sh"],
@@ -677,6 +667,29 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(lane.timeoutMs).toBe(3_720_000);
     expect(lane.command).toContain("OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s");
     expect(lane.command).toContain("OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-3420s");
+  });
+
+  it("keeps strict released readers in stable recovery coverage after latest advances", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "openclaw@2026.9.12",
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorTargetRoot: ".",
+    });
+    const recovery = plan.lanes.filter((lane) =>
+      /package-(?:publication-recovery|verification-recovery|stranded-first-hop)/u.test(lane.name),
+    );
+    expect(recovery.map((lane) => lane.name).toSorted()).toEqual([
+      "published-upgrade-survivor-2026.9.7-package-stranded-first-hop",
+      "published-upgrade-survivor-2026.9.8-package-publication-recovery",
+      "published-upgrade-survivor-2026.9.8-package-verification-recovery",
+      "published-upgrade-survivor-2026.9.9-package-publication-recovery",
+      "published-upgrade-survivor-2026.9.9-package-verification-recovery",
+    ]);
+    for (const lane of recovery) {
+      expect(lane.command).toContain("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=");
+      expect(lane.command).toContain("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=");
+    }
   });
 
   it("rejects pre-June baselines before scheduling against the target", () => {
@@ -896,6 +909,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.6.11-acpx-openclaw-tools-bridge",
       "published-upgrade-survivor-2026.6.11-meeting-transcripts-sqlite",
       "published-upgrade-survivor-2026.6.11-cron-scheduled-authority",
+      "published-upgrade-survivor-2026.9.8-package-publication-recovery",
+      "published-upgrade-survivor-2026.9.9-package-publication-recovery",
+      "published-upgrade-survivor-2026.9.8-package-verification-recovery",
+      "published-upgrade-survivor-2026.9.9-package-verification-recovery",
+      "published-upgrade-survivor-2026.9.7-package-stranded-first-hop",
     ]);
     const catalogFile = join(targetRoot, "scripts/lib/upgrade-survivor-scenarios.json");
     mkdirSync(dirname(catalogFile), { recursive: true });
@@ -1049,7 +1067,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
 
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["plugin-binding-command-escape"]);
-    expect(plan.omittedUnsupportedLanes).toHaveLength(14);
+    expect(plan.omittedUnsupportedLanes).toHaveLength(19);
     expect(plan.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
     expect(plan.omittedUnsupportedLanes).toContain(
       "published-upgrade-survivor-versioned-runtime-deps",

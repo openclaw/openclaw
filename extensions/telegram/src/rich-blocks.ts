@@ -109,31 +109,6 @@ function resolveTelegramLinkAction(
   return { kind: "url", href };
 }
 
-function collectTelegramLinkActions(
-  ir: MarkdownIR,
-): Array<{ start: number; end: number; action: TelegramLinkAction }> {
-  if (ir.links.length === 0) {
-    return [];
-  }
-  const links: Array<{ start: number; end: number; action: TelegramLinkAction }> = [];
-  renderMarkdownWithMarkers(
-    ir,
-    {
-      styleMarkers: {},
-      escapeText: (text) => text,
-      buildLink: (link, source, context) => {
-        const action = resolveTelegramLinkAction(link, source, context);
-        if (action) {
-          links.push({ start: link.start, end: link.end, action });
-        }
-        return null;
-      },
-    },
-    TELEGRAM_RICH_FORMAT_PROFILE,
-  );
-  return links;
-}
-
 /**
  * Build nested RichText from IR spans over [rangeStart, rangeEnd).
  * Spans that partially overlap are split at shared boundaries (IR contract).
@@ -160,11 +135,25 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   for (const span of slice.annotations ?? []) {
     spans.push({ start: span.start, end: span.end, kind: "annotation" });
   }
-  for (const link of collectTelegramLinkActions(slice)) {
-    spans.push(
-      link.action.kind === "code"
-        ? { start: link.start, end: link.end, kind: "style", style: "code" }
-        : { start: link.start, end: link.end, kind: "link", target: link.action },
+  if (slice.links.length > 0) {
+    renderMarkdownWithMarkers(
+      slice,
+      {
+        styleMarkers: {},
+        escapeText: (value) => value,
+        buildLink: (link, source, context) => {
+          const action = resolveTelegramLinkAction(link, source, context);
+          if (action) {
+            spans.push(
+              action.kind === "code"
+                ? { start: link.start, end: link.end, kind: "style", style: "code" }
+                : { start: link.start, end: link.end, kind: "link", target: action },
+            );
+          }
+          return null;
+        },
+      },
+      TELEGRAM_RICH_FORMAT_PROFILE,
     );
   }
   type Leaf = { start: number; end: number } & (
@@ -207,9 +196,9 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   const points = [
     ...new Set([...spans, ...leaves].flatMap((span) => [span.start, span.end])),
   ].toSorted((left, right) => left - right);
-  const stack: Active[] = [];
+  const stack: Array<{ span: Active; text: RichText[] }> = [];
   const root: RichText[] = [];
-  const frameStack: RichText[][] = [root];
+  const currentText = () => stack.at(-1)?.text ?? root;
   let leafIndex = 0;
   let nextSpanIndex = 0;
   let pendingSpans: Active[] = [];
@@ -236,13 +225,12 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
     // may contain independently authored styles and clickable links.
     const active = annotation ? [annotation] : covering;
     let shared = 0;
-    while (shared < stack.length && stack[shared] === active[shared]) {
+    while (shared < stack.length && stack[shared]?.span === active[shared]) {
       shared += 1;
     }
     // Retain unchanged containers; rebuild the suffix when an ancestor expires,
     // even if its child continues, so crossed ranges cannot leak formatting.
     stack.length = shared;
-    frameStack.length = shared + 1;
     for (const item of active.slice(shared)) {
       const container: RichText[] = [];
       const node: RichText =
@@ -253,13 +241,12 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
               ? richTextLink(container, item.target.href)
               : { type: "anchor_link", text: container, anchor_name: item.target.name }
             : { type: item.kind === "annotation" ? "code" : item.style, text: container };
-      frameStack.at(-1)?.push(node);
-      stack.push(item);
-      frameStack.push(container);
+      currentText().push(node);
+      stack.push({ span: item, text: container });
     }
     if (end > start) {
       // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
-      frameStack.at(-1)?.push(leaf.kind === "atom" ? leaf.value : text.slice(start, end));
+      currentText().push(leaf.kind === "atom" ? leaf.value : text.slice(start, end));
     }
   }
 
@@ -298,14 +285,6 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
   return paragraphs;
 }
 
-function cellToRichText(cell: MarkdownTableCell | undefined): RichText | undefined {
-  if (!cell?.text) {
-    return undefined;
-  }
-  const rich = irRangeToRichText(cell, 0, cell.text.length);
-  return rich === "" ? undefined : rich;
-}
-
 function renderTableBlock(table: MarkdownTableMeta): {
   block: InputRichBlock;
   degradation?: TelegramRichBlocksDegradationReason;
@@ -327,12 +306,12 @@ function renderTableBlock(table: MarkdownTableMeta): {
     index: number,
     header = false,
   ): RichBlockTableCell => {
-    const text = cellToRichText(cell);
+    const text = cell?.text ? irRangeToRichText(cell, 0, cell.text.length) : "";
     return {
       ...(header ? { is_header: true as const } : {}),
       align: table.aligns?.[index] ?? "left",
       valign: "middle",
-      ...(text !== undefined ? { text } : {}),
+      ...(text !== "" ? { text } : {}),
     };
   };
   const headerRow = table.headerCells.map((cell, index) => renderCell(cell, index, true));

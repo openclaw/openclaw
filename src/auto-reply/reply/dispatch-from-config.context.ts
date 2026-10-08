@@ -209,9 +209,8 @@ export function resolveDispatchResetAdmission(params: {
   }
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
-    normalizedChatType != null && normalizedChatType !== "direct"
-      ? true
-      : Boolean(resolveGroupSessionKey(ctx));
+    (normalizedChatType != null && normalizedChatType !== "direct") ||
+    Boolean(resolveGroupSessionKey(ctx));
   const { resetCommand } = resolveAuthorizedSessionResetCommand({
     agentId: params.agentId,
     cfg: params.cfg,

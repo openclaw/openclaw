@@ -7,7 +7,6 @@ import {
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   Button,
@@ -29,7 +28,7 @@ import {
   createDiscordModelPickerModelToken,
   createDiscordModelPickerRuntimeToken,
   findModelBucketId,
-  findProviderBucketId,
+  findProviderBucketLocation,
   loadDiscordModelPickerData,
   parseDiscordModelPickerData,
   type DiscordModelPickerState,
@@ -44,6 +43,7 @@ import { applyDiscordModelPickerSelection } from "./native-command-model-picker-
 import {
   buildDiscordModelPickerAllowedModelRefs,
   buildDiscordModelPickerNoticePayload,
+  createDiscordModelPickerSessionReader,
   resolveDiscordModelPickerCurrentModel,
   resolveDiscordModelPickerCurrentRuntime,
   resolveDiscordModelPickerPreferenceScope,
@@ -150,12 +150,8 @@ function listDiscordModelPickerProviderModels(
   data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>,
   provider: string,
 ): string[] {
-  const modelSet = data.byProvider.get(provider);
-  if (!modelSet) {
-    return [];
-  }
   // Legacy index callbacks depend on JavaScript's original UTF-16 code-unit ordering.
-  return [...modelSet].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+  return [...(data.byProvider.get(provider) ?? [])].toSorted();
 }
 
 function resolveDiscordModelPickerModelRefByToken(
@@ -235,22 +231,15 @@ async function handleDiscordModelPickerInteraction(params: {
     accountId: ctx.accountId,
     threadBindings: ctx.threadBindings,
   });
-  const sessionEntry = getSessionEntry({
-    storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
-    sessionKey: route.sessionKey,
-    readConsistency: "latest",
-  });
+  const sessionEntry = createDiscordModelPickerSessionReader({ cfg, route }, "latest")();
   const pickerData = await loadDiscordModelPickerData(cfg, route.agentId, { sessionEntry });
   const tokenModel = parsed.modelToken
     ? resolveDiscordModelPickerModelRefByToken(pickerData, parsed.modelToken)
     : null;
   const parsedProvider = parsed.provider ?? splitDiscordModelRef(tokenModel ?? "")?.provider;
-  const currentModelRef = resolveDiscordModelPickerCurrentModel({
-    cfg,
-    route,
-    data: pickerData,
-  });
-  const currentModel = splitDiscordModelRef(currentModelRef ?? "");
+  const modelContext = { cfg, route, data: pickerData };
+  const currentModelRef = resolveDiscordModelPickerCurrentModel(modelContext);
+  const currentModel = splitDiscordModelRef(currentModelRef);
   const browseProvider =
     parsedProvider ?? currentModel?.provider ?? pickerData.resolvedDefault.provider;
   const resolvePendingRuntime = (provider: string) =>
@@ -259,10 +248,7 @@ async function handleDiscordModelPickerInteraction(params: {
       getDiscordModelPickerRuntimeChoices(pickerData, provider),
       parsed.runtimeToken,
     );
-  const currentRuntime = resolveDiscordModelPickerCurrentRuntime({
-    cfg,
-    route,
-  });
+  const currentRuntime = resolveDiscordModelPickerCurrentRuntime(modelContext);
   const allowedModelRefs = buildDiscordModelPickerAllowedModelRefs(pickerData);
   const preferenceScope = resolveDiscordModelPickerPreferenceScope({
     interaction,
@@ -278,24 +264,28 @@ async function handleDiscordModelPickerInteraction(params: {
     await params.safeInteractionCall("model picker update", () => interaction.editReply(payload));
   const showNotice = async (message: string) =>
     await updatePicker(buildDiscordModelPickerNoticePayload(message));
+  const renderContext = {
+    command: parsed.command,
+    userId: parsed.userId,
+    data: pickerData,
+    currentModel: currentModelRef,
+  };
   const updateModelsView = async (
     provider: string,
     state: Omit<
       Parameters<typeof renderDiscordModelPickerModelsView>[0],
-      "command" | "userId" | "data" | "provider" | "currentModel" | "currentRuntime" | "quickModels"
+      keyof typeof renderContext | "provider" | "currentRuntime" | "quickModels"
     > = {},
   ) => {
     // Provider bucket is recoverable from durable catalog state, so compact
     // custom IDs do not need to carry it through every interaction.
     const rendered = renderDiscordModelPickerModelsView({
-      command: parsed.command,
-      userId: parsed.userId,
-      data: pickerData,
+      ...renderContext,
       provider,
       page: parsed.page,
       providerPage: parsed.providerPage ?? 1,
-      providerBucket: parsed.providerBucket ?? findProviderBucketId(pickerData, provider),
-      currentModel: currentModelRef,
+      providerBucket:
+        parsed.providerBucket ?? findProviderBucketLocation(pickerData, provider)?.bucket,
       currentRuntime,
       quickModels,
       ...state,
@@ -320,11 +310,8 @@ async function handleDiscordModelPickerInteraction(params: {
 
   if (parsed.action === "recents") {
     const rendered = renderDiscordModelPickerRecentsView({
-      command: parsed.command,
-      userId: parsed.userId,
-      data: pickerData,
+      ...renderContext,
       quickModels,
-      currentModel: currentModelRef,
       runtime: parsed.runtime,
       runtimeToken: parsed.runtimeToken,
       provider: parsed.provider,
@@ -342,24 +329,20 @@ async function handleDiscordModelPickerInteraction(params: {
   ) {
     const selectingBucket = parsed.action === "bucket";
     const rendered = renderDiscordModelPickerProvidersView({
-      command: parsed.command,
-      userId: parsed.userId,
-      data: pickerData,
+      ...renderContext,
       page: selectingBucket ? 1 : parsed.page,
       providerBucket: selectingBucket ? resolveSelectedBucket(interaction) : parsed.providerBucket,
-      currentModel: currentModelRef,
     });
     await updatePicker(rendered);
     return;
   }
 
   if (parsed.view === "models" && (parsed.action === "bucket" || parsed.action === "back")) {
-    const provider = browseProvider;
     const selectingBucket = parsed.action === "bucket";
-    await updateModelsView(provider, {
+    await updateModelsView(browseProvider, {
       page: selectingBucket ? 1 : parsed.page,
       modelBucket: selectingBucket ? resolveSelectedBucket(interaction) : parsed.modelBucket,
-      pendingRuntime: resolvePendingRuntime(provider),
+      pendingRuntime: resolvePendingRuntime(browseProvider),
     });
     return;
   }
@@ -442,7 +425,7 @@ async function handleDiscordModelPickerInteraction(params: {
     await updateModelsView(provider, {
       modelBucket,
       ...(selectedModel ? { pendingModel: `${provider}/${selectedModel}` } : {}),
-      pendingModelIndex: modelIndex ?? undefined,
+      pendingModelIndex: modelIndex,
       pendingRuntime,
     });
     return;
@@ -472,11 +455,7 @@ async function handleDiscordModelPickerInteraction(params: {
     );
     const modelOnlyHost = !supportsDiscordModelPickerRuntimeChoices();
     const supportsModelOnlySelection = () => {
-      const currentEntry = getSessionEntry({
-        storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
-        sessionKey: route.sessionKey,
-        readConsistency: "latest",
-      });
+      const currentEntry = createDiscordModelPickerSessionReader({ cfg, route }, "latest")();
       const override = currentEntry?.agentRuntimeOverride?.trim();
       // The old command owner cannot validate native pins against a different model.
       // Preserve those pins; model-only compatibility never invents a runtime choice.
@@ -559,9 +538,8 @@ async function handleDiscordModelPickerInteraction(params: {
       settleMs: ctx.postApplySettleMs ?? 250,
       resolveCurrentModel: (currentRoute) =>
         resolveDiscordModelPickerCurrentModel({
-          cfg,
+          ...modelContext,
           route: currentRoute,
-          data: pickerData,
         }),
       resolveCurrentRuntime: (currentRoute) =>
         resolveDiscordModelPickerCurrentRuntime({

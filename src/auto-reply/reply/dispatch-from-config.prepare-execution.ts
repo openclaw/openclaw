@@ -80,7 +80,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     };
     state.assertProgressCurrent();
     if (shouldRouteToOriginating) {
-      await sendPayloadAsync(replyPayload, undefined, false);
+      await sendPayloadAsync(replyPayload);
       return;
     }
     markInboundDedupeReplayUnsafe();
@@ -159,6 +159,12 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     forwardWhenSourceDeliverySuppressed?: boolean;
     requiresToolSummaryVisibility?: boolean;
   }) => {
+    if (
+      params.replyOptions?.progressRequiresReply === true &&
+      state.replyOperationRunState.replyCompletion?.expectation !== "required"
+    ) {
+      return false;
+    }
     if (
       options?.requiresToolSummaryVisibility === true &&
       !(await shouldSendToolSummariesAsync()) &&

@@ -8,10 +8,8 @@ import { persistCliSessionBindingResult } from "../cli-session-store.js";
 import { getCliSessionBinding } from "../cli-session.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import { createAgentRunSupersededAbortError } from "../run-termination.js";
-import {
-  withLocalSessionPlacementTurnSettlement,
-  type LocalTurnPlacementClaim,
-} from "../session-placement-admission.js";
+import { withLocalSessionPlacementTurnSettlement } from "../session-placement-admission.js";
+import type { LocalTurnPlacementClaim } from "../session-placement-admission.types.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 type CliCandidateSettlement = Pick<

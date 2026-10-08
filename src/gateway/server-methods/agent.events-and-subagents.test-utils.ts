@@ -24,11 +24,9 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   getAgentTestMocks,
   makeContext,
-  type AgentHandlerArgs,
   type AgentParams,
   waitForAssertion,
   requireValue,
@@ -926,53 +924,6 @@ describe("gateway agent handler", () => {
     }>();
     expect(worktreeCall.workspaceDir).toBe("/tmp/session-worktree");
     expect(worktreeCall.cwd).toBe("/tmp/session-worktree");
-  });
-
-  it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "telegram", to: "12345" },
-      }),
-    });
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {
-        "agent:main:main": buildExistingMainStoreEntry({
-          delivery: normalizeSessionDeliveryState({
-            context: { channel: "telegram", to: "12345" },
-          }),
-        }),
-      };
-      return await updater(store);
-    });
-
-    mockSuccessfulAgentCommand();
-
-    await invokeAgent(
-      {
-        message: "webchat turn",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "test-webchat-origin-channel",
-      },
-      {
-        reqId: "webchat-origin-1",
-        client: {
-          connect: {
-            client: { id: "webchat-ui", mode: "webchat" },
-          },
-        } as AgentHandlerArgs["client"],
-        isWebchatConnect: () => true,
-      },
-    );
-
-    const callArgs = await waitForAgentCommandCall<{
-      channel?: string;
-      messageChannel?: string;
-      runContext?: { messageChannel?: string };
-    }>();
-    expect(callArgs.channel).toBe("telegram");
-    expect(callArgs.messageChannel).toBe("webchat");
-    expect(callArgs.runContext?.messageChannel).toBe("webchat");
   });
 
   it("forwards elevated defaults only for valid exec approval runtime handoffs", async () => {

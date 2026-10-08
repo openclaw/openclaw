@@ -45,7 +45,7 @@ class InvalidSharedAuthStoreOwnershipError extends Error {
   }
 }
 
-function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership {
+export function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership {
   if (value === undefined) {
     return { location: "legacy-main" };
   }
@@ -57,6 +57,14 @@ function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership
     return { location: value.location };
   }
   throw new InvalidSharedAuthStoreOwnershipError(value);
+}
+
+export function getPreparedSharedAuthStoreOwnership(
+  env: NodeJS.ProcessEnv,
+): SharedAuthStoreOwnership | undefined {
+  return sharedAuthStoreOwnershipByDatabasePath.get(
+    path.resolve(resolveOpenClawStateSqlitePath(env)),
+  );
 }
 
 function cacheSharedOwnership(databasePath: string, read: () => unknown): SharedAuthStoreOwnership {

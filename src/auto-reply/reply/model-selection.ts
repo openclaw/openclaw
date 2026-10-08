@@ -38,6 +38,7 @@ import {
   needsThinkHydration,
   resolveEffectiveAgentRuntime,
 } from "../../agents/thinking-runtime.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelSelection } from "../../config/sessions/model-override-provenance.js";
 import {
@@ -47,6 +48,7 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
+import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessions/auth-profile-preservation.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import * as storedModelOverrides from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -167,8 +169,7 @@ export async function createModelSelectionState(params: {
     }));
   const runtimeModelNormalization = resolveRuntimeNormalization(cfg);
 
-  let provider = params.provider;
-  let model = params.model;
+  let { provider, model } = params;
   const primaryProvider = params.primaryProvider ?? defaultProvider;
   const primaryModel = params.primaryModel ?? defaultModel;
   const modelSelectionLocked = sessionEntry?.modelSelectionLocked === true;
@@ -421,8 +422,7 @@ export async function createModelSelectionState(params: {
       usesStoredAutomaticSelection ||
       visibilityPolicy.allows(normalizedStoredOverride)
     ) {
-      provider = normalizedStoredOverride.provider;
-      model = normalizedStoredOverride.model;
+      ({ provider, model } = normalizedStoredOverride);
     }
   }
 
@@ -440,8 +440,7 @@ export async function createModelSelectionState(params: {
         `Configured default model "${buildModelCatalogRef(provider, model)}" is not allowed by ${policyPath}, and no allowed model is available.`,
       );
     }
-    provider = allowedInitialSelection.provider;
-    model = allowedInitialSelection.model;
+    ({ provider, model } = allowedInitialSelection);
   }
   let operatorModelOverride = false;
   if (!params.hasModelDirective) {
@@ -460,8 +459,7 @@ export async function createModelSelectionState(params: {
       throw new Error("No model is available for this operator role and agent.");
     }
     operatorModelOverride = selection.provider !== provider || selection.model !== model;
-    provider = selection.provider;
-    model = selection.model;
+    ({ provider, model } = selection);
   }
 
   if (
@@ -472,7 +470,8 @@ export async function createModelSelectionState(params: {
     sessionKey &&
     sessionEntry.authProfileOverride
   ) {
-    const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
+    const { ensureAuthProfileStore, prepareAuthProfileProvider } =
+      await import("../../agents/auth-profiles.runtime.js");
     const store = ensureAuthProfileStore(
       params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined,
       {
@@ -505,16 +504,57 @@ export async function createModelSelectionState(params: {
           credential: profile,
         }),
       );
-    // Admission rejects a missing personal account; clearing its pin here would bill the next participant.
+    const selection = { ...sessionEntry };
+    const assertSelectionCurrent = () => {
+      operatorAuthority?.assertCurrent();
+      if (
+        sessionStore[sessionKey] !== sessionEntry ||
+        sessionEntry.sessionId !== selection.sessionId ||
+        sessionEntry.authProfileOverride !== selection.authProfileOverride ||
+        sessionEntry.authProfileOverrideSource !== selection.authProfileOverrideSource ||
+        sessionEntry.authProfileOverrideCompactionCount !==
+          selection.authProfileOverrideCompactionCount ||
+        sessionEntry.providerOverride !== selection.providerOverride ||
+        sessionEntry.modelOverride !== selection.modelOverride
+      ) {
+        throw new SessionWorkStartInvalidatedError(
+          "Session account selection changed while preparing authentication. Retry.",
+        );
+      }
+    };
     const missingPersonalProfile =
       !profile && isUserModelAuthProfileId(sessionEntry.authProfileOverride);
-    if (!overrideStillEligible && !missingPersonalProfile) {
+    // Prepare only the missing explicit-pin path; personal and automatic selections keep their owners.
+    const recordedProvider =
+      !profile &&
+      !missingPersonalProfile &&
+      resolveCollapsedSessionAuthPinSource(sessionEntry) === "user"
+        ? await prepareAuthProfileProvider({
+            agentDir: resolveAgentDir(cfg, params.agentId),
+            profileId: sessionEntry.authProfileOverride,
+          })
+        : undefined;
+    assertSelectionCurrent();
+    const preserveUnavailableSelection =
+      missingPersonalProfile ||
+      shouldPreserveUnavailableSessionAuthProfileOverride({
+        store,
+        cfg: authConfig,
+        agentDir: resolveAgentDir(cfg, params.agentId),
+        entry: sessionEntry,
+        currentProvider: sessionEntry.providerOverride ?? defaultProvider,
+        provider,
+        recordedProvider,
+      });
+    if (!overrideStillEligible && !preserveUnavailableSelection) {
       await clearSessionAuthProfileOverride({
         agentId: params.agentId,
         sessionEntry,
         sessionStore,
         sessionKey,
         storePath,
+        assertCommitAllowed: assertSelectionCurrent,
+        expectedSnapshot: selection,
       });
     }
   }
@@ -541,29 +581,27 @@ export async function createModelSelectionState(params: {
   const resolveThinkingCatalog = async (
     selection: ThinkingDefaultSelection = { provider, model },
   ) => {
-    const thinkingSelection = resolveThinkingSelection(selection);
-    const { agentRuntime } = thinkingSelection;
+    const { agentRuntime } = resolveThinkingSelection(selection);
     const key = JSON.stringify([selection.provider, selection.model, agentRuntime]);
-    const cached = thinkingCatalogs.get(key);
-    if (cached) {
-      return cached.length > 0 ? cached : undefined;
-    }
-    let catalog = visibilityPolicy.catalog;
-    if (needsThinkHydration(catalog, selection.provider, selection.model, agentRuntime)) {
-      const { loadProviderScopedThinkingCatalog } = await modelCatalogRuntimeLoader.load();
-      const preparedCatalog = await loadProviderScopedThinkingCatalog({
-        config: cfg,
-        agentId: params.agentId,
-        provider: selection.provider,
-        model: selection.model,
-        agentRuntime,
-      });
-      // An empty refresh cannot replace the admitted owner with a configuration-only row.
-      if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {
-        catalog = createVisibilityPolicy(preparedCatalog).catalog;
+    let catalog = thinkingCatalogs.get(key);
+    if (!catalog) {
+      catalog = visibilityPolicy.catalog;
+      if (needsThinkHydration(catalog, selection.provider, selection.model, agentRuntime)) {
+        const { loadProviderScopedThinkingCatalog } = await modelCatalogRuntimeLoader.load();
+        const preparedCatalog = await loadProviderScopedThinkingCatalog({
+          config: cfg,
+          agentId: params.agentId,
+          provider: selection.provider,
+          model: selection.model,
+          agentRuntime,
+        });
+        // An empty refresh cannot replace the admitted owner with a configuration-only row.
+        if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {
+          catalog = createVisibilityPolicy(preparedCatalog).catalog;
+        }
       }
+      thinkingCatalogs.set(key, catalog);
     }
-    thinkingCatalogs.set(key, catalog);
     return catalog.length > 0 ? catalog : undefined;
   };
 

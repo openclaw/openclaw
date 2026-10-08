@@ -1,4 +1,5 @@
 import UIKit
+import Vision
 import XCTest
 
 @MainActor
@@ -668,6 +669,64 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "voice-note-sent-after-stopping-response")
     }
 
+    func testVoiceRenditionsStayVisibleBesideConsultAnswers() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "voice-consult-rows"),
+            additionalArguments: ["--openclaw-voice-consult-rows-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let latest = app.staticTexts
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "VOICE_SPOKEN_AFTER"))
+            .firstMatch
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        let question = app.staticTexts["Which build is on my phone?"]
+        for _ in 0..<6 where !question.isHittable {
+            app.swipeDown()
+        }
+        self.attachScreenshot(named: "voice-consult-rows")
+        let spokenFirst = app.staticTexts
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "VOICE_SPOKEN_FIRST"))
+            .firstMatch
+        XCTAssertTrue(spokenFirst.exists, "SPOKEN_ROW_FOLDED_INTO_WORK")
+    }
+
+    func testSystemNoticesExpandAndCollapseWithoutLosingTheirBody() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat", initialDestination: "chat", name: "system-notices"),
+            additionalArguments: ["--openclaw-system-notices-fixture", "--openclaw-no-reactions-fixture"])
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(app.staticTexts["Notice fixture ready."].waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "system-notices-collapsed")
+
+        for (label, start, end) in [
+            ("injected context", "CONTEXT_START", "CONTEXT_END"),
+            ("background task", "TASK_START", "TASK_END"),
+        ] {
+            let disclosure = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", label)).firstMatch
+            let body = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", start)).firstMatch
+            XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+            XCTAssertFalse(body.exists, "System payload should start collapsed")
+            for _ in 0..<4 where !disclosure.isHittable {
+                app.swipeDown()
+            }
+            XCTAssertTrue(disclosure.isHittable)
+            disclosure.tap()
+            XCTAssertTrue(body.waitForExistence(timeout: 5))
+            XCTAssertTrue(body.label.contains(end), "Expanded disclosure must expose the complete payload")
+            self.attachScreenshot(named: "system-notice-expanded-\(start)")
+            for _ in 0..<4 where !disclosure.isHittable {
+                app.swipeDown()
+            }
+            XCTAssertTrue(disclosure.isHittable)
+            disclosure.tap()
+            XCTAssertTrue(body.waitForNonExistence(timeout: 5))
+        }
+        self.attachScreenshot(named: "system-notices-recollapsed")
+    }
+
     func testKeyboardOpenPreservesTranscriptAndFollowsLiveEdgeAfterSend() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone keyboard proof only")
         self.launchApp(
@@ -795,6 +854,44 @@ final class OpenClawSnapshotUITests: XCTestCase {
         jumpToLatest.tap()
         XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
         XCTAssertTrue(finalReply.exists)
+    }
+
+    func testUnknownOutcomeStepUsesLocalToolTitle() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-step-labels-fixture"])
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(app.staticTexts["Local readiness checked."].waitForExistence(timeout: 8))
+        let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
+        XCTAssertTrue(work.waitForExistence(timeout: 5))
+        work.tap()
+        for (command, expectedStatus, showsUnknown) in [
+            ("printf ready", "No result", true),
+            ("printf missing", "No result", true),
+            ("printf complete", "Finished", false),
+        ] {
+            let row = app.descendants(matching: .any).matching(NSPredicate(
+                format: "label CONTAINS %@ AND value CONTAINS %@", "Exec", command)).firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 5), "Missing tool row: \(command)")
+            XCTAssertTrue(
+                (row.value as? String)?.hasPrefix(expectedStatus) == true,
+                "The row must retain the prepared outcome for \(command)")
+            // Accessibility already announced unknown outcomes; pixels must preserve that cue too.
+            let image = try XCTUnwrap(row.screenshot().image.cgImage)
+            let recognition = VNRecognizeTextRequest()
+            recognition.recognitionLevel = .accurate
+            recognition.recognitionLanguages = ["en-US"]
+            try VNImageRequestHandler(cgImage: image, options: [:]).perform([recognition])
+            let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+                .joined(separator: " ").lowercased()
+            XCTAssertTrue(text.contains("exec"), "Rendered tool title was not recognized: \(text)")
+            XCTAssertFalse(text.contains("outcome unknown"), "Step still uses the fallback title: \(text)")
+            XCTAssertEqual(
+                text.contains("no result"), showsUnknown,
+                "Visible unknown-outcome cue is wrong for \(command): \(text)")
+        }
+        self.attachScreenshot(named: "step-labels-expanded")
+        XCTAssertTrue(app.staticTexts["Local readiness checked."].exists)
     }
 
     func testCompletedWorkDisclosureKeepsFinalReplyVisible() throws {

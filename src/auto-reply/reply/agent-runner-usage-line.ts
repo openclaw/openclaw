@@ -7,7 +7,11 @@ import {
   formatTokenCount,
   formatUsd,
 } from "../../utils/usage-format.js";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import { resolveEffectiveResponseUsage } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { buildUsageContract } from "../usage-bar/contract.js";
@@ -100,26 +104,18 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
   const existing = expectDefined(payloads[index], "payloads entry at index");
   const existingText = existing.text ?? "";
   const separator = existingText.endsWith("\n") ? "" : "\n";
-  const next = {
+  const next = copyReplyPayloadMetadata(existing, {
     ...existing,
     text: `${existingText}${separator}${line}`,
-  };
-  const metadata = getReplyPayloadMetadata(existing);
+  });
+  const mirror = getReplyPayloadMetadata(existing)?.sourceReplyTranscriptMirror;
   // Transcript mirrors must track the mutated text or source-reply delivery drifts.
-  const nextWithMetadata = metadata
-    ? setReplyPayloadMetadata(next, {
-        ...metadata,
-        ...(metadata.sourceReplyTranscriptMirror
-          ? {
-              sourceReplyTranscriptMirror: {
-                ...metadata.sourceReplyTranscriptMirror,
-                text: next.text,
-              },
-            }
-          : {}),
-      })
-    : next;
+  if (mirror) {
+    setReplyPayloadMetadata(next, {
+      sourceReplyTranscriptMirror: { ...mirror, text: next.text },
+    });
+  }
   const updated = payloads.slice();
-  updated[index] = nextWithMetadata;
+  updated[index] = next;
   return updated;
 };

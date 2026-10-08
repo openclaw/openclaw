@@ -33,12 +33,6 @@ type SentMessageState = {
   bucketsByScope: Map<string, Promise<SentMessageBucket>>;
 };
 
-function getSentMessageState(): SentMessageState {
-  return resolveGlobalSingleton(TELEGRAM_SENT_MESSAGES_STATE_KEY, () => ({
-    bucketsByScope: new Map(),
-  }));
-}
-
 function openSentMessageStore(): SentMessagePersistentStore {
   return getTelegramRuntime().state.openKeyedStore<PersistedSentMessage>({
     namespace: TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
@@ -59,12 +53,6 @@ function cleanupExpired(
   }
   if (entry.size === 0) {
     store.delete(scopeKey);
-  }
-}
-
-function cleanupExpiredSentMessages(store: SentMessageStore, now: number): void {
-  for (const [scopeKey, entry] of store) {
-    cleanupExpired(store, scopeKey, entry, now);
   }
 }
 
@@ -110,7 +98,9 @@ function sentMessageEntryKey(scopeKey: string, chatId: string, messageId: string
 }
 
 function getSentMessageBucket(scopeKey: string): Promise<SentMessageBucket> {
-  const state = getSentMessageState();
+  const state = resolveGlobalSingleton<SentMessageState>(TELEGRAM_SENT_MESSAGES_STATE_KEY, () => ({
+    bucketsByScope: new Map(),
+  }));
   const existing = state.bucketsByScope.get(scopeKey);
   if (existing) {
     return existing;
@@ -158,7 +148,9 @@ export async function recordSentMessage(
   store.set(scopeKey, entry);
   entry.set(idKey, now);
   if (now >= bucket.nextCleanupAt) {
-    cleanupExpiredSentMessages(store, now);
+    for (const [entryScopeKey, messages] of store) {
+      cleanupExpired(store, entryScopeKey, messages, now);
+    }
     bucket.nextCleanupAt = now + CLEANUP_INTERVAL_MS;
   }
   await persistence;

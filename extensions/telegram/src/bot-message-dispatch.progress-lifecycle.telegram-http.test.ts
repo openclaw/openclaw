@@ -236,9 +236,13 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     ).toEqual([]);
   });
 
-  it.each([true, false])(
-    "keeps updating and then deletes the same card only after accepted custody (%s)",
-    async (accept) => {
+  it.each([
+    { accept: true, toolProgress: true },
+    { accept: false, toolProgress: true },
+    { accept: true, toolProgress: false },
+  ])(
+    "keeps the same card after accepted custody ($accept, tool log $toolProgress)",
+    async ({ accept, toolProgress }) => {
       const waitingText = "Waiting for delegated work.";
       const commentary = "Parent commentary remains visible.";
       const plan = [
@@ -280,7 +284,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
           await waitForBotApiCall((call) => call.method === "sendMessage");
           progressMessageId = [...visibleMessages.keys()][0];
         },
-        { mode: "progress", toolProgress: true, finalReply: waitingPayload },
+        { mode: "progress", toolProgress, finalReply: waitingPayload },
       );
 
       expect(draft).toBeDefined();

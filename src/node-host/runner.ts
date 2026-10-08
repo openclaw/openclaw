@@ -1,4 +1,3 @@
-/** CLI runner for node-host stdin/stdout command dispatch. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";

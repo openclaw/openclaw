@@ -49,9 +49,6 @@ function normalizeDiscordOriginChannelId(value?: string | null): string | null {
     return null;
   }
   const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
   const prefixed = trimmed.match(/^(?:channel|group):(\d+)$/i);
   if (prefixed) {
     return prefixed[1] ?? null;
@@ -134,14 +131,6 @@ function createDiscordOriginTargetResolver() {
   });
 }
 
-function createDiscordApproverDmTargetResolver() {
-  return createChannelApproverDmTargetResolver({
-    shouldHandleRequest: shouldHandleCapabilityRequest,
-    resolveApprovers: ({ cfg, accountId }) => getDiscordExecApprovalApprovers({ cfg, accountId }),
-    mapApprover: (approver) => ({ to: approver }),
-  });
-}
-
 function createDiscordApprovalCapability() {
   return createApproverRestrictedNativeApprovalCapability({
     channel: "discord",
@@ -165,7 +154,11 @@ function createDiscordApprovalCapability() {
     resolveNativeDeliveryMode: ({ cfg, accountId }) =>
       resolveDiscordAccount({ cfg, accountId }).config.execApprovals?.target ?? "dm",
     resolveOriginTarget: createDiscordOriginTargetResolver(),
-    resolveApproverDmTargets: createDiscordApproverDmTargetResolver(),
+    resolveApproverDmTargets: createChannelApproverDmTargetResolver({
+      shouldHandleRequest: shouldHandleCapabilityRequest,
+      resolveApprovers: ({ cfg, accountId }) => getDiscordExecApprovalApprovers({ cfg, accountId }),
+      mapApprover: (approver) => ({ to: approver }),
+    }),
     notifyOriginWhenDmOnly: true,
     nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
       capabilityBoundary: true,

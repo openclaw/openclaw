@@ -289,6 +289,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "userProfiles.catalog" ||
       (input.command.type === "userModelAccounts.links" &&
         typeof input.command.profileId === "string") ||
+      (input.command.type === "userModelAccounts.catalog" &&
+        isRecord(input.command.selection) &&
+        (typeof input.command.selection.profileId === "string" ||
+          typeof input.command.selection.requesterProfileId === "string")) ||
       (input.command.type === "userPreferences.values" &&
         typeof input.command.key === "string" &&
         isStringArray(input.command.profileIds)) ||
@@ -384,7 +388,6 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.input.reason === "string") &&
         (input.command.input.includeRunId === undefined ||
           typeof input.command.input.includeRunId === "string")) ||
-      input.command.type === "fleet.list" ||
       ((input.command.type === "operatorApprovals.placementGrant" ||
         input.command.type === "operatorApprovals.history" ||
         input.command.type === "operatorApprovals.listCronGrants" ||
@@ -404,7 +407,6 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.type === "sandboxRegistry.runtimeIds" &&
         typeof input.command.backendId === "string" &&
         typeof input.command.scopeKey === "string") ||
-      (input.command.type === "fleet.get" && typeof input.command.tenantId === "string") ||
       input.command.type === "worktrees.cleanupState" ||
       input.command.type === "worktrees.list" ||
       (input.command.type === "workerPlacements.changeSnapshot" &&

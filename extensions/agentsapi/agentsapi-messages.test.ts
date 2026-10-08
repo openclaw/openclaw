@@ -8,50 +8,84 @@ import { createModel, createTurn } from "./agentsapi.test-support.js";
 type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
 
 describe("Agents API commentary projection", () => {
-  it("completes commentary after an identical final delta without replaying completion", async () => {
-    const { projection, events } = createProjection();
-    const item: AgentsApiItem = {
-      id: "commentary-fixture",
-      type: "message",
-      role: "assistant",
-      phase: "commentary",
-      status: "in_progress",
-      turn_id: "turn-fixture",
-      content: [{ type: "output_text", text: "" }],
-    };
-    const text = "Checking the command.";
+  it.each(["added", "done"])(
+    "hands off commentary identified at item.%s once",
+    async (phaseKnownAt) => {
+      const { projection, events } = createProjection();
+      const item: AgentsApiItem = {
+        id: "commentary-fixture",
+        type: "message",
+        role: "assistant",
+        phase: phaseKnownAt === "added" ? "commentary" : null,
+        status: "in_progress",
+        turn_id: "turn-fixture",
+        content: [{ type: "output_text", text: "" }],
+      };
+      const text = "Checking the command.\n\n    pwd";
 
-    await projection.observe({ type: "agent.session.turn.item.added", item });
-    await projection.observe({
-      type: "agent.session.turn.output_text.delta",
-      item_id: item.id,
-      turn_id: "turn-fixture",
-      content_index: 0,
-      delta: text,
-    });
-    const completed: AgentsApiEvent = {
-      type: "agent.session.turn.item.done",
-      item: {
-        ...item,
-        status: "completed",
-        content: [{ type: "output_text", text }],
-      },
-    };
-    await projection.observe(completed);
-    await projection.observe(completed);
+      await projection.observe({ type: "agent.session.turn.item.added", item });
+      await projection.observe({
+        type: "agent.session.turn.output_text.delta",
+        item_id: item.id,
+        turn_id: "turn-fixture",
+        content_index: 0,
+        delta: text,
+      });
+      const completed: AgentsApiEvent = {
+        type: "agent.session.turn.item.done",
+        item: {
+          ...item,
+          phase: "commentary",
+          status: "completed",
+          content: [{ type: "output_text", text }],
+        },
+      };
+      await projection.observe(completed);
+      await projection.observe(completed);
 
-    const preamble = {
-      itemId: "agentsapi:session-fixture:turn-fixture:commentary-fixture",
-      kind: "preamble",
-      title: "Preamble",
-      progressText: text,
-      source: "agentsapi",
-    };
-    expect(events).toEqual([
-      { stream: "item", data: { ...preamble, phase: "update" } },
-      { stream: "item", data: { ...preamble, phase: "end" } },
-    ]);
-  });
+      const itemId = "agentsapi:session-fixture:turn-fixture:commentary-fixture";
+      const preamble = {
+        itemId,
+        kind: "preamble",
+        title: "Preamble",
+        progressText: text,
+        source: "agentsapi",
+      };
+      expect(events).toEqual([
+        ...(phaseKnownAt === "added"
+          ? [{ stream: "item", data: { ...preamble, phase: "update" } }]
+          : [
+              {
+                stream: "assistant",
+                data: { itemId, text, delta: "", replaceable: true, replace: true },
+              },
+              { stream: "assistant", data: { itemId, text: "", delta: "", replace: true } },
+            ]),
+        { stream: "item", data: { ...preamble, phase: "end" } },
+      ]);
+
+      await projection.observe({
+        type: "agent.session.turn.item.done",
+        item: {
+          ...item,
+          id: "final-fixture",
+          phase: "final_answer",
+          status: "completed",
+          content: [{ type: "output_text", text: "Done." }],
+        },
+      });
+      expect(events.at(-1)).toEqual({
+        stream: "assistant",
+        data: {
+          itemId: "agentsapi:session-fixture:turn-fixture:final-fixture",
+          text: "Done.",
+          delta: "",
+          replaceable: true,
+          replace: true,
+        },
+      });
+    },
+  );
 });
 
 describe("Agents API final usage accounting", () => {

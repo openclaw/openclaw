@@ -1,4 +1,3 @@
-/** Node-host command dispatcher for system commands, approvals, env policy, and plugin commands. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -14,11 +13,10 @@ import {
   analyzeArgvCommand,
   createExecApprovalPolicySnapshot,
   ensureExecApprovalsSnapshot,
-  mergeExecApprovalsSocketDefaults,
   minSecurity,
   maxAsk,
   normalizeExecApprovals,
-  readExecApprovalsSnapshot,
+  readExecApprovalsSnapshotAsync,
   redactExecApprovals,
   resolveAllowAlwaysPatternCoverage,
   resolveExecApprovalsFromFile,
@@ -43,6 +41,7 @@ import {
 import { stageTerminalUpload } from "../infra/terminal-file-upload.js";
 import { logWarn } from "../logger.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   createNodeInvokeResponder,
   type NodeHostClient,
@@ -204,11 +203,6 @@ function requireExecApprovalsBaseHash(
   }
 }
 
-function resolveEnvPath(env?: Record<string, string>): string[] {
-  const raw = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? DEFAULT_NODE_PATH;
-  return raw.split(path.delimiter).filter(Boolean);
-}
-
 function resolveExecutable(bin: string, env?: Record<string, string>) {
   if (bin.includes("/") || bin.includes("\\")) {
     return null;
@@ -226,7 +220,9 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
           .split(";")
           .map((ext) => normalizeLowercaseStringOrEmpty(ext))
       : [""];
-  for (const dir of resolveEnvPath(env)) {
+  const envPath =
+    env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? DEFAULT_NODE_PATH;
+  for (const dir of envPath.split(path.delimiter).filter(Boolean)) {
     for (const ext of extensions) {
       const candidate = path.join(dir, bin + ext);
       if (fs.existsSync(candidate)) {
@@ -284,7 +280,6 @@ function createNodeHostInvocationClient(
   };
 }
 
-/** Handles one node-host command invocation payload and returns serialized results. */
 export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
   client: NodeHostClient,
@@ -405,7 +400,7 @@ async function dispatchInvoke(
       return;
     }
     try {
-      const snapshot = await ensureExecApprovalsSnapshot();
+      const snapshot = await ensureExecApprovalsSnapshot(() => runtime.signal?.throwIfAborted());
       const payload = {
         ...redactExecApprovals(snapshot),
         ...(includeResolvedDefaults
@@ -420,6 +415,7 @@ async function dispatchInvoke(
   }
 
   if (command === "system.execApprovals.set") {
+    const assertCurrent = () => runtime.signal?.throwIfAborted();
     let params: SystemExecApprovalsSetParams;
     let normalized: ExecApprovalsFile;
     try {
@@ -434,9 +430,12 @@ async function dispatchInvoke(
     }
 
     let snapshot: ExecApprovalsSnapshot;
+    let context: ReturnType<typeof captureOpenClawStateWorkerContext>;
     try {
       // A stale save must not initialize state before its base hash is checked.
-      snapshot = readExecApprovalsSnapshot();
+      context = captureOpenClawStateWorkerContext();
+      snapshot = await readExecApprovalsSnapshotAsync(context);
+      assertCurrent();
     } catch (err) {
       await response.error(classifyExecApprovalsStorageError(err), String(err));
       return;
@@ -451,10 +450,14 @@ async function dispatchInvoke(
 
     let nextSnapshot: ExecApprovalsSnapshot | null;
     try {
-      nextSnapshot = await updateExecApprovals({
-        baseHash: snapshot.hash,
-        update: (current) => mergeExecApprovalsSocketDefaults({ normalized, current }),
-      });
+      nextSnapshot = await updateExecApprovals(
+        {
+          baseHash: snapshot.hash,
+          assertCurrent,
+          update: { kind: "replace", file: normalized, preserveSocket: true },
+        },
+        context,
+      );
     } catch (err) {
       await response.error(classifyExecApprovalsStorageError(err), String(err));
       return;
@@ -468,6 +471,8 @@ async function dispatchInvoke(
       return;
     }
 
+    context.admission.assertCurrent();
+    assertCurrent();
     await response.json(redactExecApprovals(nextSnapshot));
     return;
   }

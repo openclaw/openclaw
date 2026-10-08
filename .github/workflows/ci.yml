@@ -3387,7 +3387,7 @@ jobs:
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: ${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency }}
-          OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && '1' || '0' }}
+          OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: ${{ ((github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw') || (github.event_name == 'workflow_dispatch' && startsWith(matrix.check_name, 'checks-node-release-packed-'))) && '1' || '0' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -4402,7 +4402,8 @@ jobs:
       - name: Check docs
         env:
           OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: ${{ github.workspace }}/clawhub-source
-        run: pnpm check:docs
+        # Keep the content checks serial; only their read-only formatter runs alongside.
+        run: pnpm run --workspace-concurrency=2 --no-bail '/^(format:docs:check|check:docs:content)$/'
 
   skills-python:
     permissions:
@@ -5387,10 +5388,20 @@ jobs:
           mkdir -p "apps/ios/build/LifecycleTestResults"
           test_args=(
             -only-testing:OpenClawTests/CloudflareAccessClientTests
+            -only-testing:OpenClawTests/CloudflareAccessBrowserPresenterTests
             -only-testing:OpenClawTests/CloudflareAccessTransferTests
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/GatewayIngressControllerTests
+            -only-testing:OpenClawTests/GatewayIngressLoginPreparationTests
+            -only-testing:OpenClawTests/GatewayConnectionControllerTests
+            -only-testing:OpenClawTests/LegacyManualGatewayMigrationTests
+            -only-testing:OpenClawTests/GatewayOperatorFleetTests
+            -only-testing:OpenClawTests/IOSMediaArtifactLoaderTests
+            -only-testing:OpenClawTests/OpenClawTypographyTests
+            -only-testing:OpenClawTests/GatewayConnectionSecurityTests
+            -only-testing:OpenClawTests/GatewaySettingsStoreTests
           )
           if [[ "$IOS_CI_PHASE" == "tests" ]]; then
             test_args+=(
@@ -5427,6 +5438,7 @@ jobs:
             -collect-test-diagnostics "$diagnostic_collection" \
             "${test_args[@]}" \
             "$test_action"
+          python3 scripts/ios-access-restart-proof.py "${IOS_SIMULATOR_ID:?}"
           if [[ "$IOS_CI_PHASE" == "tests" && "$IOS_MAIN_TIER" != "true" ]]; then
             run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.log xcodebuild \
               -project apps/ios/OpenClaw.xcodeproj \
@@ -6231,15 +6243,6 @@ jobs:
           OPENCLAW_DOCKER_ALL_PARALLELISM: &docker_parallelism ${{ (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && 3 || 1 }}
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: *docker_parallelism
         run: pnpm test:docker:all
-
-      - name: Upload Fleet Docker proof
-        if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' fleet-cache ')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: fleet-cache-docker-proof
-          path: .artifacts/docker-tests/**/fleet-cache.log
-          include-hidden-files: true
-          if-no-files-found: warn
 
       - name: Upload sanitized upgrade survivor proof
         if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ')

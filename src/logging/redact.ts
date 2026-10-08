@@ -227,8 +227,8 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
       builtInResolvedPatterns.add(pattern);
     }
     if (canPrefilter && vendorSources.has(raw) && !vendorResolvedPatterns.has(pattern)) {
-      // oxlint-disable-next-line typescript/unbound-method -- Compare method identity; never invoke it unbound.
-      const { source, exec } = pattern;
+      const source = pattern.source;
+      const exec = pattern.exec;
       const flags = pattern instanceof RegExp ? pattern.flags : undefined;
       const replace = pattern instanceof RegExp ? pattern[Symbol.replace] : undefined;
       vendorResolvedPatterns.set(
@@ -269,10 +269,7 @@ function resolvePatterns(value?: readonly RedactPattern[]): ResolvedRedactPatter
   const combined: ResolvedRedactPattern[] = [];
   for (const raw of value) {
     const resolved = parsePattern(raw);
-    if (resolved === null) {
-      continue;
-    }
-    if (!seen.has(resolved)) {
+    if (resolved !== null && !seen.has(resolved)) {
       seen.add(resolved);
       combined.push(resolved);
     }

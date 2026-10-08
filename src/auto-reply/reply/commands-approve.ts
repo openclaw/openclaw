@@ -57,9 +57,6 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     return null;
   }
   const rest = trimmed.slice(commandMatch[0].length).trim();
-  if (!rest) {
-    return { ok: false, error: APPROVE_USAGE_TEXT };
-  }
   const tokens = rest.split(/\s+/);
   if (tokens.length < 2) {
     return { ok: false, error: APPROVE_USAGE_TEXT };
@@ -69,19 +66,12 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const second = normalizeLowercaseStringOrEmpty(tokens[1]);
 
   const firstDecision = DECISION_ALIASES.get(first);
-  if (firstDecision) {
+  const decision = firstDecision ?? DECISION_ALIASES.get(second);
+  if (decision) {
     return {
       ok: true,
-      decision: firstDecision,
-      id: tokens.slice(1).join(" "),
-    };
-  }
-  const secondDecision = DECISION_ALIASES.get(second);
-  if (secondDecision) {
-    return {
-      ok: true,
-      decision: secondDecision,
-      id: expectDefined(tokens[0], "tokens entry at 0"),
+      decision,
+      id: firstDecision ? tokens.slice(1).join(" ") : expectDefined(tokens[0], "tokens entry at 0"),
     };
   }
   return { ok: false, error: APPROVE_USAGE_TEXT };
@@ -185,7 +175,7 @@ export async function handleApproveCommandFromContext(
     if (Array.from(commandBehaviors.values()).some((behavior) => behavior?.kind === "ignore")) {
       return { shouldContinue: false };
     }
-    return null;
+    return systemAgentRefusedForOwner ? ownerOnlyResult : null;
   };
 
   const resolvedBy = `${params.command.channel}:${params.command.senderId ?? "unknown"}`;
@@ -253,9 +243,6 @@ export async function handleApproveCommandFromContext(
     if (blocked) {
       return blocked;
     }
-    if (systemAgentRefusedForOwner) {
-      return ownerOnlyResult;
-    }
     return commandReply(
       Object.values(authorizations).find((authorization) => authorization.reason)?.reason ??
         "❌ You are not authorized to approve this request.",
@@ -274,10 +261,6 @@ export async function handleApproveCommandFromContext(
         const blocked = blockedCommandResult();
         if (blocked) {
           return blocked;
-        }
-        // Not an exec or plugin approval; it may be a change only the owner can decide.
-        if (systemAgentRefusedForOwner) {
-          return ownerOnlyResult;
         }
         return commandReply(
           "That approval is no longer available. Check the request in the Control UI.",

@@ -227,31 +227,23 @@ function ensureCanonicalVectorTableForLegacyRows(db: DatabaseSync): void {
   if (!dimensions) {
     throw new Error("legacy memory chunks_vec rows require vector dimensions before import");
   }
-  if (tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE)) {
-    const canonicalDimensions =
-      readVectorTableSqlDimensions(db, "main", MEMORY_INDEX_VECTOR_TABLE) ??
-      readMemoryIndexMetaVectorDimensions(db, "main", MEMORY_INDEX_META_TABLE);
-    if (!canonicalDimensions) {
-      throw new Error(
-        "canonical memory chunks_vec table requires vector dimensions before legacy import",
-      );
-    }
-    if (canonicalDimensions !== dimensions) {
-      throw new Error(
-        `legacy memory chunks_vec dimensions ${dimensions} do not match canonical memory chunks_vec dimensions ${canonicalDimensions}`,
-      );
-    }
-    return;
-  }
-  const canonicalMetaDimensions = readMemoryIndexMetaVectorDimensions(
-    db,
-    "main",
-    MEMORY_INDEX_META_TABLE,
-  );
-  if (canonicalMetaDimensions && canonicalMetaDimensions !== dimensions) {
+  const canonicalTableExists = tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE);
+  const canonicalDimensions =
+    (canonicalTableExists
+      ? readVectorTableSqlDimensions(db, "main", MEMORY_INDEX_VECTOR_TABLE)
+      : undefined) ?? readMemoryIndexMetaVectorDimensions(db, "main", MEMORY_INDEX_META_TABLE);
+  if (canonicalTableExists && !canonicalDimensions) {
     throw new Error(
-      `legacy memory chunks_vec dimensions ${dimensions} do not match canonical memory chunks_vec dimensions ${canonicalMetaDimensions}`,
+      "canonical memory chunks_vec table requires vector dimensions before legacy import",
     );
+  }
+  if (canonicalDimensions && canonicalDimensions !== dimensions) {
+    throw new Error(
+      `legacy memory chunks_vec dimensions ${dimensions} do not match canonical memory chunks_vec dimensions ${canonicalDimensions}`,
+    );
+  }
+  if (canonicalTableExists) {
+    return;
   }
   db.exec(
     `CREATE VIRTUAL TABLE IF NOT EXISTS main.${MEMORY_INDEX_VECTOR_TABLE} USING vec0(\n` +
@@ -387,31 +379,26 @@ export function importLegacyMemorySidecarIndex(params: {
   copyVectorRows: boolean;
   requireVectorRows: boolean;
 }): LegacyMemorySidecarImportResult {
+  const skipped = (
+    reason: LegacyMemorySidecarImportResult["reason"],
+  ): LegacyMemorySidecarImportResult => ({
+    imported: false,
+    reason,
+    sources: 0,
+    chunks: 0,
+    cacheEntries: 0,
+    vectorEntries: 0,
+    vectorEntriesImported: true,
+  });
   if (!params.legacySidecarDatabasePath || !fsSync.existsSync(params.legacySidecarDatabasePath)) {
-    return {
-      imported: false,
-      reason: "missing-sidecar",
-      sources: 0,
-      chunks: 0,
-      cacheEntries: 0,
-      vectorEntries: 0,
-      vectorEntriesImported: true,
-    };
+    return skipped("missing-sidecar");
   }
   params.db
     .prepare(`ATTACH DATABASE ? AS ${LEGACY_MEMORY_SIDECAR_SCHEMA}`)
     .run(params.legacySidecarDatabasePath);
   try {
     if (!hasLegacyMemoryIndexTables(params.db)) {
-      return {
-        imported: false,
-        reason: "legacy-schema-missing",
-        sources: 0,
-        chunks: 0,
-        cacheEntries: 0,
-        vectorEntries: 0,
-        vectorEntriesImported: true,
-      };
+      return skipped("legacy-schema-missing");
     }
     const counts = readLegacySidecarCounts(params.db, params.copyVectorRows);
     params.db.exec("SAVEPOINT import_legacy_sidecar_memory_index");

@@ -1,10 +1,11 @@
-import { svg, type SVGTemplateResult, type TemplateResult } from "lit";
+import { svg, type TemplateResult } from "lit";
 import { LOBSTER_HAT_SPRITES } from "./lobster-hat-sprites.ts";
 import type {
   LobsterPetAccessory,
   LobsterPetAntennae,
   LobsterPetPaletteId,
 } from "./lobster-pet-contract.ts";
+import { passerSprite } from "./lobster-pet-sprite.ts";
 import {
   CHIMERA_STITCHES,
   ECLIPSE_CORONA,
@@ -520,13 +521,17 @@ export const RETRO_ANTENNAE = svg`
   </g>
 `;
 
-export const RETRO_FACE = svg`
-  <g stroke="#0a1014" stroke-linecap="round" fill="none">
-    <path d="M37 24 L51 28" stroke-width="3.5" />
-    <path d="M69 28 L83 24" stroke-width="3.5" />
-    <path d="M49 45 Q59 51 69 45 L72 42" stroke-width="3" />
-  </g>
-`;
+function browedFace(mouth: string): TemplateResult {
+  return svg`
+    <g stroke="#0a1014" stroke-linecap="round" fill="none">
+      <path d="M37 24 L51 28" stroke-width="3.5" />
+      <path d="M69 28 L83 24" stroke-width="3.5" />
+      <path d=${mouth} stroke-width="3" />
+    </g>
+  `;
+}
+
+export const RETRO_FACE = browedFace("M49 45 Q59 51 69 45 L72 42");
 
 // Tail-fan lobes peek out diagonally behind the lower body (drawn before the
 // body path so they read as "behind"). Fill color lives in lobster-pet.css.
@@ -566,13 +571,7 @@ export const SAILOR_CAP = svg`
   </g>
 `;
 
-export const GRUMPY_FACE = svg`
-  <g stroke="#0a1014" stroke-linecap="round" fill="none">
-    <path d="M37 24 L51 28" stroke-width="3.5" />
-    <path d="M69 28 L83 24" stroke-width="3.5" />
-    <path d="M50 48 Q60 42 70 48" stroke-width="3" />
-  </g>
-`;
+export const GRUMPY_FACE = browedFace("M50 48 Q60 42 70 48");
 
 export const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
   perky: svg`
@@ -588,19 +587,6 @@ export const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
     </g>
   `,
 };
-
-function passerSprite(content: SVGTemplateResult): SVGTemplateResult {
-  return svg`
-    <svg
-      class="lobster-pet__svg"
-      viewBox="0 0 120 105"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      ${content}
-    </svg>
-  `;
-}
 
 const CRAB_SPRITE = passerSprite(svg`
     <g stroke="#a63a2e" stroke-width="4" stroke-linecap="round" fill="none">

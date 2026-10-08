@@ -16,7 +16,7 @@ export function requireRecord(value: unknown, label: string): Record<string, unk
   return value;
 }
 
-export function requireArray(value: unknown, label: string): unknown[] {
+function requireArray(value: unknown, label: string): unknown[] {
   expect(Array.isArray(value), `${label} should be an array`).toBe(true);
   if (!Array.isArray(value)) {
     throw new Error(`${label} should be an array`);

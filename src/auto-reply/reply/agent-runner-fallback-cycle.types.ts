@@ -24,37 +24,41 @@ import type { CurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 
-/** Inputs prepared once per fallback candidate and consumed by either runtime adapter. */
-export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions & {
+type AgentFallbackRunContext = {
   preparedRunAdmission: PreparedAgentRunAdmission;
-  messageActionTurnCapability?: string;
   turn: AgentTurnParams;
-  candidateRun: FollowupRun["run"];
   runtimeConfig: OpenClawConfig;
-  provider: string;
-  model: string;
-  candidateThinkLevel?: ThinkLevel;
-  candidateFastMode: Pick<RunEmbeddedAgentParams, "fastMode" | "fastModeAutoOnSeconds">;
   runId: string;
   runAbortSignal?: AbortSignal;
-  runLane: RunEmbeddedAgentParams["lane"];
-  suppressQueuedUserPersistenceForCandidate: boolean;
-  userTurnTranscriptRecorder: RunEmbeddedAgentParams["userTurnTranscriptRecorder"];
-  notifyUserMessagePersisted: () => void;
-  fastModeStartedAtMs: number;
-  fastModeAutoProgressState: FastModeAutoProgressState;
-  bootstrapContextRunKind: BootstrapContextRunKind;
-  bootstrapPromptWarningSignaturesSeen: string[];
   currentTurnImages: CurrentTurnImages;
-  signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
-  prepareAgentRunStart: () => void | Promise<void>;
-  notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
-  preserveProgressCallbackStartOrder: boolean;
   presentation: ReturnType<typeof createAgentTurnPresentation>;
   timing: AgentTurnTimingTracker;
-  onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => void;
-  deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
 };
+
+/** Inputs prepared once per fallback candidate and consumed by either runtime adapter. */
+export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions &
+  AgentFallbackRunContext & {
+    messageActionTurnCapability?: string;
+    candidateRun: FollowupRun["run"];
+    provider: string;
+    model: string;
+    candidateThinkLevel?: ThinkLevel;
+    candidateFastMode: Pick<RunEmbeddedAgentParams, "fastMode" | "fastModeAutoOnSeconds">;
+    runLane: RunEmbeddedAgentParams["lane"];
+    suppressQueuedUserPersistenceForCandidate: boolean;
+    userTurnTranscriptRecorder: RunEmbeddedAgentParams["userTurnTranscriptRecorder"];
+    notifyUserMessagePersisted: () => void;
+    fastModeStartedAtMs: number;
+    fastModeAutoProgressState: FastModeAutoProgressState;
+    bootstrapContextRunKind: BootstrapContextRunKind;
+    bootstrapPromptWarningSignaturesSeen: string[];
+    signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
+    prepareAgentRunStart: () => void | Promise<void>;
+    notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
+    preserveProgressCallbackStartOrder: boolean;
+    onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => void;
+    deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
+  };
 
 export type AgentFallbackCycleState = {
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
@@ -95,27 +99,19 @@ type AgentFallbackModelPatch = {
   captureFailure: (error: unknown) => void;
 };
 
-export type AgentFallbackCycleParams = {
-  preparedRunAdmission: PreparedAgentRunAdmission;
-  turn: AgentTurnParams;
+export type AgentFallbackCycleParams = AgentFallbackRunContext & {
   effectiveRun: FollowupRun["run"];
-  runtimeConfig: OpenClawConfig;
   liveModelSwitchRuntimeEntry?: Pick<
     SessionEntry,
     "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "pluginOwnerId"
   >;
-  runId: string;
-  runAbortSignal?: AbortSignal;
-  currentTurnImages: CurrentTurnImages;
   state: AgentFallbackCycleState;
-  presentation: ReturnType<typeof createAgentTurnPresentation>;
   directBlockDeliveries: DirectBlockDelivery[];
   createAgentRunStartCallbacks: () => Pick<
     AgentFallbackCandidateCommonParams,
     "prepareAgentRunStart" | "notifyAgentRunStart" | "signalExecutionPhaseForTyping"
   > & { close: () => void };
   notifyUserAboutCompaction: boolean;
-  timing: AgentTurnTimingTracker;
   modelPatch: AgentFallbackModelPatch;
   shouldSurfaceToControlUi: boolean;
   commitTerminalOutcome: () => void;

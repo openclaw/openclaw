@@ -606,40 +606,35 @@ async function resolveCompatiblePackageVersion(params: {
       CLAWHUB_INSTALL_ERROR_CODE.NO_INSTALLABLE_VERSION,
     );
   }
+  const packageRequest = {
+    name: params.detail.package?.name ?? "",
+    baseUrl: params.baseUrl,
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+  };
   let artifactResponse: ClawHubPackageArtifactResolverResponse;
   try {
-    artifactResponse = await fetchClawHubPackageArtifact({
-      name: params.detail.package?.name ?? "",
-      version: requestedVersion,
-      baseUrl: params.baseUrl,
-      token: params.token,
-      timeoutMs: params.timeoutMs,
-    });
-  } catch (error) {
-    if (isMissingArtifactResolverRoute(error)) {
-      try {
-        const versionDetail = await fetchClawHubPackageVersion({
-          name: params.detail.package?.name ?? "",
-          version: requestedVersion,
-          baseUrl: params.baseUrl,
-          token: params.token,
-          timeoutMs: params.timeoutMs,
-        });
-        artifactResponse = { version: versionDetail.version };
-      } catch (versionError) {
-        return mapClawHubRequestError(versionError, {
-          stage: "version",
-          name: params.detail.package?.name ?? "unknown",
-          version: requestedVersion,
-        });
-      }
-    } else {
-      return mapClawHubRequestError(error, {
-        stage: "version",
-        name: params.detail.package?.name ?? "unknown",
+    try {
+      artifactResponse = await fetchClawHubPackageArtifact({
+        ...packageRequest,
         version: requestedVersion,
       });
+    } catch (error) {
+      if (!isMissingArtifactResolverRoute(error)) {
+        throw error;
+      }
+      const versionDetail = await fetchClawHubPackageVersion({
+        ...packageRequest,
+        version: requestedVersion,
+      });
+      artifactResponse = { version: versionDetail.version };
     }
+  } catch (error) {
+    return mapClawHubRequestError(error, {
+      stage: "version",
+      name: params.detail.package?.name ?? "unknown",
+      version: requestedVersion,
+    });
   }
   const artifactVersion = readArtifactResolverVersion(artifactResponse, requestedVersion);
   const resolvedVersion = normalizeOptionalString(artifactVersion.version) ?? requestedVersion;
@@ -656,11 +651,8 @@ async function resolveCompatiblePackageVersion(params: {
   if (!artifactVersion.compatibility && resolvedVersion !== latestVersion) {
     try {
       const selectedVersion = await fetchClawHubPackageVersion({
-        name: params.detail.package?.name ?? "",
+        ...packageRequest,
         version: resolvedVersion,
-        baseUrl: params.baseUrl,
-        token: params.token,
-        timeoutMs: params.timeoutMs,
       });
       versionEndpointCompatibility = selectedVersion.version?.compatibility ?? null;
     } catch (error) {

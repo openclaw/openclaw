@@ -20,13 +20,15 @@ import {
   ensureSubagentControllerOwnsRun,
   getLatestOwnedSubagentRun,
   isCurrentSubagentRun,
-  type ResolvedSubagentController,
 } from "./subagent-control-scope.js";
 import {
   prepareSubagentKillSession,
   type SubagentKillSession,
 } from "./subagent-control-session.js";
-import type { SubagentCancellationControl } from "./subagent-control.types.js";
+import type {
+  ResolvedSubagentController,
+  SubagentCancellationControl,
+} from "./subagent-control.types.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
   captureSubagentExecution,
@@ -35,6 +37,7 @@ import {
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { listRunsForControllerFromRuns } from "./subagent-registry-queries.js";
 import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -63,14 +66,18 @@ export type KillSelection = {
   assertCurrent?: () => void;
   prepareRead?: () => Promise<void> | undefined;
   ownsRoot?: (entry: SubagentRunRecord) => boolean;
+  selectPublishedRoot?: (entry: SubagentRunRecord) => boolean;
   controller?: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
 };
 
 export type KillScope = {
   cancellationControl: SubagentCancellationControl;
   refresh: () => Promise<number>;
+  sealRootSelection: () => void;
   stateContext: OpenClawStateWorkerContext;
 };
+
+type PendingKillTree = { tree: KillTree; prepare: () => Promise<void> };
 
 export type KillPublicationPreparation<T> = {
   prepare: (
@@ -116,7 +123,7 @@ export async function withSubagentKillScope<T>(
     controllerAgentId: resolveSubagentChildSessionOwner(tree.entry, params.cfg).agentId,
   });
   const capture = (
-    pending: Array<{ tree: KillTree; prepare: () => Promise<void> }>,
+    pending: PendingKillTree[],
     runs: Iterable<SubagentRunRecord>,
     trees: KillTree[],
     owner?: KillSelection["controller"],
@@ -292,15 +299,7 @@ export async function withSubagentKillScope<T>(
       });
     }
   };
-  const select = async (
-    runs: Iterable<SubagentRunRecord>,
-    trees: KillTree[],
-    owner?: KillSelection["controller"],
-    parent?: KillBinding,
-    ownsRoot?: (entry: SubagentRunRecord) => boolean,
-  ) => {
-    const pending: Array<{ tree: KillTree; prepare: () => Promise<void> }> = [];
-    capture(pending, runs, trees, owner, parent, ownsRoot);
+  const captureResidentDescendants = (pending: PendingKillTree[]) => {
     // Resident reservations can dispatch on the first await. Capture all known roots and
     // descendants first; persisted-only discovery below remains worker-owned.
     const resident = new Map(subagentRuns);
@@ -314,6 +313,17 @@ export async function withSubagentKillScope<T>(
         tree,
       );
     }
+  };
+  const select = async (
+    runs: Iterable<SubagentRunRecord>,
+    trees: KillTree[],
+    owner?: KillSelection["controller"],
+    parent?: KillBinding,
+    ownsRoot?: (entry: SubagentRunRecord) => boolean,
+  ) => {
+    const pending: PendingKillTree[] = [];
+    capture(pending, runs, trees, owner, parent, ownsRoot);
+    captureResidentDescendants(pending);
     for (const item of pending) {
       await item.prepare();
     }
@@ -388,6 +398,15 @@ export async function withSubagentKillScope<T>(
     }
   };
   const trees: KillTree[] = [];
+  const publishedRoots: PendingKillTree[] = [];
+  let rootObservationFailure: { error: unknown } | undefined;
+  let disposeRootObservation: (() => void) | undefined;
+  const sealRootSelection = () => {
+    disposeRootObservation?.();
+    if (rootObservationFailure) {
+      throw rootObservationFailure.error;
+    }
+  };
   let queuedRefresh: ReturnType<typeof createDeferredCore<number>> | undefined;
   let refreshWork: Promise<void> | undefined;
   let refreshing = false;
@@ -410,6 +429,12 @@ export async function withSubagentKillScope<T>(
             const current = queuedRefresh;
             queuedRefresh = undefined;
             try {
+              if (rootObservationFailure) {
+                throw rootObservationFailure.error;
+              }
+              for (const pending of publishedRoots.splice(0)) {
+                await pending.prepare();
+              }
               for (const tree of trees) {
                 await refreshTree(tree);
               }
@@ -474,11 +499,36 @@ export async function withSubagentKillScope<T>(
   let outcome: { ok: true; rawResult: T; value: T } | { ok: false; error: unknown };
   try {
     assertCurrent();
+    const selectPublishedRoot = params.selectPublishedRoot;
+    if (selectPublishedRoot) {
+      disposeRootObservation = subscribeSubagentRunChanges("persistence", ({ runIds }) => {
+        try {
+          runInScope(() => {
+            const pending: PendingKillTree[] = [];
+            for (const runId of runIds ?? []) {
+              const entry = subagentRuns.get(runId);
+              if (entry && selectPublishedRoot(entry)) {
+                capture(pending, [entry], trees, params.controller, undefined, params.ownsRoot);
+              }
+            }
+            if (pending.length > 0) {
+              captureResidentDescendants(pending);
+              publishedRoots.push(...pending);
+            }
+          });
+        } catch (error) {
+          // This Stop owns observation failure; it cannot reject another registration.
+          rootObservationFailure = { error };
+          disposeRootObservation?.();
+        }
+      });
+    }
     await select(params.runs, trees, params.controller, undefined, params.ownsRoot);
     const scope: KillScope = {
       cancellationControl,
       stateContext,
       refresh,
+      sealRootSelection,
     };
     await scope.refresh();
     const result = await run(scope, trees);
@@ -500,6 +550,16 @@ export async function withSubagentKillScope<T>(
     outcome = { ok: true, rawResult: result, value: snapshot };
   } catch (error) {
     outcome = { ok: false, error };
+  }
+  disposeRootObservation?.();
+  if (rootObservationFailure && !outcome.ok && outcome.error !== rootObservationFailure.error) {
+    outcome = {
+      ok: false,
+      error: new AggregateError(
+        [outcome.error, rootObservationFailure.error],
+        "Subagent cancellation and root observation failed",
+      ),
+    };
   }
   refreshClosed = true;
   await refreshWork;

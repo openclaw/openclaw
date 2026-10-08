@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import { root as openSafeRoot } from "../../infra/fs-safe.js";
 import { resolveOpenPathCommand } from "./open-path.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
@@ -49,9 +50,15 @@ vi.mock("../session-utils.js", async (original) => ({
   loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
 }));
 
-vi.mock("../session-transcript-readers.js", async (original) => ({
-  ...(await original<typeof import("../session-transcript-readers.js")>()),
-  readSessionTranscriptVisibleMessageDeltaCore: hoisted.readDelta,
+// mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
+vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
+  withSessionTranscriptDeltaReader: ((scope, consume) =>
+    consume({
+      visible: async (limits) => hoisted.readDelta(scope, limits),
+      raw: async () => {
+        throw new Error("File browsing must consume visible transcript pages");
+      },
+    })) satisfies typeof withSessionTranscriptDeltaReader,
 }));
 
 const sessionKey = "agent:main:main";
@@ -75,10 +82,7 @@ const mockVisibleMessages = createVisibleMessagesMock(hoisted.readDelta);
 
 let workspaceRoot: string;
 beforeEach(() => {
-  workspaceRoot = prepareSessionFilesTest(
-    { ...hoisted, readSessionTranscriptVisibleMessageDeltaCore: hoisted.readDelta },
-    mockVisibleMessages,
-  );
+  workspaceRoot = prepareSessionFilesTest(hoisted, mockVisibleMessages);
 });
 
 afterEach(() => {

@@ -28,6 +28,7 @@ import {
   withSessionEntryWorker,
   type SessionEntryWorkerPreparation,
 } from "./session-accessor.sqlite-replacement-worker.js";
+import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import type {
   SessionEntryPatchCommit,
   SessionEntryPatchCommitted,
@@ -183,6 +184,7 @@ export async function runSessionEntryWorkerOperation<
     candidate: Candidate,
     published: ReturnType<ReturnType<typeof retainSessionEntryWorkerPublication>["settle"]>,
     identity: string,
+    context: SessionEntryCommitContext,
   ): Result | Promise<Result>;
 }): Promise<Result> {
   let publication: ReturnType<typeof retainSessionEntryWorkerPublication> | undefined;
@@ -210,7 +212,7 @@ export async function runSessionEntryWorkerOperation<
     params.database,
     params.databaseIdentity,
     params.assertCurrent,
-    async (execution, source) => {
+    async (execution, source, context) => {
       await execution.prepare(source);
       params.assertCurrent();
       params.assertPrepared?.();
@@ -263,7 +265,12 @@ export async function runSessionEntryWorkerOperation<
               const published = publication?.settle(committed?.publication, unknown);
               if (committed) {
                 publishedResult = {
-                  value: await params.onCommitted(committed, published, identity.physicalIdentity),
+                  value: await params.onCommitted(
+                    committed,
+                    published,
+                    identity.physicalIdentity,
+                    context,
+                  ),
                 };
               }
             } catch (error) {

@@ -4,7 +4,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTelegramRuntime } from "./runtime.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 import {
-  fingerprintTelegramBotToken,
+  fingerprintOptionalTelegramBotToken,
   resolveTelegramBotUserIdFromToken,
 } from "./token-fingerprint.js";
 
@@ -38,17 +38,12 @@ function extractBotIdFromToken(token?: string): string | null {
   return botUserId === undefined ? null : String(botUserId);
 }
 
-function fingerprintFromToken(token?: string): string | null {
-  const trimmed = token?.trim();
-  return trimmed ? fingerprintTelegramBotToken(trimmed) : null;
-}
-
 function updateOffsetState(lastUpdateId: number | null, token?: string) {
   return {
     version: STORE_VERSION,
     lastUpdateId,
     botId: extractBotIdFromToken(token),
-    tokenFingerprint: fingerprintFromToken(token),
+    tokenFingerprint: fingerprintOptionalTelegramBotToken(token),
   };
 }
 
@@ -106,7 +101,7 @@ function rotationForToken(
     reason = "bot-id-changed";
   } else if (parsed.tokenFingerprint === null) {
     reason = "legacy-state";
-  } else if (parsed.tokenFingerprint !== fingerprintFromToken(botToken)) {
+  } else if (parsed.tokenFingerprint !== fingerprintOptionalTelegramBotToken(botToken)) {
     reason = "token-rotated";
   }
   return reason

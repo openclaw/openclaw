@@ -250,19 +250,16 @@ function aggregateSessionBackfillBatches(
       });
     }
   }
+  const total = (
+    field: "candidateCount" | "stagedEntries" | "writtenDiaryEntries" | "replacedDiaryEntries",
+  ) => executions.reduce((sum, { result }) => sum + result[field], 0);
   return {
     ...first,
     days: [...days.values()].toSorted((a, b) => a.day.localeCompare(b.day)),
-    candidateCount: executions.reduce((sum, execution) => sum + execution.result.candidateCount, 0),
-    stagedEntries: executions.reduce((sum, execution) => sum + execution.result.stagedEntries, 0),
-    writtenDiaryEntries: executions.reduce(
-      (sum, execution) => sum + execution.result.writtenDiaryEntries,
-      0,
-    ),
-    replacedDiaryEntries: executions.reduce(
-      (sum, execution) => sum + execution.result.replacedDiaryEntries,
-      0,
-    ),
+    candidateCount: total("candidateCount"),
+    stagedEntries: total("stagedEntries"),
+    writtenDiaryEntries: total("writtenDiaryEntries"),
+    replacedDiaryEntries: total("replacedDiaryEntries"),
     batchCount: executions.length,
     batches: executions.map((execution, index) => ({
       batch: index + 1,

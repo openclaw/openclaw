@@ -52,12 +52,18 @@ import {
   withOptions,
 } from "./directive-handling.shared.js";
 import { resolveDirectiveRuntimeContext } from "./directive-runtime-context.js";
-import type { ReasoningLevel, ThinkLevel } from "./directives.js";
+import type { ThinkLevel } from "./directives.js";
 import {
   findSelectedCatalogEntry,
   prepareModelSelectionRuntime,
 } from "./model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
+
+const LEVEL_QUERY_OPTIONS = {
+  Verbose: ["off, on, full", "on, full, off"],
+  Trace: ["off, on, raw", "on, off, raw"],
+  Reasoning: ["on, off, stream", "on, off, stream"],
+} as const;
 
 const ELEVATED_RUNTIME_HINT = prefixSystemMessage("Runtime is direct; sandboxing does not apply.");
 
@@ -106,6 +112,16 @@ export async function handleDirectiveOnly(
       applyRemainingDirectives: (remainingDirectives) =>
         handleDirectiveOnly({ ...params, directives: remainingDirectives }),
     });
+  const acknowledgeLevel = (name: keyof typeof LEVEL_QUERY_OPTIONS, currentLevel?: string) => {
+    const [validLevels, options] = LEVEL_QUERY_OPTIONS[name];
+    const rawLevel = directives[`raw${name}Level`];
+    return acknowledgeIgnoredDirective(
+      rawLevel
+        ? `Unrecognized ${name.toLowerCase()} level "${rawLevel}". Valid levels: ${validLevels}.`
+        : withOptions(`Current ${name.toLowerCase()} level: ${currentLevel ?? "off"}.`, options),
+      `has${name}Directive`,
+    );
+  };
   const delegatedTraceAllowed = (params.gatewayClientScopes ?? []).includes("operator.admin");
   if (directives.hasTraceDirective && !params.senderIsOwner && !delegatedTraceAllowed) {
     return acknowledgeIgnoredDirective(
@@ -233,20 +249,10 @@ export async function handleDirectiveOnly(
     );
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
-    return acknowledgeIgnoredDirective(
-      directives.rawVerboseLevel
-        ? `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on, full.`
-        : withOptions(`Current verbose level: ${currentVerboseLevel ?? "off"}.`, "on, full, off"),
-      "hasVerboseDirective",
-    );
+    return acknowledgeLevel("Verbose", currentVerboseLevel);
   }
   if (directives.hasTraceDirective && !directives.traceLevel) {
-    return acknowledgeIgnoredDirective(
-      directives.rawTraceLevel
-        ? `Unrecognized trace level "${directives.rawTraceLevel}". Valid levels: off, on, raw.`
-        : withOptions(`Current trace level: ${sessionEntry.traceLevel ?? "off"}.`, "on, off, raw"),
-      "hasTraceDirective",
-    );
+    return acknowledgeLevel("Trace", sessionEntry.traceLevel);
   }
   if (
     directives.hasFastDirective &&
@@ -278,15 +284,7 @@ export async function handleDirectiveOnly(
     );
   }
   if (directives.hasReasoningDirective && !directives.reasoningLevel) {
-    return acknowledgeIgnoredDirective(
-      directives.rawReasoningLevel
-        ? `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream.`
-        : withOptions(
-            `Current reasoning level: ${currentReasoningLevel ?? "off"}.`,
-            "on, off, stream",
-          ),
-      "hasReasoningDirective",
-    );
+    return acknowledgeLevel("Reasoning", currentReasoningLevel);
   }
   if (directives.hasElevatedDirective) {
     if (!directives.elevatedLevel && directives.rawElevatedLevel) {
@@ -387,8 +385,7 @@ export async function handleDirectiveOnly(
   const shouldRemapUnsupportedThinkLevel =
     Boolean(remappedUnsupportedThinkLevel) && remappedUnsupportedThinkLevel !== nextThinkLevel;
 
-  const prevReasoningLevel =
-    currentReasoningLevel ?? (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+  const prevReasoningLevel = currentReasoningLevel ?? sessionEntry.reasoningLevel ?? "off";
   const elevatedChanged =
     directives.hasElevatedDirective &&
     directives.elevatedLevel !== undefined &&
@@ -539,17 +536,13 @@ export async function handleDirectiveOnly(
   }
   if (!params.persistenceState) {
     const eventSessionKey = resolveSystemEventQueueKey(sessionKey, activeAgentId);
-    if (elevatedChanged) {
-      enqueueSystemEvent(formatElevatedEvent(sessionEntry.elevatedLevel), {
-        sessionKey: eventSessionKey,
-        contextKey: "mode:elevated",
-      });
-    }
-    if (reasoningChanged) {
-      enqueueSystemEvent(formatReasoningEvent(sessionEntry.reasoningLevel), {
-        sessionKey: eventSessionKey,
-        contextKey: "mode:reasoning",
-      });
+    for (const [changed, mode, format] of [
+      [elevatedChanged, "elevated", () => formatElevatedEvent(sessionEntry.elevatedLevel)],
+      [reasoningChanged, "reasoning", () => formatReasoningEvent(sessionEntry.reasoningLevel)],
+    ] as const) {
+      if (changed) {
+        enqueueSystemEvent(format(), { sessionKey: eventSessionKey, contextKey: `mode:${mode}` });
+      }
     }
   }
   if (params.persistenceState) {
@@ -623,12 +616,9 @@ export async function handleDirectiveOnly(
     }
   }
   if (modelSelection) {
-    const label = `${modelSelection.provider}/${modelSelection.model}`;
-    const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
     parts.push(
       formatModelSelectionScopeAck({
-        isDefault: modelSelection.isDefault,
-        label: labelWithAlias,
+        selection: modelSelection,
         configuredDefaultUpdate,
         ...(params.stickyModelSelectionTarget
           ? { stickyModelSelectionTarget: params.stickyModelSelectionTarget }

@@ -4,6 +4,62 @@ import type { PluginCompatRecord } from "./types.js";
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   REPLY_TOOL_AUTHORITY_COMPAT_RECORD,
   {
+    code: "codex-transcript-sync-validation",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-08",
+    deprecated: "2026-10-06",
+    warningStarts: "2026-10-06",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await readCodexSessionContextProjection for retained worker projection and final validation. Keep the released synchronous validators until the next Plugin SDK major and explicit breaking-release approval. readCodexSessionContext remains a supported synchronous worker reader with its released three-argument generic result contract.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence",
+    surfaces: [
+      "openclaw/plugin-sdk/codex-session-transcript-runtime.validateCodexSessionTranscriptReadAdmission",
+      "openclaw/plugin-sdk/codex-session-transcript-runtime.validateCodexSessionTranscriptContextVersion",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/codex-session-transcript-runtime.compat.test.ts",
+      "src/config/sessions/session-transcript-context-read.worker.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Codex history validates retained worker projections off the Gateway thread while preserving the released synchronous reader and validator signatures. Storage and update behavior are unchanged.",
+  },
+  {
+    code: "deprecated-session-store-beta5-api",
+    status: "removed",
+    removeAfter: "2026-09-30",
+    owner: "sdk",
+    introduced: "2026-05-21",
+    deprecated: "2026-07-12",
+    warningStarts: "2026-07-12",
+    replacement:
+      "Use `getSessionEntry(...)` and `listSessionEntries(...)` for reads; `patchSessionEntry(...)`, `upsertSessionEntry(...)`, and `deleteSessionEntry(...)` for row mutations; and session identity with `session-transcript-runtime` for active transcripts. The supported-plugin cutoff excludes v2026.7.1-beta.5 and other packages importing the retired bridge.",
+    docsPath: "/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis",
+    surfaces: [
+      "openclaw/plugin-sdk/session-store-runtime loadSessionStore",
+      "openclaw/plugin-sdk/session-store-runtime updateSessionStore",
+      "openclaw/plugin-sdk/session-store-runtime resolveSessionFilePath",
+      "openclaw/plugin-sdk/session-store-runtime resolveSessionStoreEntry",
+      "openclaw/plugin-sdk/session-store-runtime LoadSessionStoreOptions",
+      "openclaw/plugin-sdk/session-store-runtime UpdateSessionStoreOptions",
+      "openclaw package root loadSessionStore",
+      "openclaw package root saveSessionStore",
+    ],
+    diagnostics: ["plugin compatibility registry and migration guide"],
+    tests: [
+      "src/plugin-sdk/session-store-runtime.test.ts",
+      "src/index.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "The September 30, 2026 approved cutoff in 1783c5fd6fc5b03d2b376ba7cbbab4461940207e retired the beta.5 session-store bridge, its option types, and package-root loadSessionStore/saveSessionStore aliases ahead of the former October 12 window. Plugins must use scoped row APIs and identity-backed transcript APIs; the session-store-runtime subpath and resolveStorePath remain available.",
+  },
+  {
     code: "transcript-lock-sync-message-preparation",
     status: "deprecated",
     owner: "sdk",

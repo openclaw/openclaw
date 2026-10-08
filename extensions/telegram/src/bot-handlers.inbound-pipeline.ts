@@ -289,8 +289,5 @@ export function registerTelegramInboundHandlers({
   bot: RegisterTelegramHandlerParams["bot"];
   pipeline: Pick<TelegramInboundPipeline, "handle">;
 }): void {
-  bot.on("message", pipeline.handle);
-  bot.on("edited_message", pipeline.handle);
-  bot.on("channel_post", pipeline.handle);
-  bot.on("edited_channel_post", pipeline.handle);
+  bot.on(["message", "edited_message", "channel_post", "edited_channel_post"], pipeline.handle);
 }

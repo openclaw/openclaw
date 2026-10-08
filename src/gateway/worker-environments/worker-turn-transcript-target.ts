@@ -215,13 +215,9 @@ export function captureWorkerTurnTranscriptSource(
       };
   const fields: (keyof WorkerTranscriptSourceIdentity)[] = predicate
     ? [...predicate.fields]
-    : ["sessionId"];
-  if (!predicate && captured.expectedLifecycleRevision !== undefined) {
-    fields.push("lifecycleRevision");
-  }
-  if (!predicate && captured.expectedWriterRunId !== undefined) {
-    fields.push("activeWriterRunId");
-  }
+    : (["sessionId", "lifecycleRevision", "activeWriterRunId"] as const).filter((field) =>
+        Object.hasOwn(expected, field),
+      );
   const assertEntry = (entry: WorkerTranscriptSourceIdentity | undefined) => {
     if (!entry || fields.some((field) => entry[field] !== expected[field])) {
       refuse();
