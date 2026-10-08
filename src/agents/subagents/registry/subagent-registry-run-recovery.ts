@@ -411,6 +411,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             spawnMode,
             archiveAtMs: undefined,
             runTimeoutSeconds,
+            waitExpiryObservedAt: undefined,
+            waitExpiryAnnouncedAt: undefined,
           });
           clearDeliveryState(next);
           const postimages = this.planSupersededKillReconciliations(rows, next);

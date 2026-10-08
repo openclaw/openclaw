@@ -244,6 +244,7 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/worktree-provision.mts!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/print-live-docker-plugin-selection.mjs!",
+  "scripts/proof-136554-timeout-notification-boundaries.ts!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   // qa/README.md delegates campaign Git execution to this guarded CLI by path.

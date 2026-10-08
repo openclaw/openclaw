@@ -12,6 +12,7 @@ import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js";
 import { sleep } from "../../../utils/sleep.js";
+import type { AgentRunDisposition } from "../../internal-event-contract.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunReadRecord } from "../registry/subagent-registry-read.types.js";
@@ -44,6 +45,18 @@ type SubagentOutputSnapshot = {
   latestToolCallCount?: number;
   waitingForContinuation?: boolean;
 };
+
+/** Total read of a run's disposition; see `SubagentRunOutcome.disposition`. */
+export function resolveSubagentRunDisposition(
+  outcome: SubagentRunOutcome | undefined,
+): AgentRunDisposition {
+  return outcome?.disposition ?? "exited";
+}
+
+/** True when the completion event describes a child that has not stopped. */
+export function isSubagentRunStillRunning(outcome: SubagentRunOutcome | undefined): boolean {
+  return resolveSubagentRunDisposition(outcome) === "still-running";
+}
 
 export function withSubagentOutcomeTiming(
   outcome: SubagentRunOutcome,
@@ -373,7 +386,9 @@ export async function buildCompactAnnounceStatsLine(params: {
   sessionKey: string;
   startedAt?: number;
   endedAt?: number;
+  disposition?: AgentRunDisposition;
 }) {
+  const stillRunning = params.disposition === "still-running";
   const cfg = getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveSessionStorePathCore(cfg.session?.store, {
@@ -405,14 +420,26 @@ export async function buildCompactAnnounceStatsLine(params: {
       ? Math.max(0, params.endedAt - params.startedAt)
       : undefined;
 
-  const parts = [
-    `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
-    hasDirectionalUsage
-      ? `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
-      : promptCache === undefined
-        ? "tokens unknown"
-        : `tokens ${formatTokenCount(promptCache)} prompt/cache`,
-  ];
+  // A live child has not flushed its usage counters, so a zeroed token total
+  // reads as "the run did nothing" when it means "nothing is final yet". Label
+  // both numbers by what they actually measure instead of publishing 0. For a
+  // terminal run, fall back to prompt/cache totals (or say so) rather than
+  // implying directional counts we never received.
+  const parts = stillRunning
+    ? [
+        `waited ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
+        hasDirectionalUsage && ioTotal > 0
+          ? `tokens so far ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
+          : "child tokens not yet reported",
+      ]
+    : [
+        `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
+        hasDirectionalUsage
+          ? `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
+          : promptCache === undefined
+            ? "tokens unknown"
+            : `tokens ${formatTokenCount(promptCache)} prompt/cache`,
+      ];
   if (hasDirectionalUsage && typeof promptCache === "number" && promptCache > ioTotal) {
     parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
   }

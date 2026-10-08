@@ -21,6 +21,7 @@ import type {
 } from "../../../sessions/session-lifecycle-events.js";
 import { notifyListeners, registerListener } from "../../../shared/listeners.js";
 import type { MockSubagentRegistryRows } from "../../subagent-test-fixtures.test-helpers.js";
+import type { SubagentAnnounceFlowOutcome } from "../announce/subagent-announce.js";
 import type { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -131,7 +132,7 @@ export function createSubagentRegistryMockState() {
     ),
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-    runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
+    runSubagentAnnounceFlow: vi.fn(async (): Promise<SubagentAnnounceFlowOutcome> => "delivered"),
     getGlobalHookRunner: vi.fn(() => null),
     ensureContextEnginesInitialized: vi.fn(),
     loadAgentRuntimePluginRegistryHandle: vi.fn(),

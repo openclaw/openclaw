@@ -70,6 +70,12 @@ export type SubagentManagerOptions = {
   >["notifyContextEngineSubagentEnded"];
   completeCleanupBookkeeping(args: CleanupBookkeepingParams): Promise<void>;
   completeSubagentRun(args: SubagentCompletionRequest): Promise<void>;
+  reportSubagentWaitExpiry(args: {
+    entry: SubagentRunRecord;
+    observedAt: number;
+    startedAt?: number;
+    lifecycleGeneration: string;
+  }): Promise<void>;
 };
 
 export abstract class SubagentWaitManager {
@@ -103,6 +109,7 @@ export abstract class SubagentWaitManager {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const stateContext = captureOpenClawStateWorkerContext();
     let waitedEntry: SubagentRunRecord | undefined;
+    let waitExpiryForRetry: Parameters<typeof this.options.reportSubagentWaitExpiry>[0] | undefined;
     let completionAttempted = false;
     let releaseCompletionWork: (() => void) | null = null;
     const currentEntry = () => {
@@ -251,7 +258,7 @@ export abstract class SubagentWaitManager {
       entry = currentEntry();
       const completeAsRunTimeout = (endedAt?: number, startedAt?: number) =>
         complete({
-          outcome: { status: "timeout" },
+          outcome: { status: "timeout", disposition: "exited" },
           reason: SUBAGENT_ENDED_REASON_COMPLETE,
           terminalReply: wait.terminalReply,
           ...(typeof endedAt === "number" ? { endedAt } : {}),
@@ -309,6 +316,24 @@ export abstract class SubagentWaitManager {
         if (isTerminalWaitTimeout || hardRunTimeoutEndedAt !== undefined) {
           const timeoutEndedAt =
             typeof wait.endedAt === "number" ? wait.endedAt : hardRunTimeoutEndedAt;
+          // Only `isTerminalWaitTimeout` carries evidence that the run stopped.
+          // Reaching the stored deadline is clock arithmetic on our own budget:
+          // it earns the parent a wake, but must stay outside terminal completion
+          // because that path owns browser/MCP/session cleanup.
+          if (!isTerminalWaitTimeout) {
+            waitExpiryForRetry = {
+              entry,
+              observedAt: timeoutEndedAt ?? now,
+              startedAt: observedStartedAt,
+              lifecycleGeneration,
+            };
+            await this.options.reportSubagentWaitExpiry(waitExpiryForRetry);
+            // Do not keep a second long-poll alive after the parent has been
+            // notified. The periodic registry sweeper remains the settlement
+            // backstop: once the run context disappears, it reconciles the
+            // persisted terminal session state or records a lost-context error.
+            return;
+          }
           await completeWithDeadline(observedStartedAt, timeoutEndedAt, now, () =>
             completeAsRunTimeout(timeoutEndedAt, observedStartedAt),
           );
@@ -356,9 +381,17 @@ export abstract class SubagentWaitManager {
       }
       await completeWithDeadline(observedStartedAt, wait.endedAt, Date.now(), () => {
         const endedAt = typeof wait.endedAt === "number" ? wait.endedAt : Date.now();
+        // A cancellation stays a cancellation even once `observedCompletion`
+        // has normalized it to a plain error: `resolveSubagentRunDisposition`
+        // reads an absent disposition as `exited`, so the kill would publish
+        // as a clean exit.
+        const outcome =
+          observedCompletion.reason === SUBAGENT_ENDED_REASON_KILLED
+            ? { ...observedCompletion.outcome, disposition: "killed" as const }
+            : observedCompletion.outcome;
         return complete({
           endedAt,
-          outcome: withSubagentOutcomeTiming(observedCompletion.outcome, {
+          outcome: withSubagentOutcomeTiming(outcome, {
             startedAt: observedStartedAt ?? entry.execution.startedAt,
             endedAt,
           }),
@@ -391,6 +424,14 @@ export abstract class SubagentWaitManager {
         return;
       }
       current = currentEntry();
+      if (waitExpiryForRetry && typeof current.execution.endedAt !== "number") {
+        scheduleWaitRetry(
+          current,
+          "failed to publish subagent wait expiry; scheduling recovery",
+          error instanceof Error ? error.message : String(error),
+        );
+        return;
+      }
       if (
         typeof current.execution.endedAt === "number" &&
         !current.cleanupCompletedAt &&
