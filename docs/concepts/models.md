@@ -456,10 +456,12 @@ no prompts, credentials, model usage, or configuration payload beyond the
 normal HTTP user agent and conditional cache headers.
 
 The downloaded bundle is stored in the shared SQLite state database. The Gateway
-prepares a new catalog generation in the background, then publishes its model
-rows and prices together without restarting. Picker reads keep using the current
-generation during preparation; a failed or superseded preparation leaves it in
-place. Admitted runs retain their captured generation, and each usage-estimation
+prepares a new catalog generation in the background, including each agent's
+provider model discovery, then publishes its model rows and prices together
+without restarting. Picker reads keep using the current generation during
+preparation; a failed or superseded preparation leaves it in place. A provider
+whose discovery fails publishes with the new generation's built-in rows.
+Admitted runs retain their captured generation, and each usage-estimation
 operation uses one pricing context.
 
 Catalog reads and refresh writes run through the shared-state worker. If a

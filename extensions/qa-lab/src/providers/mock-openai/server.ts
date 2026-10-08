@@ -139,7 +139,6 @@ import {
   buildRemoteCompactionV2Events,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
-  extractPlannedToolIdentity,
   splitMockStreamingText,
   buildChannelStreamingFixtureEvents,
   resolveTelegramChannelStreamingPause,
@@ -377,6 +376,21 @@ function buildMemoryGetArgs(result: Record<string, unknown>) {
         ? Math.max(1, result.endLine)
         : 1;
   return { path: result.path, from, lines: 4 };
+}
+
+function isSessionMemoryResult(result: Record<string, unknown>) {
+  return (
+    result.source === "sessions" ||
+    (typeof result.path === "string" && result.path.startsWith("sessions/"))
+  );
+}
+
+function memoryResultText(result: Record<string, unknown> | undefined) {
+  return typeof result?.snippet === "string"
+    ? result.snippet
+    : typeof result?.text === "string"
+      ? result.text
+      : "";
 }
 
 const PERSONAL_FOLLOWTHROUGH_FIXTURES = [
@@ -663,6 +677,9 @@ async function buildResponsesPayload(
     toolJson?.unavailable === true ||
     toolJson?.disabled === true ||
     (typeof toolJson?.error === "string" && toolJson.error.trim().length > 0);
+  const memoryResults = Array.isArray(toolJson?.results)
+    ? (toolJson.results as Array<Record<string, unknown>>)
+    : [];
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const allUserTexts = extractUserTurnTexts(input);
@@ -1568,10 +1585,7 @@ async function buildResponsesPayload(
         maxResults: 3,
       });
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
+    const first = memoryResults[0];
     if (typeof first?.path === "string") {
       return buildToolCallEventsWithArgs("memory_get", buildMemoryGetArgs(first));
     }
@@ -1609,10 +1623,7 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents("NONE");
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
+    const first = memoryResults[0];
     if (typeof first?.path === "string" && hasDeclaredTool(body, "memory_get")) {
       return buildToolCallEventsWithArgs("memory_get", buildMemoryGetArgs(first));
     }
@@ -1635,41 +1646,19 @@ async function buildResponsesPayload(
     if (memoryToolUnavailable) {
       return buildAssistantEvents("NONE");
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const preferredSessionResult = results.find((result) => {
-      const resultPath = typeof result.path === "string" ? result.path : undefined;
-      if (result.source !== "sessions" && !resultPath?.startsWith("sessions/")) {
-        return false;
-      }
-      const memoryText =
-        typeof result.snippet === "string"
-          ? result.snippet
-          : typeof result.text === "string"
-            ? result.text
-            : "";
-      return extractOrbitCode(memoryText) !== null;
-    });
-    const sessionMemoryText =
-      typeof preferredSessionResult?.snippet === "string"
-        ? preferredSessionResult.snippet
-        : typeof preferredSessionResult?.text === "string"
-          ? preferredSessionResult.text
-          : "";
+    const preferredSessionResult = memoryResults.find(
+      (result) =>
+        isSessionMemoryResult(result) && extractOrbitCode(memoryResultText(result)) !== null,
+    );
     const retrievedOrbitCode =
-      extractOrbitCode(sessionMemoryText) ??
+      extractOrbitCode(memoryResultText(preferredSessionResult)) ??
       (typeof toolJson?.text === "string" ? extractOrbitCode(toolJson.text) : null);
     if (retrievedOrbitCode) {
       return buildAssistantEvents(
         `Protocol note: I checked memory and the current Project Nebula codename is ${retrievedOrbitCode}.`,
       );
     }
-    const first =
-      results.find((result) => {
-        const resultPath = typeof result.path === "string" ? result.path : undefined;
-        return result.source === "sessions" || resultPath?.startsWith("sessions/");
-      }) ?? results[0];
+    const first = memoryResults.find(isSessionMemoryResult) ?? memoryResults[0];
     if (
       typeof first?.path === "string" &&
       (typeof first.startLine === "number" || typeof first.endLine === "number")
@@ -2145,7 +2134,6 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     if (request.route === "anthropic-messages") {
       events = adaptAnthropicToolCallIds(events);
     }
-    const plannedToolIdentity = extractPlannedToolIdentity(events);
     const plannedTool = extractScenarioPlannedTool(events);
     const terminalRequesterCase =
       subagentTurn?.kind === "kickoff" ? subagentTurn.caseName : undefined;
@@ -2184,9 +2172,9 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       ...(events.some((event) => event.type === "response.failed")
         ? { errorCode: "response_failed_no_details" }
         : {}),
-      plannedToolCallId: plannedToolIdentity.callId,
-      ...(request.route === "responses" && plannedToolIdentity.itemId
-        ? { plannedToolItemId: plannedToolIdentity.itemId }
+      plannedToolCallId: plannedTool.callId,
+      ...(request.route === "responses" && plannedTool.itemId
+        ? { plannedToolItemId: plannedTool.itemId }
         : {}),
       plannedToolName: plannedTool.name,
       ...(plannedTool.wireName && plannedTool.wireName !== plannedTool.name

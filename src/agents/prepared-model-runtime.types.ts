@@ -37,6 +37,8 @@ export type PreparedModelCatalogRefreshOptions = {
   refresh?: boolean;
   providerIds?: readonly string[];
   changedOnly?: boolean;
+  /** Await acquisition instead of returning published rows after the foreground deadline. */
+  wait?: boolean;
 };
 
 export type PreparedNativeModelSelection = {

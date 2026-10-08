@@ -57,7 +57,7 @@ export async function finalizeCodexAttempt(
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
   activeTurn: CodexAttemptActiveTurn,
 ): Promise<EmbeddedRunAttemptResult> {
-  const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
+  const { prompt, state: resourceState, trajectoryRecorder } = resources;
   const { context, systemPromptReport } = prompt;
   const { runtime, attemptTools, activeTranscriptTarget, hookContext } = context;
   const { hookRunner } = context;
@@ -614,7 +614,7 @@ export async function finalizeCodexAttempt(
       yieldDetected: toolState.yieldDetected,
       promptError: normalizeCodexTrajectoryError(finalPromptError),
     });
-    markTrajectoryEndRecorded();
+    resourceState.trajectoryEndRecorded = true;
     const terminalAssistantText = collectTerminalAssistantText(result);
     if (
       terminalAssistantText &&

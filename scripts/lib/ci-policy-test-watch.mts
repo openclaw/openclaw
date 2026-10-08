@@ -1079,7 +1079,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ...[
     "src/infra/sqlite-worker-transcripts.test.ts",
     "src/meeting-bot/transcripts-bridge.test.ts",
-    "src/transcripts/status.producer.shutdown.test.ts",
+    "src/transcripts/status.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [

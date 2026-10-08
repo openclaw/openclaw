@@ -12,7 +12,7 @@ import {
   hasDeclaredTool,
   hasToolDefinition,
 } from "./mock-openai-directives.js";
-import { extractPlannedToolArgs, extractPlannedToolName } from "./mock-openai-events.js";
+import { extractPlannedTool } from "./mock-openai-events.js";
 import {
   extractAllRequestTexts,
   extractToolOutput,
@@ -533,43 +533,32 @@ export function buildScenarioToolCallEvents(
     return buildRawToolCallEventsWithArgs(name, callArgs, namespace);
   }
   const encodedTarget = encodeCodeModeTarget(name, args);
-  if (resolveCodeModeExecSurface(body) === "native") {
-    return buildCustomToolCallEventsWithInput(
-      "exec",
-      [
-        `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
-        `const targetName = ${JSON.stringify(name)};`,
-        `const targetArgs = ${JSON.stringify(args)};`,
-        "const target = ALL_TOOLS.find((entry) => entry.name === targetName);",
-        "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
-        "let value = await tools[target.name](targetArgs);",
-        'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
-        "  value = { ...value, content: value.content.slice(0, 2048) };",
-        "}",
-        "text(JSON.stringify(value));",
-      ].join("\n"),
-    );
-  }
-  return buildRawToolCallEventsWithArgs("exec", {
-    title: "Run the QA fixture step",
-    code: [
-      `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
-      `const targetName = ${JSON.stringify(name)};`,
-      `const targetArgs = ${JSON.stringify(args)};`,
-      "const target = (await catalog.search(targetName)).find((entry) => entry.toolName === targetName);",
-      "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
-      "const value = await target(targetArgs);",
-      'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
-      "  return { ...value, content: value.content.slice(0, 2048) };",
-      "}",
-      "return value;",
-    ].join("\n"),
-  });
+  const native = resolveCodeModeExecSurface(body) === "native";
+  const code = [
+    `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
+    `const targetName = ${JSON.stringify(name)};`,
+    `const targetArgs = ${JSON.stringify(args)};`,
+    native
+      ? "const target = ALL_TOOLS.find((entry) => entry.name === targetName);"
+      : "const target = (await catalog.search(targetName)).find((entry) => entry.toolName === targetName);",
+    "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
+    native
+      ? "let value = await tools[target.name](targetArgs);"
+      : "const value = await target(targetArgs);",
+    'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
+    native
+      ? "  value = { ...value, content: value.content.slice(0, 2048) };"
+      : "  return { ...value, content: value.content.slice(0, 2048) };",
+    "}",
+    native ? "text(JSON.stringify(value));" : "return value;",
+  ].join("\n");
+  return native
+    ? buildCustomToolCallEventsWithInput("exec", code)
+    : buildRawToolCallEventsWithArgs("exec", { title: "Run the QA fixture step", code });
 }
 
 export function extractScenarioPlannedTool(events: StreamEvent[]) {
-  const wireName = extractPlannedToolName(events);
-  const wireArgs = extractPlannedToolArgs(events);
+  const { name: wireName, args: wireArgs, ...identity } = extractPlannedTool(events);
   const source =
     typeof wireArgs?.input === "string"
       ? wireArgs.input
@@ -577,13 +566,13 @@ export function extractScenarioPlannedTool(events: StreamEvent[]) {
         ? wireArgs.code
         : undefined;
   if (wireName === "tool_call" && typeof wireArgs?.id === "string" && isRecord(wireArgs.args)) {
-    return { name: wireArgs.id, args: wireArgs.args, wireName };
+    return { name: wireArgs.id, args: wireArgs.args, wireName, ...identity };
   }
   if (wireName !== "exec" || !source) {
-    return { name: wireName, args: wireArgs, wireName };
+    return { name: wireName, args: wireArgs, wireName, ...identity };
   }
   const target = decodeCodeModeTarget(source);
   return target
-    ? { name: target.name, args: target.args, wireName }
-    : { name: wireName, args: wireArgs, wireName };
+    ? { name: target.name, args: target.args, wireName, ...identity }
+    : { name: wireName, args: wireArgs, wireName, ...identity };
 }

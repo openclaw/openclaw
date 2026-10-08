@@ -437,29 +437,23 @@ export function visitPluginSourceReferences(
               pre(file: { path: NodePath<BabelProgram> }) {
                 file.path.traverse({
                   // Native type erasure retains empty requests from specifier-only type syntax.
-                  ImportDeclaration(declaration) {
+                  "ImportDeclaration|ExportNamedDeclaration"(
+                    declaration: NodePath<ImportDeclaration | ExportNamedDeclaration>,
+                  ) {
+                    const node = declaration.node;
                     if (
-                      declaration.node.importKind !== "type" &&
-                      declaration.node.specifiers.length > 0 &&
-                      declaration.node.specifiers.every(
+                      node.source &&
+                      (node.type === "ImportDeclaration" ? node.importKind : node.exportKind) !==
+                        "type" &&
+                      node.specifiers.length > 0 &&
+                      node.specifiers.every(
                         (specifier) =>
-                          specifier.type === "ImportSpecifier" && specifier.importKind === "type",
+                          (specifier.type === "ImportSpecifier" &&
+                            specifier.importKind === "type") ||
+                          (specifier.type === "ExportSpecifier" && specifier.exportKind === "type"),
                       )
                     ) {
-                      authoredStaticImports.add(declaration.node.source.value);
-                    }
-                  },
-                  ExportNamedDeclaration(declaration) {
-                    if (
-                      declaration.node.source &&
-                      declaration.node.exportKind !== "type" &&
-                      declaration.node.specifiers.length > 0 &&
-                      declaration.node.specifiers.every(
-                        (specifier) =>
-                          specifier.type === "ExportSpecifier" && specifier.exportKind === "type",
-                      )
-                    ) {
-                      authoredStaticImports.add(declaration.node.source.value);
+                      authoredStaticImports.add(node.source.value);
                     }
                   },
                   MemberExpression(member) {

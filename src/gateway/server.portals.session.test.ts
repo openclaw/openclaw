@@ -8,9 +8,20 @@ import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import {
+  acquireGatewayTestWebSocket,
+  closeGatewayTestWebSocket,
+} from "../../test/helpers/gateway-websocket.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { writeConfigFile } from "../config/config.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
@@ -42,18 +53,29 @@ import {
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
   NODE_CLIENT,
-  openWs,
   rpcReq,
   testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
+import { trackConnectChallengeNonce } from "./test-helpers.js";
 import * as workerBundles from "./worker-environments/bundle.js";
 import { hashWorkerCredential } from "./worker-environments/credential.js";
 import * as workerService from "./worker-environments/service.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-it("carries authenticated session previews through the node and retires access before persistence", async () => {
+describe("session portal fixture", () => {
+  const fixture = createFixtureLifetime();
+  // This inner hook joins the body before parent hooks reset shared Gateway state.
+  afterEach(() => fixture.cleanup());
+  it(
+    "carries authenticated session previews through the node and retires access before persistence",
+    ({ signal }) => fixture.run(() => runSessionPortalProof(signal)),
+    30_000,
+  );
+});
+
+async function runSessionPortalProof(signal: AbortSignal) {
   const origin = "https://control.example.test";
   const auth = {
     mode: "trusted-proxy" as const,
@@ -159,6 +181,7 @@ it("carries authenticated session previews through the node and retires access b
     await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: "0" }, () =>
       withGatewayServer(async ({ port, server }) => {
         await server.startupSettled;
+        signal.throwIfAborted();
         const startup = runtimeFactory.mock.calls.at(-1)?.[0];
         assert(startup, "Gateway must create its real worker runtime");
         const { config, registry } = createPluginRegistryFixture();
@@ -202,57 +225,78 @@ it("carries authenticated session previews through the node and retires access b
           openclawVersion: artifact.openclawVersion,
           protocolFeatures: [...artifact.protocolFeatures],
         };
-        const sockets: Awaited<ReturnType<typeof openWs>>[] = [];
+        const sockets: WebSocket[] = [];
         const controllers = new Map<string, AbortController>();
         const running = new Set<Promise<void>>();
         const invocations: string[] = [];
         let releasePairing: (() => void) | undefined;
         let releasePersistence: (() => void) | undefined;
         const connect = async (label: string, email: string, node = false) => {
-          const socket = await openWs(port, {
-            origin,
-            "x-forwarded-for": "203.0.113.50",
-            "x-forwarded-proto": "https",
-            "x-forwarded-user": email,
+          signal.throwIfAborted();
+          const socket = new WebSocket(`ws://127.0.0.1:${port}`, {
+            headers: {
+              origin,
+              "x-forwarded-for": "203.0.113.50",
+              "x-forwarded-proto": "https",
+              "x-forwarded-user": email,
+            },
           });
           sockets.push(socket);
-          let deviceIdentityPath = path.join(process.env.OPENCLAW_STATE_DIR!, `${label}.sqlite`);
-          if (node) {
-            const paired = await pairDeviceIdentity({
-              name: label,
-              role: "node",
-              scopes: [],
-              clientId: NODE_CLIENT.id,
-              clientMode: NODE_CLIENT.mode,
-              platform: NODE_CLIENT.platform,
-            });
-            deviceIdentityPath = paired.identityPath;
-            // Device identity approval and machine capability consent are separate grants.
-            const pairing = await nodePairingWrites.requestNodePairing({
-              nodeId: paired.identity.deviceId,
-              platform: NODE_CLIENT.platform,
-              caps: [],
-              commands: [],
-            });
-            const approved = await nodePairingWrites.approveNodePairing(pairing.request.requestId, {
-              callerScopes: ["operator.pairing", "operator.write"],
-            });
-            assert(approved && "node" in approved, "Node capability approval must succeed");
-          }
-          const result = await connectReq(socket, {
-            skipDefaultAuth: true,
-            prePairDevice: true,
-            scopes: node ? [] : ["operator.sessions.write"],
-            role: node ? "node" : "operator",
-            client: node ? NODE_CLIENT : CONTROL_UI_CLIENT,
-            deviceIdentityPath,
-            browserOrigin: node ? undefined : origin,
-          });
-          expect(result.ok, JSON.stringify(result.error)).toBe(true);
-          return {
-            socket,
-            deviceId: loadOrCreateDeviceIdentity({ path: deviceIdentityPath }).deviceId,
+          trackConnectChallengeNonce(socket);
+          let abortClose: Promise<void> | undefined;
+          const abort = () => {
+            abortClose = closeGatewayTestWebSocket(socket);
+            void abortClose.catch(() => {});
           };
+          signal.addEventListener("abort", abort, { once: true });
+          try {
+            await acquireGatewayTestWebSocket(socket, 30_000);
+            signal.throwIfAborted();
+            let deviceIdentityPath = path.join(process.env.OPENCLAW_STATE_DIR!, `${label}.sqlite`);
+            if (node) {
+              const paired = await pairDeviceIdentity({
+                name: label,
+                role: "node",
+                scopes: [],
+                clientId: NODE_CLIENT.id,
+                clientMode: NODE_CLIENT.mode,
+                platform: NODE_CLIENT.platform,
+              });
+              deviceIdentityPath = paired.identityPath;
+              // Device identity approval and machine capability consent are separate grants.
+              const pairing = await nodePairingWrites.requestNodePairing({
+                nodeId: paired.identity.deviceId,
+                platform: NODE_CLIENT.platform,
+                caps: [],
+                commands: [],
+              });
+              const approved = await nodePairingWrites.approveNodePairing(
+                pairing.request.requestId,
+                {
+                  callerScopes: ["operator.pairing", "operator.write"],
+                },
+              );
+              assert(approved && "node" in approved, "Node capability approval must succeed");
+            }
+            signal.throwIfAborted();
+            const result = await connectReq(socket, {
+              skipDefaultAuth: true,
+              prePairDevice: true,
+              scopes: node ? [] : ["operator.sessions.write"],
+              role: node ? "node" : "operator",
+              client: node ? NODE_CLIENT : CONTROL_UI_CLIENT,
+              deviceIdentityPath,
+              browserOrigin: node ? undefined : origin,
+            });
+            expect(result.ok, JSON.stringify(result.error)).toBe(true);
+            return {
+              socket,
+              deviceId: loadOrCreateDeviceIdentity({ path: deviceIdentityPath }).deviceId,
+            };
+          } finally {
+            signal.removeEventListener("abort", abort);
+            await abortClose;
+          }
         };
         try {
           const allowed = await connect("writer", "preview-writer@example.test");
@@ -312,7 +356,7 @@ it("carries authenticated session previews through the node and retires access b
             void invocation.finally(() => running.delete(invocation)).catch(() => {});
           });
           // Hello precedes pairing bookkeeping; this manual RPC does not use the node host's retry owner.
-          await nodeConnectionRecorded.promise;
+          await withinTest(nodeConnectionRecorded.promise, signal);
           const inventory = await rpcReq(node.socket, "node.runnerInventory.update", {
             protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
             workerHost: {
@@ -356,6 +400,7 @@ it("carries authenticated session previews through the node and retires access b
             },
           });
           await environments.reconcileOnce(environmentId);
+          signal.throwIfAborted();
           const params = { sessionKey: identity.sessionKey, environmentId, port: destinationPort };
           expect((await rpcReq(denied.socket, "portal.session.open", params)).ok).toBe(false);
           expect(portals.list()).toEqual([]);
@@ -363,6 +408,7 @@ it("carries authenticated session previews through the node and retires access b
           expect(connections).toBe(0);
 
           for (const rejectPersistence of [false, true]) {
+            signal.throwIfAborted();
             sharedHost = false;
             await environments.reconcileOnce(environmentId);
             const qualification = environments.getDedicatedNodeLeaseSignal(environmentId);
@@ -384,7 +430,7 @@ it("carries authenticated session previews through the node and retires access b
             expect(opened.ok, JSON.stringify(opened.error)).toBe(true);
             assert(opened.payload?.url);
             const url = new URL(opened.payload.url);
-            const response = await fetch(url);
+            const response = await fetch(url, { signal });
             expect(response.status).toBe(200);
             expect(await response.text()).toBe("preview-ok");
             url.pathname = "/stream";
@@ -420,10 +466,17 @@ it("carries authenticated session previews through the node and retires access b
             });
             let streaming: Response;
             try {
-              await committed.promise;
+              await withinTest(
+                awaitGateBeforeSettlement(
+                  committed.promise,
+                  maintenance,
+                  "Metadata maintenance settled before its commit was observed",
+                ),
+                signal,
+              );
               destination.once("connection", onTargetConnection);
-              const requested = fetch(url);
-              await Promise.race([targetConnected.promise, requested]);
+              const requested = fetch(url, { signal });
+              await withinTest(Promise.race([targetConnected.promise, requested]), signal);
               publish.resolve();
               await maintenance;
               streaming = await requested;
@@ -449,14 +502,17 @@ it("carries authenticated session previews through the node and retires access b
               await pairingResume.promise;
             };
             url.pathname = "/blocked";
-            const pending = fetch(url).then(
+            const pending = fetch(url, { signal }).then(
               (result) => result.status,
               () => 0,
             );
-            await withTestTimeout(
-              pairingEntered.promise,
-              5_000,
-              "Preview did not reach node discovery",
+            await withinTest(
+              awaitGateBeforeSettlement(
+                pairingEntered.promise,
+                pending,
+                "Preview settled before node discovery",
+              ),
+              signal,
             );
             const persistenceEntered = createDeferred();
             const persistenceResume = createDeferred();
@@ -474,21 +530,20 @@ it("carries authenticated session previews through the node and retires access b
               });
             sharedHost = undefined;
             const reconcile = environments.reconcileOnce(environmentId);
-            await withTestTimeout(
-              persistenceEntered.promise,
-              5_000,
-              "Inspection did not reach persistence",
+            await withinTest(
+              awaitGateBeforeSettlement(
+                persistenceEntered.promise,
+                reconcile,
+                "Inspection settled before persistence",
+              ),
+              signal,
             );
             expect(qualification.aborted).toBe(true);
             expect(portals.list()).toEqual([]);
             pairingGate = undefined;
             pairingResume.resolve();
             expect(await pending).not.toBe(200);
-            await withTestTimeout(
-              activePeersClosed,
-              5_000,
-              "Revocation left a destination socket open",
-            );
+            await withinTest(activePeersClosed, signal);
             await reader.cancel().catch(() => {});
             expect(connections).toBe(priorConnections);
             expect(invocations).toHaveLength(priorInvocations);
@@ -502,14 +557,15 @@ it("carries authenticated session previews through the node and retires access b
           pairingGate = undefined;
           releasePairing?.();
           releasePersistence?.();
-          await portals.closeAll();
+          const closing = portals.closeAll();
           for (const controller of controllers.values()) {
             controller.abort();
           }
-          await Promise.allSettled(running);
-          for (const socket of sockets) {
-            socket.terminate();
-          }
+          await runQaGatewayFixture(
+            () => closing,
+            () => Promise.allSettled(running),
+            () => Promise.all(sockets.map(closeGatewayTestWebSocket)),
+          );
         }
       }),
     );
@@ -520,4 +576,4 @@ it("carries authenticated session previews through the node and retires access b
       destination.close(() => resolve());
     });
   }
-}, 30_000);
+}

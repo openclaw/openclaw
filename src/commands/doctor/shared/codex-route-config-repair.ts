@@ -412,21 +412,26 @@ function maybeMigrateLegacyLosslessCompactionConfig(params: {
     changes,
   });
   for (const hit of hits) {
-    removeMigratedLosslessCompactionKey({
-      cfg: params.cfg,
-      path: hit.providerPath,
-      key: "provider",
-      changes,
-      changeMessage: `Removed ${hit.providerPath}; Lossless now runs through plugins.slots.contextEngine.`,
-    });
-    if (hit.modelPath) {
-      removeMigratedLosslessCompactionKey({
-        cfg: params.cfg,
-        path: hit.modelPath,
-        key: "model",
-        changes,
-        changeMessage: `Removed ${hit.modelPath} after migrating the Lossless summary model.`,
-      });
+    for (const key of ["provider", "model"] as const) {
+      const path = key === "provider" ? hit.providerPath : hit.modelPath;
+      if (!path) {
+        continue;
+      }
+      const owner = readCompactionOwnerForPath(params.cfg, readCompactionOwnerPathForKeyPath(path));
+      const compaction = asMutableRecord(owner?.compaction);
+      const value = compaction?.[key];
+      if (!owner || !compaction || typeof value !== "string" || !value.trim()) {
+        continue;
+      }
+      delete compaction[key];
+      changes.push(
+        key === "provider"
+          ? `Removed ${path}; Lossless now runs through plugins.slots.contextEngine.`
+          : `Removed ${path} after migrating the Lossless summary model.`,
+      );
+      if (Object.keys(compaction).length === 0) {
+        delete owner.compaction;
+      }
     }
   }
   return changes;
@@ -492,32 +497,6 @@ function ensureLosslessLlmPolicy(params: {
     params.changes.push(
       `Added ${params.summaryModel} to plugins.entries.${LOSSLESS_CONTEXT_ENGINE_ID}.llm.allowedModels.`,
     );
-  }
-}
-
-function removeMigratedLosslessCompactionKey(params: {
-  cfg: OpenClawConfigWithLegacyRoster;
-  path: string;
-  key: CompactionOverrideKey;
-  changes: string[];
-  changeMessage: string;
-}): void {
-  const owner = readCompactionOwnerForPath(
-    params.cfg,
-    readCompactionOwnerPathForKeyPath(params.path),
-  );
-  const compaction = asMutableRecord(owner?.compaction);
-  if (!owner || !compaction) {
-    return;
-  }
-  const value = compaction[params.key];
-  if (typeof value !== "string" || !value.trim()) {
-    return;
-  }
-  delete compaction[params.key];
-  params.changes.push(params.changeMessage);
-  if (Object.keys(compaction).length === 0) {
-    delete owner.compaction;
   }
 }
 

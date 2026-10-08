@@ -39,24 +39,20 @@ const codexHistoryWorkerEntrypoint = {
   },
 } as const;
 
-function resolveCodexHistoryWorkerUrl(): URL {
-  const sourceUrl = resolveRuntimeWorkerUrl(codexHistoryWorkerEntrypoint);
-  const sourceNeedsBuiltFallback =
-    /\.[cm]?ts$/u.test(sourceUrl.pathname) &&
-    (typeof process.versions.bun === "string" || resolveRuntimeWorkerArgv(sourceUrl).length === 1);
-  if (!sourceNeedsBuiltFallback) {
-    return sourceUrl;
-  }
-  // oxlint-disable-next-line no-warning-comments -- removal awaits Bun Worker preload resolver support.
-  // TODO: Remove this fallback once Bun Workers apply resolver hooks from execArgv --import preloads.
-  return resolveRuntimeWorkerUrl({
-    ...codexHistoryWorkerEntrypoint,
-    root: fileURLToPath(new URL("../..", import.meta.url)),
-  });
-}
-
+const sourceWorkerUrl = resolveRuntimeWorkerUrl(codexHistoryWorkerEntrypoint);
+const sourceNeedsBuiltFallback =
+  /\.[cm]?ts$/u.test(sourceWorkerUrl.pathname) &&
+  (typeof process.versions.bun === "string" ||
+    resolveRuntimeWorkerArgv(sourceWorkerUrl).length === 1);
+// oxlint-disable-next-line no-warning-comments -- removal awaits Bun Worker preload resolver support.
+// TODO: Remove this fallback once Bun Workers apply resolver hooks from execArgv --import preloads.
 const historyReads = new WorkerTaskPool<CodexHistoryWorkerInput, CodexHistoryWorkerResult>({
-  workerUrl: resolveCodexHistoryWorkerUrl(),
+  workerUrl: sourceNeedsBuiltFallback
+    ? resolveRuntimeWorkerUrl({
+        ...codexHistoryWorkerEntrypoint,
+        root: fileURLToPath(new URL("../..", import.meta.url)),
+      })
+    : sourceWorkerUrl,
   maxWorkers: 1,
 });
 
