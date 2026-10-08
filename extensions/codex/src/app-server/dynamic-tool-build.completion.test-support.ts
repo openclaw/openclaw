@@ -32,7 +32,7 @@ const {
   createParams,
 } = await import("./dynamic-tool-build.test-support.js");
 
-type ToolOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
+type ToolOptions = Parameters<typeof createOpenClawCodingTools>[0];
 
 export function registerCodexCompletionCommandTest() {
   it("marks a command started by a conversation's completion turn as the conversation's own", async () => {
