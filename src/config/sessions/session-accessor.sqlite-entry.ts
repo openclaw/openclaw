@@ -108,6 +108,8 @@ export {
 type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
   /** Audited internal updaters: no nested writer admission; guards retain only host authority. */
   workerGuard?: SessionEntryPatchGuard;
+  /** A negative current-row selection ends this internal operation before callback preparation. */
+  prepareIf?: { kind: "live-model-switch-pending" };
   /** Recheck owner cancellation after async preparation, immediately before committing. */
   shouldCommit?: () => boolean;
   /** Synchronous owner bookkeeping after COMMIT, before identity observers can cancel the caller. */
@@ -435,6 +437,12 @@ async function patchSqliteSessionEntrySnapshot(
   } = captureSessionEntryPatchSource(params.resolved, sessionKey, captured);
   const prepare = async (prepared: SqliteLifecycleTargetSnapshot) => {
     const existing = prepared[0]?.entry;
+    if (
+      options.prepareIf?.kind === "live-model-switch-pending" &&
+      !existing?.liveModelSwitchPending
+    ) {
+      return undefined;
+    }
     const writeBase = existing ?? options.fallbackEntry;
     if (!writeBase) {
       return undefined;
