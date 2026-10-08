@@ -36,6 +36,8 @@ mkdir -p "$case_dir/home" "$case_dir/state" "$case_dir/host-cache" \
 
 cat > "$engine_root/containers.conf" <<CONFIG
 [engine]
+# This control proves delegated resource limits, not the host's Podman default.
+cgroup_manager = "systemd"
 static_dir = "$engine_root/data/containers/storage/libpod"
 tmp_dir = "$runtime_root/libpod/tmp"
 volume_path = "$engine_root/data/containers/storage/volumes"

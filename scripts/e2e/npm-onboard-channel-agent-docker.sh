@@ -155,7 +155,7 @@ dump_debug_logs() {
     "$OPENCLAW_HOME/.openclaw/openclaw.json" \
     "$OPENCLAW_HOME/.openclaw/agents/main/agent/auth-profiles.json"
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 required_plugins='["@openclaw/codex"]'
 if [ "${OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE:-0}" = "1" ] && [ "$CHANNEL" != "telegram" ]; then
