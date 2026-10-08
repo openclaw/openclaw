@@ -118,9 +118,9 @@ describe("media requester provenance", () => {
             sessionKey: "agent:main:main",
             requesterOrigin: {
               channel: "webchat",
-              to: "stale-peer",
-              accountId: "stale-account",
-              threadId: "stale-thread",
+              ...(channel === "webchat"
+                ? { to: "stale-peer", accountId: "stale-account", threadId: "stale-thread" }
+                : {}),
             },
             prompt,
             requestKey: "provenance-proof",
@@ -151,8 +151,7 @@ describe("media requester provenance", () => {
           : {
               channel: "telegram",
               to: "test-room",
-              accountId: "stale-account",
-              threadId: "stale-thread",
+              accountId: "test-bot",
               chatType: "direct",
             },
       );

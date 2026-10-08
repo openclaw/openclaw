@@ -956,7 +956,7 @@ describe("gateway agent handler", () => {
     {
       name: "explicit external channel",
       webchat: true,
-      request: { channel: "telegram" },
+      request: { channel: "telegram", to: "12345" },
       external: true,
     },
     {

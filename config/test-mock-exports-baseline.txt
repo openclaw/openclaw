@@ -3508,7 +3508,6 @@
 ["src/agents/tools/media-generate-background-shared.test.ts","../../cron/run-continuation-cleanup.js","5047ade59ca3bb9803fd7cdb308680db901bcede296d500b77d02a99ff14249b",1]
 ["src/agents/tools/media-generate-background-shared.test.ts","../media-generation-activity.js","2a40b3d1b338b019c6a28b6fb295f8f63d2396fe9934061a4f9c5578dd666c02",1]
 ["src/agents/tools/media-generate-background-shared.test.ts","../subagents/announce/subagent-announce-delivery.js","747f5ef9bd575bb9c88d4b960415dafbe5698bf8eff0c135729d7477ff6ea5b3",1]
-["src/agents/tools/media-generate-background.test.ts","../../config/sessions/session-entry-read-runtime.js","fe4a3e1dc3f08d88058705349f819495f09a2febc806e6901eddcb653902e78f",1]
 ["src/agents/tools/media-generate-background.test.ts","../media-generation-activity.js","084dcf04db3bd95a2d828285a5192436f7ddf323d5e10a0b34e760d4617cb430",1]
 ["src/agents/tools/media-generate-background.test.ts","../subagents/announce/subagent-announce-delivery.js","47932fde820a6c128d9bc82c1de14bc2ba9e179ec05cfbdde660035fb501ef91",1]
 ["src/agents/tools/media-tool-file-url.windows.test.ts","../openclaw-plugin-tools.js","5f4cec3553f307631c831e2fb9157c52af96afde0a174251d4e53d04a9ac3697",1]
