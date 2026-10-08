@@ -3,7 +3,9 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { readJson, write } from "../fixtures/common.mjs";
 
 const root = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
 const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
@@ -21,6 +23,44 @@ const refusalPreload = path.join(artifacts, "sibling-refusal-preload.mjs");
 const refusalWorker = path.join(artifacts, "sibling-refusal-worker.json");
 const refusalChild = path.join(artifacts, "sibling-refusal-child.json");
 const refusalBaseline = path.join(artifacts, "sibling-refusal-baseline.json");
+const activationSeed = path.join(artifacts, "sibling-activation-seed.json");
+
+function seedActivationHealth(databasePath, engineId) {
+  const database = new DatabaseSync(databasePath, { timeout: 5000 });
+  const entries = [
+    [engineId, process.pid],
+    [`${engineId}-unselected`, process.pid],
+    [engineId, process.ppid],
+  ].map(([selectedId, processId]) => ({
+    key: JSON.stringify([selectedId, processId]),
+    value: JSON.stringify({
+      engineId: selectedId,
+      processId,
+      processToken: "survivor-activation-fixture",
+      processStartTime: null,
+      failedAtMs: Date.now(),
+      operation: "resolve",
+      reason: "persisted activation fixture",
+    }),
+  }));
+  try {
+    const insert = database.prepare(
+      "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, NULL)",
+    );
+    for (const entry of entries) {
+      insert.run(
+        "core:context-engine-quarantine-health",
+        "runtime-quarantines",
+        entry.key,
+        entry.value,
+        Date.now(),
+      );
+    }
+  } finally {
+    database.close();
+  }
+  return { databasePath, processId: process.pid, entries };
+}
 
 function processIdentity(pid) {
   try {
@@ -43,7 +83,7 @@ function processIdentity(pid) {
 }
 
 function survivingRefusalProcesses() {
-  const record = JSON.parse(fs.readFileSync(refusalChild, "utf8"));
+  const record = readJson(refusalChild);
   assert.equal(record.child.group, record.worker.pid, "Output child escaped its worker group");
   assert.equal(record.worker.group, record.worker.pid, "Worker is not its group leader");
   return [record.worker, record.child].flatMap((expected) => {
@@ -75,7 +115,7 @@ function installationDigest(packageRoot) {
 
 function armRefusal(packageRoot) {
   assert.equal(process.platform, "linux", "Refusal process identity proof requires Linux");
-  const installed = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+  const installed = readJson(path.join(packageRoot, "package.json"));
   assert.equal(installed.version, "2026.9.6", "Refusal proof requires the published 9.6 updater");
   const operatorFile = path.join(root, "workspace", "MEMORY.md");
   write(operatorFile, "# Existing operator memory\nPreserve this through the refused update.\n");
@@ -94,8 +134,7 @@ function armRefusal(packageRoot) {
 
 function assertRefusal(packageRoot, exitCode) {
   assert.equal(Number(exitCode), 1, "Published updater did not report a failed update");
-  const raw = fs.readFileSync(path.join(artifacts, "sibling-refusal-update.json"), "utf8");
-  const result = JSON.parse(raw);
+  const result = readJson(path.join(artifacts, "sibling-refusal-update.json"));
   assert.equal(result.status, "error");
   assert.equal(result.before?.version, "2026.9.6");
   const failed = result.steps.find((step) => step.name === "candidate-doctor-lint");
@@ -137,7 +176,7 @@ function assertRefusal(packageRoot, exitCode) {
     ),
     "Saved failed run lost the authentic supervisor refusal",
   );
-  const before = JSON.parse(fs.readFileSync(refusalBaseline, "utf8"));
+  const before = readJson(refusalBaseline);
   assert.equal(fs.realpathSync(packageRoot), before.packageRoot);
   assert.equal(
     installationDigest(packageRoot),
@@ -146,9 +185,7 @@ function assertRefusal(packageRoot, exitCode) {
   );
   assert.equal(digest(configPath), before.config, "Refusal changed operator config");
   assert.equal(digest(before.operatorFile), before.operator, "Refusal changed operator memory");
-  for (const [file, expected] of Object.entries(
-    JSON.parse(fs.readFileSync(evidencePath, "utf8")),
-  )) {
+  for (const [file, expected] of Object.entries(readJson(evidencePath))) {
     assert.equal(digest(file), expected, `Refusal changed original plugin source: ${file}`);
   }
   assert.deepEqual(
@@ -180,11 +217,6 @@ function cleanupRefusal() {
   assert.deepEqual(survivors, [], "Refusal cleanup incomplete; recorded processes remain");
 }
 
-function write(file, contents) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-}
-
 function digest(file) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
@@ -210,7 +242,7 @@ function seed() {
     }),
     [path.join(pluginRoot, "openclaw.plugin.json")]: JSON.stringify({
       id: pluginId,
-      kind: "memory",
+      kind: ["memory", "context-engine"],
       doctorContract: { configRepair: true },
       configSchema: { type: "object", properties: {}, additionalProperties: false },
     }),
@@ -218,11 +250,35 @@ function seed() {
       `export default ${JSON.stringify(marker)};\nexport const sharedSource = import.meta.url;\n`,
     [path.join(pluginRoot, "index.mjs")]: `import fs from "node:fs";
 import { createHash } from "node:crypto";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import value, { sharedSource } from "../shared/value.mjs";
+${seedActivationHealth.toString()}
 export default {
   id: ${JSON.stringify(pluginId)},
-  kind: "memory",
-  register() {
+  kind: ["memory", "context-engine"],
+  register(api) {
+    api.registerContextEngine(${JSON.stringify(pluginId)}, () => ({
+      info: { id: ${JSON.stringify(pluginId)}, name: "Survivor context", version: "1.0.0" },
+      async ingest() { return { ingested: false }; },
+      async assemble({ messages }) { return { messages, estimatedTokens: 0 }; },
+      async compact() { return { ok: true, compacted: false, reason: "fixture" }; },
+    }));
+    // Author fixture rows before the real activation owner runs. Canary and
+    // inspection processes keep their existing read-only/state-copy contracts.
+    if (process.env.OPENCLAW_UPGRADE_SURVIVOR_CONTEXT_ACTIVATION === "1" &&
+        api.registrationMode === "full" && process.argv.includes("gateway") &&
+        process.env.OPENCLAW_STATE_DIR === ${JSON.stringify(stateDir)} &&
+        !process.argv.includes("--update-canary")) {
+      if (api.config.plugins.slots.contextEngine !== ${JSON.stringify(pluginId)}) {
+        throw new Error("Survivor context engine is not selected");
+      }
+      const seeded = seedActivationHealth(
+        path.join(process.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
+        ${JSON.stringify(pluginId)},
+      );
+      fs.writeFileSync(${JSON.stringify(activationSeed)}, JSON.stringify(seeded), { flag: "wx" });
+    }
     ${observe("runtime")}
   },
 };
@@ -302,7 +358,7 @@ for (let offset = 0; offset < bytes.length; offset += 64 * 1024) {
         allow: [pluginId],
         load: { paths: [pluginRoot] },
         entries: { [pluginId]: { enabled: true } },
-        slots: { memory: pluginId },
+        slots: { memory: pluginId, contextEngine: pluginId },
       },
     }),
   );
@@ -352,16 +408,15 @@ function assertCanary() {
       );
     }
   }
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const config = readJson(configPath);
   assert.equal(
     config.plugins.entries[pluginId].enabled,
     true,
     "Updater disabled the custom plugin",
   );
   assert.equal(config.plugins.slots.memory, pluginId, "Updater replaced the memory plugin");
-  for (const [file, expected] of Object.entries(
-    JSON.parse(fs.readFileSync(evidencePath, "utf8")),
-  )) {
+  assert.equal(config.plugins.slots.contextEngine, pluginId, "Updater replaced the context engine");
+  for (const [file, expected] of Object.entries(readJson(evidencePath))) {
     assert.equal(digest(file), expected, `Updater changed original plugin source: ${file}`);
   }
   write(
@@ -371,6 +426,46 @@ function assertCanary() {
   console.log(
     `canary: ${canary.length} actual plugin executions resolved sibling source; original files preserved`,
   );
+}
+
+function assertActivation() {
+  const activation = readJson(activationSeed);
+  assert.equal(activation.databasePath, path.join(stateDir, "state", "openclaw.sqlite"));
+  assert.equal(activation.entries.length, 3, "Activation did not author all fixture records");
+  process.kill(activation.processId, 0);
+  const config = readJson(configPath);
+  assert.equal(config.plugins.slots.contextEngine, pluginId);
+  const database = new DatabaseSync(activation.databasePath, { readOnly: true });
+  try {
+    const read = database.prepare(
+      "SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+    );
+    const rows = activation.entries.map(({ key }) =>
+      read.get("core:context-engine-quarantine-health", "runtime-quarantines", key),
+    );
+    assert.equal(rows[0], undefined, "Ready Gateway retained its selected activation quarantine");
+    assert.equal(
+      rows[1]?.value_json,
+      activation.entries[1].value,
+      "Activation changed another engine",
+    );
+    assert.equal(
+      rows[2]?.value_json,
+      activation.entries[2].value,
+      "Activation changed another process",
+    );
+  } finally {
+    database.close();
+  }
+  const receipt = {
+    processId: activation.processId,
+    selectedEngine: pluginId,
+    selectedQuarantineCleared: true,
+    otherEnginePreserved: true,
+    otherProcessPreserved: true,
+  };
+  write(path.join(artifacts, "sibling-activation.json"), JSON.stringify(receipt));
+  console.log("Ready candidate context-engine activation:", JSON.stringify(receipt));
 }
 
 const [mode, packageRoot, exitCode] = process.argv.slice(2);
@@ -386,6 +481,8 @@ if (mode === "seed") {
   cleanupRefusal();
 } else if (mode === "assert-canary") {
   assertCanary();
+} else if (mode === "assert-activation") {
+  assertActivation();
 } else {
   throw new Error(`Unknown sibling fixture mode: ${mode}`);
 }

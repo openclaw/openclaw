@@ -30,19 +30,18 @@ export function formatQuotaReset(resetAt?: number): string | null {
   return new Date(timestampMs).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-/** Auth-status source props for surfaces that render provider plan usage. */
 export type ProviderUsageDisplayProps = {
   basePath?: string;
   modelAuthStatusResult?: ModelAuthStatusResult | null;
 };
 
-export type QuotaLimitSummary = {
+type QuotaLimitSummary = {
   label: string;
   usedPercent: number;
   resetAt?: number;
 };
 
-export type QuotaBudgetSummary = {
+type QuotaBudgetSummary = {
   label?: string;
   used: number;
   limit: number;
@@ -54,7 +53,6 @@ export type ProviderQuotaGroup = {
   providers: string[];
   displayName: string;
   plan?: string;
-  /** Account email the usage was fetched under, when known. */
   accountEmail?: string;
   windows: QuotaLimitSummary[];
   budgets: QuotaBudgetSummary[];
@@ -100,15 +98,14 @@ export function collectProviderQuotaGroups(
       ) {
         return [];
       }
-      const budget: QuotaBudgetSummary = {
-        used: entry.used,
-        limit: entry.limit,
-        unit: entry.unit,
-      };
-      if (entry.label) {
-        budget.label = entry.label;
-      }
-      return [budget];
+      return [
+        {
+          used: entry.used,
+          limit: entry.limit,
+          unit: entry.unit,
+          ...(entry.label ? { label: entry.label } : {}),
+        },
+      ];
     });
     if (windows.length === 0 && budgets.length === 0) {
       continue;

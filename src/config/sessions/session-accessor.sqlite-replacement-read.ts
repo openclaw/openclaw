@@ -1,22 +1,18 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type {
-  SessionEntryReplacementSnapshot,
-  SessionEntryStatus,
-} from "./session-accessor.sqlite-contract.js";
+import type { SessionEntryReplacementSnapshot } from "./session-accessor.sqlite-contract.js";
 import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-inventory.js";
 import {
   prepareExactSessionEntryRowReads,
   readExactSessionEntryRow,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 
 export type SessionEntryReplacementSelection = {
   sessionKeys?: readonly string[];
-  statuses?: readonly SessionEntryStatus[];
   includeLabelOwners?: string;
 };
 
@@ -47,21 +43,6 @@ function selectReplacementKeys(
   params: SessionEntryReplacementSelection,
   labelOwnerKeys: readonly string[],
 ): string[] {
-  if (params.statuses) {
-    if (params.statuses.length === 0) {
-      return [];
-    }
-    let query = getSessionKysely(database.db)
-      .selectFrom("session_nodes")
-      .select("session_key")
-      .where("status", "in", params.statuses);
-    if (params.sessionKeys) {
-      query = query.where("session_key", "in", sqliteStringSet(params.sessionKeys));
-    }
-    return executeSqliteQuerySync(database.db, query)
-      .rows.map((row) => row.session_key)
-      .toSorted((left, right) => left.localeCompare(right));
-  }
   if (params.sessionKeys) {
     return uniqueStrings([...params.sessionKeys, ...labelOwnerKeys]);
   }
@@ -75,7 +56,6 @@ export function readSessionEntryReplacementState(
   params: SessionEntryReplacementSelection,
 ): SessionEntryReplacementState {
   const selectedKeys = params.sessionKeys ? new Set(params.sessionKeys) : undefined;
-  const selectedStatuses = params.statuses ? new Set(params.statuses) : undefined;
   const labelOwnerKeys = readSessionEntryReplacementLabelOwnerKeys(
     database,
     params.includeLabelOwners,
@@ -89,12 +69,9 @@ export function readSessionEntryReplacementState(
       ? readPrepared(sessionKey)
       : readExactSessionEntryRow(database, sessionKey);
     if (!row) {
-      if (!selectedKeys || selectedStatuses) {
+      if (!selectedKeys) {
         throw new Error(`SQLite session entry changed before replacement for ${sessionKey}`);
       }
-      return [];
-    }
-    if (selectedStatuses && (!row.entry.status || !selectedStatuses.has(row.entry.status))) {
       return [];
     }
     expectedRows.set(sessionKey, row);

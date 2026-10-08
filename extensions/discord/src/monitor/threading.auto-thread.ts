@@ -111,13 +111,7 @@ export async function resolveDiscordAutoThreadReplyPlan(
 export async function maybeCreateDiscordAutoThread(
   params: MaybeCreateDiscordAutoThreadParams,
 ): Promise<string | undefined> {
-  if (!params.isGuildMessage) {
-    return undefined;
-  }
-  if (!params.channelConfig?.autoThread) {
-    return undefined;
-  }
-  if (params.threadChannel) {
+  if (!params.isGuildMessage || !params.channelConfig?.autoThread || params.threadChannel) {
     return undefined;
   }
   if (

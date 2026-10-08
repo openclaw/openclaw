@@ -32,6 +32,9 @@ export function createTelegramStatusPublisher(
         }),
       );
     },
+    noteActivity(at = Date.now()) {
+      setStatus?.({ lastEventAt: at });
+    },
     noteRecovery() {
       setStatus?.({ lifecycle: "recovering" });
     },

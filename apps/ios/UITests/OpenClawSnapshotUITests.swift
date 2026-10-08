@@ -47,6 +47,45 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.captureReleaseScreenshot(Self.controlScreenshotTarget)
     }
 
+    func testStreamedReplyIsNotDuplicatedWithSavedRow() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-empty-chat-fixture", "--openclaw-dup-filter-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        let prompt = "Show the fixture reply."
+        input.typeText(prompt)
+        XCTAssertEqual(input.value as? String, prompt, "Fixture prompt was not entered")
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "Fixture Send button is missing")
+        XCTAssertTrue(send.isEnabled, "Fixture Send button is disabled")
+        send.tap()
+        let userRow = app.staticTexts[prompt]
+        XCTAssertTrue(userRow.waitForExistence(timeout: 5), "The explicit fixture send was not accepted")
+        // Only dismiss after sending: the empty-chat starter buttons also send on tap.
+        app.scrollViews["chat-transcript"].coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.05)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3), "Fixture keyboard stayed open")
+
+        // This tool row is emitted after both sources, not after deduplication succeeds.
+        let receipt = app.descendants(matching: .any).matching(NSPredicate(
+            format: "value CONTAINS %@", "dup-filter-inputs-received")).firstMatch
+        XCTAssertTrue(receipt.waitForExistence(timeout: 8), "FIFO receipt did not arrive after both reply sources")
+        let copies = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@", "The cobalt lighthouse is ready."))
+        XCTAssertTrue(copies.firstMatch.waitForExistence(timeout: 5), "Fixture reply marker is missing")
+        self.attachScreenshot(named: "dup-filter-streaming")
+        XCTAssertEqual(copies.count, 1, "Saved and streaming reply render duplicate copies")
+
+        let stop = app.buttons["Stop response"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        stop.tap()
+        XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
+        self.attachScreenshot(named: "dup-filter-settled")
+        XCTAssertEqual(copies.count, 1, "The saved reply must remain after stopping the run")
+    }
+
     func testReleaseChatScreenshot() {
         self.captureReleaseScreenshot(Self.chatScreenshotTarget) { app in
             let input = self.chatMessageInput(in: app)
@@ -546,6 +585,34 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-composer-return")
     }
 
+    func testChatComposerPastesClipboardImageAsAttachment() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "chat-composer-paste-image"))
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        // Match a cropped screenshot shared with "Copy and Delete": an image with no text.
+        UIPasteboard.general.image = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 64)).image { context in
+            UIColor.systemOrange.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+        }
+        input.tap()
+        input.press(forDuration: 1)
+        self.attachScreenshot(named: "chat-composer-paste-menu")
+
+        let paste = app.menuItems["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 5), "PASTE_MENU_MISSING")
+        paste.tap()
+        // Staging transcodes to JPEG, so the chip shows the converted name.
+        let attachment = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "pasted-image-1")).firstMatch
+        XCTAssertTrue(attachment.waitForExistence(timeout: 5), "PASTED_IMAGE_MISSING")
+        self.attachScreenshot(named: "chat-composer-paste-image")
+    }
+
     func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
         self.launchApp(
@@ -811,6 +878,66 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-dark-soft-bottom-edge")
     }
 
+    func testSavedPromptReactionsAndQuickPalette() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone message reaction proof only")
+        let prompt = "Check the release status and prepare the next steps."
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-no-reactions-fixture"])
+        self.sendFixtureChatMessage(prompt)
+        let before = try XCTUnwrap(self.app)
+        XCTAssertFalse(before.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "chat-message-reactions-")).firstMatch.exists)
+        self.attachScreenshot(named: "ios-reactions-prompt-before")
+        before.staticTexts[prompt].press(forDuration: 0.8)
+        XCTAssertTrue(before.buttons["Copy Message"].waitForExistence(timeout: 3))
+        XCTAssertFalse(before.buttons["chat-add-reaction"].exists)
+
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "chat-message-reactions"))
+        let app = try XCTUnwrap(self.app)
+        self.sendFixtureChatMessage(prompt)
+
+        let thumbsUp = app.buttons["chat-reaction-👍"]
+        XCTAssertTrue(thumbsUp.waitForExistence(timeout: 5))
+        XCTAssertTrue(thumbsUp.isSelected)
+        XCTAssertTrue(thumbsUp.label.contains("You, Casey"))
+        XCTAssertTrue(app.buttons["chat-reaction-🚀"].exists)
+        self.attachScreenshot(named: "ios-reactions-prompt-after")
+
+        thumbsUp.tap()
+        XCTAssertTrue(thumbsUp.wait(for: \.isSelected, toEqual: false, timeout: 5))
+        XCTAssertEqual(thumbsUp.label, "Casey reacted with 👍")
+        thumbsUp.tap()
+        XCTAssertTrue(thumbsUp.wait(for: \.isSelected, toEqual: true, timeout: 5))
+
+        app.staticTexts[prompt].press(forDuration: 0.8)
+        let addReaction = app.buttons["chat-add-reaction"]
+        XCTAssertTrue(addReaction.waitForExistence(timeout: 3))
+        addReaction.tap()
+        let picker = app.descendants(matching: .any)["chat-reaction-picker"].firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 3))
+        let quickEmoji = ["👍", "❤️", "🎉", "👀", "🚀", "😂"]
+        let choices = quickEmoji.map { app.buttons["chat-reaction-choice-\($0)"] }
+        for choice in choices {
+            XCTAssertTrue(choice.exists)
+        }
+        for (left, right) in zip(choices, choices.dropFirst()) {
+            XCTAssertLessThan(left.frame.minX, right.frame.minX)
+        }
+        XCTAssertTrue(choices[0].isSelected)
+        XCTAssertTrue(app.buttons["chat-reaction-more"].exists)
+        self.attachScreenshot(named: "ios-reactions-quick-palette")
+
+        app.buttons["chat-reaction-choice-😂"].tap()
+        XCTAssertTrue(picker.waitForNonExistence(timeout: 3))
+        let addedReaction = app.buttons["chat-reaction-😂"]
+        XCTAssertTrue(addedReaction.waitForExistence(timeout: 5))
+        XCTAssertTrue(addedReaction.isSelected)
+    }
+
     func testAssistantLongPressKeepsTranscriptVisibleAndActionsReachable() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone message interaction proof only")
         self.launchApp(for: ScreenshotTarget(
@@ -826,12 +953,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         assistant.press(forDuration: 0.8)
         XCTAssertTrue(assistant.exists)
         XCTAssertTrue(app.otherElements["chat-composer-surface"].exists)
-        self.attachScreenshot(named: "assistant-message-selection")
-
-        let actions = app.buttons["chat-message-actions"]
-        XCTAssertTrue(actions.waitForExistence(timeout: 3))
-        actions.tap()
         XCTAssertTrue(app.buttons["Copy Message"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["chat-add-reaction"].exists)
         self.attachScreenshot(named: "assistant-message-actions")
 
         app.buttons["Select Text"].tap()

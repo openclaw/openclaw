@@ -12,7 +12,7 @@ const lifecycle = source.slice(
   source.indexOf("companion_survivor_scenario() {"),
 );
 const update = source.slice(
-  source.indexOf("update_candidate() {"),
+  source.indexOf("is_extended_stable_release_version() {"),
   source.indexOf("assert_sibling_published_refusal() {"),
 );
 const outer = "recovery-update-restart";
@@ -186,7 +186,7 @@ node() {
 }
 assert_update_restart_service_replaced() {
   printf 'check\treplacement\n' >&3
-  [ "$1" = 42 ] && [ "$2" = 0 ] || return 92
+  [ "$1" = 42 ] && [ "$2" -eq 0 ] || return 92
   if [ "$FAULT" = signal-replacement ]; then kill -TERM $$; fi
   [ "$FAULT" != replacement ]
 }

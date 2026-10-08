@@ -1,4 +1,3 @@
-// OpenClaw dialogue parses direct commands and optionally asks the assistant planner.
 import type { RuntimeEnv } from "../runtime.js";
 import type { SystemAgentAssistantPlan, SystemAgentAssistantPlanner } from "./assistant.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
@@ -59,7 +58,7 @@ export async function resolveSystemAgentOperation(
       plan &&
       !(await resolveSystemAgentVerifiedInferenceRoute(opts.verifiedInference, opts.deps))
     ) {
-      throw new SystemAgentInferenceUnavailableError("planner");
+      throw new SystemAgentInferenceUnavailableError("planner", [], "route-changed");
     }
   } catch (error) {
     if (error instanceof SystemAgentInferenceUnavailableError) {

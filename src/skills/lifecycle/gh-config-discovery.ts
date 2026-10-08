@@ -101,13 +101,6 @@ function defaultCandidateOperatorHomes(input: GhConfigDiscoveryInput): string[] 
   return [...homes];
 }
 
-function ghConfigDirForHome(home: string, platform: NodeJS.Platform): string {
-  // Linux and macOS both put gh's config under <HOME>/.config/gh. Windows is
-  // not a realistic mismatch case for the bug this helper detects; we still
-  // return the POSIX-layout directory so the hint points at a sensible path.
-  return pathFor(platform).join(home, ".config", "gh");
-}
-
 export function detectGhConfigDirMismatch(input: GhConfigDiscoveryInput): GhConfigDiscoveryResult {
   const env = input.env;
   if (env.GH_CONFIG_DIR && env.GH_CONFIG_DIR.trim()) {
@@ -123,7 +116,7 @@ export function detectGhConfigDirMismatch(input: GhConfigDiscoveryInput): GhConf
   }
   const candidates = input.candidateOperatorHomes ?? defaultCandidateOperatorHomes(input);
   for (const home of candidates) {
-    const candidateDir = ghConfigDirForHome(home, input.platform);
+    const candidateDir = pathFor(input.platform).join(home, ".config", "gh");
     if (candidateDir === effective) {
       continue;
     }

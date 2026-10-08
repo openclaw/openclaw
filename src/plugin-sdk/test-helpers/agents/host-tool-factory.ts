@@ -1,8 +1,11 @@
 import { onTestFinished, vi } from "vitest";
-import type { createOpenClawCodingToolsInternal } from "../../../agents/agent-tools.js";
+import type {
+  createOpenClawCodingToolsInternal,
+  createOpenClawCodingToolsInternalAsync,
+} from "../../../agents/agent-tools.js";
 
 type ToolsFactory = typeof createOpenClawCodingToolsInternal;
-let createTools: ToolsFactory | undefined;
+let createTools: typeof createOpenClawCodingToolsInternalAsync | undefined;
 const factories = new Map<string, ToolsFactory>();
 
 /** Substitutes construction while preserving the real host's private authority and bindings. */
@@ -11,13 +14,13 @@ export async function setHostToolFactoryForTest(
   factory: ToolsFactory,
 ): Promise<void> {
   const agentTools = await import("../../../agents/agent-tools.js");
-  const actual = (createTools ??= agentTools.createOpenClawCodingToolsInternal);
+  const actual = (createTools ??= agentTools.createOpenClawCodingToolsInternalAsync);
   factories.set(params.runId, factory);
   const spy = vi
-    .spyOn(agentTools, "createOpenClawCodingToolsInternal")
-    .mockImplementation((...args) => {
+    .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
+    .mockImplementation(async (...args) => {
       const runFactory = args[0]?.runId ? factories.get(args[0].runId) : undefined;
-      return (runFactory ?? actual)(...args);
+      return runFactory ? runFactory(args[0], args[1], args[2], args[3]) : await actual(...args);
     });
   onTestFinished(() => {
     factories.clear();

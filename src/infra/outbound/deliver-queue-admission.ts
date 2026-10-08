@@ -1,7 +1,7 @@
 // Owns durable outbound admission, immutable payload custody, and media staging.
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
+import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import { throwSqliteLifecycleErrors } from "../sqlite-lifecycle-errors.js";
 import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
@@ -24,6 +24,7 @@ import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.j
 import {
   acceptedPreparedOutboundEntries,
   mapPreparedOutboundAcceptedPayloads,
+  preparedOutboundPayloads,
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
 import { normalizeOutboundReplyFacts } from "./reply-policy.js";
@@ -66,9 +67,7 @@ export function restoreQueuedDeliveryCustody(
       target,
     );
   }
-  const payloads = acceptedPreparedOutboundEntries(custody.preparedBatch).map(
-    (prepared) => prepared.payload,
-  );
+  const payloads = preparedOutboundPayloads(custody.preparedBatch);
   return { ...params, ...custody, payloads, sessionGeneration: entry.sessionGeneration };
 }
 
@@ -121,7 +120,6 @@ export async function stageAndEnqueueOutboundDelivery(
       // reachable through the agent-scoped roots) nor read more than the send may.
       mediaAccess: resolveOutboundMediaAccessForSend(
         params,
-        channel,
         collectPayloadMediaSources(acceptedPayloads),
       ),
       maxBytes: resolveOutboundMediaMaxBytes({

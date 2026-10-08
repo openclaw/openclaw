@@ -6,6 +6,11 @@ import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 
+/** Bun's native plugin resolver remains the owner even when Node hooks are available. */
+export function useNodeModuleHooks(): boolean {
+  return !process.versions.bun && typeof Module.registerHooks === "function";
+}
+
 // Resolution and Jiti must accept the same source family, including typed JSX variants.
 export const PLUGIN_SOURCE_MODULE_EXTENSIONS: readonly string[] = [
   ".ts",
@@ -23,7 +28,7 @@ export function isPluginSourceModulePath(modulePath: string): boolean {
 // Failed ESM jobs survive require-cache eviction. Preserve an observed terminal error
 // if a retry hits that job, rather than transforming its rejected graph through Jiti.
 const nativeModuleLoadFailures = new Map<string, unknown>();
-type ResolveFilename = (
+export type ResolveFilename = (
   request: string,
   parent: NodeJS.Module | undefined,
   isMain: boolean,
@@ -408,21 +413,19 @@ function withNativeRequireAliases<T>(
   const resolveAlias =
     typeof aliasMap === "function" ? aliasMap : (specifier: string) => aliasMap[specifier];
   const originalResolveFilename = moduleWithResolver["_resolveFilename"];
-  const esmHooks = moduleWithResolver.registerHooks?.({
-    resolve(specifier, context, nextResolve) {
-      const parent = context.parentURL?.startsWith("file:")
-        ? fileURLToPath(context.parentURL)
-        : undefined;
-      const aliasTarget = resolveAlias(specifier, parent);
-      if (aliasTarget) {
-        return {
-          shortCircuit: true,
-          url: pathToFileURL(aliasTarget).href,
-        };
-      }
-      return nextResolve(specifier, context);
-    },
-  });
+  const esmHooks = useNodeModuleHooks()
+    ? Module.registerHooks({
+        resolve(specifier, context, nextResolve) {
+          const parent = context.parentURL?.startsWith("file:")
+            ? fileURLToPath(context.parentURL)
+            : undefined;
+          const aliasTarget = resolveAlias(specifier, parent);
+          return aliasTarget
+            ? { shortCircuit: true, url: pathToFileURL(aliasTarget).href }
+            : nextResolve(specifier, context);
+        },
+      })
+    : undefined;
   moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
     const aliasTarget = resolveAlias(request, parent?.filename);
     if (aliasTarget) {

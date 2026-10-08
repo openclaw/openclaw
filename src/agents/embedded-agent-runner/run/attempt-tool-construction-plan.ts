@@ -18,21 +18,17 @@ import {
   readToolAllowlistIntersection,
 } from "../../tool-policy.js";
 
-const ALL_CODING_TOOL_CONSTRUCTION_PLAN: OpenClawCodingToolConstructionPlan = {
-  includeBaseCodingTools: true,
-  includeShellTools: true,
-  includeChannelTools: true,
-  includeOpenClawTools: true,
-  includePluginTools: true,
-};
-
-const NO_CODING_TOOL_CONSTRUCTION_PLAN: OpenClawCodingToolConstructionPlan = {
-  includeBaseCodingTools: false,
-  includeShellTools: false,
-  includeChannelTools: false,
-  includeOpenClawTools: false,
-  includePluginTools: false,
-};
+function createUniformCodingToolConstructionPlan(
+  include: boolean,
+): OpenClawCodingToolConstructionPlan {
+  return {
+    includeBaseCodingTools: include,
+    includeShellTools: include,
+    includeChannelTools: include,
+    includeOpenClawTools: include,
+    includePluginTools: include,
+  };
+}
 
 function isBundleMcpAllowlistName(normalized: string): boolean {
   // Bundle MCP tools use the synthetic bundle name or `bundle__tool` separator form.
@@ -121,14 +117,14 @@ function resolveCodingToolConstructionPlanForAllowlist(
   toolsAllow?: string[],
 ): OpenClawCodingToolConstructionPlan {
   if (!toolsAllow) {
-    return { ...ALL_CODING_TOOL_CONSTRUCTION_PLAN };
+    return createUniformCodingToolConstructionPlan(true);
   }
   const restrictions = readToolAllowlistIntersection(toolsAllow);
   if (!restrictions && toolsAllow.length === 0) {
-    return { ...NO_CODING_TOOL_CONSTRUCTION_PLAN };
+    return createUniformCodingToolConstructionPlan(false);
   }
   if (!restrictions && hasWildcardToolAllowlist(toolsAllow)) {
-    return { ...ALL_CODING_TOOL_CONSTRUCTION_PLAN };
+    return createUniformCodingToolConstructionPlan(true);
   }
   const constructionEntries = restrictions?.flat() ?? toolsAllow;
   const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(constructionEntries));
@@ -186,7 +182,7 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
     return {
       constructTools: false,
       includeCoreTools: false,
-      codingToolConstructionPlan: { ...NO_CODING_TOOL_CONSTRUCTION_PLAN },
+      codingToolConstructionPlan: createUniformCodingToolConstructionPlan(false),
     };
   }
   const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
@@ -259,9 +255,6 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   });
 }
 
-/**
- * Discovers LSP tools for plugin grants or patterns that can match their namespace.
- */
 export function shouldCreateBundleLspRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;

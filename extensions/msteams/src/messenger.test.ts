@@ -71,7 +71,10 @@ const createRecordedSendActivity = (
     sink.push(content);
     attempts += 1;
     if (failFirstWithStatusCode !== undefined && attempts === 1) {
-      throw Object.assign(new Error("send failed"), { statusCode: failFirstWithStatusCode });
+      throw Object.assign(new Error("send failed"), {
+        statusCode: failFirstWithStatusCode,
+        ...(failFirstWithStatusCode === 429 ? { retryAfterMs: 0 } : {}),
+      });
     }
     return { id: `id:${content}` };
   };
@@ -117,7 +120,6 @@ async function buildActivity(
   await sendMSTeamsMessages({
     replyStyle: "top-level",
     app,
-    appId: "app123",
     conversationRef,
     messages: [message],
     tokenProvider,
@@ -161,14 +163,6 @@ describe("msteams messenger", () => {
         { textChunkLimit: 4000, tableMode: "code" },
       );
       expect(messages).toEqual([{ text: "hi" }, { mediaUrl: "https://example.com/a.png" }]);
-    });
-
-    it("supports inline media mode", () => {
-      const messages = renderReplyPayloadsToMessages(
-        [{ text: "hi", mediaUrl: "https://example.com/a.png" }],
-        { textChunkLimit: 4000, mediaMode: "inline", tableMode: "code" },
-      );
-      expect(messages).toEqual([{ text: "hi", mediaUrl: "https://example.com/a.png" }]);
     });
 
     it("chunks long text when enabled", () => {
@@ -232,7 +226,6 @@ describe("msteams messenger", () => {
             capturedConversationId = conversationId;
           },
         }),
-        appId: "app123",
         conversationRef,
         context: createRevokedThreadContext(),
         messages: [{ text: "hello" }],
@@ -256,7 +249,6 @@ describe("msteams messenger", () => {
       const ids = await sendMSTeamsMessages({
         replyStyle: "thread",
         app: createMockApp(),
-        appId: "app123",
         conversationRef: baseRef,
         context: ctx,
         messages: [{ text: "one" }, { text: "two" }],
@@ -280,7 +272,6 @@ describe("msteams messenger", () => {
               capturedConversationId = conversationId;
             },
           }),
-          appId: "app123",
           conversationRef: baseRef,
           messages: renderReplyPayloadsToMessages([{ text: source }], {
             textChunkLimit: 4000,
@@ -304,7 +295,6 @@ describe("msteams messenger", () => {
           sendMSTeamsMessages({
             replyStyle: "thread",
             app: createMockApp(),
-            appId: "app123",
             conversationRef: {
               ...baseRef,
               conversation: {
@@ -329,7 +319,6 @@ describe("msteams messenger", () => {
         sendMSTeamsMessages({
           replyStyle: "thread",
           app: createMockApp(),
-          appId: "app123",
           conversationRef: baseRef,
           context: { sendActivity },
           messages: [{ mediaUrl: missingPath }],
@@ -377,7 +366,6 @@ describe("msteams messenger", () => {
       const error = await sendMSTeamsMessages({
         replyStyle: "thread",
         app: createMockApp(),
-        appId: "app123",
         conversationRef: baseRef,
         context: { sendActivity },
         messages: [{ text: "first" }, { mediaUrl: missingPath }],
@@ -393,7 +381,6 @@ describe("msteams messenger", () => {
       const error = await sendMSTeamsMessages({
         replyStyle: "thread",
         app: createMockApp(),
-        appId: "app123",
         conversationRef: {
           ...baseRef,
           user: undefined,
@@ -413,7 +400,6 @@ describe("msteams messenger", () => {
         sendMSTeamsMessages({
           replyStyle: "top-level",
           app: createMockApp(),
-          appId: "app123",
           conversationRef: {
             ...baseRef,
             conversation: { id: "" },
@@ -436,7 +422,10 @@ describe("msteams messenger", () => {
         graphUploadMockState.uploadAndShareSharePoint.mockImplementation(async () => {
           uploadAttempts += 1;
           if (uploadAttempts === 1) {
-            throw Object.assign(new Error("transient upload failure"), { statusCode: 429 });
+            throw Object.assign(new Error("transient upload failure"), {
+              statusCode: 429,
+              retryAfterMs: 0,
+            });
           }
           return {
             itemId: "item123",
@@ -461,7 +450,6 @@ describe("msteams messenger", () => {
         const ids = await sendMSTeamsMessages({
           replyStyle: "thread",
           app: createMockApp(),
-          appId: "app123",
           conversationRef: {
             ...baseRef,
             conversation: {
@@ -475,7 +463,6 @@ describe("msteams messenger", () => {
             getAccessToken: async () => "token",
           },
           sharePointSiteId: "site-123",
-          retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
           onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
         });
 
@@ -503,11 +490,9 @@ describe("msteams messenger", () => {
         sendMSTeamsMessages({
           replyStyle: "thread",
           app: createMockApp(),
-          appId: "app123",
           conversationRef: baseRef,
           context: ctx,
           messages: [{ text: "one" }],
-          retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
         }),
       ).rejects.toMatchObject({ statusCode: 400 });
     });
@@ -520,7 +505,6 @@ describe("msteams messenger", () => {
       const ids = await sendMSTeamsMessages({
         replyStyle: "thread",
         app: createMockApp({ createFn: createRecordedSendActivity(proactiveSent) }),
-        appId: "app123",
         conversationRef: baseRef,
         context: ctx,
         messages: [{ text: "one" }, { text: "two" }, { text: "three" }],
@@ -600,7 +584,6 @@ describe("msteams messenger", () => {
             capturedConversationId = conversationId;
           },
         }),
-        appId: "app123",
         conversationRef: channelRef,
         messages: [{ text: "hello" }],
       });
@@ -634,7 +617,6 @@ describe("msteams messenger", () => {
             capturedConversationId = conversationId;
           },
         }),
-        appId: "app123",
         conversationRef: channelRef,
         messages: [{ text: "hello" }],
       });
@@ -654,10 +636,8 @@ describe("msteams messenger", () => {
           app: createMockApp({
             createFn: createRecordedSendActivity(attempts, statusCode),
           }),
-          appId: "app123",
           conversationRef: baseRef,
           messages: [{ text: "hello" }],
-          retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
         }).catch((cause: unknown) => cause);
 
         expect(attempts).toEqual(["hello"]);
@@ -677,10 +657,8 @@ describe("msteams messenger", () => {
               throw Object.assign(new Error(code), { code });
             },
           }),
-          appId: "app123",
           conversationRef: baseRef,
           messages: [{ text: "hello" }],
-          retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
         }).catch((cause: unknown) => cause);
 
         expect(attempts).toEqual(["hello"]);
@@ -702,10 +680,8 @@ describe("msteams messenger", () => {
             return { id: `id:${text}` };
           },
         }),
-        appId: "app123",
         conversationRef: baseRef,
         messages: [{ text: "first" }, { text: "second" }],
-        retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
       }).catch((cause: unknown) => cause);
 
       expect(attempts).toEqual(["first", "second"]);
@@ -729,7 +705,6 @@ describe("msteams messenger", () => {
             return { id: `id:${text ?? ""}` };
           },
         }),
-        appId: "app123",
         conversationRef: baseRef,
         messages: [
           { text: "Let me look that up..." },
@@ -807,7 +782,6 @@ describe("msteams messenger", () => {
           await sendMSTeamsMessages({
             replyStyle: "top-level",
             app,
-            appId: "app123",
             conversationRef: baseRef,
             messages: encodedNames.map((name) => ({
               mediaUrl: `${baseUrl}/files/${name}`,
@@ -924,7 +898,6 @@ describe("msteams messenger", () => {
           createFn: createRecordedSendActivity(sent),
           onReference: (ref) => refs.push(ref),
         }),
-        appId: "app123",
         conversationRef: storedWithChannelDataTenant,
         messages: [{ text: "hello" }],
       });

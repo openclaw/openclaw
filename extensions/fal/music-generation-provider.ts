@@ -25,8 +25,29 @@ const FAL_MUSIC_MODELS = [
   FAL_STABLE_AUDIO_MODEL,
 ] as const;
 
-function buildFalMinimaxBody(req: MusicGenerationRequest): Record<string, unknown> {
+function buildFalMusicRequestBody(
+  req: MusicGenerationRequest,
+  model: string,
+): Record<string, unknown> {
   const lyrics = normalizeOptionalString(req.lyrics);
+  if (model === FAL_ACE_STEP_MODEL || model === FAL_STABLE_AUDIO_MODEL) {
+    const isStableAudio = model === FAL_STABLE_AUDIO_MODEL;
+    if (lyrics) {
+      throw new Error(
+        `fal ${isStableAudio ? "Stable Audio" : "ACE-Step"} music generation does not support explicit lyrics.`,
+      );
+    }
+    if (isStableAudio && req.instrumental === true) {
+      throw new Error("fal Stable Audio music generation does not support instrumental mode.");
+    }
+    return {
+      prompt: req.prompt,
+      ...(req.instrumental === true ? { instrumental: true } : {}),
+      ...(typeof req.durationSeconds === "number"
+        ? { [isStableAudio ? "seconds_total" : "duration"]: req.durationSeconds }
+        : {}),
+    };
+  }
   if (lyrics && req.instrumental === true) {
     throw new Error("fal MiniMax music generation cannot use lyrics when instrumental=true.");
   }
@@ -42,43 +63,6 @@ function buildFalMinimaxBody(req: MusicGenerationRequest): Record<string, unknow
       format: req.format ?? "mp3",
     },
   };
-}
-
-function buildFalAceStepBody(req: MusicGenerationRequest): Record<string, unknown> {
-  if (normalizeOptionalString(req.lyrics)) {
-    throw new Error("fal ACE-Step music generation does not support explicit lyrics.");
-  }
-  return {
-    prompt: req.prompt,
-    ...(req.instrumental === true ? { instrumental: true } : {}),
-    ...(typeof req.durationSeconds === "number" ? { duration: req.durationSeconds } : {}),
-  };
-}
-
-function buildFalStableAudioBody(req: MusicGenerationRequest): Record<string, unknown> {
-  if (normalizeOptionalString(req.lyrics)) {
-    throw new Error("fal Stable Audio music generation does not support explicit lyrics.");
-  }
-  if (req.instrumental === true) {
-    throw new Error("fal Stable Audio music generation does not support instrumental mode.");
-  }
-  return {
-    prompt: req.prompt,
-    ...(typeof req.durationSeconds === "number" ? { seconds_total: req.durationSeconds } : {}),
-  };
-}
-
-function buildFalMusicRequestBody(
-  req: MusicGenerationRequest,
-  model: string,
-): Record<string, unknown> {
-  if (model === FAL_ACE_STEP_MODEL) {
-    return buildFalAceStepBody(req);
-  }
-  if (model === FAL_STABLE_AUDIO_MODEL) {
-    return buildFalStableAudioBody(req);
-  }
-  return buildFalMinimaxBody(req);
 }
 
 function resolveFalMusicMetadata(payload: unknown): Record<string, unknown> | undefined {

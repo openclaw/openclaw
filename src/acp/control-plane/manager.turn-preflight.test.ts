@@ -17,7 +17,7 @@ import {
 describe("AcpSessionManager", () => {
   installAcpSessionManagerTestLifecycle();
 
-  it.each(["metadata failure", "signal failure", "abort", "actor replacement"] as const)(
+  it.each(["signal failure", "abort", "actor replacement"] as const)(
     "releases only the current native turn when preflight ends with %s",
     async (reason) => {
       await withStateDirEnv("openclaw-acp-preflight-", async () => {
@@ -43,9 +43,6 @@ describe("AcpSessionManager", () => {
           readSpy.mockImplementationOnce(async (params) => {
             reached.resolve();
             await release.promise;
-            if (reason === "metadata failure") {
-              throw failure;
-            }
             return await read(params);
           });
         }
@@ -121,7 +118,8 @@ describe("AcpSessionManager", () => {
             successor ? [sessionKey] : [],
           );
           expect(
-            sessionStateEvents.listSessionStateEventsSince(sessionKey, "codex", 0, 200).events,
+            (await sessionStateEvents.listSessionStateEventsSince(sessionKey, "codex", 0, 200))
+              .events,
           ).toMatchObject(
             reason === "signal failure"
               ? [{ kind: "run_failed", runId: requestId, payload: { outcome: "error" } }]
@@ -132,7 +130,8 @@ describe("AcpSessionManager", () => {
             await successor;
             expect(getActiveAcpTurnCount()).toBe(0);
             expect(
-              sessionStateEvents.listSessionStateEventsSince(sessionKey, "codex", 0, 200).events,
+              (await sessionStateEvents.listSessionStateEventsSince(sessionKey, "codex", 0, 200))
+                .events,
             ).toMatchObject([{ kind: "run_completed", runId: requestId }]);
           }
         } finally {

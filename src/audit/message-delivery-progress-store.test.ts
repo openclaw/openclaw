@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import gitPrerequisites from "../../.github/actions/git-owner/test-prerequisites.json" with { type: "json" };
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { getCanonicalSqliteTableNames } from "../infra/sqlite-schema-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -16,6 +17,7 @@ import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "../state/openclaw-state-schema
 import { STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v12-foldin.test-support.js";
 import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v13-widerow.test-support.js";
 import { removePreparedWorkerOwnershipColumns } from "../state/openclaw-state-schema-v17.test-support.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { recordAuditEventInDatabase } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
 import {
@@ -170,12 +172,10 @@ describe("outbound message progress companion", () => {
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
     expect(
-      (
-        opened.db
-          .prepare("SELECT COUNT(*) AS count FROM audit_events WHERE action != ?")
-          .get("message.outbound.finished") as { count: number }
-      ).count,
-    ).toBe(0);
+      opened.db
+        .prepare("SELECT COUNT(*) AS count FROM audit_events WHERE action != ?")
+        .get("message.outbound.finished"),
+    ).toEqual({ count: 0 });
   });
 
   it("ensures idempotently, deduplicates replay, and stores no raw message material", () => {
@@ -199,16 +199,10 @@ describe("outbound message progress companion", () => {
     expect(recoveredReplay).toBeUndefined();
     const { db } = openOpenClawStateDatabase(database);
     expect(tableExists(db, "outbound_message_progress")).toBe(true);
-    expect(
-      (
-        db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get() as {
-          count: number;
-        }
-      ).count,
-    ).toBe(2);
-    expect(
-      (db.prepare("SELECT COUNT(*) AS count FROM audit_events").get() as { count: number }).count,
-    ).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
+      count: 2,
+    });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 0 });
     const stored = JSON.stringify(
       db.prepare("SELECT * FROM outbound_message_progress ORDER BY sequence").all(),
     );
@@ -303,11 +297,6 @@ describe("outbound message progress companion", () => {
     // Only audit rows belong to this proof. Restore empty unrelated owner tables
     // for the immutable reader without inventing a production downgrade.
     expect(
-      projectedDatabase
-        .prepare("SELECT COUNT(*) AS count FROM current_conversation_bindings")
-        .get(),
-    ).toEqual({ count: 0 });
-    expect(
       projectedDatabase.prepare("SELECT COUNT(*) AS count FROM worker_environments").get(),
     ).toEqual({ count: 0 });
     removePreparedWorkerOwnershipColumns(projectedDatabase);
@@ -326,21 +315,42 @@ describe("outbound message progress companion", () => {
            AND type IN ('table', 'index') AND sql IS NOT NULL
          ORDER BY type = 'table' DESC, name`,
       );
-      for (const table of ["current_conversation_bindings", "skill_workshop_proposals"]) {
+      for (const table of [
+        "current_conversation_bindings",
+        "skill_workshop_proposals",
+        "cron_run_receipts",
+      ]) {
+        expect(projectedDatabase.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
+          count: 0,
+        });
         projectedDatabase.exec(`DROP TABLE ${table};`);
         for (const { sql } of pinnedStatements.all(table) as Array<{ sql: string }>) {
+          projectedDatabase.exec(sql);
+        }
+      }
+
+      // The v9-era reader needs these owner projections reversed before restoring
+      // any other retired tables from its immutable schema.
+      projectedDatabase.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
+      projectedDatabase.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
+      projectedDatabase.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
+      projectedDatabase.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
+      const currentTables = new Set(getCanonicalSqliteTableNames(OPENCLAW_STATE_SCHEMA_SQL));
+      const pinnedTables = pinnedSchemaDatabase
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+        .all() as Array<{ name: string }>;
+      for (const { name } of pinnedTables) {
+        // Current owners, including lazy audit tables, must retain their own setup.
+        if (currentTables.has(name) || tableExists(projectedDatabase, name)) {
+          continue;
+        }
+        for (const { sql } of pinnedStatements.all(name) as Array<{ sql: string }>) {
           projectedDatabase.exec(sql);
         }
       }
     } finally {
       pinnedSchemaDatabase.close();
     }
-    // The v9-era reader needs the v13 projection removal, v12 singleton fold-in,
-    // v11 curator retirement, and v10 dead-table retirement reversed in order.
-    projectedDatabase.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
-    projectedDatabase.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
-    projectedDatabase.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
-    projectedDatabase.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
     closeOpenClawStateDatabaseForTest();
 
     const checkoutParent = tempDirs.make("message-progress-pinned-reader-");
@@ -532,36 +542,7 @@ describe("outbound message progress companion", () => {
     ).toEqual(["sent"]);
   });
 
-  it("prunes expired progress without touching retained terminal rows", () => {
-    const database = databaseOptions();
-    const occurredAt = Date.now() - 31 * 24 * 60 * 60_000;
-    recordOutboundMessageProgressInDatabase(
-      progressInput("message.outbound.queued", { occurredAt }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    recordAuditEventInDatabase(terminalInput({ occurredAt: Date.now() }), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-
-    pruneExpiredOutboundMessageProgressInDatabase({
-      database: { ...database, database: openOpenClawStateDatabase(database) },
-      now: Date.now(),
-    });
-    const { db } = openOpenClawStateDatabase(database);
-    expect(
-      (
-        db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get() as {
-          count: number;
-        }
-      ).count,
-    ).toBe(0);
-    expect(
-      (db.prepare("SELECT COUNT(*) AS count FROM audit_events").get() as { count: number }).count,
-    ).toBe(1);
-  });
-
-  it("bounds each expired progress maintenance transaction", () => {
+  it("bounds expired progress maintenance while preserving retained terminal rows", () => {
     const database = databaseOptions();
     recordOutboundMessageProgressInDatabase(progressInput("message.outbound.queued"), {
       ...database,
@@ -570,6 +551,10 @@ describe("outbound message progress companion", () => {
     const { db } = openOpenClawStateDatabase(database);
     db.exec("DELETE FROM outbound_message_progress");
     const now = Date.now();
+    recordAuditEventInDatabase(terminalInput({ occurredAt: now }), {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
     const expiredAt = now - 31 * 24 * 60 * 60_000;
     db.prepare(
       `WITH RECURSIVE numbers(n) AS (
@@ -608,5 +593,6 @@ describe("outbound message progress companion", () => {
         now,
       }),
     ).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 1 });
   });
 });

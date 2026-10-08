@@ -95,7 +95,6 @@ if [[ "$(id -u)" -eq 0 ]]; then
   fail "Run run-openclaw-podman.sh as your normal user so Podman stays rootless."
 fi
 
-# Legacy: setup-host -> run the Podman setup script
 if [[ "${1:-}" == "setup-host" ]]; then
   shift
   REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -264,57 +263,7 @@ sync_local_control_ui_origins() {
   dir="$(dirname "$file")"
   ensure_private_existing_dir_owned_by_user "config file directory" "$dir"
   tmp="$(mktemp "$dir/.config.tmp.XXXXXX")"
-  if ! python3 - "$file" "$port" "$tmp" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-port = sys.argv[2]
-tmp = sys.argv[3]
-try:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-except json.JSONDecodeError as exc:
-    print(
-        f"Warning: unable to sync gateway.controlUi.allowedOrigins in {path}: existing config is not strict JSON ({exc}). Leaving file unchanged.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-if not isinstance(data, dict):
-    raise SystemExit(f"{path}: expected top-level object")
-gateway = data.setdefault("gateway", {})
-if not isinstance(gateway, dict):
-    raise SystemExit(f"{path}: expected gateway object")
-gateway.setdefault("mode", "local")
-control_ui = gateway.setdefault("controlUi", {})
-if not isinstance(control_ui, dict):
-    raise SystemExit(f"{path}: expected gateway.controlUi object")
-allowed = control_ui.get("allowedOrigins")
-public_origin = gateway.get("publicOrigin")
-inherits_public_origin = "allowedOrigins" not in control_ui and isinstance(public_origin, str) and public_origin.strip()
-desired = [
-    f"http://127.0.0.1:{port}",
-    f"http://localhost:{port}",
-]
-if not isinstance(allowed, list):
-    allowed = []
-cleaned = []
-seen = set()
-for origin in allowed + desired:
-    if not isinstance(origin, str):
-        continue
-    normalized = origin.strip()
-    if not normalized or normalized in seen:
-        continue
-    cleaned.append(normalized)
-    seen.add(normalized)
-if not inherits_public_origin:
-    control_ui["allowedOrigins"] = cleaned
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
-PY
-  then
+  if ! write_local_control_ui_origins "$file" "$port" "$tmp" sync; then
     rm -f "$tmp"
     sync_local_control_ui_origins_via_cli "$file" "$port"
     return 0

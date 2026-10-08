@@ -4,8 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
+  normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
@@ -20,8 +19,6 @@ import type {
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { expandHomePrefix, resolveHomeRelativePath } from "./home-dir.js";
 
-const toStringOrUndefined = readStringValue;
-
 const execSecuritySchema = z.enum(["allowlist", "full", "deny"]);
 const execAskSchema = z.enum(["always", "off", "on-miss"]);
 const persistedExecApprovalPolicySchema = z.looseObject({
@@ -33,52 +30,67 @@ const persistedExecApprovalPolicySchema = z.looseObject({
 function normalizePersistedAllowlistSource(value: string): "allow-always" | undefined {
   return value === "allow-always" ? value : undefined;
 }
-const persistedExecAllowlistEntrySchema = z
+const persistedExecAllowlistEntrySchema = z.looseObject({
+  pattern: z.string().refine((value) => value.trim().length > 0),
+  id: z.string().min(1),
+  source: z.literal("allow-always").optional(),
+  commandText: z.never().optional(),
+  argPattern: z.string().optional(),
+  lastUsedAt: z.number().finite().optional(),
+  lastUsedCommand: z.string().optional(),
+  lastResolvedPath: z.string().optional(),
+});
+const legacyExecAllowlistEntrySchema = z
   .union([
     z.string().trim().min(1),
-    z.looseObject({
-      pattern: z.string().refine((value) => value.trim().length > 0),
+    persistedExecAllowlistEntrySchema.extend({
       id: z.string().optional(),
       source: z.string().transform(normalizePersistedAllowlistSource).optional(),
       commandText: z.string().optional(),
-      argPattern: z.string().optional(),
-      lastUsedAt: z.number().finite().optional(),
-      lastUsedCommand: z.string().optional(),
-      lastResolvedPath: z.string().optional(),
     }),
   ])
   .transform((value): ExecAllowlistEntry =>
     typeof value === "string" ? { pattern: value } : value,
   );
-const persistedExecApprovalsAgentSchema = persistedExecApprovalPolicySchema.extend({
-  allowlist: z.array(persistedExecAllowlistEntrySchema).optional(),
-  mcpTools: z
-    .array(
-      z.looseObject({
-        server: z.string().refine((value) => value.trim().length > 0),
-        tool: z.string().refine((value) => value.trim().length > 0),
-        source: z.literal("allow-always"),
-        addedAt: z.number().finite().nonnegative(),
-        lastUsedAt: z.number().finite().nonnegative().optional(),
-      }),
-    )
-    .optional(),
-});
-const persistedExecApprovalsAgentsSchema = z
-  .unknown()
-  .refine((value) => !isRecord(value) || !Object.hasOwn(value, "__proto__"))
-  .pipe(z.record(z.string(), persistedExecApprovalsAgentSchema));
-const persistedExecApprovalsSchema = z.looseObject({
-  version: z.literal(1),
-  socket: z
-    .looseObject({
-      path: z.string().optional(),
-      token: z.string().optional(),
-    })
-    .optional(),
-  defaults: persistedExecApprovalPolicySchema.optional(),
-  agents: persistedExecApprovalsAgentsSchema.optional(),
-});
+function createExecApprovalsSchema(allowlistEntry: z.ZodType<ExecAllowlistEntry>, legacy: boolean) {
+  const agentSchema = persistedExecApprovalPolicySchema.extend({
+    allowlist: z.array(allowlistEntry).optional(),
+    mcpTools: z
+      .array(
+        z.looseObject({
+          server: z.string().refine((value) => value.trim().length > 0),
+          tool: z.string().refine((value) => value.trim().length > 0),
+          source: z.literal("allow-always"),
+          addedAt: z.number().finite().nonnegative(),
+          lastUsedAt: z.number().finite().nonnegative().optional(),
+        }),
+      )
+      .optional(),
+  });
+  const agentsSchema = z
+    .unknown()
+    .refine((value) => !isRecord(value) || !Object.hasOwn(value, "__proto__"))
+    .pipe(z.record(z.string(), agentSchema))
+    .refine((value) => legacy || !Object.hasOwn(value, "default"));
+  return z.looseObject({
+    version: z.literal(1),
+    socket: z
+      .looseObject({
+        path: z.string().optional(),
+        token: z.string().optional(),
+      })
+      .optional(),
+    defaults: persistedExecApprovalPolicySchema.optional(),
+    agents: agentsSchema.optional(),
+  });
+}
+const persistedExecApprovalsSchema = createExecApprovalsSchema(
+  persistedExecAllowlistEntrySchema,
+  false,
+);
+const legacyExecApprovalsSchema = createExecApprovalsSchema(legacyExecAllowlistEntrySchema, true);
+export const LEGACY_EXEC_APPROVALS_DIAGNOSTIC =
+  "Legacy exec approval policy requires Doctor repair";
 
 export const DEFAULT_SECURITY: ExecSecurity = "full";
 export const DEFAULT_ASK: ExecAsk = "off";
@@ -121,12 +133,6 @@ export function resolveExecApprovalsDisplayPath(env: NodeJS.ProcessEnv = process
     : path.join(stateDir, locator);
 }
 
-export function resolveExecApprovalsTranscriptPath(): string {
-  return process.env.OPENCLAW_STATE_DIR?.trim()
-    ? "$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config"
-    : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/state/openclaw.sqlite#exec_approvals_config`;
-}
-
 export function createFailClosedExecApprovalsFallback(): ExecApprovalsFile {
   return normalizeExecApprovalsInternal({
     version: 1,
@@ -167,6 +173,14 @@ const diagnosticFields = new Set([
   "lastResolvedPath",
 ]);
 
+const diagnosticTypeReasons = new Map([
+  ["string", "expected a string"],
+  ["number", "expected a finite number"],
+  ["boolean", "expected a boolean"],
+  ["array", "expected an array"],
+  ["object", "expected an object"],
+]);
+
 function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unknown): string {
   // Only the object arm has field issues. The string arm's root error would
   // misdiagnose object metadata; Zod's union child paths are relative.
@@ -204,25 +218,7 @@ function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unkn
   let reason = "invalid value";
   switch (detail.code) {
     case "invalid_type":
-      switch (detail.expected) {
-        case "string":
-          reason = "expected a string";
-          break;
-        case "number":
-          reason = "expected a finite number";
-          break;
-        case "boolean":
-          reason = "expected a boolean";
-          break;
-        case "array":
-          reason = "expected an array";
-          break;
-        case "object":
-          reason = "expected an object";
-          break;
-        default:
-          break;
-      }
+      reason = diagnosticTypeReasons.get(detail.expected) ?? reason;
       break;
     case "invalid_value":
       reason = "expected a supported value";
@@ -246,7 +242,10 @@ function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unkn
 }
 
 /** Validate canonical policy and expose only a bounded, value-free failure diagnostic. */
-export function parsePersistedExecApprovals(raw: string): Result<ExecApprovalsFile, string> {
+function parseExecApprovals(
+  raw: string,
+  schema: z.ZodType<ExecApprovalsFile>,
+): Result<ExecApprovalsFile, string> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw) as unknown;
@@ -254,9 +253,15 @@ export function parsePersistedExecApprovals(raw: string): Result<ExecApprovalsFi
     return err("invalid JSON syntax");
   }
   try {
-    const result = persistedExecApprovalsSchema.safeParse(parsed);
+    const result = schema.safeParse(parsed);
     if (result.success) {
-      return ok(normalizeExecApprovalsInternal(result.data));
+      return ok(result.data);
+    }
+    if (
+      schema === persistedExecApprovalsSchema &&
+      legacyExecApprovalsSchema.safeParse(parsed).success
+    ) {
+      return err(LEGACY_EXEC_APPROVALS_DIAGNOSTIC);
     }
     const issue = result.error.issues[0];
     return err(
@@ -267,15 +272,20 @@ export function parsePersistedExecApprovals(raw: string): Result<ExecApprovalsFi
   }
 }
 
+export function parsePersistedExecApprovals(raw: string): Result<ExecApprovalsFile, string> {
+  return parseExecApprovals(raw, persistedExecApprovalsSchema);
+}
+
+/** Doctor imports historical documents before ordinary readers accept their canonical shape. */
+export function parseLegacyExecApprovals(raw: string): Result<ExecApprovalsFile, string> {
+  const parsed = parseExecApprovals(raw, legacyExecApprovalsSchema);
+  return parsed.ok ? ok(normalizeExecApprovalsInternal(parsed.value)) : parsed;
+}
+
 /** Parse only structurally valid persisted approvals without inventing fallback policy. */
 export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile | null {
   const result = parsePersistedExecApprovals(raw);
   return result.ok ? result.value : null;
-}
-
-function normalizeAllowlistPattern(value: string | undefined): string | null {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  return trimmed ? normalizeLowercaseStringOrEmpty(trimmed) : null;
 }
 
 function mergeLegacyAgent(
@@ -285,7 +295,7 @@ function mergeLegacyAgent(
   const allowlist: ExecAllowlistEntry[] = [];
   const seen = new Set<string>();
   const pushEntry = (entry: ExecAllowlistEntry) => {
-    const patternKey = normalizeAllowlistPattern(entry.pattern);
+    const patternKey = normalizeOptionalLowercaseString(entry.pattern);
     if (!patternKey) {
       return;
     }
@@ -335,21 +345,19 @@ function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | unde
   for (const item of allowlist) {
     if (typeof item === "string") {
       const trimmed = item.trim();
+      changed = true;
       if (trimmed) {
         result.push({ pattern: trimmed });
-        changed = true;
-      } else {
-        changed = true; // dropped empty string
       }
     } else if (item && typeof item === "object" && !Array.isArray(item)) {
       const pattern = (item as { pattern?: unknown }).pattern;
       if (typeof pattern === "string" && pattern.trim().length > 0) {
         result.push(item as ExecAllowlistEntry);
       } else {
-        changed = true; // dropped invalid entry
+        changed = true;
       }
     } else {
-      changed = true; // dropped invalid entry
+      changed = true;
     }
   }
   return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
@@ -364,6 +372,10 @@ function normalizeAllowlistMetadata(
   let changed = false;
   const next = allowlist.map((entry) => {
     let normalized = entry;
+    const source = normalizePersistedAllowlistSource(normalized.source ?? "");
+    if (normalized.source !== source) {
+      normalized = { ...normalized, source };
+    }
     if (!normalized.id) {
       normalized = { ...normalized, id: crypto.randomUUID() };
     }
@@ -380,9 +392,9 @@ function normalizeAllowlistMetadata(
 function sanitizeExecApprovalPolicy(
   policy: ExecApprovalsDefaults | ExecApprovalsAgent | undefined,
 ): ExecApprovalsDefaults {
-  const security = toStringOrUndefined(policy?.security)?.trim();
-  const ask = toStringOrUndefined(policy?.ask)?.trim();
-  const askFallback = toStringOrUndefined(policy?.askFallback)?.trim();
+  const security = readStringValue(policy?.security)?.trim();
+  const ask = readStringValue(policy?.ask)?.trim();
+  const askFallback = readStringValue(policy?.askFallback)?.trim();
   return {
     security:
       security === "deny" || security === "allowlist" || security === "full" ? security : undefined,
@@ -426,18 +438,15 @@ export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApp
     }
   }
   const sanitizedDefaults = sanitizeExecApprovalPolicy(file.defaults);
-  const normalized: ExecApprovalsFile = {
+  return {
     version: 1,
     socket: {
       path: socketPath && socketPath.length > 0 ? socketPath : undefined,
       token: token && token.length > 0 ? token : undefined,
     },
-    defaults: {
-      ...sanitizedDefaults,
-    },
+    defaults: sanitizedDefaults,
     agents,
   };
-  return normalized;
 }
 
 export function mergeExecApprovalsSocketDefaults(params: {

@@ -98,32 +98,28 @@ export class CodexAppInventoryCache {
   read(params: RefreshParams): CodexAppInventoryCacheRead {
     const nowMs = resolveDateTimestampMs(params.nowMs);
     const entry = this.entries.get(params.key);
-    if (!entry) {
-      const refreshScheduled = params.suppressRefresh ? false : this.scheduleRefresh(params);
-      return {
-        state: "missing",
-        key: params.key,
-        revision: this.revision,
-        refreshScheduled,
-        ...(this.diagnostics.get(params.key)
-          ? { diagnostic: this.diagnostics.get(params.key) }
-          : {}),
-      };
-    }
-
-    const state: CodexAppInventoryReadState =
-      entry.invalidated || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })
+    const state: CodexAppInventoryReadState = !entry
+      ? "missing"
+      : entry.invalidated || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })
         ? "stale"
         : "fresh";
     const refreshScheduled =
-      state === "fresh" && !params.forceRefetch ? false : this.scheduleRefresh(params);
+      (state === "missing"
+        ? !params.suppressRefresh
+        : state === "stale" || Boolean(params.forceRefetch)) && this.scheduleRefresh(params);
+    let snapshot: CodexAppInventorySnapshot | undefined;
+    if (entry) {
+      const { invalidated: _invalidated, invalidatedAppIds: _invalidatedAppIds, ...rest } = entry;
+      snapshot = rest;
+    }
+    const diagnostic = entry ? entry.lastError : this.diagnostics.get(params.key);
     return {
       state,
       key: params.key,
-      revision: entry.revision,
-      snapshot: stripEntryState(entry),
+      revision: entry?.revision ?? this.revision,
+      ...(snapshot ? { snapshot } : {}),
       refreshScheduled,
-      ...(entry.lastError ? { diagnostic: entry.lastError } : {}),
+      ...(diagnostic ? { diagnostic } : {}),
     };
   }
 
@@ -173,10 +169,6 @@ export class CodexAppInventoryCache {
     this.refreshTokens.clear();
     this.diagnostics.clear();
     this.revision = 0;
-  }
-
-  getRevision(): number {
-    return this.revision;
   }
 
   private scheduleRefresh(params: RefreshParams): boolean {
@@ -270,14 +262,16 @@ export class CodexAppInventoryCache {
       }
       return snapshot;
     } catch (error) {
-      const diagnostic = {
-        message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
-        atMs: nowMs,
-      };
-      this.diagnostics.set(params.key, diagnostic);
-      const entry = this.entries.get(params.key);
-      if (entry) {
-        entry.lastError = diagnostic;
+      if (this.refreshTokens.get(params.key) === refreshToken) {
+        const diagnostic = {
+          message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
+          atMs: nowMs,
+        };
+        this.diagnostics.set(params.key, diagnostic);
+        const entry = this.entries.get(params.key);
+        if (entry) {
+          entry.lastError = diagnostic;
+        }
       }
       embeddedAgentLog.warn("codex app inventory refresh failed", {
         forceRefetch: params.forceRefetch === true,
@@ -484,11 +478,6 @@ async function readInstalledApps(
     }),
     installedApps: apps,
   };
-}
-
-function stripEntryState(entry: CacheEntry): CodexAppInventorySnapshot {
-  const { invalidated: _invalidated, invalidatedAppIds: _invalidatedAppIds, ...snapshot } = entry;
-  return snapshot;
 }
 
 function fingerprintInventoryCacheKey(key: string): string {

@@ -116,7 +116,7 @@ function outboxDb(database: ContextEngineTurnOutboxConnection) {
 
 function assertMatchingOutboxOwner(
   existing: { engine_id: string; owner_plugin_id: string | null },
-  params: { engineId: string; ownerPluginId?: string },
+  params: ContextEngineTurnOutboxFilter,
   advancementKey: string,
 ): void {
   if (
@@ -127,12 +127,12 @@ function assertMatchingOutboxOwner(
   }
 }
 
-function writeContextEngineTurnOutboxPayload(params: {
-  database: ContextEngineTurnOutboxConnection;
-  engineId: string;
-  ownerPluginId?: string;
-  payload: ContextEngineTurnOutboxPayload;
-}): void {
+function writeContextEngineTurnOutboxPayload(
+  params: ContextEngineTurnOutboxFilter & {
+    database: ContextEngineTurnOutboxConnection;
+    payload: ContextEngineTurnOutboxPayload;
+  },
+): void {
   const db = outboxDb(params.database);
   const admission =
     params.payload.state === "admitted"
@@ -231,14 +231,14 @@ export function enqueueContextEngineTurnCommit(params: {
   });
 }
 
-function blockContextEngineTurnIntent(params: {
-  boundary: TranscriptTurnBoundary;
-  database: ContextEngineTurnOutboxConnection;
-  engineId: string;
-  failure: BlockedContextEngineTurnOutboxPayload["failure"];
-  isHeartbeat: boolean;
-  ownerPluginId?: string;
-}): void {
+function blockContextEngineTurnIntent(
+  params: ContextEngineTurnOutboxFilter & {
+    boundary: TranscriptTurnBoundary;
+    database: ContextEngineTurnOutboxConnection;
+    failure: BlockedContextEngineTurnOutboxPayload["failure"];
+    isHeartbeat: boolean;
+  },
+): void {
   writeContextEngineTurnOutboxPayload({
     ...params,
     payload: {
@@ -287,26 +287,43 @@ function publishClosedContextEngineTurn(
   if (existingPayload.state !== "accepted") {
     return "ok";
   }
-  const closedTurn = readClosedTranscriptTurnInDatabase(params.database.db, {
-    boundary: params.boundary,
-    maxEvents: params.maxEvents,
-    maxBytes: params.maxBytes,
+  return advanceAcceptedContextEngineTurn(params, params, params);
+}
+
+function advanceAcceptedContextEngineTurn(
+  owner: ContextEngineTurnOutboxFilter & { database: ContextEngineTurnOutboxConnection },
+  payload: Omit<AcceptedContextEngineTurnOutboxPayload, "state">,
+  limits: { maxEvents: number; maxBytes: number },
+  onReadFailure?: (kind: ContextEngineTurnReadFailureKind) => void,
+): ClosedTranscriptTurnReadResult["kind"] {
+  const closedTurn = readClosedTranscriptTurnInDatabase(owner.database.db, {
+    boundary: payload.boundary,
+    maxEvents: limits.maxEvents,
+    maxBytes: limits.maxBytes,
   });
   if (closedTurn.kind !== "ok") {
+    onReadFailure?.(closedTurn.kind);
     if (!isRetryableContextEngineTurnReadFailure(closedTurn.kind)) {
-      blockContextEngineTurnIntent({ ...params, failure: closedTurn.kind });
+      blockContextEngineTurnIntent({
+        boundary: payload.boundary,
+        database: owner.database,
+        engineId: owner.engineId,
+        failure: closedTurn.kind,
+        isHeartbeat: payload.isHeartbeat,
+        ownerPluginId: owner.ownerPluginId,
+      });
     }
     return closedTurn.kind;
   }
   enqueueContextEngineTurnCommit({
-    database: params.database,
-    engineId: params.engineId,
-    ownerPluginId: params.ownerPluginId,
+    database: owner.database,
+    engineId: owner.engineId,
+    ownerPluginId: owner.ownerPluginId,
     payload: {
-      boundary: params.boundary,
-      isHeartbeat: params.isHeartbeat,
+      boundary: payload.boundary,
+      isHeartbeat: payload.isHeartbeat,
       messages: closedTurn.messages,
-      runtimeContext: params.runtimeContext,
+      runtimeContext: payload.runtimeContext,
     },
   });
   return closedTurn.kind;
@@ -352,42 +369,20 @@ export function recoverContextEngineTurnOutbox(params: {
       });
       continue;
     }
-    const closedTurn = readClosedTranscriptTurnInDatabase(params.database.db, {
-      boundary: payload.boundary,
-      maxEvents: RECOVERED_TURN_MAX_EVENTS,
-      maxBytes: RECOVERED_TURN_MAX_BYTES,
-    });
-    if (closedTurn.kind !== "ok") {
-      if (isRetryableContextEngineTurnReadFailure(closedTurn.kind)) {
-        params.warn(
-          `[context-engine] durable turn recovery remains queued: ${row.advancement_key}: transcript range is ${closedTurn.kind}`,
-        );
-        continue;
-      }
-      params.warn(
-        `[context-engine] blocked unrecoverable turn advancement: ${row.advancement_key}: transcript range is ${closedTurn.kind}`,
-      );
-      blockContextEngineTurnIntent({
-        boundary: payload.boundary,
-        database: params.database,
-        engineId: params.engineId,
-        failure: closedTurn.kind,
-        isHeartbeat: payload.isHeartbeat,
-        ownerPluginId: params.ownerPluginId,
-      });
-      continue;
-    }
-    enqueueContextEngineTurnCommit({
-      database: params.database,
-      engineId: params.engineId,
-      ownerPluginId: params.ownerPluginId,
-      payload: {
-        boundary: payload.boundary,
-        isHeartbeat: payload.isHeartbeat,
-        messages: closedTurn.messages,
-        runtimeContext: payload.runtimeContext,
+    advanceAcceptedContextEngineTurn(
+      params,
+      payload,
+      {
+        maxEvents: RECOVERED_TURN_MAX_EVENTS,
+        maxBytes: RECOVERED_TURN_MAX_BYTES,
       },
-    });
+      (kind) =>
+        params.warn(
+          isRetryableContextEngineTurnReadFailure(kind)
+            ? `[context-engine] durable turn recovery remains queued: ${row.advancement_key}: transcript range is ${kind}`
+            : `[context-engine] blocked unrecoverable turn advancement: ${row.advancement_key}: transcript range is ${kind}`,
+        ),
+    );
   }
 }
 
@@ -398,6 +393,9 @@ type ContextEngineTurnOutboxFilter = Readonly<{
 
 /** Durable outbox rows the drain reads and settles through the agent database worker. */
 export type ContextEngineTurnOutboxStore = Readonly<{
+  /** Keep the selected owner through consumption and acknowledgment, outside its writer FIFO. */
+  retain?<T>(operation: () => Promise<T>): Promise<T>;
+  assertReadable?(): void;
   listPendingSessions(
     filter: ContextEngineTurnOutboxFilter & { sessionId?: string; limit: number },
   ): Promise<string[]>;
@@ -526,6 +524,14 @@ export async function drainContextEngineTurnOutbox(params: {
   onCommitted?: (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]) => void;
   warn: (message: string) => void;
 }): Promise<{ pending: boolean }> {
+  return params.store.retain
+    ? params.store.retain(() => drainRetainedContextEngineTurnOutbox(params))
+    : drainRetainedContextEngineTurnOutbox(params);
+}
+
+async function drainRetainedContextEngineTurnOutbox(
+  params: Parameters<typeof drainContextEngineTurnOutbox>[0],
+): Promise<{ pending: boolean }> {
   const { store } = params;
   const filter = { engineId: params.engineId, ownerPluginId: params.ownerPluginId };
   if (typeof params.engine.commitTurn !== "function") {
@@ -589,6 +595,7 @@ async function commitPendingContextEngineTurn(params: {
       isHeartbeat: payload.isHeartbeat,
       ...(payload.runtimeContext ? { runtimeContext: payload.runtimeContext } : {}),
     };
+    params.store.assertReadable?.();
     const result = await params.engine.commitTurn?.(commonParams);
     if (!result) {
       throw new Error("context engine does not implement commitTurn");
@@ -599,6 +606,7 @@ async function commitPendingContextEngineTurn(params: {
     await params.store.complete(row.advancement_key);
     // Notification is best effort after acknowledgment; its failure must never requeue a commit.
     try {
+      params.store.assertReadable?.();
       params.onCommitted?.(commonParams);
     } catch (error) {
       params.warn(

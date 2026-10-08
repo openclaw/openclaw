@@ -5,7 +5,10 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readActiveMemoryConfig } from "./config.js";
 import {
@@ -25,6 +28,18 @@ type ActiveRecallRunEntry = {
 };
 const activeRecallRuns = new Map<string, ActiveRecallRunEntry>();
 const timeoutCircuitBreaker = new Map<string, CircuitBreakerEntry>();
+type MemoryAudience = NonNullable<OpenClawPluginToolContext["memoryAudience"]>;
+
+export function buildMemoryAudienceCacheIdentity(audience: MemoryAudience | undefined): string {
+  if (!audience) {
+    return "none";
+  }
+  return JSON.stringify(
+    audience.kind === "owner-private"
+      ? [audience.kind, audience.agentId]
+      : [audience.kind, audience.agentId, audience.sessionKey, audience.sessionId],
+  );
+}
 
 export function buildCircuitBreakerKey(agentId: string, provider?: string, model?: string): string {
   return `${agentId}:${provider ?? "unknown"}/${model ?? "unknown"}`;
@@ -155,6 +170,7 @@ export function buildCacheKey(params: {
   sessionId?: string;
   query: string;
   authorityFingerprint: string;
+  memoryAudience?: MemoryAudience;
   memorySlot?: string;
   activeProjectKeys?: string[];
   modelProviderId?: string;
@@ -168,6 +184,7 @@ export function buildCacheKey(params: {
       JSON.stringify({
         query: params.query,
         authorityFingerprint: params.authorityFingerprint,
+        memoryAudience: buildMemoryAudienceCacheIdentity(params.memoryAudience),
         memorySlot: params.memorySlot,
         activeProjectKeys: [...(params.activeProjectKeys ?? [])].toSorted(),
         modelProviderId: params.modelProviderId,
@@ -186,11 +203,7 @@ export function getCachedResult(cacheKey: string): ActiveRecallResult | undefine
     return undefined;
   }
   const now = asDateTimestampMs(Date.now());
-  if (
-    now === undefined ||
-    asDateTimestampMs(cached.expiresAt) === undefined ||
-    cached.expiresAt <= now
-  ) {
+  if (now === undefined || cached.expiresAt <= now) {
     activeRecallCache.delete(cacheKey);
     return undefined;
   }
@@ -236,17 +249,14 @@ function sweepExpiredCacheEntries(now = asDateTimestampMs(Date.now())): void {
     return;
   }
   for (const [cacheKey, cached] of activeRecallCache.entries()) {
-    if (asDateTimestampMs(cached.expiresAt) === undefined || cached.expiresAt <= now) {
+    if (cached.expiresAt <= now) {
       activeRecallCache.delete(cacheKey);
     }
   }
 }
 
 export function toSingleLineLogValue(value: string): string {
-  const singleLine = value
-    .replace(/[\r\n\t]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const singleLine = value.replace(/\s+/g, " ").trim();
   return singleLine.length > MAX_LOG_VALUE_CHARS
     ? `${truncateUtf16Safe(singleLine, MAX_LOG_VALUE_CHARS)}...`
     : singleLine;

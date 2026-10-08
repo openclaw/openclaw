@@ -121,12 +121,7 @@ internal class SystemAgentChatController(
           access = nextAccess,
           input = "",
           sending = false,
-          expectsSensitiveReply =
-            if (nextAccess == SystemAgentChatAccess.CheckingGateway) {
-              it.expectsSensitiveReply
-            } else {
-              false
-            },
+          expectsSensitiveReply = nextAccess == SystemAgentChatAccess.CheckingGateway && it.expectsSensitiveReply,
           errorText =
             when {
               nextAccess == SystemAgentChatAccess.CheckingGateway -> it.errorText
@@ -217,14 +212,7 @@ internal class SystemAgentChatController(
     dismissedQuestionId: String? = null,
   ) {
     val current = state.value
-    if (
-      current.access != SystemAgentChatAccess.Ready ||
-      current.sending ||
-      current.errorText != null ||
-      current.handoff != null
-    ) {
-      return
-    }
+    if (!current.canSend()) return
     val gateway = access()
     if (gateway.toChatAccess() != SystemAgentChatAccess.Ready || gateway.gatewayId != activeGatewayId) {
       refresh()
@@ -251,22 +239,16 @@ internal class SystemAgentChatController(
         )
       }
     val admitted =
-      lease.commitIfCurrent {
-        if (!isCurrent(requestGeneration)) return@commitIfCurrent
-        _state.update {
-          it.copy(
-            messages = if (localMessage == null) it.messages else it.messages + localMessage,
-            input = "",
-            sending = true,
-            dismissedQuestionIds = it.dismissedQuestionIds + listOfNotNull(dismissedQuestionId),
-            retiredQuestionIds = retired,
-          )
-        }
+      commitRequestState(requestGeneration, lease) {
+        it.copy(
+          messages = if (localMessage == null) it.messages else it.messages + localMessage,
+          input = "",
+          sending = true,
+          dismissedQuestionIds = it.dismissedQuestionIds + listOfNotNull(dismissedQuestionId),
+          retiredQuestionIds = retired,
+        )
       }
-    if (!admitted) {
-      markRouteChanged(requestGeneration)
-      return
-    }
+    if (!admitted) return
     if (!isCurrent(requestGeneration)) return
 
     requestJob =
@@ -284,61 +266,61 @@ internal class SystemAgentChatController(
             markRouteChanged(requestGeneration)
             return@launch
           }
-          val result = parseResult(json.parseToJsonElement(response).jsonObject)
+          val result = json.parseToJsonElement(response).jsonObject
+          val reply = result["reply"]?.jsonPrimitive?.contentOrNull ?: ""
+          val action = result["action"]?.jsonPrimitive?.contentOrNull ?: "none"
+          val sensitive = result["sensitive"]?.jsonPrimitive?.booleanOrNull
+          val agentId = result["agentId"]?.jsonPrimitive?.contentOrNull
           if (!isCurrent(requestGeneration)) return@launch
           if (!lease.isCurrent()) {
             markRouteChanged(requestGeneration)
             return@launch
           }
-          val committed =
-            lease.commitIfCurrent {
-              if (!isCurrent(requestGeneration)) return@commitIfCurrent
-              _state.update {
-                it.copy(
-                  messages =
-                    it.messages +
-                      SystemAgentChatMessage(
-                        role = SystemAgentChatMessage.Role.Assistant,
-                        text = result.reply,
-                        question = parseQuestion(result.question),
-                      ),
-                  sending = false,
-                  expectsSensitiveReply = result.sensitive == true,
-                  errorText = null,
-                  handoff = if (result.action == "open-agent") SystemAgentChatHandoff(result.agentId) else null,
-                )
-              }
-            }
-          if (!committed) markRouteChanged(requestGeneration)
+          commitRequestState(requestGeneration, lease) {
+            it.copy(
+              messages =
+                it.messages +
+                  SystemAgentChatMessage(
+                    role = SystemAgentChatMessage.Role.Assistant,
+                    text = reply,
+                    question = parseQuestion(result["question"]),
+                  ),
+              sending = false,
+              expectsSensitiveReply = sensitive == true,
+              errorText = null,
+              handoff = if (action == "open-agent") SystemAgentChatHandoff(agentId) else null,
+            )
+          }
         } catch (err: CancellationException) {
           throw err
         } catch (_: GatewayRequestNotEnqueued) {
           markRouteChanged(requestGeneration)
-        } catch (err: GatewayRequestRejected) {
+        } catch (err: Throwable) {
           if (!isCurrent(requestGeneration)) return@launch
           val message =
-            err.gatewayError.message
-              .trim()
-              .ifEmpty { nativeString("OpenClaw request failed.") }
-          commitRequestError(requestGeneration, lease, message)
-        } catch (_: Throwable) {
-          if (!isCurrent(requestGeneration)) return@launch
-          commitRequestError(requestGeneration, lease, nativeString("OpenClaw request failed."))
+            (err as? GatewayRequestRejected)
+              ?.gatewayError
+              ?.message
+              ?.trim()
+              ?.takeIf(String::isNotEmpty)
+              ?: nativeString("OpenClaw request failed.")
+          commitRequestState(requestGeneration, lease) { it.copy(sending = false, errorText = message) }
         }
       }
   }
 
-  private fun commitRequestError(
+  private fun commitRequestState(
     requestGeneration: Long,
     lease: GatewaySession.RequestLease,
-    message: String,
-  ) {
+    update: (SystemAgentChatState) -> SystemAgentChatState,
+  ): Boolean {
     val committed =
       lease.commitIfCurrent {
         if (!isCurrent(requestGeneration)) return@commitIfCurrent
-        _state.update { it.copy(sending = false, errorText = message) }
+        _state.update(update)
       }
     if (!committed) markRouteChanged(requestGeneration)
+    return committed
   }
 
   private fun invalidateRequest() {
@@ -364,63 +346,20 @@ internal class SystemAgentChatController(
     }
   }
 
-  private data class Result(
-    val reply: String,
-    val action: String,
-    val sensitive: Boolean?,
-    val agentId: String?,
-    val question: JsonElement?,
-  )
-
-  private fun parseResult(root: JsonObject): Result =
-    Result(
-      reply = root["reply"]?.jsonPrimitive?.contentOrNull ?: "",
-      action = root["action"]?.jsonPrimitive?.contentOrNull ?: "none",
-      sensitive = root["sensitive"]?.jsonPrimitive?.booleanOrNull,
-      agentId = root["agentId"]?.jsonPrimitive?.contentOrNull,
-      question = root["question"],
-    )
-
   private fun parseQuestion(value: JsonElement?): SystemAgentChatQuestion? {
     val root = value as? JsonObject ?: return null
-    val header =
-      root["header"]
-        ?.jsonPrimitive
-        ?.contentOrNull
-        ?.trim()
-        .orEmpty()
-    val question =
-      root["question"]
-        ?.jsonPrimitive
-        ?.contentOrNull
-        ?.trim()
-        .orEmpty()
+    val header = root.trimmedString("header").orEmpty()
+    val question = root.trimmedString("question").orEmpty()
     val options = root["options"] as? JsonArray ?: return null
     if (header.isEmpty() || question.isEmpty() || options.size !in 2..4) return null
     val parsed =
       options.map { element ->
         val option = element as? JsonObject ?: return null
-        val label =
-          option["label"]
-            ?.jsonPrimitive
-            ?.contentOrNull
-            ?.trim()
-            .orEmpty()
-        if (label.isEmpty()) return null
+        val label = option.trimmedString("label") ?: return null
         SystemAgentChatQuestionOption(
           label = label,
-          description =
-            option["description"]
-              ?.jsonPrimitive
-              ?.contentOrNull
-              ?.trim()
-              ?.ifEmpty { null },
-          reply =
-            option["reply"]
-              ?.jsonPrimitive
-              ?.contentOrNull
-              ?.trim()
-              ?.ifEmpty { null },
+          description = option.trimmedString("description"),
+          reply = option.trimmedString("reply"),
           recommended = option["recommended"]?.jsonPrimitive?.booleanOrNull == true,
         )
       }
@@ -430,11 +369,21 @@ internal class SystemAgentChatController(
   }
 }
 
-private fun SystemAgentChatState.canAnswer(message: SystemAgentChatMessage): Boolean =
+private fun JsonObject.trimmedString(name: String): String? =
+  this[name]
+    ?.jsonPrimitive
+    ?.contentOrNull
+    ?.trim()
+    ?.ifEmpty { null }
+
+private fun SystemAgentChatState.canSend(): Boolean =
   access == SystemAgentChatAccess.Ready &&
     !sending &&
     errorText == null &&
-    handoff == null &&
+    handoff == null
+
+private fun SystemAgentChatState.canAnswer(message: SystemAgentChatMessage): Boolean =
+  canSend() &&
     message.question != null &&
     message.id !in dismissedQuestionIds &&
     message.id !in retiredQuestionIds

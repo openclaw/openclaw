@@ -1,5 +1,3 @@
-// Gateway HTTP server routes control UI, OpenAI-compatible APIs, plugin HTTP
-// surfaces, hooks, readiness, auth, and WebSocket upgrades.
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -23,6 +21,7 @@ import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
+import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../worker/node-bundle-install-protocol.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -30,13 +29,13 @@ import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./cont
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import { CONTROL_UI_IMAGE_HTTP_ROUTES } from "./control-ui-image-http-routes.js";
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
-import { createControlUiPublicSessionRoute } from "./control-ui-public-session.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
   classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
+import { createControlUiSessionRoutes } from "./control-ui-session-routes.js";
 import { isControlUiSharePath } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
@@ -46,6 +45,7 @@ import {
   classifyNodeWorkspaceTransferPath,
   classifyWorkerGatewayPath,
   classifyWorkerBootstrapArtifactTransferPath,
+  WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH,
 } from "./gateway-http-route-contracts.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import {
@@ -68,6 +68,7 @@ import {
 } from "./provider-browser-auth.js";
 import type { ControlUiRootState } from "./server-control-ui-root.js";
 import {
+  getNativeHookRelayModule,
   getControlUiModule,
   getControlUiPluginAssetsModule,
   getCanvasServeModule,
@@ -105,20 +106,20 @@ import {
 import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
-import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
-import { handleNodeWorkerBundleTransferHttpRequest } from "./worker-environments/node-worker-bundle-transfer-http.js";
+import {
+  handleArtifactTransferHttpRequest,
+  type ArtifactTransferHttpCallback,
+} from "./worker-environments/artifact-transfer-http.js";
 import {
   handleNodeWorkspaceTransferHttpRequest,
   type NodeWorkspaceTransferHttpCallback,
 } from "./worker-environments/node-workspace-transfer-http.js";
-import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 
 type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 
-/** Creates the gateway HTTP/HTTPS server and ordered request-stage router. */
 export function createGatewayHttpServer(opts: {
   /** Pre-bound listener supplied by the internal test transport. */
   testListener?: HttpServer;
@@ -175,7 +176,7 @@ export function createGatewayHttpServer(opts: {
   const controlUiRouteBasePath =
     controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
   const pluginAssetRoot = controlUiPluginAssetRoot(controlUiRouteBasePath);
-  const publicSessionRoute = createControlUiPublicSessionRoute();
+  const publicSessionRoute = createControlUiSessionRoutes(opts);
   const handleServerRequest = (
     req: IncomingMessage,
     res: ServerResponse,
@@ -200,6 +201,7 @@ export function createGatewayHttpServer(opts: {
     opts.testListener ??
     (opts.tlsOptions ? createHttpsServer(opts.tlsOptions) : createHttpServer());
   httpServer.on("request", handleServerRequest);
+  httpServer.once("close", () => publicSessionRoute.dispose());
   // Node otherwise sends interim/expectation responses before application admission.
   httpServer.on("checkContinue", (req, res) => handleServerRequest(req, res, "continue"));
   httpServer.on("checkExpectation", (req, res) => handleServerRequest(req, res, "reject"));
@@ -373,14 +375,9 @@ export function createGatewayHttpServer(opts: {
           root: controlUiRoot,
         }) ?? false;
       const handleStandaloneControlUiRequest = async () => {
-        if (!controlUiEnabled) {
+        if (!controlUiEnabled || !(await handleControlUiRequest())) {
           respondNotFound(res);
-          return true;
         }
-        if (await handleControlUiRequest()) {
-          return true;
-        }
-        respondNotFound(res);
         return true;
       };
       const requestStages: GatewayHttpRequestStage[] = [
@@ -415,34 +412,38 @@ export function createGatewayHttpServer(opts: {
         return true;
       });
 
+      const transferRequest = {
+        req,
+        res,
+        clientIp: ingressAttribution.rateLimit.subject.key,
+        rateLimiter: joinRateLimiter,
+      };
+      addAdmittedStage(scopedRequestPath.startsWith("/__openclaw__/native-hook"), async () =>
+        (await getNativeHookRelayModule()).handleNativeHookRelayHttpRequest(transferRequest),
+      );
       addAdmittedStage(
         classifyWorkerBootstrapArtifactTransferPath(scopedRequestPath) !== "outside",
         () =>
-          handleWorkerBootstrapArtifactTransferHttpRequest({
-            req,
-            res,
-            clientIp: ingressAttribution.rateLimit.subject.key,
-            rateLimiter: joinRateLimiter,
+          handleArtifactTransferHttpRequest({
+            classifyPath: classifyWorkerBootstrapArtifactTransferPath,
+            routePrefix: `${WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH}/artifacts/`,
+            ...transferRequest,
             callback: opts.handleWorkerBootstrapArtifactTransferRequest,
           }),
       );
 
       addAdmittedStage(classifyNodeWorkerBundleTransferPath(scopedRequestPath) !== "outside", () =>
-        handleNodeWorkerBundleTransferHttpRequest({
-          req,
-          res,
-          clientIp: ingressAttribution.rateLimit.subject.key,
-          rateLimiter: joinRateLimiter,
+        handleArtifactTransferHttpRequest({
+          classifyPath: classifyNodeWorkerBundleTransferPath,
+          routePrefix: `${NODE_WORKER_BUNDLE_TRANSFER_PATH}/bundles/`,
+          ...transferRequest,
           callback: opts.handleNodeWorkerBundleTransferRequest,
         }),
       );
 
       addAdmittedStage(classifyNodeWorkspaceTransferPath(scopedRequestPath) !== "outside", () =>
         handleNodeWorkspaceTransferHttpRequest({
-          req,
-          res,
-          clientIp: ingressAttribution.rateLimit.subject.key,
-          rateLimiter: joinRateLimiter,
+          ...transferRequest,
           callback: opts.handleNodeWorkspaceTransferRequest,
         }),
       );
@@ -556,16 +557,13 @@ export function createGatewayHttpServer(opts: {
         pathname: scopedRequestPath,
       });
       const focusDocument = isControlUiFocusPath(scopedRequestPath, controlUiBasePath);
-      const publicSessionPath = publicSessionRoute.matches(
-        scopedRequestPath,
-        controlUiRouteBasePath,
-      );
+      const publicSessionPath = publicSessionRoute.matches(scopedRequestPath, req.url);
       addRequestStage(!controlUiEnabled && publicSessionPath, () => publicSessionRoute.reject(res));
       addAdmittedStage(controlUiEnabled && publicSessionPath, () =>
         publicSessionRoute.serve({
+          ...routeAuth,
           req,
           res,
-          basePath: controlUiRouteBasePath,
           config: configSnapshot,
           ingress: ingressAttribution,
         }),
@@ -696,7 +694,12 @@ export function createGatewayHttpServer(opts: {
                 parseControlUiResourcePath(route, scopedRequestPath, controlUiRouteBasePath)
                   .matched,
             ),
-          async () => (await loadHandler())(req, res, controlUiRouteOptions),
+          async () =>
+            (await loadHandler())(req, res, {
+              ...controlUiRouteOptions,
+              sessionRowProjectionOwner:
+                opts.getGatewayRequestContext?.()?.sessionRowProjectionOwner,
+            }),
         );
       }
       // Authenticated media also serves non-browser clients when dashboard hosting is disabled.
@@ -744,5 +747,3 @@ export function createGatewayHttpServer(opts: {
 
   return httpServer;
 }
-
-export { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";

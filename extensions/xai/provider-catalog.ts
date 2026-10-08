@@ -30,14 +30,7 @@ const XAI_GROK_OAUTH_MODELS_CACHE_TTL_MS = 60_000;
 const XAI_GROK_OAUTH_REASONING_MODEL_IDS = new Set(["grok-composer-2.5-fast"]);
 
 export function isXaiGrokProxyBaseUrl(baseUrl: string | undefined): boolean {
-  if (!baseUrl) {
-    return false;
-  }
-  try {
-    return new URL(baseUrl).href.replace(/\/+$/u, "") === XAI_GROK_OAUTH_BASE_URL;
-  } catch {
-    return false;
-  }
+  return URL.parse(baseUrl ?? "")?.href.replace(/\/+$/u, "") === XAI_GROK_OAUTH_BASE_URL;
 }
 
 export function buildXaiProvider(
@@ -76,17 +69,12 @@ export async function buildLiveXaiProvider(params: {
   });
 }
 
-function resolveXaiOauthMetadataFallback(modelId: string) {
-  if (modelId === "grok-build") {
-    return resolveXaiCatalogEntry("grok-build-0.1");
-  }
-  return resolveXaiCatalogEntry(modelId);
-}
-
-function isXaiOAuthResponsesModel(row: unknown, fallback: ModelDefinitionConfig | undefined) {
-  const modelId =
-    readLiveModelCatalogStringField(row, "id") ?? readLiveModelCatalogStringField(row, "model");
-  if (modelId && (XAI_IMAGE_MODELS as readonly string[]).includes(modelId)) {
+function isXaiOAuthResponsesModel(
+  row: unknown,
+  modelId: string,
+  fallback: ModelDefinitionConfig | undefined,
+) {
+  if ((XAI_IMAGE_MODELS as readonly string[]).includes(modelId)) {
     return false;
   }
   const backend =
@@ -110,8 +98,8 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
   if (!modelId) {
     return undefined;
   }
-  const fallback = resolveXaiOauthMetadataFallback(modelId);
-  if (!isXaiOAuthResponsesModel(row, fallback)) {
+  const fallback = resolveXaiCatalogEntry(modelId === "grok-build" ? "grok-build-0.1" : modelId);
+  if (!isXaiOAuthResponsesModel(row, modelId, fallback)) {
     return undefined;
   }
   const contextWindow =

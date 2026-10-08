@@ -44,9 +44,9 @@ import {
   commitMainSessionRecovery,
   type MainSessionRecoveryStoreTarget,
 } from "./main-session-recovery-store.js";
-import { dispatchRestartRecoveryWithinCapacity } from "./main-session-restart-dispatch-capacity.js";
 import { settleAcceptedRestartRecovery } from "./main-session-restart-dispatch-settlement.js";
 import {
+  dispatchRestartRecoveryUntilStarted,
   normalizeRestartRecoveryTerminalStatus,
   probeRestartRecoveryTerminalStatus,
 } from "./main-session-restart-dispatch-start.js";
@@ -89,22 +89,18 @@ export function requiresRestartRecoveryMessageActionAuthority(entry: SessionEntr
 }
 
 function buildResumeMessage(
-  pendingFinalDeliveryText?: string | null,
+  pendingFinalDeliveryText: string,
   forceRestartSafeTools?: boolean,
   childRecoveryRoster?: string,
 ): string {
-  const sanitizedPendingText =
-    typeof pendingFinalDeliveryText === "string"
-      ? sanitizePendingFinalDeliveryText(pendingFinalDeliveryText)
-      : "";
+  const sanitizedPendingText = sanitizePendingFinalDeliveryText(pendingFinalDeliveryText);
   const instructions = forceRestartSafeTools
     ? `${RESTART_RECOVERY_RESUME_MESSAGE}\n\n${RESTART_SAFE_TOOLS_NOTICE}`
     : RESTART_RECOVERY_RESUME_MESSAGE;
   const base = childRecoveryRoster ? `${instructions}\n\n${childRecoveryRoster}` : instructions;
-  if (sanitizedPendingText) {
-    return `${base}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`;
-  }
-  return base;
+  return sanitizedPendingText
+    ? `${base}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`
+    : base;
 }
 
 type MainSessionResumeResult = "started" | "settled" | "skipped" | "failed";
@@ -178,7 +174,6 @@ type ResumeMainSessionParams = {
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
-  recoveryCapacity?: Parameters<typeof dispatchRestartRecoveryWithinCapacity>[0]["capacity"];
 };
 
 export async function resumeMainSession(
@@ -374,7 +369,6 @@ async function resumeMainSessionWithinAdmission(
           (harnessCompletion &&
             (entry.lifecycleRevision !== harnessCompletion.lifecycleRevision ||
               entry.restartRecoveryHarnessCompletion?.taskId !== harnessCompletion.taskId)) ||
-          entry.status !== "running" ||
           entry.abortedLastRun !== true ||
           normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== claimedRunId ||
           normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
@@ -404,7 +398,6 @@ async function resumeMainSessionWithinAdmission(
       }
       const current = rollback?.entry;
       return current?.sessionId === params.entry.sessionId &&
-        current.status === "running" &&
         current.abortedLastRun === true &&
         !current.mainRestartRecovery?.reservation &&
         !current.mainRestartRecovery?.tombstone
@@ -471,25 +464,36 @@ async function resumeMainSessionWithinAdmission(
     if (params.forceRestartSafeTools) {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
     }
+    if (!params.recoveryAdmission.beginDispatch()) {
+      await rollbackReservation("cancel_reservation");
+      return "skipped";
+    }
     dispatchStarted = true;
     let dispatchSettled = false;
     let stopTyping: (() => void) | undefined;
-    const dispatchOutcome = await dispatchRestartRecoveryWithinCapacity({
+    const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
       agentParams,
-      capacity: params.recoveryCapacity,
-      beginDispatch: params.recoveryAdmission.beginDispatch,
       gatewayRuntime: params.gatewayRuntime,
+      ...(sourceRunId && params.entry.restartRecoveryOperatorSource
+        ? {
+            restartRecoveryOperatorTarget: {
+              ...target,
+              sessionId: params.entry.sessionId,
+              sourceRunId,
+              recoveryRunId,
+            },
+          }
+        : {}),
+      assertAdmissionCurrent: () => {
+        if (params.shouldContinue?.() === false || !taskRemainsOwed()) {
+          throw new Error("Restart recovery admission is no longer current.");
+        }
+      },
       onSettled: () => {
         dispatchSettled = true;
         stopTyping?.();
       },
-      shouldContinue: () => params.shouldContinue?.() !== false,
     });
-    if (!dispatchOutcome) {
-      dispatchStarted = false;
-      await rollbackReservation("cancel_reservation");
-      return "skipped";
-    }
     ({ dispatchAccepted, executionStarted, preStartAbortAttempted, preStartAbortConfirmed } =
       dispatchOutcome.observation);
     if (dispatchOutcome.kind === "failed") {

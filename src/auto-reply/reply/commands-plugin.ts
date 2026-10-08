@@ -17,17 +17,14 @@ import {
   type PluginCommandExecutionReplyOptions,
 } from "../../plugins/plugin-command-runtime.js";
 import { handleCompactCommand } from "./commands-compact.js";
-import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
+import type { CommandHandler } from "./commands-types.js";
 
 /**
  * Handle plugin-registered commands.
  * Returns a result if a plugin command was matched and executed,
  * or null to continue to the next handler.
  */
-export const handlePluginCommand: CommandHandler = async (
-  params,
-  allowTextCommands,
-): Promise<CommandHandlerResult | null> => {
+export const handlePluginCommand: CommandHandler = async (params, allowTextCommands) => {
   const { command, cfg, agentId: targetAgentId } = params;
   if (!allowTextCommands) {
     return null;
@@ -131,12 +128,10 @@ export const handlePluginCommand: CommandHandler = async (
         }
       : {}),
   });
-  const shouldContinue = result.continueAgent === true;
-  const { continueAgent: _continueAgent, ...reply } = result;
-  void _continueAgent;
+  const { continueAgent, ...reply } = result;
 
   return {
-    shouldContinue,
+    shouldContinue: continueAgent === true,
     reply: Object.keys(reply).length > 0 ? reply : undefined,
   };
 };

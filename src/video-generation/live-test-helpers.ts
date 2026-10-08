@@ -1,14 +1,7 @@
-// Video live test helpers resolve live provider test settings from environment.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  parseLiveCsvFilter,
-  parseProviderModelMap,
-  resolveConfiguredLiveProviderModels,
-  resolveLiveAuthStore,
-} from "../media-generation/live-test-helpers.js";
-
-export { parseProviderModelMap };
+import { resolveConfiguredLiveProviderModels } from "../media-generation/live-test-helpers.js";
+export { resolveLiveAuthStore as resolveLiveVideoAuthStore } from "../media-generation/live-test-helpers.js";
 
 // Default provider/model matrix for video live tests. Env/config filters can
 // override this without editing the live test source.
@@ -60,10 +53,6 @@ export function resolveLiveVideoResolution(params: {
   return "480P";
 }
 
-export function parseVideoProviderFilter(raw?: string): Set<string> | null {
-  return parseLiveCsvFilter(raw);
-}
-
 export function resolveConfiguredLiveVideoModels(cfg: OpenClawConfig): Map<string, string> {
   return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.mediaModels?.video);
 }
@@ -110,11 +99,4 @@ export function canRunBufferBackedImageToVideoLiveLane(params: {
     return params.modelRef.includes(TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL);
   }
   return true;
-}
-
-export function resolveLiveVideoAuthStore(params: {
-  requireProfileKeys: boolean;
-  hasLiveKeys: boolean;
-}) {
-  return resolveLiveAuthStore(params);
 }

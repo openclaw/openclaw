@@ -4,6 +4,108 @@ import Testing
 
 @Suite(.serialized)
 struct GatewayLaunchAgentManagerTests {
+    @Test(arguments: [
+        "definition",
+        "absent",
+        "legacy",
+        "retained-bun",
+        "restore",
+        "restore-without-runtime",
+        "restore-with-conflicting-cli",
+    ])
+    func `bundled installs carry the CLI observation across the final custody check`(_ mode: String) async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        await TestIsolation.withIsolatedState(launchAgentHomeDirectory: home) {
+            let runtime = BundledRuntime(root: home.appendingPathComponent("runtime/build"))
+            let definition = mode == "definition" ? #", "definition":"service/\"one\"""# : ""
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayloads(["""
+            {"service":{"revision":"not-the-pin-revision",
+            "runtimeIntent":{"status":"known","revision":"observed-pin"\(definition)}}}
+            """])
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+            let retained = ["legacy", "retained-bun"].contains(mode)
+            let restoring = mode.hasPrefix("restore")
+                ? GatewayLaunchAgentManager.InstalledServiceCLI(
+                    prefix: ["/fixture/node", "/fixture/old package/openclaw.mjs"], sqliteLibrary: nil) : nil
+            let legacy: GatewayLaunchAgentManager.InstalledServiceCLI? = retained
+                ? .init(
+                    prefix: [
+                        mode == "legacy" ? "/fixture/node" : "/fixture/runtime/old/bin/bun",
+                        "/fixture/openclaw.mjs",
+                    ],
+                    sqliteLibrary: nil) : nil
+            let arguments = ["install", "--force"] + (restoring == nil ? [] : ["--runtime", "node"])
+            let rejected = ["restore-without-runtime", "restore-with-conflicting-cli"].contains(mode)
+            let error = await GatewayLaunchAgentManager.runDaemonCommand(
+                arguments,
+                runtime: ["retained-bun", "restore-without-runtime"].contains(mode) ? nil : runtime,
+                installedCLI: mode == "restore-with-conflicting-cli" ? restoring : legacy,
+                restoring: restoring,
+                checkCurrent: {
+                    #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().count ==
+                        (retained ? 0 : 1))
+                })
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            if rejected {
+                #expect(error?.contains("Reinstall OpenClaw.app") == true)
+                #expect(calls.isEmpty)
+                return
+            }
+            #expect(error == nil)
+            if retained {
+                #expect(calls == [["install", "--force"]])
+                #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                    .first.map { Array($0.prefix(2)) } == legacy?.prefix)
+            } else {
+                let expected = mode == "definition"
+                    ? #"{"definition":"service/\"one\"","revision":"observed-pin"}"#
+                    : #"{"definition":null,"revision":"observed-pin"}"#
+                let restoration = restoring == nil ? [] : [
+                    "--restore-service-cli",
+                    #"{"entrypoint":"/fixture/old package/openclaw.mjs","executable":"/fixture/node","sqliteLibrary":null}"#,
+                ]
+                #expect(calls == [
+                    ["status", "--deep", "--json", "--no-probe"],
+                    arguments + restoration + ["--expected-runtime-pin", expected],
+                ])
+                let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                #expect(commands.allSatisfy { Array($0.prefix(2)) == runtime.cliCommand })
+            }
+        }
+    }
+
+    @Test(arguments: [
+        #"{"service":{"runtimeIntent":{"status":"unknown"}}}"#,
+        #"{"ok":false,"error":"inspection failed"}"#,
+        #"{"service":{"runtimeIntent":{"status":"known","revision":42}}}"#,
+    ])
+    func `untrusted runtime intent blocks bundled installation`(_ payload: String) async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        await TestIsolation.withIsolatedState(launchAgentHomeDirectory: home) {
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(payload)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+            let error = await GatewayLaunchAgentManager.runDaemonCommand(
+                ["install", "--force"], runtime: BundledRuntime(root: home.appendingPathComponent("runtime/build")))
+            #expect(error == "Gateway service or runtime pin changed before installation. " +
+                "The newer selection was preserved; inspect it before retrying.")
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "--deep", "--json", "--no-probe"],
+            ])
+        }
+    }
+
     @Test func `attach-only marker belongs to the selected state directory`() {
         let stateDirectory = URL(fileURLWithPath: "/tmp/openclaw-elevation-state", isDirectory: true)
 
@@ -374,6 +476,8 @@ struct GatewayLaunchAgentManagerTests {
         try """
         # Generated by OpenClaw. Do not edit while the gateway service is installed.
         export CUSTOM_GATEWAY_TOKEN='custom-token'
+        export MULTILINE_FIXTURE='first line
+        second line'\\''s literal $VALUE and `command`'
         export OPENCLAW_GATEWAY_PASSWORD='service'\\''pass'
         export OPENCLAW_GATEWAY_TOKEN=' service-token '
 
@@ -399,6 +503,7 @@ struct GatewayLaunchAgentManagerTests {
             generatedEnvironmentFileURL: environmentFileURL,
             generatedEnvironmentWrapperURL: wrapperURL))
         #expect(snapshot.environment["CUSTOM_GATEWAY_TOKEN"] == "custom-token")
+        #expect(snapshot.environment["MULTILINE_FIXTURE"] == "first line\nsecond line's literal $VALUE and `command`")
         #expect(snapshot.token == "service-token")
         #expect(snapshot.password == "service'pass")
         #expect(snapshot.port == 18789)

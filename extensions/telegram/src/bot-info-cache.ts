@@ -13,17 +13,11 @@ type TelegramBotInfoCacheState = {
   botInfo: TelegramBotInfo;
 };
 
-type CachedTelegramBotInfo = {
-  botInfo: TelegramBotInfo;
-  fetchedAt: string;
-};
+type CachedTelegramBotInfo = Pick<TelegramBotInfoCacheState, "botInfo" | "fetchedAt">;
 
 function fingerprintFromToken(botToken?: string): string | null {
   const trimmed = botToken?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return fingerprintTelegramBotToken(trimmed);
+  return trimmed ? fingerprintTelegramBotToken(trimmed) : null;
 }
 
 function openBotInfoCacheStore() {

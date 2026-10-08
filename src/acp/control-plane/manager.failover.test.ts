@@ -89,15 +89,32 @@ describe("AcpSessionManager backend failover", () => {
     expect(f.readMeta().backend).toBe("primary");
   });
 
-  it("fails over when the primary backend is registered but unavailable", async () => {
-    const f = fixture(
-      new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "primary backend unavailable"),
-    );
-    await f.turn("unavailable");
-    expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("primary");
-    expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("fallback");
-    expect(f.fallback.runTurn).toHaveBeenCalledOnce();
-  });
+  it.each(["available", "unavailable"])(
+    "settles primary-backend unavailability with an %s fallback",
+    async (fallback) => {
+      const f = fixture(
+        new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "primary backend unavailable"),
+      );
+      if (fallback === "unavailable") {
+        f.fallback.ensureSession.mockRejectedValue(
+          new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "fallback backend unavailable"),
+        );
+      }
+      const turn = f.turn("unavailable");
+      if (fallback === "available") {
+        await expect(turn).resolves.toBeUndefined();
+        expect(f.fallback.runTurn).toHaveBeenCalledOnce();
+      } else {
+        await expect(turn).rejects.toMatchObject({
+          code: "ACP_BACKEND_UNAVAILABLE",
+          message: expect.stringMatching(/All ACP backends failed \(2\)/),
+        });
+        expect(f.fallback.runTurn).not.toHaveBeenCalled();
+      }
+      expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("primary");
+      expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("fallback");
+    },
+  );
 
   it("does not fail over after prompt submission even when no output was emitted", async () => {
     const f = fixture();

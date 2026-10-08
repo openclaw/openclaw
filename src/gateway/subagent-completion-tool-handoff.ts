@@ -22,7 +22,7 @@ const handoffs = resolveGlobalMap<string, SubagentCompletionToolHandoffEntry>(
 );
 
 function normalizeRegistration(
-  params: SubagentCompletionToolHandoffRegistration,
+  params: Partial<SubagentCompletionToolHandoffRegistration>,
 ): SubagentCompletionToolHandoffRegistration | undefined {
   const sourceSessionKey = normalizeOptionalString(params.sourceSessionKey);
   const sourceSessionId = normalizeOptionalString(params.sourceSessionId);
@@ -105,24 +105,14 @@ export function consumeSubagentCompletionToolHandoff(params: {
   nowMs?: number;
 }): TrustedSubagentCompletionHandoff | undefined {
   const handoffId = normalizeOptionalString(params.handoffId);
-  const sourceSessionKey = normalizeOptionalString(params.sourceSessionKey);
-  const sourceSessionId = normalizeOptionalString(params.sourceSessionId);
-  const targetSessionKey = normalizeOptionalString(params.targetSessionKey);
-  const targetSessionId = normalizeOptionalString(params.targetSessionId);
-  const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
+  const registration = normalizeRegistration(params);
   const provider = normalizeOptionalString(params.provider)?.toLowerCase();
   const model = normalizeOptionalString(params.model);
-  if (
-    !handoffId ||
-    !sourceSessionKey ||
-    !targetSessionKey ||
-    !targetSessionId ||
-    !idempotencyKey ||
-    !provider ||
-    !model
-  ) {
+  if (!handoffId || !registration || !provider || !model) {
     return undefined;
   }
+  const { sourceSessionKey, sourceSessionId, targetSessionKey, targetSessionId, idempotencyKey } =
+    registration;
   const nowMs = params.nowMs ?? Date.now();
   pruneExpired(nowMs);
   const entry = handoffs.get(handoffId);

@@ -17,7 +17,22 @@ struct WatchExecApprovalIdentityKey: Hashable, Sendable {
     var approvalID: WatchApprovalID.Key
 }
 
+extension WatchExecApprovalIdentityKey {
+    init?(approvalId: String, gatewayStableID: String?) {
+        guard let approvalID = WatchApprovalID.key(approvalId),
+              let gatewayID = WatchGatewayID.key(gatewayStableID)
+        else { return nil }
+        self.init(gatewayID: gatewayID, approvalID: approvalID)
+    }
+}
+
 typealias WatchExecApprovalItem = OpenClawWatchExecApprovalItem
+
+extension WatchExecApprovalItem {
+    var ownerKey: WatchExecApprovalIdentityKey? {
+        WatchExecApprovalIdentityKey(approvalId: self.id, gatewayStableID: self.gatewayStableID)
+    }
+}
 
 struct WatchExecApprovalPromptMessage: Codable, Equatable {
     var approval: WatchExecApprovalItem
@@ -592,26 +607,6 @@ extension WatchAppSnapshotMessage: Codable {
             : localize(.waitingForIPhone)
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case gatewayStatus
-        case gatewayConnected
-        case agentName
-        case agentAvatarURL
-        case agentAvatarText
-        case sessionKey
-        case gatewayStableID
-        case talkStatus
-        case talkEnabled
-        case talkListening
-        case talkSpeaking
-        case pendingApprovalCount
-        case chatItems
-        case chatStatus
-        case sentAtMs
-        case snapshotId
-        case chatDeliveryContext
-    }
-
     private enum LegacyCodingKeys: String, CodingKey {
         case gatewayStatusText, talkStatusText, chatStatusCode, chatStatusText
     }
@@ -638,35 +633,23 @@ extension WatchAppSnapshotMessage: Codable {
         let talkStatusText = try legacy.decodeIfPresent(String.self, forKey: .talkStatusText)
         let chatStatusCode = try legacy.decodeIfPresent(String.self, forKey: .chatStatusCode)
         let chatStatusText = try legacy.decodeIfPresent(String.self, forKey: .chatStatusText)
-        if let gatewayStatus = try? container.decode(
-            OpenClawWatchAppStatus.self,
-            forKey: .gatewayStatus)
+        if let gatewayStatus = OpenClawWatchAppStatus.decode(
+            from: container,
+            forKey: .gatewayStatus,
+            fallbackText: gatewayStatusText)
         {
             self.gatewayStatus = gatewayStatus
-        } else if container.contains(.gatewayStatus),
-                  let gatewayStatusText,
-                  !gatewayStatusText.isEmpty
-        {
-            self.gatewayStatus = OpenClawWatchAppStatus(
-                code: .legacy,
-                verbatim: gatewayStatusText)
         } else {
             self.gatewayStatus = OpenClawWatchAppStatus.decodeLegacyGateway(
                 text: gatewayStatusText,
                 connected: self.gatewayConnected)
         }
-        if let talkStatus = try? container.decode(
-            OpenClawWatchAppStatus.self,
-            forKey: .talkStatus)
+        if let talkStatus = OpenClawWatchAppStatus.decode(
+            from: container,
+            forKey: .talkStatus,
+            fallbackText: talkStatusText)
         {
             self.talkStatus = talkStatus
-        } else if container.contains(.talkStatus),
-                  let talkStatusText,
-                  !talkStatusText.isEmpty
-        {
-            self.talkStatus = OpenClawWatchAppStatus(
-                code: .legacy,
-                verbatim: talkStatusText)
         } else {
             self.talkStatus = OpenClawWatchAppStatus.decodeLegacyTalk(
                 text: talkStatusText,
@@ -778,18 +761,6 @@ struct WatchExecApprovalRecord: Equatable, Identifiable {
 }
 
 extension WatchExecApprovalRecord: Codable {
-    private enum CodingKeys: String, CodingKey {
-        case approval
-        case transport
-        case sourceSentAtMs
-        case updatedAt
-        case isResolving
-        case pendingDecision
-        case activeResolutionAttemptID
-        case status
-        case statusAt
-    }
-
     private enum LegacyCodingKeys: String, CodingKey {
         case statusText
     }

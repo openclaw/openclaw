@@ -1,6 +1,3 @@
-/**
- * Merges media payloads discovered from attempt tool results.
- */
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
@@ -115,26 +112,23 @@ function mergeSelectedToolMedia(
         )
       : mediaUrls;
   const appendOwnedMedia = (nextPayloads: EmbeddedRunPayload[]): EmbeddedRunPayload[] => {
-    const withHostOwnedMedia = !shouldSplitHostOwnedMedia
-      ? nextPayloads
-      : [
-          ...nextPayloads,
-          markReplyPayloadForSourceSuppressionDelivery(
-            buildMediaPayload(hostOwnedMediaUrls, false),
-          ),
-        ];
-    if (!shouldSplitAutoDeliveryMedia) {
-      return withHostOwnedMedia;
+    const owned: EmbeddedRunPayload[] = [];
+    if (shouldSplitHostOwnedMedia) {
+      owned.push(
+        markReplyPayloadForSourceSuppressionDelivery(buildMediaPayload(hostOwnedMediaUrls, false)),
+      );
     }
     // Contract-owned media remains separate from private assistant text and
     // generic tool media so only its explicit provenance bypasses suppression.
-    return [
-      ...withHostOwnedMedia,
-      markReplyPayloadForSourceSuppressionDelivery({
-        ...buildMediaPayload(autoDeliveryOnlyMediaUrls, true),
-        trustedLocalMedia: true,
-      }),
-    ];
+    if (shouldSplitAutoDeliveryMedia) {
+      owned.push(
+        markReplyPayloadForSourceSuppressionDelivery({
+          ...buildMediaPayload(autoDeliveryOnlyMediaUrls, true),
+          trustedLocalMedia: true,
+        }),
+      );
+    }
+    return owned.length ? [...nextPayloads, ...owned] : nextPayloads;
   };
 
   // A transcript mirror is already delivered; every batch observes the same
@@ -143,11 +137,8 @@ function mergeSelectedToolMedia(
     return appendOwnedMedia(payloads);
   }
 
-  if (payloadIndex >= 0) {
-    const payload = payloads.at(payloadIndex);
-    if (!payload) {
-      return payloads;
-    }
+  const payload = payloads[payloadIndex];
+  if (payload) {
     if (
       mergeableMediaUrls.length === 0 &&
       (shouldSplitHostOwnedMedia || shouldSplitAutoDeliveryMedia)
@@ -221,13 +212,9 @@ export function createPendingToolMediaCarry() {
       const projected = allBatches.map((batch) =>
         Object.assign({}, batch, {
           hadMedia: Boolean(batch.toolMediaUrls?.length || batch.toolAutoDeliveryMediaUrls?.length),
-          toolMediaUrls: [
-            ...new Set(
-              batch.toolMediaUrls
-                ?.map((url) => url.trim())
-                .filter((url) => selectedUrls.has(url)) ?? [],
-            ),
-          ],
+          toolMediaUrls: normalizeUniqueTrimmedStringList(batch.toolMediaUrls).filter((url) =>
+            selectedUrls.has(url),
+          ),
         }),
       );
       const owners = new Map<string, ToolMediaBatch>();

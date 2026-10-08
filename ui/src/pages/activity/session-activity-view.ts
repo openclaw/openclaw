@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
+import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
@@ -38,11 +39,10 @@ import { renderSessionActivityPulse } from "./session-activity-pulse.ts";
 import { renderSessionActivitySummary } from "./session-activity-summary.ts";
 import {
   ACTIVITY_TIME_FILTERS,
+  TIME_LABELS,
   projectSessionActivity,
   resolveViewingNow,
   sessionActivityOwner,
-  sessionActivityTimestamp,
-  type ActivityTimeFilter,
   type SessionActivityFilters,
 } from "./session-activity.ts";
 
@@ -61,13 +61,6 @@ type SessionActivityViewProps = {
   onSummaryRetry?: (row: GatewaySessionRow) => void;
 };
 
-const TIME_LABELS: Record<ActivityTimeFilter, string> = {
-  "24h": "activityFeed.time24h",
-  "7d": "activityFeed.time7d",
-  "30d": "activityFeed.time30d",
-  all: "activityFeed.timeAll",
-};
-
 type ActivityPerson = PresenceViewer & { count: number };
 
 function isUnresolvedPerson(person: PresenceViewer): boolean {
@@ -80,8 +73,8 @@ function compactPersonLabel(person: PresenceViewer): string {
     : presenceViewerLabel(person);
 }
 
-function renderPersonAvatar(person: PresenceViewer, showPresence = false) {
-  if (isUnresolvedPerson(person)) {
+function renderPersonAvatar(person: PresenceViewer | null, showPresence = false) {
+  if (!person || isUnresolvedPerson(person)) {
     return html`<span
       class="viewer-avatar viewer-avatar--overflow activity-feed__unknown-avatar"
       aria-hidden="true"
@@ -123,19 +116,26 @@ function setPeopleExpanded(event: Event, expanded: boolean) {
   }
 }
 
-function renderPersonRow(person: ActivityPerson, props: SessionActivityViewProps) {
+function renderPersonRow(
+  person: ActivityPerson | null,
+  props: SessionActivityViewProps,
+  count = person?.count,
+) {
+  const personId = person?.id ?? null;
   return html`<button
     type="button"
     class="session-menu__item activity-feed__people-row"
-    data-activity-person=${person.id}
-    aria-pressed=${String(props.filters.personId === person.id)}
-    @click=${(event: Event) => selectPerson(event, props, person.id)}
+    data-activity-person=${personId ?? ""}
+    aria-pressed=${String(props.filters.personId === personId)}
+    @click=${(event: Event) => selectPerson(event, props, personId)}
   >
     ${renderPersonAvatar(person, true)}
     <span class="activity-feed__people-copy">
-      <span class="activity-feed__people-name">${compactPersonLabel(person)}</span>
+      <span class="activity-feed__people-name"
+        >${person ? compactPersonLabel(person) : t("activityFeed.everyone")}</span
+      >
     </span>
-    <span class="activity-feed__people-count">${person.count}</span>
+    <span class="activity-feed__people-count">${count}</span>
   </button>`;
 }
 
@@ -203,23 +203,7 @@ function renderPeopleControl(
       @wa-hide=${(event: Event) => setPeopleExpanded(event, false)}
     >
       <div class="activity-feed__people-panel">
-        <button
-          type="button"
-          class="session-menu__item activity-feed__people-row"
-          data-activity-person=""
-          aria-pressed=${String(props.filters.personId === null)}
-          @click=${(event: Event) => selectPerson(event, props, null)}
-        >
-          <span
-            class="viewer-avatar viewer-avatar--overflow activity-feed__unknown-avatar"
-            aria-hidden="true"
-            >${icons.users}</span
-          >
-          <span class="activity-feed__people-copy">
-            <span class="activity-feed__people-name">${t("activityFeed.everyone")}</span>
-          </span>
-          <span class="activity-feed__people-count">${totalSessions}</span>
-        </button>
+        ${renderPersonRow(null, props, totalSessions)}
         ${resolved.map((person) => renderPersonRow(person, props))}
         ${
           unresolved.length > 0
@@ -396,20 +380,20 @@ function renderDaySessions(
   props: SessionActivityViewProps,
   day: ReturnType<typeof projectSessionActivity>["days"][number],
 ) {
-  if (props.filters.query || props.filters.personId) {
-    return day.sessions.map((row) => renderSessionLink(props.context, row, props.onSummaryRetry));
-  }
+  const renderRow = (row: GatewaySessionRow) =>
+    renderSessionLink(props.context, row, props.onSummaryRetry);
   // GatewaySessionRow.hasAutomation records that an enabled cron job is bound to the session;
   // grouping must consume that fact directly rather than infer automation from titles or keys.
-  const automation = day.sessions.filter((row) => row.hasAutomation === true);
+  const automation =
+    props.filters.query || props.filters.personId
+      ? []
+      : day.sessions.filter((row) => row.hasAutomation === true);
   if (automation.length < 2) {
-    return day.sessions.map((row) => renderSessionLink(props.context, row, props.onSummaryRetry));
+    return day.sessions.map(renderRow);
   }
   const expanded = props.expandedAutomationDays.has(day.key);
   return html`
-    ${day.sessions
-      .filter((row) => row.hasAutomation !== true)
-      .map((row) => renderSessionLink(props.context, row, props.onSummaryRetry))}
+    ${day.sessions.filter((row) => row.hasAutomation !== true).map(renderRow)}
     <button
       type="button"
       class="activity-feed__session activity-feed__automation-group"
@@ -423,11 +407,7 @@ function renderDaySessions(
         >${icons.chevronRight}</span
       >
     </button>
-    ${
-      expanded
-        ? automation.map((row) => renderSessionLink(props.context, row, props.onSummaryRetry))
-        : nothing
-    }
+    ${expanded ? automation.map(renderRow) : nothing}
   `;
 }
 
@@ -596,7 +576,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         ${props.loading && !props.result ? renderActivityLoading() : nothing}
         ${
           props.result?.activityPulse
-            ? renderSessionActivityPulse(props.result.activityPulse, Date.now(), {
+            ? renderSessionActivityPulse(props.result.activityPulse, props.filters.time, {
                 peopleIncomplete: props.result.peopleIncomplete,
               })
             : nothing

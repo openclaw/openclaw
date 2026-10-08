@@ -354,14 +354,15 @@ openclaw models auth login --provider openrouter --method oauth
 openclaw models auth login --provider openrouter --method api-key
 ```
 
-On verified OpenRouter requests (`https://openrouter.ai/api/v1`), OpenClaw adds
-OpenRouter's documented app-attribution headers:
+On requests to OpenRouter endpoints (`openrouter.ai`), OpenClaw adds OpenRouter's
+documented app-attribution headers. This applies to the bundled `openrouter`
+provider and to custom provider ids whose `baseUrl` points at OpenRouter:
 
-| Header                    | Value                                                                                                  |
-| ------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `HTTP-Referer`            | `https://openclaw.ai`                                                                                  |
-| `X-OpenRouter-Title`      | `OpenClaw`                                                                                             |
-| `X-OpenRouter-Categories` | `cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent` |
+| Header                    | Value                      |
+| ------------------------- | -------------------------- |
+| `HTTP-Referer`            | `https://openclaw.ai`      |
+| `X-OpenRouter-Title`      | `OpenClaw`                 |
+| `X-OpenRouter-Categories` | `personal-agent,cli-agent` |
 
 <Warning>
 If you repoint the OpenRouter provider at some other proxy or base URL, OpenClaw
@@ -397,6 +398,7 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     aliases (`response_cache`, `response_cache_ttl_seconds`,
     `response_cache_clear`) are accepted, as is `responseCacheTtl` /
     `response_cache_ttl` without the `Seconds` suffix.
+    TTL values are truncated and clamped to 1–86400 seconds; non-finite values are ignored.
 
     This is separate from provider prompt caching and from OpenRouter's
     Anthropic `cache_control` markers. It only applies on verified

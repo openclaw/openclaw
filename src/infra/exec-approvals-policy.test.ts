@@ -1,6 +1,7 @@
 // Tests execution approval policy matching and persistence.
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
@@ -19,7 +20,6 @@ let evaluateExecAllowlist: typeof import("./exec-approvals.js").evaluateExecAllo
 let hasDurableExecApproval: typeof import("./exec-approvals.js").hasDurableExecApproval;
 let requireValidExecTarget: typeof import("./exec-approvals.js").requireValidExecTarget;
 let normalizeExecAsk: typeof import("./exec-approvals.js").normalizeExecAsk;
-let normalizeExecHost: typeof import("./exec-approvals.js").normalizeExecHost;
 let normalizeExecMode: typeof import("./exec-approvals.js").normalizeExecMode;
 let normalizeExecTarget: typeof import("./exec-approvals.js").normalizeExecTarget;
 let normalizeExecSecurity: typeof import("./exec-approvals.js").normalizeExecSecurity;
@@ -45,7 +45,6 @@ async function loadActualExecApprovalModules(): Promise<void> {
   hasDurableExecApproval = execApprovals.hasDurableExecApproval;
   requireValidExecTarget = execApprovals.requireValidExecTarget;
   normalizeExecAsk = execApprovals.normalizeExecAsk;
-  normalizeExecHost = execApprovals.normalizeExecHost;
   normalizeExecMode = execApprovals.normalizeExecMode;
   normalizeExecTarget = execApprovals.normalizeExecTarget;
   normalizeExecSecurity = execApprovals.normalizeExecSecurity;
@@ -90,7 +89,7 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
     globalExecConfig: {
       ask: "off",
     },
-    configPath: "agents.list.runner.tools.exec",
+    configPath: "agents.entries.runner.tools.exec",
     scopeLabel: "agent:runner",
     agentId: "runner",
   });
@@ -108,13 +107,6 @@ describe("exec approvals policy helpers", () => {
   beforeAll(async () => {
     // Reload once to isolate this suite from facade mocks left by other test files.
     await loadActualExecApprovalModules();
-  });
-
-  it.each([
-    { raw: " gateway ", expected: "gateway" },
-    { raw: "NODE", expected: "node" },
-  ])("normalizes exec host value %j", ({ raw, expected }) => {
-    expect(normalizeExecHost(raw)).toBe(expected);
   });
 
   it.each([
@@ -487,7 +479,7 @@ describe("exec approvals policy helpers", () => {
         security: "full",
         ask: "off",
       },
-      configPath: "agents.list.runner.tools.exec",
+      configPath: "agents.entries.runner.tools.exec",
       scopeLabel: "agent:runner",
       agentId: "runner",
     });
@@ -495,12 +487,12 @@ describe("exec approvals policy helpers", () => {
     expectFields(summary.mode, {
       requested: "full",
       requestedSource:
-        "derived from agents.list.runner.tools.exec.security and agents.list.runner.tools.exec.ask",
+        "derived from agents.entries.runner.tools.exec.security and agents.entries.runner.tools.exec.ask",
       effective: "full",
     });
     expectFields(summary.security, {
       requested: "full",
-      requestedSource: "agents.list.runner.tools.exec.security",
+      requestedSource: "agents.entries.runner.tools.exec.security",
       effective: "full",
     });
   });
@@ -516,7 +508,7 @@ describe("exec approvals policy helpers", () => {
       scopeExecConfig: {
         ask: "off",
       },
-      configPath: "agents.list.runner.tools.exec",
+      configPath: "agents.entries.runner.tools.exec",
       scopeLabel: "agent:runner",
       agentId: "runner",
     });
@@ -527,7 +519,7 @@ describe("exec approvals policy helpers", () => {
     });
     expectFields(summary.ask, {
       requested: "off",
-      requestedSource: "agents.list.runner.tools.exec.ask",
+      requestedSource: "agents.entries.runner.tools.exec.ask",
     });
     expectFields(summary.mode, {
       requested: "allowlist",
@@ -546,14 +538,14 @@ describe("exec approvals policy helpers", () => {
       scopeExecConfig: {
         security: "full",
       },
-      configPath: "agents.list.runner.tools.exec",
+      configPath: "agents.entries.runner.tools.exec",
       scopeLabel: "agent:runner",
       agentId: "runner",
     });
 
     expectFields(summary.security, {
       requested: "full",
-      requestedSource: "agents.list.runner.tools.exec.security",
+      requestedSource: "agents.entries.runner.tools.exec.security",
     });
     expectFields(summary.ask, {
       requested: "on-miss",
@@ -703,7 +695,7 @@ describe("exec approvals policy helpers", () => {
         security: "full",
         ask: "off",
       },
-      configPath: "agents.list.runner.tools.exec",
+      configPath: "agents.entries.runner.tools.exec",
       scopeLabel: "agent:runner",
       agentId: "runner",
     });
@@ -737,7 +729,7 @@ describe("exec approvals policy helpers", () => {
         security: "full",
         ask: "off",
       },
-      configPath: "agents.list.runner.tools.exec",
+      configPath: "agents.entries.runner.tools.exec",
       scopeLabel: "agent:runner",
       agentId: "runner",
     });
@@ -811,7 +803,7 @@ describe("exec approvals policy helpers", () => {
           },
         },
         agents: {
-          entries: { runner: { default: true } },
+          entries: { runner: {} },
         },
       } satisfies OpenClawConfig,
       approvals: {
@@ -851,7 +843,7 @@ describe("exec approvals policy helpers", () => {
             ask: "off",
           },
         },
-        agents: { entries: { [DEFAULT_AGENT_ID]: { default: true } } },
+        agents: { entries: { [DEFAULT_AGENT_ID]: {} } },
       } satisfies OpenClawConfig,
       approvals: {
         version: 1,
@@ -887,7 +879,6 @@ describe("exec approvals policy helpers", () => {
         agents: {
           entries: {
             [DEFAULT_AGENT_ID]: {
-              default: true,
               tools: {
                 exec: {
                   ask: "always",
@@ -913,8 +904,10 @@ describe("exec approvals policy helpers", () => {
     const snapshots = collectExecPolicyScopeSnapshots({
       cfg: {
         agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
           entries: {
-            main: { default: true },
+            main: {},
             runner: { tools: { exec: { ask: "always" } } },
           },
         },

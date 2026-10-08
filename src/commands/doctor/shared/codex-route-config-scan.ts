@@ -1,16 +1,13 @@
 import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured-model-refs";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { ensureRecord } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
-  asAgentRuntimePolicyConfig,
-  isOpenAICodexModelRef,
   modelRefUsesCodexRuntime,
-  readLegacyDefaultsRuntime,
   readModelConfigPrimaryRef,
   resolveImplicitDefaultAgentModelRef,
-  resolveRuntime,
   resolveRuntimeModelRef,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
@@ -22,6 +19,7 @@ import {
   collectStringModelSlot,
   recordCodexModelHit,
   visitChannelModelSlots,
+  visitNonAgentModelSlots,
 } from "./codex-route-model-slots.js";
 import type {
   CodexRouteHit,
@@ -40,14 +38,10 @@ function collectModelsMapRefs(params: {
     return;
   }
   for (const modelRef of Object.keys(record)) {
-    if (!isOpenAICodexModelRef(modelRef)) {
-      continue;
-    }
     recordCodexModelHit({
-      hits: params.hits,
+      ...params,
       path: `${params.path}.${modelRef}`,
       model: modelRef,
-      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
 }
@@ -64,10 +58,9 @@ function collectModelPolicyAllowRefs(params: {
   }
   for (const [index, modelRef] of allow.entries()) {
     collectStringModelSlot({
-      hits: params.hits,
+      ...params,
       path: `${params.path}.allow.${index}`,
       value: modelRef,
-      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
 }
@@ -76,7 +69,6 @@ function collectAgentModelRefs(params: {
   hits: CodexRouteHit[];
   agent: unknown;
   path: string;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
   const agent = asMutableRecord(params.agent);
@@ -85,58 +77,49 @@ function collectAgentModelRefs(params: {
   }
   for (const key of AGENT_MODEL_CONFIG_KEYS) {
     collectModelConfigSlot({
-      hits: params.hits,
+      ...params,
       path: `${params.path}.${key}`,
       value: agent[key],
-      runtime: key === "model" ? params.runtime : undefined,
-      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
   const mediaModels = asMutableRecord(agent.mediaModels);
   for (const key of ["image", "video", "music"] as const) {
     collectModelConfigSlot({
-      hits: params.hits,
+      ...params,
       path: `${params.path}.mediaModels.${key}`,
       value: mediaModels?.[key],
-      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
   collectStringModelSlot({
-    hits: params.hits,
+    ...params,
     path: `${params.path}.heartbeat.model`,
     value: asMutableRecord(agent.heartbeat)?.model,
-    blockedModelIdentities: params.blockedModelIdentities,
   });
   collectModelConfigSlot({
-    hits: params.hits,
+    ...params,
     path: `${params.path}.subagents.model`,
     value: asMutableRecord(agent.subagents)?.model,
-    blockedModelIdentities: params.blockedModelIdentities,
   });
   const compaction = asMutableRecord(agent.compaction);
   collectStringModelSlot({
-    hits: params.hits,
+    ...params,
     path: `${params.path}.compaction.model`,
     value: compaction?.model,
-    blockedModelIdentities: params.blockedModelIdentities,
   });
   collectStringModelSlot({
-    hits: params.hits,
+    ...params,
     path: `${params.path}.compaction.memoryFlush.model`,
     value: asMutableRecord(compaction?.memoryFlush)?.model,
-    blockedModelIdentities: params.blockedModelIdentities,
   });
   collectModelsMapRefs({
-    hits: params.hits,
+    ...params,
     path: `${params.path}.models`,
     models: agent.models,
-    blockedModelIdentities: params.blockedModelIdentities,
   });
   collectModelPolicyAllowRefs({
-    hits: params.hits,
+    ...params,
     path: `${params.path}.modelPolicy`,
     modelPolicy: agent.modelPolicy,
-    blockedModelIdentities: params.blockedModelIdentities,
   });
 }
 
@@ -146,12 +129,10 @@ export function collectConfigModelRefs(
 ): CodexRouteHit[] {
   const hits: CodexRouteHit[] = [];
   const defaults = cfg.agents?.defaults;
-  const defaultsRuntime = readLegacyDefaultsRuntime(defaults);
   collectAgentModelRefs({
     hits,
     agent: defaults,
     path: "agents.defaults",
-    runtime: resolveRuntime({ defaultsRuntime }),
     blockedModelIdentities,
   });
 
@@ -161,43 +142,12 @@ export function collectConfigModelRefs(
       hits,
       agent: agentRecord,
       path,
-      runtime: resolveRuntime({
-        agentRuntime: asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
-        defaultsRuntime,
-      }),
       blockedModelIdentities,
     });
   }
 
-  visitChannelModelSlots(cfg, ({ container, key, path }) => {
+  visitNonAgentModelSlots(cfg, ({ container, key, path }) => {
     collectStringModelSlot({ hits, path, value: container[key], blockedModelIdentities });
-  });
-
-  for (const [index, mapping] of (cfg.hooks?.mappings ?? []).entries()) {
-    collectStringModelSlot({
-      hits,
-      path: `hooks.mappings.${index}.model`,
-      value: mapping.model,
-      blockedModelIdentities,
-    });
-  }
-  collectStringModelSlot({
-    hits,
-    path: "hooks.gmail.model",
-    value: cfg.hooks?.gmail?.model,
-    blockedModelIdentities,
-  });
-  collectStringModelSlot({
-    hits,
-    path: "tts.summaryModel",
-    value: cfg.tts?.summaryModel,
-    blockedModelIdentities,
-  });
-  collectStringModelSlot({
-    hits,
-    path: "channels.discord.voice.model",
-    value: asMutableRecord(asMutableRecord(cfg.channels?.discord)?.voice)?.model,
-    blockedModelIdentities,
   });
   return hits;
 }
@@ -206,10 +156,7 @@ export function collectDisabledCodexPluginRouteHits(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): CodexRuntimeRouteHit[] {
-  if (!isCodexPluginUnavailableByConfig(cfg)) {
-    return [];
-  }
-  return collectCodexRuntimeRouteHits(cfg, env);
+  return isCodexPluginUnavailableByConfig(cfg) ? collectCodexRuntimeRouteHits(cfg, env) : [];
 }
 
 /** Find effective configured model routes that select the Codex runtime. */
@@ -341,14 +288,8 @@ export function enableCodexPluginForRequiredRoutes(params: {
     return { cfg: params.cfg, changes: [] };
   }
   const cfg = structuredClone(params.cfg);
-  const plugins = asMutableRecord(cfg.plugins) ?? {};
-  if (cfg.plugins !== plugins) {
-    cfg.plugins = plugins;
-  }
-  const entries = asMutableRecord(plugins.entries) ?? {};
-  if (plugins.entries !== entries) {
-    plugins.entries = entries;
-  }
+  const plugins = ensureRecord(cfg, "plugins");
+  const entries = ensureRecord(plugins, "entries");
   const codexEntry = asMutableRecord(entries.codex) ?? {};
   const changes: string[] = [];
   if (codexEntry.enabled !== true) {
@@ -370,13 +311,10 @@ export function enableCodexPluginForRequiredRoutes(params: {
   return { cfg, changes };
 }
 
-function codexPluginIsBlockedOutsideEntry(cfg: OpenClawConfig): boolean {
-  return cfg.plugins?.enabled === false || pluginIdListIncludes(cfg.plugins?.deny, "codex");
-}
-
 export function codexPluginRepairIsBlocked(cfg: OpenClawConfig): boolean {
   return (
-    codexPluginIsBlockedOutsideEntry(cfg) ||
+    cfg.plugins?.enabled === false ||
+    pluginIdListIncludes(cfg.plugins?.deny, "codex") ||
     asMutableRecord(asMutableRecord(cfg.plugins?.entries)?.codex)?.enabled === false
   );
 }

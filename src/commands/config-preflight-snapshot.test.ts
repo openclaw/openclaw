@@ -2,11 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import * as retry from "@openclaw/retry";
+import { expect, it, vi } from "vitest";
 import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { createSqliteReadOnlyWorkerError } from "../infra/sqlite-readonly-worker-protocol.js";
 import { readBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { readPersistedInstalledPluginIndexRowSync } from "../plugins/test-helpers/installed-plugin-index.js";
@@ -32,7 +34,7 @@ it("preserves a proven schema failure from the full config snapshot", async () =
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
     const pathname = openOpenClawStateDatabase({ env: process.env }).path;
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const database = new DatabaseSync(pathname);
     try {
       database.exec(
@@ -190,7 +192,61 @@ it.each([
   });
 });
 
-it("reads discovery policy and index from one generation, then releases it before readiness guards", async () => {
+it("waits through temporary schema custody before reading startup configuration once", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    const configPath =
+      process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw/openclaw.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
+    );
+    const databasePath = openOpenClawStateDatabase({ env: process.env }).path;
+    await closeOpenClawStateDatabaseAsync();
+    const before = fs.readFileSync(databasePath);
+    const marker = resolveGatewayStateOwnerPath(databasePath);
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
+    fs.writeFileSync(
+      marker,
+      JSON.stringify({
+        pid: process.ppid,
+        ownerId: "synthetic-schema-owner",
+        createdAt: new Date().toISOString(),
+        configPath,
+        role: "sqlite-maintenance",
+        stateOwnerKind: "schema",
+      }),
+    );
+    const readSnapshot = vi.fn(async () => ({
+      snapshot: await readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" }),
+    }));
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
+    const wait = vi.spyOn(retry, "sleepWithAbort").mockImplementation(async () => {
+      expect(readSnapshot).not.toHaveBeenCalled();
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+      if (wait.mock.calls.length === 1) {
+        now.mockReturnValue(9_000);
+      } else {
+        fs.unlinkSync(marker);
+        now.mockRestore();
+      }
+    });
+    try {
+      const result = await readAdmittedConfigSnapshot({ env: process.env, readSnapshot });
+      expect(result.snapshot.valid).toBe(true);
+      expect(wait).toHaveBeenCalledTimes(2);
+      expect(readSnapshot).toHaveBeenCalledOnce();
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+    } finally {
+      wait.mockRestore();
+      now.mockRestore();
+      fs.rmSync(marker, { force: true });
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+});
+
+it("shares startup validation and discovery reads, then releases them before readiness guards", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
     const stateDir = process.env.OPENCLAW_STATE_DIR ?? path.join(home, ".openclaw");
     const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(stateDir, "openclaw.json");
@@ -201,7 +257,7 @@ it("reads discovery policy and index from one generation, then releases it befor
     );
     const options = { env: process.env };
     const { path: databasePath } = openOpenClawStateDatabase(options);
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const writer = new DatabaseSync(databasePath);
     const family = () =>
       ["", "-wal", "-shm"].map((suffix) => {
@@ -218,8 +274,13 @@ it("reads discovery policy and index from one generation, then releases it befor
       insert.run("plugins.installedIndex", '{"generation":"before"}');
       const before = family();
       let afterWrite: ReturnType<typeof family> | undefined;
+      const validations: Array<string | undefined> = [];
       const result = await readAdmittedConfigSnapshot({
         env: process.env,
+        validateConfig: () => {
+          validations.push(readIndex());
+          expect(readBundledDiscoveryMode(options)).toBe("compat");
+        },
         readSnapshot: async () => {
           const snapshot = await readConfigFileSnapshot({
             observe: false,
@@ -246,6 +307,7 @@ it("reads discovery policy and index from one generation, then releases it befor
         },
       });
       expect(result.snapshot.valid).toBe(true);
+      expect(validations).toEqual(['{"generation":"before"}', '{"generation":"before"}']);
       expect(family()).toEqual(afterWrite);
     } finally {
       writer.close();

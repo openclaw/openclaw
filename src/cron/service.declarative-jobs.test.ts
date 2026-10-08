@@ -243,12 +243,18 @@ describe("CronService declarative jobs", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { model: "openai/gpt-blocked" },
-        list: [{ id: "main", models: { "openai/gpt-blocked": { agentRuntime: { id: "codex" } } } }],
+        entries: {
+          main: {
+            models: { "openai/gpt-blocked": { agentRuntime: { id: "unsupported-harness" } } },
+          },
+        },
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     };
     const project = () => {
-      const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, []);
+      const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
+        schedulerSeed: "test-seed",
+      });
       return spec!.input;
     };
     const created = await add(cron, project(), { enabledExplicit: true, systemOwned: true });

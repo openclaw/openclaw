@@ -10,12 +10,13 @@ import {
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../../infra/node-commands.js";
 import {
-  formatNodeRunnerInventoryIssue,
+  createNodeRunnerInventoryIssueError,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_STATUS_WAIT_VERSION,
   resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
+import type { SpawnResult } from "../../process/exec.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import {
   nodeWorkerPlanHash,
@@ -40,6 +41,19 @@ import type {
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
+
+export function nodeWorkerSpawnResultFromReceipt(
+  receipt: TerminalNodeWorkerSupervisorReceipt,
+): SpawnResult {
+  return {
+    stdout: receipt.state === "completed" ? receipt.resultJson : "",
+    stderr: receipt.state === "completed" ? "" : receipt.errorText,
+    code: receipt.state === "completed" ? 0 : 1,
+    signal: null,
+    killed: receipt.state === "cancelled" || receipt.state === "interrupted",
+    termination: "exit",
+  };
+}
 
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
@@ -332,20 +346,18 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         deviceId: params.deviceId,
         signal,
       });
-      params.prepareLaunch?.(node);
-      if (!params.prepareLaunch && params.idleRetention && node.workerHost.idleRetention !== true) {
-        throw new NodeWorkerLaunchTransportError(
-          "PRIVATE_DIALECT_UNAVAILABLE",
-          "node worker idle retention is unavailable",
-        );
-      }
       if (
         params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
         (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION ||
           resolveNodeWorkerExecutionIssue(node.workerHost))
       ) {
-        throw new Error(
-          formatNodeRunnerInventoryIssue(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+        throw createNodeRunnerInventoryIssueError(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE);
+      }
+      params.prepareLaunch?.(node);
+      if (!params.prepareLaunch && params.idleRetention && node.workerHost.idleRetention !== true) {
+        throw new NodeWorkerLaunchTransportError(
+          "PRIVATE_DIALECT_UNAVAILABLE",
+          "node worker idle retention is unavailable",
         );
       }
       // A retained environment already owns its slot. The node arbitrates new physical
@@ -521,6 +533,15 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
             ...(!pollStatus && !mayHaveLaunched
               ? {
                   prepareLaunch: (node: NodeWorkerSupervisorNodeProof) => {
+                    if (
+                      input.descriptor.assignment.inference === "runtime-local" &&
+                      node.workerHost.nativeInference !== 1
+                    ) {
+                      throw createNodeRunnerInventoryIssueError(
+                        node.nodeId,
+                        NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+                      );
+                    }
                     if (
                       node.workerHost.idleRetention === true &&
                       input.descriptor.admission.handshake.protocolFeatures.includes(

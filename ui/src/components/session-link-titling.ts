@@ -5,6 +5,7 @@ import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
@@ -15,7 +16,7 @@ import {
   markdownSessionPublicOrigin,
   parseLocalMarkdownSessionUrl,
 } from "./markdown-session-links.ts";
-import { SESSION_PROGRESS_HOVER_LINK_SELECTOR } from "./session-progress-hovercard-target.ts";
+import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
 
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
@@ -53,10 +54,15 @@ function titleFromPreview(value: unknown): SessionTitle {
 }
 
 export class SessionLinkTitler {
-  client: GatewayBrowserClient | null = null;
-  context: ApplicationContext | null = null;
-
+  private currentClient: GatewayBrowserClient | null = null;
+  private currentContext: ApplicationContext | null = null;
   private readonly cache = new Map<string, CacheEntry>();
+  private scope = {};
+  private presentationScope: number | undefined;
+  private readonly titledAnchors = new WeakMap<
+    HTMLElement,
+    { scope: object; key: string; title: string }
+  >();
   private readonly observer = new MutationObserver((records) => {
     for (const node of records.flatMap((record) => [...record.addedNodes])) {
       if (node instanceof HTMLElement) {
@@ -67,6 +73,42 @@ export class SessionLinkTitler {
 
   constructor(private readonly host: HTMLElement) {}
 
+  get client() {
+    return this.currentClient;
+  }
+
+  set client(client: GatewayBrowserClient | null) {
+    if (client !== this.currentClient) {
+      this.currentClient = client;
+      this.retireTitles();
+    }
+  }
+
+  get context() {
+    return this.currentContext;
+  }
+
+  set context(context: ApplicationContext | null) {
+    if (context !== this.currentContext) {
+      this.currentContext = context;
+      this.retireTitles();
+    }
+  }
+
+  private retireTitles(): void {
+    this.cache.clear();
+    this.scope = {};
+  }
+
+  private currentScope(): object {
+    const scope = this.context ? gatewayPresentationScope(this.context.gateway).key : undefined;
+    if (scope !== this.presentationScope) {
+      this.presentationScope = scope;
+      this.retireTitles();
+    }
+    return this.scope;
+  }
+
   connect(): void {
     this.observer.observe(this.host, { childList: true, subtree: true });
     this.refresh();
@@ -75,10 +117,10 @@ export class SessionLinkTitler {
   refresh(root = this.host): void {
     // Share repeated references only within this synchronous roster projection.
     const targets = new Map<string, SessionTitleTarget | null>();
-    if (root.matches(SESSION_PROGRESS_HOVER_LINK_SELECTOR)) {
+    if (root.matches(SESSION_TITLE_TARGET_SELECTOR)) {
       void this.decorate(root, false, targets);
     }
-    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_PROGRESS_HOVER_LINK_SELECTOR)) {
+    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
       void this.decorate(anchor, false, targets);
     }
   }
@@ -92,8 +134,12 @@ export class SessionLinkTitler {
     load = false,
     targets?: Map<string, SessionTitleTarget | null>,
   ): Promise<void> {
+    const scope = this.currentScope();
     const target = this.targetForAnchor(element, targets);
-    const anchor = element instanceof HTMLAnchorElement ? element : document.createElement("a");
+    const anchor =
+      element instanceof HTMLAnchorElement || element.hasAttribute("data-session-title-only")
+        ? element
+        : document.createElement("a");
     if (element !== anchor && element.classList.contains("markdown-session-link")) {
       anchor.dataset.sessionHref = element.dataset.sessionHref;
       anchor.setAttribute("href", element.getAttribute("href") ?? "");
@@ -104,6 +150,16 @@ export class SessionLinkTitler {
       element.replaceWith(anchor);
       anchor.append(element);
     }
+    const previous = this.titledAnchors.get(anchor);
+    if (previous && previous.scope !== scope) {
+      const label = anchor.querySelector<HTMLSpanElement>(":scope > .session-label");
+      if (label?.textContent === previous.title) {
+        anchor.classList.remove("markdown-session-link--titled");
+        anchor.removeAttribute("title");
+        label.textContent = previous.key;
+      }
+      this.titledAnchors.delete(anchor);
+    }
     if (!target) {
       return;
     }
@@ -113,7 +169,10 @@ export class SessionLinkTitler {
       return;
     }
     try {
-      this.stampAnchor(anchor, target, await this.loadTitle(target));
+      const title = await this.loadTitle(target);
+      if (this.currentScope() === scope) {
+        this.stampAnchor(anchor, target, title);
+      }
     } catch {
       // A title is decoration; the session link remains usable with its raw key.
     }
@@ -210,12 +269,13 @@ export class SessionLinkTitler {
     if (cached) {
       return cached.promise;
     }
+    const client = this.client;
     const load = async () => {
-      if (!this.client) {
+      if (!client) {
         throw new Error("Session title requires a connected Gateway");
       }
       const title = titleFromPreview(
-        await this.client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
+        await client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
           sessionKey: target.sessionKey,
         }),
       );
@@ -240,7 +300,7 @@ export class SessionLinkTitler {
   }
 
   private stampAnchor(
-    anchor: HTMLAnchorElement,
+    anchor: HTMLElement,
     target: SessionTitleTarget,
     titleRecord?: SessionTitle,
   ): void {
@@ -255,16 +315,19 @@ export class SessionLinkTitler {
     if (anchor.dataset.sessionKey !== target.sessionKey) {
       anchor.dataset.sessionKey = target.sessionKey;
     }
-    if (!anchor.classList.contains("markdown-session-link")) {
-      anchor.classList.add("markdown-session-link");
-    }
-    if (!anchor.dataset.sessionHref && href && anchor.getAttribute("href") !== href) {
-      anchor.setAttribute("href", href);
+    if (!anchor.hasAttribute("data-session-title-only")) {
+      if (!anchor.classList.contains("markdown-session-link")) {
+        anchor.classList.add("markdown-session-link");
+      }
+      if (!anchor.dataset.sessionHref && href && anchor.getAttribute("href") !== href) {
+        anchor.setAttribute("href", href);
+      }
     }
     if (!title || anchor.classList.contains("markdown-session-link--titled")) {
       return;
     }
     anchor.classList.add("markdown-session-link--titled");
+    this.titledAnchors.set(anchor, { scope: this.scope, key: target.sessionKey, title });
     // Keep a producer's label node so Lit can still update its text binding.
     const label =
       anchor.querySelector<HTMLSpanElement>(":scope > .session-label") ??

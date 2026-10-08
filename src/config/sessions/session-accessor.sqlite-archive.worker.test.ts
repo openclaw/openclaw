@@ -3,9 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.js";
+import { recordAcpParentStreamEventsForTest as recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
+import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.test-support.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -266,7 +266,9 @@ describe("SQLite transcript archive worker", () => {
     const result = await deletion(target.sessionKey);
     expect(result.deleted).toBe(true);
     const archivePath = result.archivedTranscripts[0]?.archivedPath ?? "";
-    expect(path.dirname(archivePath)).toBe(path.join(tempDir, "backup", "sessions"));
+    expect(fs.realpathSync.native(path.dirname(archivePath))).toBe(
+      fs.realpathSync.native(path.join(tempDir, "backup", "sessions")),
+    );
     expect(archiveLines(archivePath)).toEqual([JSON.stringify(transcript)]);
     const bytes = fs.statSync(archivePath).size;
     for (const selector of [storePath, resolveSqliteTargetFromSessionStorePath(storePath).path]) {
@@ -457,7 +459,7 @@ describe("SQLite transcript archive worker", () => {
     ]);
     appendSqliteTrajectoryRuntimeEvents(target, [trajectory(target.sessionId)]);
     const db = database();
-    recordAcpParentStreamEvents({
+    await recordAcpParentStreamEvents({
       agentId: db.agentId,
       path: db.path,
       sessionId: target.sessionId,
@@ -600,7 +602,7 @@ describe("SQLite transcript archive worker", () => {
         appendSqliteTrajectoryRuntimeEvents(target, [trajectory(sessionId)]);
         break;
       case "ACP parent-stream":
-        recordAcpParentStreamEvents({
+        await recordAcpParentStreamEvents({
           agentId: db.agentId,
           path: db.path,
           sessionId,

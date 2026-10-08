@@ -34,37 +34,7 @@ type DirFetchParams = {
   expectedBinding?: unknown;
 };
 
-type DirFetchOk = {
-  ok: true;
-  path: string;
-  tarBase64: string;
-  tarBytes: number;
-  sha256: string;
-  fileCount: number;
-  entries?: string[];
-  preflightOnly?: boolean;
-  binding: PathBinding;
-};
-
-type DirFetchErrCode =
-  | "INVALID_PATH"
-  | "NOT_FOUND"
-  | "IS_FILE"
-  | "TREE_TOO_LARGE"
-  | "SYMLINK_REDIRECT"
-  | "CANONICAL_PATH_CHANGED"
-  | "READ_ERROR";
-
-type DirFetchErr = {
-  ok: false;
-  code: DirFetchErrCode;
-  message: string;
-  canonicalPath?: string;
-};
-
-type DirFetchResult = DirFetchOk | DirFetchErr;
-
-function classifyFsError(err: unknown): DirFetchErrCode {
+function classifyFsError(err: unknown) {
   const safeCode = classifyFsSafeReadError(err);
   if (safeCode) {
     return safeCode;
@@ -126,7 +96,7 @@ async function listTreeEntries(
   return (await visit(".")) ? results : "TOO_MANY";
 }
 
-export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchResult> {
+export async function handleDirFetch(params: DirFetchParams) {
   const requestedPath = readAbsolutePath(params.path);
   if (typeof requestedPath !== "string") {
     return requestedPath;
@@ -162,7 +132,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
       const code =
         errorCode === "CANONICAL_PATH_CHANGED" ? "CANONICAL_PATH_CHANGED" : classifyFsError(err);
       return {
-        ok: false,
+        ok: false as const,
         code,
         message: `preflight readdir failed: ${String(err)}`,
         canonicalPath: canonical,
@@ -170,7 +140,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     }
     if (entries === "TOO_MANY") {
       return {
-        ok: false,
+        ok: false as const,
         code: "TREE_TOO_LARGE",
         message: "directory tree exceeds 5000 entries during preflight",
         canonicalPath: canonical,
@@ -180,7 +150,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     preflightEntries = entries;
   } else if (!(await preflightDu(canonical, maxBytes))) {
     return {
-      ok: false,
+      ok: false as const,
       code: "TREE_TOO_LARGE",
       message: `directory tree exceeds estimated size limit (${maxBytes} bytes raw)`,
       canonicalPath: canonical,
@@ -198,7 +168,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
 
   if (tarBuffer === "TOO_LARGE") {
     return {
-      ok: false,
+      ok: false as const,
       code: "TREE_TOO_LARGE",
       message: `tarball exceeded ${maxBytes} byte limit ${preflightOnly ? "during preflight" : "mid-stream"}`,
       canonicalPath: canonical,
@@ -206,7 +176,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   }
   if (tarBuffer === "TIMEOUT") {
     return {
-      ok: false,
+      ok: false as const,
       code: "READ_ERROR",
       message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
       canonicalPath: canonical,
@@ -214,7 +184,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   }
   if (tarBuffer === "CANONICAL_PATH_CHANGED") {
     return {
-      ok: false,
+      ok: false as const,
       code: "CANONICAL_PATH_CHANGED",
       message: "canonical path differs from the authorized target",
       canonicalPath: canonical,
@@ -230,7 +200,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
       }
     }
     return {
-      ok: false,
+      ok: false as const,
       code: "READ_ERROR",
       message: "tar command failed",
       canonicalPath: canonical,
@@ -239,7 +209,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
 
   if (preflightEntries) {
     return {
-      ok: true,
+      ok: true as const,
       path: canonical,
       tarBase64: "",
       tarBytes: 0,
@@ -247,7 +217,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
       fileCount: preflightEntries.length,
       entries: preflightEntries,
       preflightOnly: true,
-      binding: { kind: "existing", ...identity },
+      binding: { kind: "existing", ...identity } satisfies PathBinding,
     };
   }
 
@@ -259,7 +229,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     entries = await inspectDirFetchArchive(tarBuffer, 10_000);
   } catch (error) {
     return {
-      ok: false,
+      ok: false as const,
       code: error instanceof ArchiveLimitError ? "TREE_TOO_LARGE" : "READ_ERROR",
       message: `archive inspection failed: ${formatErrorMessage(error)}`,
       canonicalPath: canonical,
@@ -267,13 +237,13 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   }
 
   return {
-    ok: true,
+    ok: true as const,
     path: canonical,
     tarBase64,
     tarBytes,
     sha256,
     fileCount: entries.length,
     entries,
-    binding: { kind: "existing", ...identity },
+    binding: { kind: "existing", ...identity } satisfies PathBinding,
   };
 }

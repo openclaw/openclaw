@@ -1,5 +1,4 @@
 // Gateway service lifecycle command core: install, uninstall, start, stop, restart.
-import type { Writable } from "node:stream";
 import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
@@ -34,12 +33,7 @@ import {
   createServiceLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
 import { createServiceRestartIntent } from "./lifecycle-restart-intent.js";
-import {
-  buildDaemonServiceSnapshot,
-  createDaemonActionContext,
-  emitDaemonAlreadyRunning,
-  emitDaemonScheduledRestart,
-} from "./response.js";
+import { buildDaemonServiceSnapshot, createDaemonActionContext } from "./response.js";
 import { filterContainerGenericHints, resolveDaemonInstallBlockMessage } from "./shared.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -47,15 +41,18 @@ type ServiceLifecycleOptions = DaemonLifecycleOptions & {
   restartIntent?: GatewayRestartIntent;
 };
 
-type StartPostCheckContext = {
+type StartPostCheckContext = Pick<
+  ReturnType<typeof createDaemonActionContext>,
+  "stdout" | "warnings" | "fail"
+> & {
   json: boolean;
-  stdout: Writable;
-  warnings: string[];
   warn?: (message: string) => void;
-  fail: ReturnType<typeof createDaemonActionContext>["fail"];
 };
 
-type RestartPostCheckContext = StartPostCheckContext & { activationAccepted: boolean };
+type RestartPostCheckContext = StartPostCheckContext & {
+  activationAccepted: boolean;
+  preserveDefinition?: boolean;
+};
 
 type ServiceRecoveryResult<TResult extends "started" | "stopped" | "restarted"> = {
   result: TResult;
@@ -64,12 +61,7 @@ type ServiceRecoveryResult<TResult extends "started" | "stopped" | "restarted"> 
   loaded?: boolean;
 };
 
-type ServiceRecoveryContext = {
-  json: boolean;
-  stdout: Writable;
-  warn?: (message: string) => void;
-  fail: (message: string, hints?: string[]) => void;
-};
+type ServiceRecoveryContext = Omit<StartPostCheckContext, "warnings">;
 
 type ServiceStartRepairContext = ServiceRecoveryContext & {
   state: GatewayServiceState;
@@ -153,6 +145,24 @@ async function blockInvalidServiceAction(
   return true;
 }
 
+function warnServiceConfig(
+  issue: Awaited<ReturnType<typeof getServiceActionPreflightFailure>>,
+  context: { json: boolean; warnings: string[] },
+) {
+  if (!issue) {
+    return;
+  }
+  const warning = [
+    `Config needs repair: ${issue.message}`,
+    ...(issue.hints ?? []),
+    formatCliCommand("openclaw doctor --fix"),
+  ].join("\n");
+  context.warnings.push(warning);
+  if (!context.json) {
+    defaultRuntime.error(`WARNING: ${warning}`);
+  }
+}
+
 export async function runServiceUninstall(params: {
   serviceNoun: string;
   service: GatewayService;
@@ -161,14 +171,10 @@ export async function runServiceUninstall(params: {
   assertNotLoadedAfterUninstall: boolean;
 }) {
   const json = Boolean(params.opts?.json);
-  const { stdout, emit, fail } = createDaemonActionContext({ action: "uninstall", json });
+  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "uninstall", json });
 
   if (resolveIsNixMode(process.env)) {
     fail("Nix mode detected; service uninstall is disabled.");
-    return;
-  }
-
-  if (await blockInvalidServiceAction(params.serviceNoun, "uninstall", fail)) {
     return;
   }
 
@@ -207,6 +213,7 @@ export async function runServiceUninstall(params: {
     fail(`${params.serviceNoun} service still loaded after uninstall.`);
     return;
   }
+  warnServiceConfig(await getServiceActionPreflightFailure("uninstall"), { json, warnings });
   emit({
     ok: true,
     result: "uninstalled",
@@ -310,12 +317,13 @@ export async function runServiceStart(params: {
           defaultRuntime.log(warning);
         }
       }
-      emitDaemonAlreadyRunning({
-        serviceNoun: params.serviceNoun,
-        service: params.service,
-        pid: startResult.state.runtime?.pid,
-        warnings,
-        emitMessage,
+      const pid = startResult.state.runtime?.pid;
+      emitMessage({
+        ok: true,
+        result: "already-running",
+        message: `${params.serviceNoun} service already running${pid === undefined ? "" : ` (pid ${pid})`}.`,
+        service: buildDaemonServiceSnapshot(params.service, true),
+        warnings: warnings.length ? warnings : undefined,
       });
       return;
     }
@@ -366,7 +374,10 @@ export async function runServiceStop(params: {
   stopWhenNotLoaded?: boolean;
 }) {
   const json = Boolean(params.opts?.json);
-  const { stdout, emit, emitMessage, fail } = createDaemonActionContext({ action: "stop", json });
+  const { stdout, warnings, emit, emitMessage, fail } = createDaemonActionContext({
+    action: "stop",
+    json,
+  });
   const gatewayStopAudit = createServiceLifecycleMutationAudit({
     serviceNoun: params.serviceNoun,
     action: "stop",
@@ -380,18 +391,16 @@ export async function runServiceStop(params: {
   if (loaded === null) {
     return;
   }
-  if (await blockInvalidServiceAction(params.serviceNoun, "stop", fail)) {
-    return;
-  }
   if (!loaded && !params.stopWhenNotLoaded) {
     try {
       const handled = await params.onNotLoaded?.({ json, stdout, fail });
       if (handled) {
+        warnServiceConfig(await getServiceActionPreflightFailure("stop"), { json, warnings });
         emitMessage({
           ok: true,
           result: handled.result,
           message: handled.message,
-          warnings: handled.warnings,
+          warnings: mergeWarnings(warnings, handled.warnings),
           service: buildDaemonServiceSnapshot(params.service, false),
         });
         return;
@@ -400,6 +409,7 @@ export async function runServiceStop(params: {
       fail(`${params.serviceNoun} stop failed: ${String(err)}`);
       return;
     }
+    warnServiceConfig(await getServiceActionPreflightFailure("stop"), { json, warnings });
     emitMessage({
       ok: true,
       result: "not-loaded",
@@ -431,6 +441,7 @@ export async function runServiceStop(params: {
   if (finalLoaded === null) {
     return;
   }
+  warnServiceConfig(await getServiceActionPreflightFailure("stop"), { json, warnings });
   emit({
     ok: true,
     result: "stopped",
@@ -478,15 +489,15 @@ export async function runServiceRestart(params: {
   const emitScheduledRestart = (
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
     serviceLoaded: boolean,
-  ) => {
-    return emitDaemonScheduledRestart({
-      emitMessage,
+  ): true => {
+    emitMessage({
+      ok: true,
       result: restartStatus.daemonActionResult,
       message: restartStatus.message,
-      service: params.service,
-      loaded: serviceLoaded,
-      warnings,
+      service: buildDaemonServiceSnapshot(params.service, serviceLoaded),
+      warnings: warnings.length ? warnings : undefined,
     });
+    return true;
   };
 
   const loaded = await resolveServiceLoadedOrFail({
@@ -499,10 +510,9 @@ export async function runServiceRestart(params: {
     return false;
   }
 
-  // Validation also precedes unmanaged restart recovery (#35862).
-  if (await blockInvalidServiceAction(params.serviceNoun, "restart", fail)) {
-    return false;
-  }
+  // An invalid candidate must not prevent control of the installed service or
+  // regenerate its definition from config that Doctor has not repaired yet.
+  const configIssue = await getServiceActionPreflightFailure("restart");
 
   if (params.restartOwnedProcess) {
     try {
@@ -541,7 +551,7 @@ export async function runServiceRestart(params: {
     recoveredLoadedState = handledRecovery.loaded ?? null;
   }
 
-  if (loaded && !handledRecovery && params.repairLoadedService) {
+  if (loaded && !handledRecovery && !configIssue && params.repairLoadedService) {
     try {
       const state = await readGatewayServiceState(params.service, { env: process.env });
       const issues = collectGatewayServiceStartRepairIssues(state, params.expectedPort);
@@ -580,7 +590,7 @@ export async function runServiceRestart(params: {
     }
   }
 
-  if (loaded && !handledRecovery && params.checkTokenDrift) {
+  if (loaded && !handledRecovery && !configIssue && params.checkTokenDrift) {
     try {
       const command = await params.service.readCommand(process.env);
       const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
@@ -620,7 +630,7 @@ export async function runServiceRestart(params: {
       await prepareGatewayRestartIntent();
       try {
         restartResult = await params.service.restart({
-          preserveDefinition: params.opts?.preserveDefinition,
+          preserveDefinition: configIssue ? true : params.opts?.preserveDefinition,
           env: process.env,
           stdout,
           warn,
@@ -631,6 +641,7 @@ export async function runServiceRestart(params: {
         throw err;
       }
     }
+    warnServiceConfig(configIssue, { json, warnings });
     let restartStatus = describeGatewayServiceRestart(
       params.serviceNoun,
       restartResult ?? { outcome: "completed" },
@@ -646,6 +657,7 @@ export async function runServiceRestart(params: {
         warn,
         // Definition repair alone does not record native activation.
         activationAccepted: restartResult?.outcome === "completed" || Boolean(handledRecovery),
+        preserveDefinition: configIssue ? true : params.opts?.preserveDefinition,
         fail: (message, hints, result) => {
           postCheckFailed = true;
           fail(message, hints, result);

@@ -29,7 +29,7 @@ export const BUNDLED_PLUGIN_BUILD_ENV_NAMES = [
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]*$/u;
 const TOP_LEVEL_PRIVATE_TEST_SURFACE_RE =
   /(?:^|[._-])(?:test|spec|test-support|test-helpers|test-fixtures|test-harness|mock-setup)(?:[._-]|$)/u;
-const toPosixPath = (value) => value.replaceAll("\\", "/");
+const toPosixPath = (value) => value.replaceAll(path.sep, "/");
 
 function parseBundledPluginBuildIdFilter(env = process.env) {
   const raw = env[BUNDLED_PLUGIN_BUILD_IDS_ENV];
@@ -115,6 +115,14 @@ function isExcludedTopLevelPublicSurfaceFile(fileName) {
   );
 }
 
+function isTopLevelPublicSurfaceFile(fileName) {
+  return (
+    !fileName.includes("/") &&
+    TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(path.extname(fileName)) &&
+    !isExcludedTopLevelPublicSurfaceFile(fileName)
+  );
+}
+
 const CATALOG_ENTRY_FIELDS = ["providerCatalogEntry", "capabilityCatalogEntry"];
 
 function collectPluginCatalogSourceEntries(manifest) {
@@ -187,50 +195,23 @@ export function collectTopLevelPublicSurfaceEntries(pluginDir) {
     return [];
   }
 
-  return fs
-    .readdirSync(pluginDir, { withFileTypes: true })
-    .flatMap((dirent) => {
-      if (!dirent.isFile()) {
-        return [];
-      }
-
-      const ext = path.extname(dirent.name);
-      if (!TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(ext)) {
-        return [];
-      }
-
-      if (isExcludedTopLevelPublicSurfaceFile(dirent.name)) {
-        return [];
-      }
-
-      return [`./${dirent.name}`];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  return collectTopLevelPublicSurfaceEntriesFromFiles(
+    fs
+      .readdirSync(pluginDir, { withFileTypes: true })
+      .filter((dirent) => dirent.isFile())
+      .map((dirent) => dirent.name),
+  );
 }
 
 function collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles) {
   return relativeFiles
-    .flatMap((relativeFile) => {
-      if (relativeFile.includes("/")) {
-        return [];
-      }
-
-      const ext = path.extname(relativeFile);
-      if (!TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(ext)) {
-        return [];
-      }
-
-      if (isExcludedTopLevelPublicSurfaceFile(relativeFile)) {
-        return [];
-      }
-
-      return [`./${relativeFile}`];
-    })
+    .filter(isTopLevelPublicSurfaceFile)
+    .map((relativeFile) => `./${relativeFile}`)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
 function collectTrackedBundledPluginFiles(cwd) {
-  const result = spawnSync("git", ["ls-files", "--", BUNDLED_PLUGIN_ROOT_DIR], {
+  const result = spawnSync("git", ["ls-files", "-z", "--", BUNDLED_PLUGIN_ROOT_DIR], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
@@ -239,18 +220,30 @@ function collectTrackedBundledPluginFiles(cwd) {
     return null;
   }
   const filesByPlugin = new Map();
-  for (const rawLine of result.stdout.split("\n")) {
-    const line = toPosixPath(rawLine.trim());
-    if (!fs.existsSync(path.join(cwd, line))) {
+  const prefix = `${BUNDLED_PLUGIN_ROOT_DIR}/`;
+  for (const file of result.stdout.split("\0")) {
+    if (!file.startsWith(prefix)) {
       continue;
     }
-    const match = new RegExp(`^${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/(.+)$`).exec(line);
-    if (!match) {
+    const separator = file.indexOf("/", prefix.length);
+    if (separator === -1) {
       continue;
     }
-    const [, dirName, relativeFile] = match;
+    const dirName = file.slice(prefix.length, separator);
+    const relativeFile = file.slice(separator + 1);
+    const relevant =
+      relativeFile === "package.json" ||
+      relativeFile === "openclaw.plugin.json" ||
+      isTopLevelPublicSurfaceFile(relativeFile);
+    // Any existing tracked file establishes a known plugin directory. Once known,
+    // only metadata and top-level entry files affect its build inventory.
+    if ((!relevant && filesByPlugin.has(dirName)) || !fs.existsSync(path.join(cwd, file))) {
+      continue;
+    }
     const files = filesByPlugin.get(dirName) ?? [];
-    files.push(relativeFile);
+    if (relevant) {
+      files.push(relativeFile);
+    }
     filesByPlugin.set(dirName, files);
   }
 
@@ -412,8 +405,8 @@ export function collectSourceCheckoutPluginBuildEntries(params = {}) {
     });
 }
 
-/** Retain channel config migrations with core schemas, independently of plugin installation. */
-export function collectChannelConfigDoctorBuildEntries(params = {}) {
+/** Retain plugin-owned Doctor checks independently of runtime installation. */
+export function collectRetainedDoctorBuildEntries(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const entries = {};
   const candidates =
@@ -425,18 +418,32 @@ export function collectChannelConfigDoctorBuildEntries(params = {}) {
       continue;
     }
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    if (manifest.doctorContract?.configRepair !== true || !manifest.channels?.length) {
+    const stateRetention = params.surface === "state-retention";
+    const ids = stateRetention
+      ? Array.isArray(manifest.doctorContract?.stateMigrations)
+        ? [manifest.id]
+        : []
+      : manifest.doctorContract?.configRepair === true
+        ? (manifest.channels ?? [])
+        : [];
+    if (!ids.length) {
       continue;
     }
-    const source = path.join(pluginDir, "config-doctor-api.ts");
+    const source = path.join(
+      pluginDir,
+      `${stateRetention ? "state-retention" : "config-doctor"}-api.ts`,
+    );
     if (!fs.existsSync(source)) {
+      if (stateRetention) {
+        continue;
+      }
       throw new Error(`Missing config-only doctor entrypoint: ${source}`);
     }
-    for (const channelId of manifest.channels) {
-      if (!PLUGIN_ID_RE.test(channelId) || entries[channelId]) {
-        throw new Error(`Invalid or duplicate config doctor channel: ${channelId}`);
+    for (const id of ids) {
+      if (!PLUGIN_ID_RE.test(id) || entries[id]) {
+        throw new Error(`Invalid or duplicate retained Doctor owner: ${id}`);
       }
-      entries[channelId] = toPosixPath(path.relative(cwd, source));
+      entries[id] = toPosixPath(path.relative(cwd, source));
     }
   }
   return entries;

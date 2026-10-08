@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { hasErrnoCode } from "../../infra/errno.js";
 import {
   createGitCommandError,
   enqueueGitRefMutation,
@@ -10,6 +11,7 @@ import {
   executeGitCommandBuffered,
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
+  type GitBufferedCommandOptions,
   type GitCommandOptions,
 } from "../../infra/git-exec.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
@@ -18,7 +20,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../../infra/windows-encoding.js";
-import type { BufferedCommandOptions, BufferedCommandResult } from "../../process/exec.js";
+import type { BufferedCommandResult } from "../../process/exec.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
@@ -27,6 +29,7 @@ export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 
 type WorktreeListEntry = {
   path: string;
+  head?: string;
   lockedReason?: string;
   branch?: string | null;
 };
@@ -195,7 +198,7 @@ async function withGitRefAdmission<
 export async function runGitBuffered(
   cwd: string,
   args: string[],
-  options: BufferedCommandOptions & { beforeRun?: () => void } = {},
+  options: GitBufferedCommandOptions = {},
 ): Promise<BufferedCommandResult> {
   if (hasGitWorkerContext()) {
     const { signal: _signal, beforeRun: _beforeRun, ...forwarded } = options;
@@ -227,9 +230,7 @@ export async function runGitBuffered(
   );
 }
 
-export function commandError(command: string, result: GitResult): Error {
-  return createGitCommandError(command, result);
-}
+export { createGitCommandError as commandError } from "../../infra/git-exec.js";
 
 export async function requireGit(
   cwd: string,
@@ -252,6 +253,20 @@ export async function requireGitBuffer(
   return result.stdout;
 }
 
+/** Git may return relative or Windows-native spellings for its administrative paths. */
+export async function resolveGitMetadataPath(
+  cwd: string,
+  name: string,
+  options: GitCommandOptions = {},
+): Promise<string> {
+  return path.resolve(
+    cwd,
+    normalizeGitPathForFilesystem(
+      await requireGit(cwd, ["rev-parse", "--git-path", name], options),
+    ),
+  );
+}
+
 function parseWorktreeList(output: string): WorktreeListEntry[] {
   const entries: WorktreeListEntry[] = [];
   let current: WorktreeListEntry | undefined;
@@ -270,6 +285,8 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
       current = {
         path: normalizeGitPathForFilesystem(field.slice("worktree ".length)),
       };
+    } else if (current && field.startsWith("HEAD ")) {
+      current.head = field.slice("HEAD ".length);
     } else if (current && field === "locked") {
       current.lockedReason = "";
     } else if (current && field.startsWith("locked ")) {
@@ -306,9 +323,7 @@ export async function resolveGitRepositoryPaths(
   const commonRaw = normalizeGitPathForFilesystem(
     await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"], options),
   );
-  const commonDir = await fs.realpath(
-    path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
-  );
+  const commonDir = await fs.realpath(path.resolve(sourceRoot, commonRaw));
   const primary = (await listGitWorktrees(sourceRoot, options))[0]?.path ?? sourceRoot;
   const canonicalRoot = await fs.realpath(primary);
   return { canonicalRoot, commonDir };
@@ -339,24 +354,19 @@ export function insideGitCheckout(start: string): boolean {
 }
 
 export async function hasSelfContainedGitMetadata(checkoutRoot: string): Promise<boolean> {
-  try {
-    const marker = await fs.lstat(path.join(checkoutRoot, ".git"));
-    return marker.isDirectory();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
+  return (await lstatIfExists(path.join(checkoutRoot, ".git")))?.isDirectory() ?? false;
 }
 
 export async function worktreePathExists(target: string): Promise<boolean> {
+  return (await lstatIfExists(target)) !== undefined;
+}
+
+export async function lstatIfExists(target: string) {
   try {
-    await fs.lstat(target);
-    return true;
+    return await fs.lstat(target);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
     }
     throw error;
   }

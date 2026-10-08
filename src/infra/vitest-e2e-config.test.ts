@@ -21,7 +21,6 @@ describe("e2e vitest config", () => {
       "src/**/*.e2e.test.ts",
       "packages/**/*.e2e.test.ts",
       "src/gateway/gateway.test.ts",
-      "src/gateway/server.startup-matrix-migration.integration.test.ts",
       BUNDLED_PLUGIN_E2E_TEST_GLOB,
     ]);
     expect(e2eConfig.test?.pool).toBe("forks");

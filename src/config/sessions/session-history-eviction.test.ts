@@ -21,6 +21,7 @@ vi.mock("../../logging/subsystem.js", async () => {
   };
 });
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import * as sqliteQueries from "../../infra/kysely-sync.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -295,6 +296,13 @@ describe("SQLite historical session disk budget", () => {
     settlePhysicalUsage();
     const before = await measureSessionPhysicalDiskUsage(storePath);
     const maintenance = { maxDiskBytes: before.totalBytes - 1, highWaterBytes: 1 };
+    const execute = sqliteQueries.executeSqliteQuerySync;
+    vi.spyOn(sqliteQueries, "executeSqliteQuerySync").mockImplementation((db, query) => {
+      if (query.compile().sql.includes('order by "archived_at" asc')) {
+        throw new Error("Archived eviction scan ran on the calling thread");
+      }
+      return execute(db, query);
+    });
 
     await expect(
       inspectSqliteSessionHistoryDiskBudget({ storePath, mode: "enforce", maintenance }),
@@ -558,7 +566,7 @@ describe("SQLite historical session disk budget", () => {
           archiveReason: "active-session-cap",
         },
       );
-      const reclamation = await import("./session-accessor.sqlite-reclamation.js");
+      const reclamation = await import("./session-accessor.sqlite-reclamation-run.js");
       const reclaim = reclamation.runSqliteSessionReclamation;
       const historyRequests: string[] = [];
       let protectionChanged = false;

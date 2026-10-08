@@ -158,19 +158,31 @@ runtime supporting iPhone 17 Pro and arm64, and the repository's pinned native t
 
 ```bash
 node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
-  --mode stock --target-sha "$(git rev-parse HEAD)" --output /tmp/ios-e2e-stock.json
+  --mode stock --target-sha "$(git rev-parse HEAD)" --output /tmp/ios-e2e-stock.json \
+  --gateway-selection /tmp/ios-e2e-gateway-selection
 
 ./scripts/install-simslim.sh /tmp/ios-e2e-tools
 OPENCLAW_CI_SIMSLIM_BINARY=/tmp/ios-e2e-tools/simslim \
   node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
-  --mode compare --target-sha "$(git rev-parse HEAD)" --output /tmp/ios-e2e-compare.json
+  --mode compare --target-sha "$(git rev-parse HEAD)" --output /tmp/ios-e2e-compare.json \
+  --gateway-selection /tmp/ios-e2e-gateway-selection
 ```
 
 The gate requires a clean tracked and untracked source tree at the exact SHA;
 gitignored build outputs are allowed. It selects the newest available iOS runtime
 that supports the test device and architecture, and records that runtime in its proof.
-It builds the Gateway runtime and ad-hoc-signed
-Debug `OpenClawUITests` simulator products once. Ad-hoc signing preserves Keychain
+It qualifies the candidate iOS app against the published stable Gateway selected
+from npm's `latest` tag. The first invocation saves the exact Gateway version,
+package integrity, dependency lock, source SHA, and Node/npm versions in the
+selection directory. Later invocations using that directory validate and reuse
+the saved selection without resolving `latest` again. Without `--gateway-selection`,
+the directory defaults to the output path with `.gateway` appended. Keep it for
+replay; use a new directory to select a newer stable Gateway. Selection replay
+requires the same source SHA and Node/npm versions.
+
+The harness installs the selected package in an isolated directory using the saved
+dependency lock and builds ad-hoc-signed Debug `OpenClawUITests` simulator products
+once. Ad-hoc signing preserves Keychain
 entitlements without certificates or provisioning profiles; this is not a signed
 Release build. Each arm starts an isolated real Gateway, then prepares its setup
 handler and state worker with `device.pair.setupStatus` before booting one new
@@ -207,15 +219,17 @@ node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
 # Exercise Gateway startup, setup-status preparation, and code issuance without native resources.
 node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
   --mode stock --target-sha "$(git rev-parse HEAD)" \
-  --gateway-only --output /tmp/ios-e2e-gateway.json
+  --gateway-only --output /tmp/ios-e2e-gateway.json \
+  --gateway-selection /tmp/ios-e2e-gateway-selection
 ```
 
 These diagnostics produce `native-build`/`built` or `gateway-probe`/`probe-passed`
-proofs, respectively. Neither is release qualification. Gateway runtime preparation
-continues to use the existing build owner's cache in every mode.
+proofs, respectively. Neither is release qualification. The Gateway check uses the
+same published-package selection and installation path as full qualification.
 
-The stock gate runs in **iOS Store Release** after native tool setup and before signing
-assets are accessed. It qualifies the checked-out `main` commit used for release
+The stock gate runs for the `release` operation in **iOS Store Release** after
+native tool setup and before signing assets are accessed. Manual and scheduled
+TestFlight runs skip this gate. The gate qualifies the checked-out `main` commit used for release
 preparation and records the installed Xcode version and build without requiring
 a specific Xcode version. Manual CI also requires the stock gate when
 `validation_tier=full` and its checkout revision equals the workflow run's SHA.
@@ -227,6 +241,16 @@ Local direct upload behavior is unchanged.
 Manual dispatch of `iOS Release E2E` qualifies the selected workflow revision;
 it does not accept an alternate target SHA. CI callers must also use their own
 revision.
+
+Each fresh workflow run resolves the stable Gateway once and saves
+`selection.json`, `package.json`, and `package-lock.json` in the
+`ios-release-gateway-selection-RUN_ID` artifact before native tool installation
+and qualification. The artifact is retained for 30 days. All qualification arms
+and reruns, including **Re-run all jobs**, reuse that run's selection. A missing,
+expired, invalid, or source-mismatched selection stops a rerun; start a new
+workflow run to make a fresh selection. No workflow input is needed. To replay
+locally, download and extract that artifact and pass its directory with
+`--gateway-selection` at the same source SHA and Node/npm versions.
 
 Compare runs four serial matched pairs in stock/slim, slim/stock, stock/slim,
 slim/stock order, for eight independently prepared arms. SimSlim keeps the existing
@@ -247,21 +271,53 @@ peak, or reboot-preparation memory. Missing/invalid samples or gaps over three
 seconds fail measurement. A stock gate without the meter requires no measurements.
 Raw XCTest bundles and fixture logs stay private and are cleaned with owned
 resources. If owned cleanup cannot be confirmed, the working root is retained.
-Only sanitized JSON proof is uploaded, including on failure, with fixed operation
-labels, phase durations, setup RPC progress, and bounded exit/error diagnostics.
+Alongside the Gateway selection artifact, sanitized JSON proof is uploaded,
+including on failure, as `ios-release-e2e-MODE-RUN_ID-RUN_ATTEMPT`. It records
+the candidate source and selected Gateway identities, fixed operation labels,
+phase durations, setup RPC progress, and bounded exit/error diagnostics.
 Raw logs and setup codes are excluded. Setup-code timeouts are preparation failures
 and prevent native test execution.
 
 ## GitHub Actions
 
-Run **iOS Store Release** from `main` using the `ios-store-release` environment.
-The workflow has no input parameters and uses the same
-`pnpm ios:release:upload` entry point. It installs the pinned build tools, uses
-readonly encrypted signing assets and a job-owned temporary keychain, and
-uploads screenshots, the App Review PDF attachment, and the IPA. After Apple
-processing it stages the saved release notes and selects the exact build.
-App Review submission remains manual. For a failure after upload, use
-[staging recovery](../VERSIONING.md#staging-recovery); do not repeat the upload.
+Run **iOS Store Release** from `main` with one of these operations:
+
+| Operation | Environment | Outcome |
+| --- | --- | --- |
+| `release` (default) | `ios-store-release` | Upload screenshots, the App Review attachment, and the IPA; stage saved notes and select the processed build for manual App Review. |
+| `testflight` | `ios-testflight` | Upload the IPA, assign the external group, and submit for TestFlight review when required; automatically notify testers after approval. |
+| `screenshots` | None | Capture screenshots without signing or upload; candidate branches are allowed. |
+
+Both upload operations use `pnpm ios:release:upload`, the pinned build tools,
+readonly encrypted signing assets, a job-owned temporary keychain, and the shared
+`ios-release` concurrency lock. TestFlight does not stage the App Store listing.
+For a failure after upload, use [staging recovery](../VERSIONING.md#staging-recovery)
+with the saved destination; do not repeat the upload.
+
+Create `ios-testflight` as a GitHub environment restricted to `main` with no
+required reviewers, and make the secrets below available to it. Keep the
+`ios-store-release` environment's existing approval policy.
+
+Set `OPENCLAW_TESTFLIGHT_GROUP_ID` as an `ios-testflight` environment variable to
+the existing **External Testing** group's App Store Connect ID. Populate the
+app's required TestFlight beta metadata in App Store Connect before the first
+run, including feedback email, review contact, and reviewer access instructions.
+The pipeline validates these values and never copies or stages App Store listing
+metadata for a TestFlight run.
+
+Daily TestFlight runs are scheduled at **7:00 AM America/Los_Angeles**, with
+daylight saving time handled by GitHub. Initially leave the repository variable
+`IOS_TESTFLIGHT_ENABLED` unset or `false`. Run one manual distribution:
+
+```bash
+gh workflow run ios-store-release.yml --ref main -f operation=testflight
+```
+
+Inspect `testflight-result.json` in the recovery artifact and the matching build
+and group in App Store Connect. Once the manual flow is verified, set repository
+variable `IOS_TESTFLIGHT_ENABLED` to `true` to enable scheduled runs. Manual
+TestFlight dispatch is available regardless of that activation variable. Set it
+back to `false` to stop future scheduled jobs without disabling manual releases.
 
 Repository/environment secrets required by name:
 
@@ -272,8 +328,9 @@ Repository/environment secrets required by name:
 - `APP_STORE_CONNECT_KEY_ID`
 - `APP_STORE_CONNECT_KEY_CONTENT`
 
-App Store Connect supplies the revision and next build number. No TestFlight
-group ID or manually prepared mobile release branch is required.
+App Store Connect supplies the revision and next build number. The TestFlight
+destination requires the external group variable; App Store staging does not.
+Neither destination requires a prepared mobile release branch.
 
 Local authentication setup for a fresh clone on the same Mac:
 
@@ -323,5 +380,5 @@ Versioning rules:
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched
 - App Store release uses `OpenClawPushMode=appStore`, which derives the canonical production hosted relay, production APNs, production relay profile, and `appleStrict` proof. The release lane rejects custom production relay URL overrides.
 - The exported IPA is validated before upload by inspecting its push mode, signed entitlements, and embedded App Store profile.
-- `pnpm ios:release:upload` stages screenshots and the App Review PDF attachment before uploading the IPA, waits for processing, then stages saved notes and selects the build. It does not submit for App Review or upload the App Store Connect `Notes` field
+- The default `pnpm ios:release:upload` destination stages screenshots and the App Review PDF attachment before uploading the IPA, waits for processing, then stages saved notes and selects the build. It does not submit for App Review or upload the App Store Connect `Notes` field
 - See `apps/ios/VERSIONING.md` for the detailed workflow

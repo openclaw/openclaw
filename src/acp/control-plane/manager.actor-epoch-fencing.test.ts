@@ -275,6 +275,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
     { operation: "config option", freshOptions: { model: "fresh-model" } },
     { operation: "option update", freshOptions: { cwd: "/workspace/fresh" } },
     { operation: "option reset", freshOptions: { runtimeMode: "fresh" } },
+    { operation: "status reconciliation", freshOptions: { model: "fresh-model" } },
   ])(
     "does not let a stale $operation write or clear the fresh actor lane",
     async ({ operation, freshOptions }) => {
@@ -308,6 +309,21 @@ describe("AcpSessionManager actor epoch fencing", () => {
           }
         });
       }
+      if (operation === "status reconciliation") {
+        let statusCalls = 0;
+        runtimeState.getStatus.mockImplementation(async () => {
+          statusCalls += 1;
+          if (statusCalls === 2) {
+            staleOperationEntered.resolve();
+            await releaseStaleOperation.promise;
+          }
+          return {
+            summary: "status=alive",
+            backendSessionId: statusCalls === 2 ? "stale-status" : `backend-${statusCalls}`,
+            details: { status: "alive" },
+          };
+        });
+      }
 
       await manager.initializeSession(initialization);
 
@@ -334,10 +350,9 @@ describe("AcpSessionManager actor epoch fencing", () => {
                   sessionKey,
                   patch: { cwd: "/workspace/stale" },
                 })
-              : manager.resetSessionRuntimeOptions({
-                  cfg: baseCfg,
-                  sessionKey,
-                });
+              : operation === "status reconciliation"
+                ? manager.getSessionStatus(sessionTarget)
+                : manager.resetSessionRuntimeOptions(sessionTarget);
       await staleOperationEntered.promise;
 
       await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
@@ -357,6 +372,10 @@ describe("AcpSessionManager actor epoch fencing", () => {
       });
       expect(fixture.meta?.runtimeSessionName).toBe("runtime-2");
       expect(fixture.meta?.runtimeOptions).toEqual(freshOptions);
+      if (operation === "status reconciliation") {
+        expect(fixture.meta?.identity?.acpxSessionId).toBe("backend-2");
+        return;
+      }
 
       await manager.runTurn({
         provenance: "system",
@@ -383,49 +402,6 @@ describe("AcpSessionManager actor epoch fencing", () => {
     },
   );
 
-  it("does not let stale status reconciliation overwrite the fresh actor metadata", async () => {
-    const fixture = createFixture();
-    const { runtimeState, manager } = fixture;
-    const releaseStaleStatus = createDeferred();
-    const staleStatusEntered = createDeferred();
-    let statusCalls = 0;
-    runtimeState.getStatus.mockImplementation(async () => {
-      statusCalls += 1;
-      if (statusCalls === 2) {
-        staleStatusEntered.resolve();
-        await releaseStaleStatus.promise;
-      }
-      return {
-        summary: "status=alive",
-        backendSessionId: statusCalls === 2 ? "stale-status" : `backend-${statusCalls}`,
-        details: { status: "alive" },
-      };
-    });
-    await manager.initializeSession(initialization);
-    const staleStatus = manager.getSessionStatus({
-      cfg: baseCfg,
-      sessionKey,
-    });
-    await staleStatusEntered.promise;
-
-    await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
-      cfg: baseCfg,
-      sessionKey,
-      reason: "session-reset",
-    });
-    await manager.initializeSession({
-      ...initialization,
-      runtimeOptions: { model: "fresh-model" },
-    });
-
-    releaseStaleStatus.resolve();
-    await expect(staleStatus).rejects.toMatchObject({
-      code: "ACP_SESSION_INIT_FAILED",
-      detailCode: "SESSION_ACTOR_SUPERSEDED",
-    });
-    expect(fixture.meta?.runtimeSessionName).toBe("runtime-2");
-    expect(fixture.meta?.identity?.acpxSessionId).toBe("backend-2");
-  });
   it("rejects a stale discard token without removing the successor runtime", async () => {
     const state = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });

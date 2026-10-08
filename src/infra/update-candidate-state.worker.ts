@@ -1,5 +1,12 @@
-import { collectErrorGraphCandidates, formatErrorMessageWithCode } from "./errors.js";
-import { createUpdateStateInspectionReporter } from "./update-candidate-state.diagnostics.js";
+import { parentPort } from "node:worker_threads";
+import type {
+  UpdateCandidatePluginFileReply,
+  UpdateCandidatePluginFileRequest,
+} from "./update-candidate-plugin-file.js";
+import {
+  createUpdateStateInspectionReporter,
+  formatUpdateStateInspectionError,
+} from "./update-candidate-state.diagnostics.js";
 import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateCandidateStateInventoryInProcess,
@@ -19,12 +26,14 @@ async function snapshotCandidateState(): Promise<unknown> {
     | (Parameters<typeof snapshotUpdateCandidateState>[0] & {
         mode: "snapshot";
         streamProgress?: boolean;
+        streamEntryProgress?: boolean;
       })
     | (Parameters<typeof discoverUpdateStateSchemaInspectionInProcess>[0] & { mode: "discover" })
     | (Parameters<typeof readUpdateStateSchemaVersionsInProcess>[0] & { mode: "versions" })
     | (Parameters<typeof readUpdateCandidateStateInventoryInProcess>[0] & {
         mode: "inventory";
         streamProgress?: boolean;
+        streamEntryProgress?: boolean;
       })
     | (Parameters<
         typeof import("./update-database-backup.js").createUpdateDatabaseBackupInProcess
@@ -46,7 +55,10 @@ async function snapshotCandidateState(): Promise<unknown> {
     case "inventory": {
       const { databases, ...inventory } = await readUpdateCandidateStateInventoryInProcess({
         ...input,
-        onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
+        onProgress: createUpdateStateInspectionReporter(
+          !input.streamProgress,
+          input.streamEntryProgress,
+        ),
       });
       return { ...inventory, databases: [...databases] };
     }
@@ -60,7 +72,10 @@ async function snapshotCandidateState(): Promise<unknown> {
     case "snapshot":
       return snapshotUpdateCandidateState({
         ...input,
-        onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
+        onProgress: createUpdateStateInspectionReporter(
+          !input.streamProgress,
+          input.streamEntryProgress,
+        ),
       });
     case "discover":
       return discoverUpdateStateSchemaInspectionInProcess({
@@ -77,14 +92,41 @@ async function snapshotCandidateState(): Promise<unknown> {
   }
 }
 
-void snapshotCandidateState()
-  .then((value) => process.stdout.write(JSON.stringify(value)))
-  .catch((error: unknown) => {
-    process.stderr.write(formatErrorMessageWithCode(error));
-    const causes = collectErrorGraphCandidates(error, (current) => [current.cause]);
-    if (causes.length > 1) {
-      // The update ledger retains the final diagnostic line within its existing bound.
-      process.stderr.write(`\nCaused by: ${formatErrorMessageWithCode(causes.at(-1))}`);
-    }
-    process.exitCode = 1;
-  });
+if (parentPort) {
+  const { assertDirectoryIdentitySync } = await import("@openclaw/fs-safe/advanced");
+  const { root } = await import("./fs-safe.js");
+  const { copyUpdateCandidatePluginFile } = await import("./update-candidate-plugin-file.js");
+  const { serveWorkerTasks } = await import("./worker-task-server.js");
+  let destination: { path: string; root: Awaited<ReturnType<typeof root>> } | undefined;
+  serveWorkerTasks<UpdateCandidatePluginFileReply>(async (input, _channel, control) =>
+    control.runNativeSection(async (): Promise<UpdateCandidatePluginFileReply> => {
+      // SAFETY: The snapshot owner supplies its inventoried file and original root identity.
+      const request = input as UpdateCandidatePluginFileRequest;
+      try {
+        assertDirectoryIdentitySync(request.privateRoot, request.rootIdentity);
+        if (destination?.path !== request.privateRoot) {
+          destination = { path: request.privateRoot, root: await root(request.privateRoot) };
+        }
+        assertDirectoryIdentitySync(request.privateRoot, request.rootIdentity);
+        await copyUpdateCandidatePluginFile(request, destination.root);
+        return { type: "copied" };
+      } catch (error) {
+        return {
+          type: "failed",
+          error: error instanceof Error ? error : new Error(String(error)),
+          ...(error instanceof Error && "code" in error && typeof error.code === "string"
+            ? { code: error.code }
+            : {}),
+          ...(error instanceof Error && "details" in error ? { details: error.details } : {}),
+        };
+      }
+    }),
+  );
+} else {
+  void snapshotCandidateState()
+    .then((value) => process.stdout.write(JSON.stringify(value)))
+    .catch((error: unknown) => {
+      process.stderr.write(formatUpdateStateInspectionError(error));
+      process.exitCode = 1;
+    });
+}

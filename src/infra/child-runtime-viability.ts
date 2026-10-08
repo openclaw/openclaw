@@ -3,19 +3,12 @@
 
 import { accessSync, constants } from "node:fs";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { hasErrnoCode } from "./errno.js";
 
 export type ChildRuntimeViability = {
   execPath: string;
   available: boolean;
 };
-
-function errnoCode(error: unknown): string | undefined {
-  if (!(error instanceof Error) || !("code" in error)) {
-    return undefined;
-  }
-  const code = error.code;
-  return typeof code === "string" ? code : undefined;
-}
 
 function accessExecutable(execPath: string): void {
   accessSync(execPath, constants.X_OK);
@@ -32,10 +25,12 @@ export function readChildRuntimeViability(params?: {
     access(execPath);
     return { execPath, available: true };
   } catch (error) {
-    const code = errnoCode(error);
     // Only a removed path matches the Homebrew Cellar failure. Other access
     // errors are not this diagnostic.
-    if (code === "ENOENT" || code === "ENOTDIR") {
+    if (
+      error instanceof Error &&
+      (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR"))
+    ) {
       return { execPath, available: false };
     }
     return { execPath, available: true };
@@ -51,4 +46,17 @@ export function formatMissingChildRuntimeWarning(
   }
   const execPath = sanitizeTerminalText(viability.execPath);
   return `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`;
+}
+
+/** Do not mislabel missing commands or working directories as a removed Node runtime. */
+export function formatChildRuntimeSpawnWarning(error: unknown): string | undefined {
+  if (
+    error instanceof Error &&
+    hasErrnoCode(error, "ENOENT") &&
+    "path" in error &&
+    error.path === process.execPath
+  ) {
+    return formatMissingChildRuntimeWarning(readChildRuntimeViability());
+  }
+  return undefined;
 }

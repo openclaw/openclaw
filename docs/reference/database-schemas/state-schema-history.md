@@ -9,29 +9,74 @@ title: "State schema history"
 
 ## State schema history
 
+**Published in** names the first stable release tag containing each change,
+or the first beta tag when no stable release contains it yet. Several schema
+changes can first ship together in a release that writes a higher version.
+`Unreleased` is reserved for changes absent from both stable and beta tags.
+Use the target release's history when planning an upgrade: the installed
+version's `openclaw update --dry-run` does not reveal the target's migration plan.
+Older builds refuse newer schemas; rollback requires the verified pre-upgrade
+backup and its matching build, not just reinstalling the older package.
+
 Doctor completes recognized schema-1 databases that predate the audit ledger before later workspace and agent checks run. Missing ownership metadata or a missing audit ledger at schema 2 or newer still prevents repair.
 
-| Version | Change                                                                                                                                                                                                                                                                                                                          | First release       |
+| Version | Change                                                                                                                                                                                                                                                                                                                          | Published in        |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| 1       | Initial shared state database                                                                                                                                                                                                                                                                                                   | `v2026.5.30-beta.1` |
-| 2       | Metadata-only message audit events ([#103903](https://github.com/openclaw/openclaw/pull/103903))                                                                                                                                                                                                                                | `v2026.7.2-beta.1`  |
-| 3       | `STRICT` tables and schema-drift hardening ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                                                                                                        | `v2026.7.2-beta.2`  |
-| 4       | Session watch provenance replaces encoded sentinel rows                                                                                                                                                                                                                                                                         | Unreleased          |
-| 5       | Durable cloud-worker result references on pending workspace fences ([`7a7d6bb`](https://github.com/openclaw/openclaw/commit/7a7d6bb51f42bd896de2b8a4df2ee66f3dce0a21), [#110952](https://github.com/openclaw/openclaw/pull/110952))                                                                                             | `v2026.7.2-beta.4`  |
-| 6       | Every committed shared-state table becomes part of the canonical runtime schema ([`509a5f0`](https://github.com/openclaw/openclaw/commit/509a5f03737642fec4a940e6d605887f7957ddc8), [#113473](https://github.com/openclaw/openclaw/pull/113473))                                                                                | `v2026.7.2-beta.5`  |
-| 7       | Retired inferred-commitment storage removed                                                                                                                                                                                                                                                                                     | Unreleased          |
-| 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                                                                                               | Unreleased          |
-| 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                                                                                                    | Unreleased          |
-| 10      | Six dead tables retired (agent_model_catalogs, android_notification_recent_packages, command_log_entries, diagnostic_stability_bundles, media_blobs, model_capability_cache)                                                                                                                                                    | Unreleased          |
-| 11      | Legacy skill curator lifecycle table and never-read proposal origin-run projection retired                                                                                                                                                                                                                                      | Unreleased          |
-| 12      | Thirteen singleton/cache tables retired; durable state folded into config_machine_state                                                                                                                                                                                                                                         | Unreleased          |
-| 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, five unused indexes removed); installed_plugin_index and shared auth-profile singletons fold into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical | Unreleased          |
-| 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
-| 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
-| 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | Unreleased          |
-| 17      | Prepared worker lifecycle facts and one-use node workspace bindings                                                                                                                                                                                                                                                             | Unreleased          |
-| 18      | Original requesting authority retained with shared GitHub publication receipts                                                                                                                                                                                                                                                  | Unreleased          |
-| 19      | Durable original channel-owner authorization and revocation continuity                                                                                                                                                                                                                                                          | Unreleased          |
+| 1       | Initial shared state database                                                                                                                                                                                                                                                                                                   | `v2026.6.1`         |
+| 2       | Metadata-only message audit events ([#103903](https://github.com/openclaw/openclaw/pull/103903))                                                                                                                                                                                                                                | `v2026.8.1`         |
+| 3       | `STRICT` tables and schema-drift hardening ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                                                                                                        | `v2026.8.1`         |
+| 4       | Session watch provenance replaces encoded sentinel rows                                                                                                                                                                                                                                                                         | `v2026.8.1`         |
+| 5       | Durable cloud-worker result references on pending workspace fences ([`7a7d6bb`](https://github.com/openclaw/openclaw/commit/7a7d6bb51f42bd896de2b8a4df2ee66f3dce0a21), [#110952](https://github.com/openclaw/openclaw/pull/110952))                                                                                             | `v2026.8.1`         |
+| 6       | Every committed shared-state table becomes part of the canonical runtime schema ([`509a5f0`](https://github.com/openclaw/openclaw/commit/509a5f03737642fec4a940e6d605887f7957ddc8), [#113473](https://github.com/openclaw/openclaw/pull/113473))                                                                                | `v2026.8.1`         |
+| 7       | Retired inferred-commitment storage removed                                                                                                                                                                                                                                                                                     | `v2026.8.1`         |
+| 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                                                                                               | `v2026.8.1`         |
+| 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                                                                                                    | `v2026.8.1`         |
+| 10      | Six dead tables retired (agent_model_catalogs, android_notification_recent_packages, command_log_entries, diagnostic_stability_bundles, media_blobs, model_capability_cache)                                                                                                                                                    | `v2026.8.1`         |
+| 11      | Legacy skill curator lifecycle table and never-read proposal origin-run projection retired                                                                                                                                                                                                                                      | `v2026.8.1`         |
+| 12      | Thirteen singleton/cache tables retired; durable state folded into config_machine_state                                                                                                                                                                                                                                         | `v2026.8.1`         |
+| 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, five unused indexes removed); installed_plugin_index and shared auth-profile singletons fold into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical | `v2026.8.1`         |
+| 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | `v2026.8.1`         |
+| 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | `v2026.8.1`         |
+| 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | `v2026.9.3`         |
+| 17      | Prepared worker lifecycle facts and one-use node workspace bindings                                                                                                                                                                                                                                                             | `v2026.9.4`         |
+| 18      | Original requesting authority retained with shared GitHub publication receipts                                                                                                                                                                                                                                                  | `v2026.9.6`         |
+| 19      | Durable original channel-owner authorization and revocation continuity                                                                                                                                                                                                                                                          | `v2026.9.7`         |
+| 20      | Cron receipt delivery-attempt fence prevents replay of ambiguous one-shot completions                                                                                                                                                                                                                                           | `v2026.10.1-beta.1` |
+
+Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
+in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
+`v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 20
+
+Schema 20 adds `delivery_attempt_state` to `cron_run_receipts`. New receipt claims
+record `not-started`; the receipt owner commits `started` before completion
+handoff or durable outbound custody. The fact is monotonic and means delivery
+may have occurred, not that the recipient acknowledged it. The existing receipt
+retention and exact run identity remain unchanged; there is no additional table
+or index.
+
+Startup may recover an interrupted one-shot only when its exact receipt proves
+`not-started`. A `started` or legacy `unknown` occurrence remains disabled with
+Unknown delivery status for inspection. Receiptless legacy running markers are
+also unknown. Queued-only runs, distinct operator replacements, recurring
+schedules, and exact finalized history keep their existing recovery rules.
+A crash between the fence commit and handoff can leave Unknown without sending;
+manual retry requires checking the recipient first.
+
+Migration adds the column with default `unknown` without inferring non-delivery
+from absent historical evidence. Startup and Doctor commit the column and schema
+metadata together. Older schema-19 schedulers cannot enforce this fence, so the
+content version advances even though the physical addition is compatible SQL.
+The existing [older-updater publication deferral](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
+and its legacy updater grace remain unchanged. Schema-19 admission rejects newer
+content; the documented legacy grace delays downgrade protection until its owner
+exits or its window expires.
+
+Create a verified, WAL-aware backup before upgrading. Binary rollback cannot
+remove this delivery fence: older runtimes must refuse migrated state. Restoring
+a pre-upgrade backup loses later receipt facts and does not undo external sends;
+reconcile those effects before retrying an automation.
 
 ### State schema 19
 

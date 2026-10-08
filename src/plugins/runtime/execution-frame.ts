@@ -14,8 +14,9 @@ export const PluginRuntimeExecutionFrame = resolveGlobalSingleton(
         scopes: PluginExecutionScopes,
         readonly gatewayScope: PluginRuntimeGatewayRequestScope | undefined,
         readonly generationRegistry: PluginRegistry | undefined,
+        invocation = scopes.invocation,
       ) {
-        super(scopes);
+        super(scopes, invocation);
       }
 
       override withScopes(scopes: PluginExecutionScopes): RuntimeFrame {

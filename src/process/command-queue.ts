@@ -6,6 +6,7 @@ import {
   logLaneDequeue,
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   applyCommandLaneCapacity,
   canAdmitInGroup,
@@ -21,7 +22,6 @@ import {
   enqueueLaneQueue,
   type CommandLaneTaskMarker,
   getQueueState,
-  type LaneGroupState,
   type LaneState,
   normalizeLane,
   removeLaneQueueEntry,
@@ -183,24 +183,18 @@ function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]):
   }
 }
 
-function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
-  entry.queuedAheadAtEnqueue = enqueueLaneQueue(state.queue, entry);
-  entry.activeAheadAtEnqueue = state.activeTaskIds.size;
-}
-
 async function runQueueEntryTask(
-  lane: string,
   entry: QueueEntry,
   marker: CommandLaneTaskMarker,
 ): Promise<unknown> {
+  const { lane } = marker;
   const taskPromise = Promise.resolve().then(() => entry.task(marker));
-  const taskTimeoutMs = clampPositiveTimerTimeoutMs(entry.taskTimeoutMs);
+  const taskTimeoutMs = entry.taskTimeoutMs;
   if (taskTimeoutMs === undefined) {
     return await taskPromise;
   }
 
-  const taskTimeoutAbortGraceMs =
-    clampPositiveTimerTimeoutMs(entry.taskTimeoutAbortGraceMs) ?? taskTimeoutMs;
+  const taskTimeoutAbortGraceMs = entry.taskTimeoutAbortGraceMs ?? taskTimeoutMs;
   const startedAtMs = Date.now();
   const readLastProgressAtMs = () => {
     let value: number | undefined;
@@ -389,7 +383,7 @@ function drainLane(
       void (async () => {
         const startTime = Date.now();
         try {
-          const result = await runQueueEntryTask(lane, entry, {
+          const result = await runQueueEntryTask(entry, {
             lane,
             taskId,
             generation: taskGeneration,
@@ -430,14 +424,14 @@ function drainLane(
 }
 
 function drainReadyCommandLane(lane: string, completedState?: LaneState): void {
-  if (getLaneGroup(lane)) {
-    drainCommandLaneGroup(lane, drainLane);
-    return;
-  }
-  // An idle scoped lane may have been retired and recreated while an older
-  // task was finishing. Preserve the completion's captured state so its drain
-  // cannot retire a newer registry entry that it never owned.
-  drainLane(lane, Number.POSITIVE_INFINITY, completedState);
+  runInDetachedAsyncContext(() => {
+    if (getLaneGroup(lane)) {
+      drainCommandLaneGroup(lane, drainLane);
+      return;
+    }
+    // An older completion must not retire a recreated lane that it never owned.
+    drainLane(lane, Number.POSITIVE_INFINITY, completedState);
+  });
 }
 
 function updateLaneConcurrency(lane: string, maxConcurrent: number): LaneState[] {
@@ -472,10 +466,9 @@ export function publishLaneConfiguration(config: {
   clearGroups?: readonly string[];
 }): void {
   // Validate before mutation so a rejected group cannot leave widened lanes behind.
-  const validated: LaneGroupState[] = [];
-  for (const [group, spec] of Object.entries(config.groups ?? {})) {
-    validated.push(validateCommandLaneGroupSpec(group, spec));
-  }
+  const validated = Object.entries(config.groups ?? {}).map(([group, spec]) =>
+    validateCommandLaneGroupSpec(group, spec),
+  );
 
   const touched = new Set<string>();
   for (const [rawLane, maxConcurrent] of Object.entries(config.lanes ?? {})) {
@@ -542,6 +535,7 @@ export function enqueueCommandInLane<T>(
     return Promise.reject(new GatewayDrainingError());
   }
   const runInAsyncContext = AsyncLocalStorage.snapshot();
+  const { onWait, taskTimeoutProgressAtMs, taskTimeoutSubscribe } = opts ?? {};
   const cleaned = normalizeLane(lane);
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
@@ -560,15 +554,24 @@ export function enqueueCommandInLane<T>(
       queuedAheadAtEnqueue: 0,
       activeAheadAtEnqueue: 0,
       taskIdentity: opts?.taskIdentity ? { ...opts.taskIdentity } : undefined,
+      sessionTarget: opts?.sessionTarget ? { ...opts.sessionTarget } : undefined,
       taskTimeoutMs: clampPositiveTimerTimeoutMs(opts?.taskTimeoutMs),
-      taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
-      taskTimeoutSubscribe: opts?.taskTimeoutSubscribe,
+      taskTimeoutProgressAtMs: taskTimeoutProgressAtMs
+        ? () => runInAsyncContext(taskTimeoutProgressAtMs)
+        : undefined,
+      taskTimeoutSubscribe: taskTimeoutSubscribe
+        ? (onDeadline) => {
+            const unsubscribe = runInAsyncContext(taskTimeoutSubscribe, onDeadline);
+            return () => runInAsyncContext(unsubscribe);
+          }
+        : undefined,
       taskTimeoutAbortSignal: opts?.taskTimeoutAbortSignal,
       taskTimeoutAbortGraceMs: clampPositiveTimerTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
-      onWait: opts?.onWait,
+      onWait: onWait ? (...args) => runInAsyncContext(onWait, ...args) : undefined,
     };
-    enqueueLaneEntry(state, entry);
+    entry.queuedAheadAtEnqueue = enqueueLaneQueue(state.queue, entry);
+    entry.activeAheadAtEnqueue = state.activeTaskIds.size;
     const signal = opts?.abortSignal;
     if (signal) {
       const onAbort = () => {
@@ -598,10 +601,7 @@ export function enqueueCommandInLane<T>(
 export function getQueueSize(lane: string = CommandLane.Main) {
   const resolved = normalizeLane(lane);
   const state = getQueueState().lanes.get(resolved);
-  if (!state) {
-    return 0;
-  }
-  return getLaneDepth(state);
+  return state ? getLaneDepth(state) : 0;
 }
 
 export function getCommandLaneSnapshot(lane: string = CommandLane.Main): CommandLaneSnapshot {
@@ -628,11 +628,7 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
 }
 
 /** Per-lane work totals for every live lane; diagnostics composition lives in command-lane-diagnostics.ts. */
-export function listCommandLaneTotals(): Array<{
-  lane: string;
-  activeCount: number;
-  queuedCount: number;
-}> {
+export function listCommandLaneTotals() {
   return [...getQueueState().lanes.values()].map((state) => ({
     lane: state.lane,
     activeCount: state.activeTaskIds.size,
@@ -666,11 +662,41 @@ export function getTotalQueueSize() {
   return total;
 }
 
-export function clearCommandLane(lane: string = CommandLane.Main) {
+type CommandLaneEntryFilter = (target: CommandQueueEnqueueOptions["sessionTarget"]) => boolean;
+
+function selectQueuedCommandEntries(state: LaneState, matches: CommandLaneEntryFilter) {
+  const entries: QueueEntry[] = [];
+  for (const queue of [state.queue.foreground, state.queue.normal, state.queue.background]) {
+    for (let entry = queue.head; entry; entry = entry.next) {
+      if (matches(entry.sessionTarget)) {
+        entries.push(entry);
+      }
+    }
+  }
+  return entries;
+}
+
+export function countQueuedCommandsInLane(lane: string, matches: CommandLaneEntryFilter): number {
+  const state = getQueueState().lanes.get(normalizeLane(lane));
+  return state ? selectQueuedCommandEntries(state, matches).length : 0;
+}
+
+export function clearCommandLane(
+  lane: string = CommandLane.Main,
+  matches?: CommandLaneEntryFilter,
+) {
   const cleaned = normalizeLane(lane);
   const state = getQueueState().lanes.get(cleaned);
   if (!state) {
     return 0;
+  }
+  if (matches) {
+    const entries = selectQueuedCommandEntries(state, matches);
+    for (const entry of entries) {
+      removeLaneQueueEntry(state.queue, entry);
+      entry.reject(new CommandLaneClearedError(cleaned));
+    }
+    return entries.length;
   }
   const removed = state.queue.length;
   let entry: QueueEntry | undefined;

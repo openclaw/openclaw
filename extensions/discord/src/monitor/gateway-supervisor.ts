@@ -85,14 +85,13 @@ function readFirstStackFrame(err: Error): string | undefined {
 }
 
 function formatDiscordGatewayErrorMessage(err: unknown): string {
+  const detail = formatErrorMessage(err);
   if (!(err instanceof Error)) {
-    return formatErrorMessage(err);
+    return detail;
   }
   if (err.message) {
-    const detail = formatErrorMessage(err);
     return err.name ? `${err.name}: ${detail}` : detail;
   }
-  const detail = formatErrorMessage(err);
   const firstFrame = readFirstStackFrame(err);
   if (firstFrame && detail === (err.name || "Error")) {
     return `${detail} @ ${firstFrame}`;
@@ -174,13 +173,11 @@ export function createDiscordGatewaySupervisor(params: {
     });
     switch (phase) {
       case "disposed":
-        logLateEvent("disposed", event);
+      case "teardown":
+        logLateEvent(phase, event);
         return;
       case "active":
         lifecycleHandler?.(event);
-        return;
-      case "teardown":
-        logLateEvent("teardown", event);
         return;
       case "buffering":
         pending.push(event);

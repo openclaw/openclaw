@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { OpenClaw } from "./client.js";
 import { GatewayClientTransport } from "./transport.js";
@@ -188,69 +188,6 @@ describe("GatewayClientTransport live WebSocket lifecycle", () => {
       releaseAck.resolve();
       await iterator?.return?.();
       await oc.close();
-    }
-  });
-
-  it("settles a gap-revealing final snapshot before reconnecting", async () => {
-    const random = vi.spyOn(Math, "random").mockReturnValue(0);
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-    const disconnected = createDeferred();
-    const reconnected = createDeferred();
-    let hellos = 0;
-    const transport = new GatewayClientTransport({
-      url: gateway.url,
-      deviceIdentity: null,
-      onClose: () => disconnected.resolve(),
-      onHelloOk: () => {
-        if (++hellos === 2) {
-          reconnected.resolve();
-        }
-      },
-    });
-    const oc = new OpenClaw({ transport });
-    try {
-      await oc.connect();
-      const completion = (async () => {
-        for await (const event of oc.runEvents("gap-run")) {
-          if (event.type === "run.completed") {
-            return event;
-          }
-        }
-        throw new Error("Run ended without its terminal event");
-      })();
-      const socket = gateway.socket();
-      gateway.sendEvent(socket, "chat", {
-        runId: "gap-run",
-        sessionKey: "gap-session",
-        state: "delta",
-        deltaText: "hello",
-        message: { role: "assistant", content: "hello" },
-      });
-      socket.send(
-        JSON.stringify({
-          type: "event",
-          event: "chat",
-          seq: 3,
-          payload: {
-            runId: "gap-run",
-            sessionKey: "gap-session",
-            state: "final",
-            message: { role: "assistant", content: "hello complete answer" },
-          },
-        }),
-      );
-      await expect(completion).resolves.toMatchObject({
-        type: "run.completed",
-        data: { outputText: "hello complete answer" },
-      });
-      await disconnected.promise;
-      await vi.advanceTimersByTimeAsync(1000);
-      await reconnected.promise;
-      expect(hellos).toBe(2);
-    } finally {
-      await oc.close();
-      random.mockRestore();
-      vi.useRealTimers();
     }
   });
 

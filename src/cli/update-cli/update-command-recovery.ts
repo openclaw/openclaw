@@ -34,11 +34,9 @@ export function assertUpdateCommandRecoveryState(opts: UpdateCommandOptions): vo
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
-  if (opts.run) {
-    const current = loadUpdateRecovery(opts.run.runId, { env: opts.run.env });
-    if (current) {
-      throw new UpdateRecoveryRequiredError(current);
-    }
+  const current = opts.run && loadUpdateRecovery(opts.run.runId, { env: opts.run.env });
+  if (current) {
+    throw new UpdateRecoveryRequiredError(current);
   }
 }
 
@@ -85,7 +83,7 @@ export function createUpdateCommandFinalizationFence(
 ): () => void {
   const originalRun = params.opts.run;
   const executor = originalRun?.executorFence;
-  const assertCurrent = () => {
+  return () => {
     try {
       if (params.opts.run !== originalRun || originalRun?.executorFence !== executor) {
         throw new Error("Package finalization lost its original executor.");
@@ -97,5 +95,4 @@ export function createUpdateCommandFinalizationFence(
       });
     }
   };
-  return assertCurrent;
 }

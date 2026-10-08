@@ -5,6 +5,7 @@ import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseInvokeErrorFromThrowable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -12,6 +13,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
 fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+
+internal fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 internal fun escapeSqlLikeLiteral(value: String): String = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -87,28 +90,21 @@ fun resolveProfileAccentArgb(entries: JsonObject?): Long? {
 }
 
 fun resolveGatewayThemeFamily(config: JsonObject?): AppearanceThemeFamily {
-  val raw =
-    config
-      ?.get("ui")
-      .asObjectOrNull()
-      ?.get("prefs")
-      .asObjectOrNull()
-      ?.get("theme")
-      .asStringOrNull()
+  val raw = gatewayUiPrefs(config)?.get("theme").asStringOrNull()
   return AppearanceThemeFamily.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeFamily.Claw
 }
 
 fun resolveGatewayThemeMode(config: JsonObject?): AppearanceThemeMode {
-  val raw =
-    config
-      ?.get("ui")
-      .asObjectOrNull()
-      ?.get("prefs")
-      .asObjectOrNull()
-      ?.get("themeMode")
-      .asStringOrNull()
+  val raw = gatewayUiPrefs(config)?.get("themeMode").asStringOrNull()
   return AppearanceThemeMode.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeMode.System
 }
+
+private fun gatewayUiPrefs(config: JsonObject?): JsonObject? =
+  config
+    ?.get("ui")
+    .asObjectOrNull()
+    ?.get("prefs")
+    .asObjectOrNull()
 
 fun resolveGatewayAccentArgb(config: JsonObject?): Long? {
   val ui = config?.get("ui").asObjectOrNull()

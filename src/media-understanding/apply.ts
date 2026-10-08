@@ -10,8 +10,8 @@ import {
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { runMediaCapability } from "./apply-capability.js";
-import { resolveAttachmentKind } from "./attachments.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { resolveAttachmentKind, selectAttachments } from "./attachments.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
 import { extractFileContext, type LocalPathSelfServeUpgrade } from "./file-context.js";
@@ -27,6 +27,7 @@ import {
   createMediaAttachmentCache,
   normalizeMediaAttachments,
   resolveMediaAttachmentLocalRoots,
+  runCapability,
 } from "./runner.js";
 import type {
   MediaAttachment,
@@ -149,7 +150,22 @@ export async function applyMediaUnderstanding(params: {
     .find(Boolean);
 
   const attachments = normalizeMediaAttachments(ctx);
-  const providerRegistry = buildProviderRegistry(params.providers, cfg);
+  // Built on first read, at most once per turn: the native-vision skip never reads it.
+  // A build failure is memoized and rethrown after the capabilities run, so it still
+  // reaches the caller's raw-content fallback instead of per-capability failures.
+  let builtProviderRegistry: ReturnType<typeof buildProviderRegistry> | undefined;
+  let providerRegistryError: { error: unknown } | undefined;
+  const providerRegistry = (): ReturnType<typeof buildProviderRegistry> => {
+    if (providerRegistryError) {
+      throw providerRegistryError.error;
+    }
+    try {
+      return (builtProviderRegistry ??= buildProviderRegistry(params.providers, cfg));
+    } catch (error) {
+      providerRegistryError = { error };
+      throw error;
+    }
+  };
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: resolveMediaAttachmentLocalRoots({
       cfg,
@@ -170,8 +186,8 @@ export async function applyMediaUnderstanding(params: {
         : params.processingMode === "audio-only" || params.processingMode === "audio-and-files"
           ? AUDIO_ONLY_CAPABILITY_ORDER
           : CAPABILITY_ORDER,
-      async (capability) =>
-        await runMediaCapability({
+      async (capability) => {
+        const request = {
           capability,
           cfg,
           ctx,
@@ -183,9 +199,43 @@ export async function applyMediaUnderstanding(params: {
           providerRegistry,
           config: cfg.tools?.media?.[capability],
           activeModel: params.activeModel,
-        }),
+        };
+        try {
+          return await runCapability(request);
+        } catch (err) {
+          if (shouldLogVerbose()) {
+            logVerbose(`Media understanding task failed: ${String(err)}`);
+          }
+          const selection = selectAttachments({
+            capability,
+            attachments,
+            policy: request.config?.attachments,
+          });
+          return {
+            outputs: [],
+            decision: {
+              capability,
+              outcome: "failed" as const,
+              attachments: [],
+              // Dropped attachments were never attempted; only selected ones failed.
+              attachmentDispositions: Object.fromEntries([
+                ...selection.selected.map(
+                  ({ index }) => [index, { kind: "failed" as const }] as const,
+                ),
+                ...selection.droppedAttachmentIndexes.map(
+                  (index) => [index, { kind: "not-selected" as const }] as const,
+                ),
+              ]),
+              ...(capability === "image" ? { nativeVisionActive: false } : {}),
+            },
+          };
+        }
+      },
       { concurrency: resolveConcurrency(cfg), stopOnError: false },
     );
+    if (providerRegistryError) {
+      throw providerRegistryError.error;
+    }
     const outputs: MediaUnderstandingOutput[] = [];
     const decisions: MediaUnderstandingDecision[] = [];
     const audioAttachmentIndexes = new Set<number>();

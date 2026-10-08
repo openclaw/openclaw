@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { callGateway } from "../../../gateway/call.js";
+import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { isPathInside } from "../../../infra/path-guards.js";
@@ -20,20 +21,17 @@ const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
 }));
 
-vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
-  const { hasUsableSessionEntry } =
-    await importOriginal<typeof import("../announce/subagent-announce.js")>();
-  return {
-    hasUsableSessionEntry,
-    runSubagentAnnounceFlow: announceSpy,
-    captureSubagentCompletionReply: vi.fn(async () => undefined),
-  };
-});
+vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../announce/subagent-announce.js")>()),
+  runSubagentAnnounceFlow: announceSpy,
+  captureSubagentCompletionReply: vi.fn(async () => undefined),
+}));
 
 export { announceSpy };
 
 export function createSubagentPersistenceRuntime(call: typeof callGateway): GatewayRecoveryRuntime {
   return {
+    prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: (method, params, options) =>
       call({
         method,
@@ -57,9 +55,12 @@ export function activateSubagentPersistenceRegistry(
   call: typeof callGateway,
 ) {
   const recoveryRuntime = createSubagentPersistenceRuntime(call);
-  registry.activateSubagentRegistry(
-    () => ({ resolveGatewayContext: () => ({ recoveryRuntime }) }) as never,
-  );
+  const gateway = {
+    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+    recoveryRuntime,
+    resolveGatewayContext: () => gateway as never,
+  };
+  return registry.activateSubagentRegistry(gateway.resolveGatewayContext);
 }
 
 function listFixtureAgentDatabases(
@@ -122,7 +123,7 @@ export function useSubagentPersistenceFixture() {
     // Delivery results can settle before their tracked cleanup tails release the stores.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         if (tempStateDir) {
           await cleanupSessionStateForTest({ stateDir: tempStateDir });
         }

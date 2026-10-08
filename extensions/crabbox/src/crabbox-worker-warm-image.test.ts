@@ -21,9 +21,36 @@ import {
   OPERATION_ID,
   PROFILE,
   tempDirs,
+  unsupportedCaptureReceipt,
 } from "./crabbox-worker-warm-image.test-support.js";
 
 describe("Crabbox profile warm images", () => {
+  it("records unsupported teardown capture without failing source stop", async () => {
+    const now = 1_800_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const { provider, calls, warn } = createWarmProvider(({ argv }) =>
+      argv[2] === "create"
+        ? commandResult({
+            code: 2,
+            stdout: JSON.stringify(unsupportedCaptureReceipt(LEASE_ID)),
+          })
+        : undefined,
+    );
+    await captureWarmImage(provider);
+    expect(calls.at(-1)?.argv[1]).toBe("stop");
+    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+    const image = (await listCrabboxWarmImages(crabboxState))[0];
+    expect(image?.capture).toBeUndefined();
+    expect(image?.allocations).toEqual({});
+    expect(image?.captureUnsupported).toEqual({
+      atMs: now,
+      provider: "aws",
+      message: unsupportedCaptureReceipt(LEASE_ID).message,
+    });
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toContain("warm image capture unsupported:");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("failed");
+  });
   it("reuses captured images across managers, setup environment values, and setup environment order", async () => {
     const profile = { ...PROFILE, setup: "install-node", setupEnv: ["WARM_B", "WARM_A"] };
     vi.stubEnv("WARM_A", "first-secret");
@@ -349,6 +376,12 @@ describe("Crabbox profile warm images", () => {
   it.each([
     { backend: "aws", kind: "aws-ebs-snapshot", nativeState: "completed", sourceLifecycleMs: 0 },
     {
+      backend: "azure",
+      kind: "azure-os-disk-snapshot",
+      nativeState: "available",
+      sourceLifecycleMs: 0,
+    },
+    {
       backend: "daytona",
       kind: "daytona-snapshot",
       nativeState: "active",
@@ -403,7 +436,7 @@ describe("Crabbox profile warm images", () => {
         "--wait-timeout",
         "2700000ms",
         "--json",
-        ...(backend === "daytona" ? ["--no-reboot=false"] : []),
+        ...(["azure", "daytona"].includes(backend) ? ["--no-reboot=false"] : []),
         ...(backend === "machine0" ? ["--strategy", "image"] : []),
       ]);
       // Native capture gets Crabbox's 45m plus command overhead and separate source recovery.
@@ -650,6 +683,8 @@ describe("Crabbox profile warm images", () => {
       "--tailscale=false",
       "--class",
       "standard",
+      "--target",
+      "linux",
       "--ttl",
       "24h",
       "--idle-timeout",

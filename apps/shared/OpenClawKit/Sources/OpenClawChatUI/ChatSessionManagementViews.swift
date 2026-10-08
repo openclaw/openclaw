@@ -132,14 +132,37 @@ struct ChatSessionInspectorSheet: View {
     @Bindable var viewModel: OpenClawChatViewModel
 
     @Environment(\.dismiss) private var dismiss
-    @State private var displayedSession: OpenClawChatSessionEntry
+    @State private var legacySession: OpenClawChatSessionEntry
+    private let target: OpenClawChatSessionTarget
+    private let sessionID: String?
+
+    private var canonicalSession: OpenClawChatSessionEntry? {
+        guard let owner = self.viewModel.sidebarData else { return self.legacySession }
+        guard let row = owner.row(key: self.target.sessionKey, agentID: self.target.agentID),
+              row.sessionId == self.sessionID else { return nil }
+        return row
+    }
+
+    private var displayedSession: OpenClawChatSessionEntry {
+        get {
+            var placeholder = OpenClawChatSessionEntry(key: self.target.sessionKey)
+            placeholder.agentId = self.target.agentID
+            return self.canonicalSession ?? placeholder
+        }
+        nonmutating set {
+            if self.viewModel.sidebarData == nil { self.legacySession = newValue }
+        }
+    }
+
     @State private var groups: [OpenClawChatSessionGroup] = []
     @State private var isMutatingGroup = false
     @State private var errorText: String?
 
     init(viewModel: OpenClawChatViewModel, session: OpenClawChatSessionEntry) {
         self.viewModel = viewModel
-        _displayedSession = State(initialValue: session)
+        self.target = OpenClawChatSessionTarget(sessionKey: session.key, agentID: session.agentId)
+        self.sessionID = session.sessionId
+        _legacySession = State(initialValue: viewModel.sidebarData == nil ? session : .init(key: session.key))
     }
 
     private var details: ChatSessionInspectorDetails {
@@ -162,7 +185,10 @@ struct ChatSessionInspectorSheet: View {
                         .help("Copy session key")
                     }
                     self.optionalRow("Kind", self.details.kind)
-                    self.optionalRow("Agent", self.details.agentID)
+                    self.optionalRow(
+                        "Agent",
+                        self.details
+                            .agentID ?? (self.viewModel.sidebarData == nil ? nil : self.displayedSession.agentId))
                 }
 
                 Section("Organization") {
@@ -185,6 +211,7 @@ struct ChatSessionInspectorSheet: View {
                             self.displayedSession,
                             mainSessionKey: self.viewModel.resolvedMainSessionKey))
                 }
+                .disabled(self.canonicalSession == nil)
 
                 Section("Run") {
                     self.optionalRow("Status", self.details.runState)
@@ -255,6 +282,7 @@ struct ChatSessionInspectorSheet: View {
         Binding(
             get: { self.displayedSession.category ?? "" },
             set: { next in
+                guard self.canonicalSession != nil else { return }
                 let previous = self.displayedSession.category
                 let nextGroup = next.isEmpty ? nil : next
                 self.displayedSession.category = nextGroup
@@ -280,6 +308,7 @@ struct ChatSessionInspectorSheet: View {
         Binding(
             get: { self.displayedSession.isPinned },
             set: { pinned in
+                guard self.canonicalSession != nil else { return }
                 self.displayedSession.pinned = pinned
                 self.viewModel.setSessionPinned(
                     key: self.displayedSession.key,
@@ -292,6 +321,7 @@ struct ChatSessionInspectorSheet: View {
         Binding(
             get: { self.displayedSession.isArchived },
             set: { archived in
+                guard self.canonicalSession != nil else { return }
                 self.displayedSession.archived = archived
                 self.viewModel.setSessionArchived(self.displayedSession, archived: archived)
             })

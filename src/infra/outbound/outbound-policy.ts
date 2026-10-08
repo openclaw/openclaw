@@ -1,5 +1,3 @@
-// Outbound policy enforces message-tool allowlists and cross-context delivery
-// markers/decorations before channel dispatch.
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -15,40 +13,13 @@ import { MessageActionDeniedError } from "./message-action-denial.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
 
-/**
- * Builds a channel-native presentation for forwarded cross-context text.
- */
-type CrossContextPresentationBuilder = (message: string) => MessagePresentation;
-
-/**
- * Text and optional rich-presentation wrapper for cross-context outbound sends.
- */
 export type CrossContextDecoration = {
   prefix: string;
   suffix: string;
-  presentationBuilder?: CrossContextPresentationBuilder;
+  presentationBuilder?: (message: string) => MessagePresentation;
 };
 
-const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
-  "send",
-  "poll",
-  "poll-vote",
-  "reply",
-  "sendWithEffect",
-  "sendAttachment",
-  "upload-file",
-  "edit",
-  "delete",
-  "pin",
-  "unpin",
-  "thread-create",
-  "thread-reply",
-  "topic-create",
-  "topic-edit",
-  "sticker",
-]);
-
-// Mutations are guarded above, but markers only apply to outbound payloads that
+// All mutations are guarded, but markers only apply to outbound payloads that
 // create new visible content. Existing-message edits/pins/deletes should not
 // grow cross-context forwarding text.
 const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
@@ -62,25 +33,17 @@ const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
   "sticker",
 ]);
 
-function resolveContextGuardTarget(
-  action: ChannelMessageActionName,
-  params: Record<string, unknown>,
-): string | undefined {
-  if (!CONTEXT_GUARDED_ACTIONS.has(action)) {
-    return undefined;
-  }
-
-  const keys =
-    action === "thread-reply" || action === "thread-create"
-      ? ["channelId", "to"]
-      : ["to", "channelId"];
-  for (const key of keys) {
-    if (typeof params[key] === "string") {
-      return params[key];
-    }
-  }
-  return undefined;
-}
+const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
+  ...CONTEXT_MARKER_ACTIONS,
+  "poll-vote",
+  "edit",
+  "delete",
+  "pin",
+  "unpin",
+  "thread-create",
+  "topic-create",
+  "topic-edit",
+]);
 
 function normalizeTarget(channel: ChannelId, raw: string): string | undefined {
   return normalizeTargetForProvider(channel, raw) ?? raw.trim();
@@ -116,7 +79,10 @@ function isCrossContextTarget(params: {
   );
 }
 
-/** Resolves message-tool policy after applying agent-specific overrides. */
+function mergeMessagePolicy<T extends object>(global: T | undefined, agent: T | undefined) {
+  return global || agent ? { ...global, ...agent } : undefined;
+}
+
 export function resolveEffectiveMessageToolsConfig(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
@@ -131,44 +97,25 @@ export function resolveEffectiveMessageToolsConfig(params: {
   if (!agentConfig) {
     return globalConfig;
   }
+  const crossContext = mergeMessagePolicy(globalConfig?.crossContext, agentConfig.crossContext);
   // Agent message-tool policy is an override layer; nested policy groups must merge independently.
   return {
     ...globalConfig,
     ...agentConfig,
-    crossContext:
-      globalConfig?.crossContext || agentConfig.crossContext
-        ? {
-            ...globalConfig?.crossContext,
-            ...agentConfig.crossContext,
-            marker:
-              globalConfig?.crossContext?.marker || agentConfig.crossContext?.marker
-                ? {
-                    ...globalConfig?.crossContext?.marker,
-                    ...agentConfig.crossContext?.marker,
-                  }
-                : undefined,
-          }
-        : undefined,
-    broadcast:
-      globalConfig?.broadcast || agentConfig.broadcast
-        ? {
-            ...globalConfig?.broadcast,
-            ...agentConfig.broadcast,
-          }
-        : undefined,
-    actions:
-      globalConfig?.actions || agentConfig.actions
-        ? {
-            ...globalConfig?.actions,
-            ...agentConfig.actions,
-          }
-        : undefined,
+    crossContext: crossContext
+      ? {
+          ...crossContext,
+          marker: mergeMessagePolicy(
+            globalConfig?.crossContext?.marker,
+            agentConfig.crossContext?.marker,
+          ),
+        }
+      : undefined,
+    broadcast: mergeMessagePolicy(globalConfig?.broadcast, agentConfig.broadcast),
+    actions: mergeMessagePolicy(globalConfig?.actions, agentConfig.actions),
   };
 }
 
-/**
- * Returns the normalized allowed message actions for an agent or the global policy.
- */
 export function resolveAllowedMessageActions(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
@@ -248,7 +195,17 @@ export function enforceCrossContextPolicy(params: {
     return;
   }
 
-  const target = resolveContextGuardTarget(params.action, params.args);
+  const targetKeys =
+    params.action === "thread-reply" || params.action === "thread-create"
+      ? ["channelId", "to"]
+      : ["to", "channelId"];
+  let target: string | undefined;
+  for (const key of targetKeys) {
+    if (typeof params.args[key] === "string") {
+      target = params.args[key];
+      break;
+    }
+  }
   if (!target) {
     return;
   }
@@ -264,9 +221,6 @@ export function enforceCrossContextPolicy(params: {
   );
 }
 
-/**
- * Builds cross-context marker text or a channel-native presentation for forwarded sends.
- */
 export async function buildCrossContextDecoration(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -329,16 +283,10 @@ export async function buildCrossContextDecoration(params: {
   return { prefix, suffix, presentationBuilder };
 }
 
-/**
- * Reports whether an action can carry a cross-context marker in outbound payloads.
- */
 export function shouldApplyCrossContextMarker(action: ChannelMessageActionName): boolean {
   return CONTEXT_MARKER_ACTIONS.has(action);
 }
 
-/**
- * Applies text markers or a preferred rich presentation to a cross-context message.
- */
 export function applyCrossContextDecoration(params: {
   message: string;
   decoration: CrossContextDecoration;
@@ -346,16 +294,14 @@ export function applyCrossContextDecoration(params: {
 }): {
   message: string;
   presentation?: MessagePresentation;
-  usedPresentation: boolean;
 } {
-  const usePresentation = params.preferPresentation && params.decoration.presentationBuilder;
-  if (usePresentation) {
+  const buildPresentation = params.decoration.presentationBuilder;
+  if (params.preferPresentation && buildPresentation) {
     return {
       message: params.message,
-      presentation: params.decoration.presentationBuilder?.(params.message),
-      usedPresentation: true,
+      presentation: buildPresentation(params.message),
     };
   }
   const message = `${params.decoration.prefix}${params.message}${params.decoration.suffix}`;
-  return { message, usedPresentation: false };
+  return { message };
 }

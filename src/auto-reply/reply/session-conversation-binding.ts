@@ -26,13 +26,11 @@ export function resolveSessionDefaultAccountId(params: {
   accountIdRaw?: string;
   persistedLastAccountId?: string;
 }): string | undefined {
-  const explicit = normalizeOptionalString(params.accountIdRaw);
-  if (explicit) {
-    return explicit;
-  }
-  const persisted = normalizeOptionalString(params.persistedLastAccountId);
-  if (persisted) {
-    return persisted;
+  const accountId =
+    normalizeOptionalString(params.accountIdRaw) ??
+    normalizeOptionalString(params.persistedLastAccountId);
+  if (accountId) {
+    return accountId;
   }
   const channel = normalizeOptionalLowercaseString(params.channelRaw);
   if (!channel) {
@@ -40,8 +38,7 @@ export function resolveSessionDefaultAccountId(params: {
   }
   // SAFETY: only the optional defaultAccount field is read; its unknown value is normalized below.
   const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
-  const configuredDefault = channels?.[channel]?.defaultAccount;
-  return normalizeOptionalString(configuredDefault);
+  return normalizeOptionalString(channels?.[channel]?.defaultAccount);
 }
 
 export function resolveSessionConversationBindingContext(
@@ -60,14 +57,8 @@ export function resolveSessionConversationBindingContext(
   if (!bindingContext) {
     return null;
   }
-  return {
-    channel: bindingContext.channel,
-    accountId: bindingContext.accountId,
-    conversationId: bindingContext.conversationId,
-    ...(bindingContext.parentConversationId
-      ? { parentConversationId: bindingContext.parentConversationId }
-      : {}),
-  };
+  const { threadId: _threadId, ...conversation } = bindingContext;
+  return conversation;
 }
 
 export async function resolveDispatchConversationBinding(cfg: OpenClawConfig, ctx: MsgContext) {
@@ -86,21 +77,13 @@ export async function resolveDispatchConversationBinding(cfg: OpenClawConfig, ct
 export async function resolveBoundAcpSessionForCommandReset(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
-  bindingContext?: {
-    channel: string;
-    accountId: string;
-    conversationId: string;
-    parentConversationId?: string;
-  } | null;
+  bindingContext?: ReturnType<typeof resolveSessionConversationBindingContext>;
 }): Promise<string | undefined> {
   const bindingContext =
     params.bindingContext ?? resolveSessionConversationBindingContext(params.cfg, params.ctx);
   return await resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
-    channel: bindingContext?.channel,
-    accountId: bindingContext?.accountId,
-    conversationId: bindingContext?.conversationId,
-    parentConversationId: bindingContext?.parentConversationId,
+    ...bindingContext,
     commandTargetSessionKey: resolveCommandTurnTargetSessionKey(params.ctx),
     activeSessionKey: normalizeOptionalString(params.ctx.SessionKey),
     allowNonAcpBindingSessionKey: false,

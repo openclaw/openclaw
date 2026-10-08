@@ -2,7 +2,6 @@ package ai.openclaw.wear.shared
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -52,10 +51,7 @@ object WearProtocol {
     }
   }
 
-  fun isRealtimeAudioChannelPath(path: String): Boolean {
-    if (path == LEGACY_REALTIME_AUDIO_CHANNEL_PATH) return true
-    return isAttemptScopedRealtimeAudioChannelPath(path)
-  }
+  fun isRealtimeAudioChannelPath(path: String): Boolean = path == LEGACY_REALTIME_AUDIO_CHANNEL_PATH || isAttemptScopedRealtimeAudioChannelPath(path)
 
   fun isAttemptScopedRealtimeAudioChannelPath(path: String): Boolean {
     if (!path.startsWith(REALTIME_AUDIO_CHANNEL_PATH_PREFIX)) return false
@@ -225,7 +221,7 @@ sealed interface WearDecodeResult {
 }
 
 object WearProtocolCodec {
-  private val json =
+  internal val json =
     Json {
       classDiscriminator = "type"
       encodeDefaults = true
@@ -234,7 +230,8 @@ object WearProtocolCodec {
     }
 
   fun encode(message: WearMessage): ByteArray {
-    requireValid(message)
+    require(message.version == WearProtocol.VERSION) { "Unsupported Wear protocol version: ${message.version}" }
+    require(isValid(message)) { "Invalid Wear protocol envelope" }
     require(hasValidPayloadDepth(message)) {
       "Wear message exceeds JSON depth ${WearProtocol.MAX_JSON_DEPTH}"
     }
@@ -251,21 +248,14 @@ object WearProtocolCodec {
   }
 
   private fun hasValidPayloadDepth(message: WearMessage): Boolean {
-    val payloads =
+    val payload =
       when (message) {
-        is WearMessage.Request -> listOf(message.params)
-        is WearMessage.Response -> listOfNotNull(message.result)
-        is WearMessage.Event -> listOfNotNull(message.payload)
+        is WearMessage.Request -> message.params
+        is WearMessage.Response -> message.result
+        is WearMessage.Event -> message.payload
       }
-    return payloads.all { element -> hasValidElementDepth(element, parentDepth = 1) }
-  }
-
-  private fun hasValidElementDepth(
-    element: JsonElement,
-    parentDepth: Int,
-  ): Boolean {
     val pending = ArrayDeque<Pair<JsonElement, Int>>()
-    pending.addLast(element to parentDepth)
+    pending.addLast((payload ?: return true) to 1)
     while (pending.isNotEmpty()) {
       val (current, parent) = pending.removeLast()
       val children =
@@ -287,41 +277,29 @@ object WearProtocolCodec {
       return WearDecodeResult.Failure(WearDecodeFailureReason.TooLarge)
     }
 
-    val text =
-      try {
-        bytes.decodeToString(throwOnInvalidSequence = true)
-      } catch (_: CharacterCodingException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+    return try {
+      val text = bytes.decodeToString(throwOnInvalidSequence = true)
+      if (exceedsJsonDepth(text)) {
+        return WearDecodeResult.Failure(WearDecodeFailureReason.TooDeep)
       }
-    if (exceedsJsonDepth(text)) {
-      return WearDecodeResult.Failure(WearDecodeFailureReason.TooDeep)
-    }
-    val root =
-      try {
-        json.parseToJsonElement(text).jsonObject
-      } catch (_: SerializationException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
-      } catch (_: IllegalArgumentException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+      val root = json.parseToJsonElement(text).jsonObject
+      val version =
+        (root["version"] as? JsonPrimitive)?.intOrNull
+          ?: return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+      if (version != WearProtocol.VERSION) {
+        return WearDecodeResult.Failure(WearDecodeFailureReason.UnsupportedVersion)
       }
-    val version =
-      (root["version"] as? JsonPrimitive)?.intOrNull
-        ?: return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
-    if (version != WearProtocol.VERSION) {
-      return WearDecodeResult.Failure(WearDecodeFailureReason.UnsupportedVersion)
-    }
-    val message =
-      try {
-        json.decodeFromJsonElement(WearMessage.serializer(), root)
-      } catch (_: SerializationException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
-      } catch (_: IllegalArgumentException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+      val message = json.decodeFromJsonElement(WearMessage.serializer(), root)
+      if (isValid(message)) {
+        WearDecodeResult.Success(message)
+      } else {
+        WearDecodeResult.Failure(WearDecodeFailureReason.InvalidEnvelope)
       }
-    if (!isValid(message)) {
-      return WearDecodeResult.Failure(WearDecodeFailureReason.InvalidEnvelope)
+    } catch (_: CharacterCodingException) {
+      WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+    } catch (_: IllegalArgumentException) {
+      WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
     }
-    return WearDecodeResult.Success(message)
   }
 
   private fun exceedsJsonDepth(text: String): Boolean {
@@ -354,11 +332,6 @@ object WearProtocolCodec {
       }
     }
     return false
-  }
-
-  private fun requireValid(message: WearMessage) {
-    require(message.version == WearProtocol.VERSION) { "Unsupported Wear protocol version: ${message.version}" }
-    require(isValid(message)) { "Invalid Wear protocol envelope" }
   }
 
   private fun isValid(message: WearMessage): Boolean =

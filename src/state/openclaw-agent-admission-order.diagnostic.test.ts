@@ -9,6 +9,7 @@ import * as sqlite from "../infra/node-sqlite.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as pidAlive from "../shared/pid-alive.js";
+import { disposeOpenClawAgentDatabaseByPath } from "./openclaw-agent-db-disposal.js";
 import * as agentLeases from "./openclaw-agent-db-lease.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
@@ -18,7 +19,6 @@ import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
-  disposeOpenClawAgentDatabaseByPath,
   inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
@@ -180,13 +180,13 @@ describe("physical-open admission ordering", () => {
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
   });
 
-  it("trusts a live cached handle but rejects the same FK violation after disposal", () => {
+  it("trusts a live cached handle but rejects the same FK violation after disposal", async () => {
     const { options, pathname, writer } = seed();
     const first = openOpenClawAgentDatabase(options);
     corruptForeignKey(writer);
     expect(openOpenClawAgentDatabase(options)).toBe(first);
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
-    expect(disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
+    expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
     clearOpenClawAgentIntegrityVerification(pathname, options.env);
     expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
   });
@@ -479,9 +479,9 @@ describe("asynchronous canonical admission", () => {
       if (mode !== "new") {
         const original = openOpenClawAgentDatabase(options);
         if (mode === "disposed replacement") {
-          expect(disposeOpenClawAgentDatabaseByPath(original.path, { env: options.env })).toBe(
-            true,
-          );
+          expect(
+            await disposeOpenClawAgentDatabaseByPath(original.path, { env: options.env }),
+          ).toBe(true);
         } else {
           closeOpenClawAgentDatabaseByPath(original.path);
         }
@@ -642,7 +642,7 @@ describe("asynchronous canonical admission", () => {
   it("rechecks corruption after async handle disposal", async () => {
     const { options, pathname, writer } = seed();
     await openOpenClawAgentDatabaseAsync(options);
-    expect(disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
+    expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
     clearOpenClawAgentIntegrityVerification(pathname, options.env);
     corruptForeignKey(writer);
     await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
@@ -758,6 +758,12 @@ describe("failed-open cleanup ownership", () => {
       release.mockImplementation(() => {
         throw new Error("synthetic lease release failure");
       });
+      const closeFailure = {
+        message: "Agent database close failed",
+        errors: expect.arrayContaining([
+          expect.objectContaining({ message: "synthetic lease release failure" }),
+        ]),
+      };
       if (mode === "sync") {
         expect(() =>
           openOpenClawAgentDatabase({ ...options, agentId: "other-owner", path: pathname }),
@@ -766,9 +772,7 @@ describe("failed-open cleanup ownership", () => {
         const admission = openOpenClawAgentDatabaseAsync(options);
         await Promise.all([
           expect(admission).rejects.toThrow("synthetic lease release failure"),
-          expect(closeOpenClawAgentDatabasesAsync()).rejects.toThrow(
-            "synthetic lease release failure",
-          ),
+          expect(closeOpenClawAgentDatabasesAsync()).rejects.toMatchObject(closeFailure),
         ]);
       }
       expect(rows()).toHaveLength(1);
@@ -776,9 +780,7 @@ describe("failed-open cleanup ownership", () => {
       const nextRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-close-next-owner-"));
       roots.push(nextRoot);
       options.env.OPENCLAW_STATE_DIR = nextRoot;
-      await expect(closeOpenClawAgentDatabasesAsync()).rejects.toThrow(
-        "synthetic lease release failure",
-      );
+      await expect(closeOpenClawAgentDatabasesAsync()).rejects.toMatchObject(closeFailure);
       expect(rows()).toEqual([originalLease]);
       release.mockRestore();
       await closeOpenClawAgentDatabasesAsync();

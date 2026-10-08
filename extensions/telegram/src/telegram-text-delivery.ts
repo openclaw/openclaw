@@ -52,14 +52,6 @@ function plainPage(text: string): TelegramTextDeliveryPage {
   };
 }
 
-function fallbackPage(text: string): TelegramTextDeliveryPage {
-  return {
-    plainText: text,
-    sourceText: escapeTelegramHtml(text),
-    sourceTextMode: "html",
-  };
-}
-
 export function planTelegramTextDeliveryPages(
   params: TelegramTextPlanParams,
 ): TelegramTextDeliveryPage[] {
@@ -222,7 +214,11 @@ export async function* sendTelegramTextPageParts<TPlain, THtml, TRich>(
         page.richMessage ? { index, count: delivery.chunks.length } : undefined,
         delivery.label,
       ),
-      page: fallbackPage(text),
+      page: {
+        plainText: text,
+        sourceText: escapeTelegramHtml(text),
+        sourceTextMode: "html",
+      },
     };
   }
 }

@@ -3,6 +3,7 @@ import {
   createConfigResolutionFacts,
   setConfigResolutionFacts,
 } from "../config/resolution-facts.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as bundleMcp from "./bundle-mcp.js";
@@ -10,14 +11,24 @@ import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import {
   emptyMetadataSnapshot,
   hostedFeedDiffsEntry,
-  metadataSnapshot,
+  metadataSnapshot as managementMetadataSnapshot,
 } from "./management-service.test-helpers.js";
 import { bindPluginMetadataSnapshotCache, createPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 
-const mocks = vi.hoisted(() => ({ metadata: vi.fn(), officialCatalog: vi.fn(), mcpAuth: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  metadata: vi.fn(),
+  officialCatalog: vi.fn(),
+  mcpAuth: vi.fn(),
+  remoteDetail: vi.fn(),
+}));
+
+vi.mock("../infra/clawhub-plugin-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-plugin-catalog.js")>()),
+  fetchClawHubPluginDetail: (...args: unknown[]) => mocks.remoteDetail(...args),
+}));
 
 vi.mock("../agents/mcp-oauth.js", () => ({
   readMcpOAuthCredentialsStatuses: (...args: unknown[]) => mocks.mcpAuth(...args),
@@ -37,8 +48,19 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
 const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
 const { inspectManagedPlugin } = await import("./management-service.js");
 
+function metadataSnapshot(params: Parameters<typeof managementMetadataSnapshot>[0]) {
+  const snapshot = managementMetadataSnapshot(params);
+  return {
+    ...snapshot,
+    manifestRegistry: { plugins: snapshot.plugins, diagnostics: snapshot.diagnostics },
+  };
+}
+
 describe("managed plugin inspection", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetConfigRuntimeState();
+  });
 
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
@@ -47,9 +69,163 @@ describe("managed plugin inspection", () => {
     mocks.officialCatalog.mockReset();
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
     mocks.mcpAuth.mockReset();
+    mocks.remoteDetail.mockReset();
   });
 
-  it("projects each matching MCP connection's stored OAuth state without credential details", async () => {
+  it.each([true, false])(
+    "inspects an arbitrary selected ClawHub release with manifest available: %s",
+    async (manifestAvailable) => {
+      // A runtime ID collision is not a canonical ClawHub package match.
+      mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: true, id: "community-plugin" }));
+      mocks.remoteDetail.mockResolvedValue({
+        packageName: "community/plugin",
+        displayName: "Community Plugin",
+        family: "code-plugin",
+        runtimeId: "community-plugin",
+        isOfficial: false,
+        categories: [],
+        topics: [],
+        configFields: [],
+        mcpServers: manifestAvailable ? ["docs"] : [],
+        skills: manifestAvailable ? [{ name: "research" }] : [],
+        ...(manifestAvailable
+          ? { contracts: { tools: ["research_lookup"] }, providers: ["search"] }
+          : {}),
+        versions: [],
+        selectedRelease: { version: "1.2.3" },
+        tags: { latest: "2.0.0" },
+        downloadability: { status: "downloadable" },
+        metadata: {
+          manifest: manifestAvailable ? "available" : "missing",
+          readme: "available",
+          security: "missing",
+        },
+        readme: "# Community Plugin",
+        trust: { disposition: "review-required", reasons: ["Unverified publisher"] },
+      });
+      const inspection = await inspectManagedPlugin({
+        config: {
+          plugins: {
+            entries: { "community-plugin": { hooks: { allowConversationAccess: true } } },
+          },
+        },
+        env: {},
+        clawhub: { packageName: "community/plugin", version: "1.2.3" },
+      });
+
+      expect(inspection).toMatchObject({
+        plugin: { name: "Community Plugin", version: "1.2.3", installed: false, enabled: false },
+        source: { kind: "clawhub", packageName: "community/plugin" },
+        declaredSurfaceStatus: manifestAvailable ? "partial" : "unavailable",
+        declared: {
+          tools: manifestAvailable ? ["research_lookup"] : [],
+          mcpServers: manifestAvailable ? ["docs"] : [],
+          skills: manifestAvailable ? ["research"] : [],
+        },
+        grants: { hooks: { allowConversationAccess: { effective: false } } },
+        trust: { disposition: "review-required" },
+        catalog: {
+          detail: {
+            packageName: "community/plugin",
+            readme: "# Community Plugin",
+            selectedRelease: { version: "1.2.3" },
+          },
+        },
+      });
+      expect(inspection.reviewToken).toBeUndefined();
+      expect(inspection.overview?.capabilities === undefined).toBe(!manifestAvailable);
+    },
+  );
+
+  it.each(["community-plugin", undefined, "another-plugin"])(
+    "joins installed grants only for the selected runtime identity: %s",
+    async (runtimeId) => {
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({
+          enabled: false,
+          id: "community-plugin",
+          origin: "global",
+          installRecord: {
+            source: "clawhub",
+            clawhubPackage: "community/plugin",
+            clawhubUrl: "https://clawhub.ai",
+            installPath: "/tmp/community-plugin",
+          },
+        }),
+      );
+      mocks.remoteDetail.mockResolvedValue({
+        packageName: "community/plugin",
+        runtimeId,
+        displayName: "Community Plugin",
+        family: "code-plugin",
+        isOfficial: false,
+        categories: [],
+        topics: [],
+        configFields: [],
+        mcpServers: [],
+        skills: [],
+        versions: [],
+        selectedRelease: { version: "2.0.0" },
+        tags: {},
+        downloadability: { status: "downloadable" },
+        metadata: { manifest: "available", readme: "missing", security: "missing" },
+        contracts: { tools: ["new_tool"] },
+      });
+      const inspection = await inspectManagedPlugin({
+        config: {
+          plugins: {
+            entries: { "community-plugin": { hooks: { allowConversationAccess: true } } },
+          },
+        },
+        env: {},
+        clawhub: { packageName: "community/plugin", version: "2.0.0" },
+      });
+
+      expect(inspection).toMatchObject({
+        plugin: { id: "community-plugin", installed: true, version: "2.0.0" },
+        declared: { tools: ["new_tool"] },
+        grants: {
+          hooks: {
+            allowConversationAccess:
+              runtimeId === "community-plugin"
+                ? { effective: true, configured: true }
+                : { effective: false },
+          },
+        },
+      });
+      expect(inspection.reviewToken).toBeUndefined();
+    },
+  );
+
+  it("offers installed account sign-in and follows operator configuration changes", async () => {
+    const snapshot = metadataSnapshot({ enabled: true });
+    snapshot.plugins[0]!.mcpServers = {
+      docs: { transport: "streamable-http", url: "https://example.test/mcp", auth: "oauth" },
+    };
+    mocks.metadata.mockReturnValue(snapshot);
+    mocks.mcpAuth.mockResolvedValue([{ state: "unauthenticated" }]);
+    const config: OpenClawConfig = {
+      plugins: { entries: { workboard: { enabled: true } } },
+    };
+    setRuntimeConfigSnapshot(config);
+    const inspect = () => inspectManagedPlugin({ config, pluginId: "workboard", env: {} });
+    const auth = [{ serverName: "docs", state: "unauthenticated" }];
+    expect((await inspect()).mcpAuth).toEqual(auth);
+    expect(config.mcp).toBeUndefined();
+
+    config.mcp = {
+      servers: { docs: { url: "https://override.test/mcp", auth: "oauth" } },
+    };
+    expect((await inspect()).mcpAuth).toBeUndefined();
+    config.mcp.servers!.docs!.url = "https://example.test/mcp";
+    expect((await inspect()).mcpAuth).toEqual(auth);
+    config.mcp.servers!.docs = { enabled: false };
+    expect((await inspect()).mcpAuth).toBeUndefined();
+    delete config.mcp.servers!.docs;
+    expect((await inspect()).mcpAuth).toEqual(auth);
+  });
+
+  it("projects only eligible operator MCP connections without credential details", async () => {
     const snapshot = metadataSnapshot({ enabled: true });
     const states = [
       "unauthenticated",
@@ -67,15 +243,32 @@ describe("managed plugin inspection", () => {
         },
       ]),
     );
-    snapshot.plugins[0]!.mcpServers = servers;
-    mocks.metadata.mockReturnValue({
-      ...snapshot,
-      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
-    });
+    const base: McpServerConfig = {
+      transport: "streamable-http",
+      url: "https://example.test/mcp",
+      auth: "oauth",
+    };
+    const excluded: Record<string, McpServerConfig> = {
+      disabled: { ...base, enabled: false },
+      disabledOnly: { enabled: false },
+      command: { ...base, command: "node" },
+      unauthenticated: { ...base, auth: undefined },
+      requester: { ...base, oauth: { identity: "per-requester" } },
+      profile: { ...base, oauth: { authProfileId: "existing-account" } },
+      unrelated: { ...base, url: "https://other.example.test/mcp" },
+    };
+    snapshot.plugins[0]!.mcpServers = {
+      ...servers,
+      ...Object.fromEntries(Object.keys(excluded).map((name) => [name, base])),
+    };
+    mocks.metadata.mockReturnValue(snapshot);
     mocks.mcpAuth.mockResolvedValue(states.map((state) => ({ state, expiresAt: 100 })));
 
     const inspection = await inspectManagedPlugin({
-      config: { plugins: { entries: { workboard: { enabled: true } } }, mcp: { servers } },
+      config: {
+        plugins: { entries: { workboard: { enabled: true } } },
+        mcp: { servers: { ...servers, ...excluded } },
+      },
       pluginId: "workboard",
       env: {},
     });
@@ -94,62 +287,6 @@ describe("managed plugin inspection", () => {
     );
   });
 
-  it.each([
-    { enabled: false },
-    { command: "node" },
-    { auth: undefined },
-    { oauth: { identity: "per-requester" as const } },
-    { oauth: { authProfileId: "existing-account" } },
-    { url: "https://other.example.test/mcp" },
-  ])("omits ineligible or unrelated MCP credentials: %j", async (override) => {
-    const server: McpServerConfig = {
-      transport: "streamable-http",
-      url: "https://example.test/mcp",
-      auth: "oauth",
-    };
-    const snapshot = metadataSnapshot({ enabled: true });
-    snapshot.plugins[0]!.mcpServers = { docs: server };
-    mocks.metadata.mockReturnValue({
-      ...snapshot,
-      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
-    });
-
-    const inspection = await inspectManagedPlugin({
-      config: {
-        plugins: { entries: { workboard: { enabled: true } } },
-        mcp: { servers: { docs: { ...server, ...override } } },
-      },
-      pluginId: "workboard",
-      env: {},
-    });
-
-    expect(inspection.mcpAuth).toBeUndefined();
-    expect(mocks.mcpAuth).not.toHaveBeenCalled();
-  });
-
-  it("does not attribute a later plugin's same-name MCP server to the shadowed plugin", async () => {
-    const server = { url: "https://example.test/mcp", auth: "oauth" as const };
-    const snapshot = metadataSnapshot({ enabled: true });
-    snapshot.plugins[0]!.mcpServers = { docs: server };
-    const other = { ...snapshot.plugins[0]!, id: "other" };
-    mocks.metadata.mockReturnValue({
-      ...snapshot,
-      manifestRegistry: { plugins: [...snapshot.plugins, other], diagnostics: [] },
-    });
-
-    const inspection = await inspectManagedPlugin({
-      config: {
-        plugins: { entries: { workboard: { enabled: true }, other: { enabled: true } } },
-        mcp: { servers: { docs: server } },
-      },
-      pluginId: "workboard",
-      env: {},
-    });
-
-    expect(inspection.mcpAuth).toBeUndefined();
-    expect(mocks.mcpAuth).not.toHaveBeenCalled();
-  });
-
   it("reuses MCP ownership until config or metadata changes while reading OAuth state live", async () => {
     const server = { url: "https://example.test/mcp", auth: "oauth" as const };
     const snapshot = metadataSnapshot({ enabled: true });
@@ -165,6 +302,7 @@ describe("managed plugin inspection", () => {
       plugins: { entries: { workboard: { enabled: true }, other: { enabled: false } } },
       mcp: { servers: { docs: server } },
     };
+    setRuntimeConfigSnapshot(config);
     const inspect = (currentConfig = config) =>
       inspectManagedPlugin({ config: currentConfig, pluginId: "workboard", env: {} });
     const load = vi.spyOn(bundleMcp, "loadEnabledBundleMcpConfig");
@@ -195,16 +333,22 @@ describe("managed plugin inspection", () => {
     mocks.metadata.mockReturnValue(metadata);
     expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
     expect(load).toHaveBeenCalledTimes(3);
+
+    config.plugins!.entries!.other!.enabled = true;
+    setRuntimeConfigSnapshot(config);
+    const shadowed = await inspect();
+    expect(shadowed.plugin.enabled).toBe(true);
+    expect(shadowed.mcpAuth).toBeUndefined();
+    config.plugins!.entries!.other!.enabled = false;
+    setRuntimeConfigSnapshot(config);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
   });
 
   it("omits resolver-owned requester credentials from operator plugin inspection", async () => {
     const server = { url: "https://example.test/mcp", auth: "oauth" as const };
     const snapshot = metadataSnapshot({ enabled: true });
     snapshot.plugins[0]!.mcpServers = { docs: server };
-    mocks.metadata.mockReturnValue({
-      ...snapshot,
-      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
-    });
+    mocks.metadata.mockReturnValue(snapshot);
     const registry = createEmptyPluginRegistry();
     registry.mcpServerConnectionResolvers.push({
       pluginId: "workboard",
@@ -286,38 +430,6 @@ describe("managed plugin inspection", () => {
       ]);
     },
   );
-
-  it("inspects bundled plugin metadata with its effective default hook grants", async () => {
-    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: true }));
-
-    const inspection = await inspectManagedPlugin({
-      config: { plugins: { entries: { workboard: { enabled: true } } } },
-      env: {},
-      pluginId: "workboard",
-    });
-
-    expect(inspection).toMatchObject({
-      ok: true,
-      plugin: {
-        id: "workboard",
-        name: "Workboard",
-        description: "Coordinate agent work in a shared board.",
-        origin: "bundled",
-        installed: true,
-        enabled: true,
-      },
-      source: { kind: "bundled" },
-      reviewToken: expect.stringMatching(/^[a-f\d]{64}$/),
-      grants: {
-        hooks: {
-          allowPromptInjection: { effective: true },
-          allowConversationAccess: { effective: true },
-        },
-      },
-    });
-    expect(inspection.reviewToken).toBe(computeDeclaredSurfaceHash(inspection.declared));
-    expect(inspection).not.toHaveProperty("trust");
-  });
 
   it("inspects tracked external provenance, pinned integrity, operator grants, and trust", async () => {
     mocks.metadata.mockReturnValue(
@@ -417,35 +529,33 @@ describe("managed plugin inspection", () => {
     });
   });
 
-  it.each(["spec", "resolvedSpec"] as const)(
-    "redacts credentials from the persisted %s without changing the install record",
-    async (field) => {
-      const url = new URL("https://example.invalid/plugins/demo.git");
-      url.username = "fixture-user";
-      url.password = "fixture-password";
-      url.searchParams.set("token", "fixture-token");
-      url.searchParams.set("ref", "stable");
-      const spec = `git:${url.href}`;
-      const metadata = metadataSnapshot({
-        id: "community-plugin",
-        origin: "global",
-        enabled: false,
-        installRecord: { source: "git", installPath: "/tmp/community-plugin", [field]: spec },
-      });
-      mocks.metadata.mockReturnValue(metadata);
+  it("redacts credentials from the persisted resolved spec without changing the install record", async () => {
+    const field = "resolvedSpec";
+    const url = new URL("https://example.invalid/plugins/demo.git");
+    url.username = "fixture-user";
+    url.password = "fixture-password";
+    url.searchParams.set("token", "fixture-token");
+    url.searchParams.set("ref", "stable");
+    const spec = `git:${url.href}`;
+    const metadata = metadataSnapshot({
+      id: "community-plugin",
+      origin: "global",
+      enabled: false,
+      installRecord: { source: "git", installPath: "/tmp/community-plugin", [field]: spec },
+    });
+    mocks.metadata.mockReturnValue(metadata);
 
-      const inspection = await inspectManagedPlugin({
-        config: {},
-        env: {},
-        pluginId: "community-plugin",
-      });
+    const inspection = await inspectManagedPlugin({
+      config: {},
+      env: {},
+      pluginId: "community-plugin",
+    });
 
-      expect(inspection.source?.spec).toBe(
-        "git:https://***:***@example.invalid/plugins/demo.git?token=***&ref=stable",
-      );
-      expect(metadata.index.installRecords["community-plugin"]?.[field]).toBe(spec);
-    },
-  );
+    expect(inspection.source?.spec).toBe(
+      "git:https://***:***@example.invalid/plugins/demo.git?token=***&ref=stable",
+    );
+    expect(metadata.index.installRecords["community-plugin"]?.[field]).toBe(spec);
+  });
 
   it.each([false, true])(
     "inspects the pinned catalog candidate with npm available: %s",

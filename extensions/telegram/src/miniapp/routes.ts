@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
@@ -119,12 +120,18 @@ async function handleAuth(
   if (!body.ok) {
     return;
   }
-  const authBody = parseAuthBody(body.value);
-  if (!authBody) {
+  const authBody = body.value;
+  if (
+    !isRecord(authBody) ||
+    typeof authBody.initData !== "string" ||
+    typeof authBody.launchTicket !== "string"
+  ) {
     sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
     return;
   }
-  const accountId = normalizeAccountId(authBody.accountId ?? DEFAULT_ACCOUNT_ID);
+  const accountId = normalizeAccountId(
+    typeof authBody.accountId === "string" ? authBody.accountId : DEFAULT_ACCOUNT_ID,
+  );
   const cfg = currentConfig();
   const account = resolveTelegramAccount({ cfg, accountId });
   const validated = validateTelegramMiniAppInitData({
@@ -195,35 +202,13 @@ async function handleAuth(
   }
 }
 
-function parseAuthBody(
-  value: unknown,
-): { initData: string; launchTicket: string; accountId?: string } | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  if (typeof value.initData !== "string" || typeof value.launchTicket !== "string") {
-    return null;
-  }
-  return {
-    initData: value.initData,
-    launchTicket: value.launchTicket,
-    ...(typeof value.accountId === "string" ? { accountId: value.accountId } : {}),
-  };
-}
-
 function rememberReplay(hash: string, expiresAtMs: number): boolean {
   pruneReplayCache();
   if (replayCache.has(hash)) {
     return false;
   }
   replayCache.set(hash, expiresAtMs);
-  while (replayCache.size > REPLAY_CACHE_LIMIT) {
-    const first = replayCache.keys().next().value;
-    if (!first) {
-      return true;
-    }
-    replayCache.delete(first);
-  }
+  pruneMapToMaxSize(replayCache, REPLAY_CACHE_LIMIT);
   return true;
 }
 

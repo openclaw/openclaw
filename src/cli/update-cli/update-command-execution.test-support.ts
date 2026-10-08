@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import * as gatewayBindings from "../../daemon/managed-gateway-bindings.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
+import type { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { executeMutableUpdate } from "./update-command-execution.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
@@ -136,7 +138,7 @@ const successfulUpdate: UpdateRunResult = {
 
 function executionParams(
   updateInstallKind: "git" | "package",
-): Parameters<typeof executeMutableUpdate>[0] {
+): Omit<Parameters<typeof executeMutableUpdate>[0], "executionGuards"> {
   return {
     root: "/opt/openclaw",
     installKind: updateInstallKind,
@@ -158,6 +160,19 @@ function executionParams(
     recoveryState: { triageTarget: { env: {} } },
     prepareMutableUpdate: mocks.prepareMutableUpdate,
     packageTargetSchemaVersions: { state: 15, agent: 19 },
+  };
+}
+
+async function bindExecutionGuards(
+  params: Omit<Parameters<typeof executeMutableUpdate>[0], "executionGuards">,
+): Promise<Parameters<typeof executeMutableUpdate>[0]> {
+  const finalParams = { ...params };
+  const createGuards: typeof createUpdateCommandExecutionGuards = (
+    await import("./update-command-execution-guards.js")
+  ).createUpdateCommandExecutionGuards;
+  return {
+    ...finalParams,
+    executionGuards: createGuards(finalParams.opts, finalParams.root),
   };
 }
 
@@ -208,6 +223,7 @@ function inspectOrStopService(phase: "inspect" | "prepare" = "prepare"): PreMana
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([]);
   mocks.serviceStopped = false;
   mocks.validateCanary.mockResolvedValue({
     status: "ok",
@@ -236,4 +252,11 @@ beforeEach(() => {
   mocks.verifyPackageRecovery.mockResolvedValue({ serviceRestartSafe: true });
 });
 
-export { executionParams, inspectOrStopService, mocks, schemaContext, successfulUpdate };
+export {
+  bindExecutionGuards,
+  executionParams,
+  inspectOrStopService,
+  mocks,
+  schemaContext,
+  successfulUpdate,
+};

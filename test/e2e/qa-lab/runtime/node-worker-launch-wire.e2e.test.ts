@@ -105,6 +105,7 @@ describe("node worker launch wire", () => {
           owner: gatewayOwner,
           providerBaseUrl: provider.baseUrl,
           executionIdentity: true,
+          useRepoCli: false,
         });
         operator = await connectWireClient({ gateway, role: "operator", identity: null });
         workerNode = await createPairedNodeWorkerHost({

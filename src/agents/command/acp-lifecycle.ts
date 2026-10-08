@@ -91,7 +91,6 @@ type ActiveAcpTool = AcpRunIdentity & {
 type AcpToolLifecycleTracker = {
   active: Map<string, ActiveAcpTool>;
   terminalToolCallIds: Set<string>;
-  saturated: boolean;
 };
 
 const MAX_TRACKED_ACP_TOOLS = 4_096;
@@ -100,7 +99,6 @@ export function createAcpToolLifecycleTracker(): AcpToolLifecycleTracker {
   return {
     active: new Map(),
     terminalToolCallIds: new Set(),
-    saturated: false,
   };
 }
 
@@ -203,8 +201,7 @@ function emitAcpToolExecutionEvent(
     // lifecycle cleanup releases the complete set. Other runs own independent trackers.
     const trackedIdentities =
       params.toolTracker.active.size + params.toolTracker.terminalToolCallIds.size;
-    if (params.toolTracker.saturated || trackedIdentities >= MAX_TRACKED_ACP_TOOLS) {
-      params.toolTracker.saturated = true;
+    if (trackedIdentities >= MAX_TRACKED_ACP_TOOLS) {
       return;
     }
   }
@@ -286,7 +283,6 @@ function finalizeAcpToolsForRun(
   }
   toolTracker.active.clear();
   toolTracker.terminalToolCallIds.clear();
-  toolTracker.saturated = false;
 }
 
 function resolvePresentProxyEnvKeys(env: NodeJS.ProcessEnv = process.env): string[] {

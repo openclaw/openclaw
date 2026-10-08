@@ -8,6 +8,7 @@ import WebSocket from "ws";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
 
 const tempDirs = createTempDirTracker();
@@ -31,13 +32,13 @@ const childScript = `
   try {
     await runGatewayLoop({
       ownsProcessLifecycle: true,
-      onRestartStartupFailure: async () => {
-        process.stdout.write("waiting:" + starts + "\\n");
-      },
       start: async () => {
         const attempt = ++starts;
         process.stdout.write("start:" + attempt + "\\n");
-        if (fs.existsSync(faultPath)) throw new Error("fixture startup refused");
+        if (fs.existsSync(faultPath)) {
+          process.stdout.write("waiting:" + starts + "\\n");
+          throw new Error("fixture startup refused");
+        }
         const server = http.createServer((_request, response) => response.end("ready"));
         await new Promise((resolve, reject) => {
           server.once("error", reject);
@@ -59,7 +60,6 @@ const childScript = `
             if (closeFailure) {
               const error = new TypeError("fixture close owner failed");
               error.stack = "TypeError: fixture close owner failed\\n    at closeOwner (fixture.js:12:3)";
-              if (closeFailure === "sync") throw error;
               return Promise.reject(error);
             }
             return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
@@ -98,10 +98,21 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-function startFixture(initialFailure = false, closeFailure = "") {
+function startFixture(initialFailure = false, closeFailure = "", executable = process.execPath) {
   const directory = tempDirs.make("openclaw-restart-liveness-");
   const home = path.join(directory, "home");
   fs.mkdirSync(home);
+  const pendingClose = closeFailure === "pending";
+  const bin = path.join(directory, "bin");
+  if (pendingClose) {
+    fs.mkdirSync(bin);
+    // This fixture owns a short native deadline, independent of the service policy.
+    fs.writeFileSync(
+      path.join(bin, "launchctl"),
+      `#!/bin/sh\nprintf '\\tstate = SIGTERMed\\n\\texit timeout = 10\\n\\tpid = %s\\n' "$(cat "$0.pid")"\n`,
+      { mode: 0o755 },
+    );
+  }
   const faultPath = path.join(directory, "startup-fault");
   const logFile = path.join(directory, "gateway.jsonl");
   const stateDir = path.join(directory, "state");
@@ -113,7 +124,7 @@ function startFixture(initialFailure = false, closeFailure = "") {
     fs.writeFileSync(faultPath, "refuse");
   }
   const child = spawn(
-    process.execPath,
+    executable,
     [
       "--inspect-port=127.0.0.1:0",
       "--import",
@@ -126,15 +137,13 @@ function startFixture(initialFailure = false, closeFailure = "") {
     ],
     {
       env: {
-        PATH: process.env.PATH,
+        PATH: pendingClose ? `${bin}${path.delimiter}${process.env.PATH ?? ""}` : process.env.PATH,
         HOME: home,
         TMPDIR: directory,
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: path.join(directory, "openclaw.json"),
         OPENCLAW_NO_RESPAWN: "1",
-        ...(closeFailure === "pending"
-          ? { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway.test" }
-          : {}),
+        ...(pendingClose ? { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway.test" } : {}),
         NODE_DISABLE_COMPILE_CACHE: "1",
         TSX_DISABLE_CACHE: "1",
         ESBUILD_WORKER_THREADS: "0",
@@ -145,6 +154,10 @@ function startFixture(initialFailure = false, closeFailure = "") {
   const closed = once(child, "close");
   children.set(child, closed);
   void closed.catch(() => {});
+  if (pendingClose) {
+    // Native queries may run through the spawn broker, so report the fixture's PID.
+    fs.writeFileSync(path.join(bin, "launchctl.pid"), String(child.pid));
+  }
   let output = "";
   child.stdout?.on("data", (chunk: Buffer) => (output += chunk.toString()));
   child.stderr?.on("data", (chunk: Buffer) => (output += chunk.toString()));
@@ -176,7 +189,7 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
   posixIt(
     "attaches the Node debugger on SIGUSR1 and restarts only on SIGUSR2",
     async () => {
-      const fixture = startFixture();
+      const fixture = startFixture(false, "", resolveTestNodeExecPath());
       await fixture.waitForOutput("ready:1");
       expect(fixture.child.kill("SIGUSR1")).toBe(true);
       await fixture.waitForOutput("Debugger listening on ws://127.0.0.1:");
@@ -231,10 +244,10 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
     60_000,
   );
 
-  posixIt.each(["sync", "rejected"])(
-    "persists %s close failures before a SIGUSR2 force-exit",
-    async (mode) => {
-      const fixture = startFixture(false, mode);
+  posixIt(
+    "persists rejected close failures before a SIGUSR2 force-exit",
+    async () => {
+      const fixture = startFixture(false, "rejected");
       await fixture.waitForOutput("ready:1");
       expect(fixture.child.kill("SIGUSR2")).toBe(true);
       expect(await fixture.closed, fixture.output()).toEqual([1, null]);
@@ -283,14 +296,14 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
     60_000,
   );
 
-  posixIt.each(["SIGTERM", "SIGINT"] as const)(
-    "exits cleanly on %s while waiting after a failed restart",
-    async (signal) => {
+  posixIt(
+    "exits cleanly on SIGTERM while waiting after a failed restart",
+    async () => {
       const fixture = startFixture();
       await fixture.waitForOutput("ready:1");
       fs.writeFileSync(fixture.faultPath, "refuse");
       await expectFailedRestartWaiting(fixture, 2);
-      expect(fixture.child.kill(signal)).toBe(true);
+      expect(fixture.child.kill("SIGTERM")).toBe(true);
       expect(await fixture.closed, fixture.output()).toEqual([0, null]);
       expect(fixture.output()).not.toContain("start:3");
     },

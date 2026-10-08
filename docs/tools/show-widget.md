@@ -245,8 +245,32 @@ Include playback controls so the user can start playback when the browser blocks
 autoplay. The format must be supported by the browser or native web view.
 
 ```html
-<video controls playsinline src="https://example.com/video.mp4"></video>
+<video controls playsinline preload="auto" src="https://example.com/video.mp4"></video>
 ```
+
+In chat, scrolling over a video or other widget content continues through the
+conversation. A scrollable region inside the widget consumes the gesture until
+it reaches its edge, then passes the remaining movement to chat.
+
+The tool's authoring default is `preload="auto"`, which lets the browser load a
+first frame before playback without autoplaying. This can download media before
+the user presses Play; choose `metadata` or `none` explicitly when conserving
+bandwidth is more important than an initial frame. Browsers may limit preloading.
+Existing saved widgets keep their authored preload attributes.
+
+For a chosen cover image, supply a `poster` containing an embedded `data:` image.
+Widgets do not generate thumbnails automatically, and HTTPS poster images are
+blocked by the image policy. With `preload="none"` and no poster, browsers may
+show a black player until playback starts. YouTube page URLs are not direct video
+files, and YouTube iframes remain blocked inside widgets. In the Control UI, use a
+dedicated [YouTube card](/web/control-ui/chat#youtube-videos) instead:
+
+```text
+[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Trailer" /]
+```
+
+Put this shortcode in the assistant reply, not in `widget_code`. It needs no
+`show_widget` call. On other surfaces, use a regular YouTube link.
 
 Media playback has its own content policy. It does not grant `fetch`, WebSocket,
 remote images, external scripts, or nested frames. API connections, including

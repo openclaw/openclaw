@@ -39,8 +39,7 @@ import { normalizeToolPolicyName } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
-import { selectContextEngineForTranscriptHost } from "./context-engine-logical-turn.js";
-import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
+import { beginContextEngineLogicalTurn } from "./context-engine-turn-begin.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
@@ -53,13 +52,11 @@ import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
-import type { AgentHarnessPolicy } from "./policy.js";
 import {
   buildAgentHarnessSelectionDecision,
   resolveAgentHarnessSelectionDecision,
   type AgentHarnessSelectionParams,
   type AgentHarnessSelectionDecisionParams,
-  type AgentHarnessSelectionCandidate,
   type AgentHarnessSelectionDecision as AgentHarnessSelectionFact,
   type AgentHarnessPreparedModelProvider,
 } from "./selection-decision.js";
@@ -201,12 +198,17 @@ export async function runAgentHarnessAttempt(
   // redirect its transcript or credentials through a second support decision.
   const selection =
     nativeSessionRuntime?.auth === "native"
-      ? buildSelectionDecision({
+      ? {
+          ...buildAgentHarnessSelectionDecision({
+            harness: isBuiltInOpenClawAgentHarness(nativeSessionRuntime.harness)
+              ? undefined
+              : nativeSessionRuntime.harness,
+            policy: { runtime: nativeSessionRuntime.harness.id, runtimeSource: "model" },
+            selectedReason: "forced_plugin",
+            candidates: [],
+          }),
           harness: nativeSessionRuntime.harness,
-          policy: { runtime: nativeSessionRuntime.harness.id, runtimeSource: "model" },
-          selectedReason: "forced_plugin",
-          candidates: [],
-        })
+        }
       : selectPreparedAgentHarness(params);
   const harness = selection.harness;
   const nativeOwnsModel = nativeSessionRuntime?.auth === "native";
@@ -262,24 +264,17 @@ export async function runAgentHarnessAttempt(
     );
   }
   if (internalParams.contextEngineLogicalTurnLease) {
-    selectContextEngineForTranscriptHost({
+    const effective = await beginContextEngineLogicalTurn({
       lease: internalParams.contextEngineLogicalTurnLease,
       host: {
         id: `agent-harness:${harness.id}`,
         label: `agent harness "${harness.id}"`,
         capabilities: harness.contextEngineHostCapabilities ?? [],
       },
-      operation: "agent-run",
       recorder: internalParams.userTurnTranscriptRecorder,
-    });
-    await drainPendingContextEngineTurnsBeforeRun({
-      admission: internalParams.userTurnTranscriptRecorder?.getAdmissionReceipt(),
       isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
-      lease: internalParams.contextEngineLogicalTurnLease,
-      recorder: internalParams.userTurnTranscriptRecorder,
       sessionTarget: internalParams.sessionTarget,
     });
-    const effective = internalParams.contextEngineLogicalTurnLease.begin();
     internalParams = {
       ...internalParams,
       contextEngine: effective.engine.info.id === "legacy" ? undefined : effective.engine,
@@ -317,7 +312,11 @@ export async function runAgentHarnessAttempt(
   if (nativeSessionRuntime) {
     await nativeSessionRuntime.assertCurrent();
   }
-  const attemptParams = withoutHarnessSetupAuthority(internalParams);
+  const {
+    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    systemAgentTool: _systemAgentTool,
+    ...attemptParams
+  } = internalParams;
   const pluginAttempt = withoutInternalHarnessAuthority(
     attemptParams,
     harness,
@@ -521,17 +520,6 @@ function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): 
   return toolsAllow?.length === 1 && normalizeToolPolicyName(toolsAllow[0] ?? "") === "openclaw";
 }
 
-function withoutHarnessSetupAuthority(
-  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
-): EmbeddedRunAttemptParams {
-  const {
-    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
-    systemAgentTool: _systemAgentTool,
-    ...attemptParams
-  } = params;
-  return attemptParams;
-}
-
 function withoutInternalHarnessAuthority(
   params: EmbeddedRunAttemptParams,
   harness: AgentHarness,
@@ -618,6 +606,7 @@ function withoutPluginHarnessPrivateState(
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
     trajectoryRecorder: _trajectoryRecorder,
     inputAttachmentMedia: _inputAttachmentMedia,
+    supportsTurnScopedToolRestrictions: _supportsTurnScopedToolRestrictions,
     __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
     ...pluginParams
   } = params as EmbeddedRunAttemptInternalParams & {
@@ -693,21 +682,6 @@ function appendPluginHarnessToolPolicyPrompt(existing: string | undefined, promp
     return prompt;
   }
   return trimmed.includes(prompt) ? trimmed : `${trimmed}\n\n${prompt}`;
-}
-
-function buildSelectionDecision(params: {
-  harness: AgentHarness;
-  policy: AgentHarnessPolicy;
-  selectedReason: AgentHarnessSelectionDecision["selectedReason"];
-  candidates: AgentHarnessSelectionCandidate[];
-}): AgentHarnessSelectionDecision {
-  return {
-    ...buildAgentHarnessSelectionDecision({
-      ...params,
-      harness: isBuiltInOpenClawAgentHarness(params.harness) ? undefined : params.harness,
-    }),
-    harness: params.harness,
-  };
 }
 
 function logAgentHarnessSelection(

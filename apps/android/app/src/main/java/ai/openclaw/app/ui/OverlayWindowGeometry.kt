@@ -25,17 +25,16 @@ internal fun sampleOverlayWindowGeometry(
   overlayView: View,
 ): OverlayWindowGeometry? {
   val displayId = activityView.display?.displayId
-  return if (activity != null && activityView.isAttachedToWindow && overlayView.isAttachedToWindow &&
-    displayId != null && displayId == overlayView.display?.displayId
+  if (activity == null || !activityView.isAttachedToWindow || !overlayView.isAttachedToWindow ||
+    displayId == null || displayId != overlayView.display?.displayId
   ) {
-    val extent = WindowMetricsCalculator.getOrCreate().computeCurrentWindowMetrics(activity).bounds
-    OverlayWindowGeometry(
-      IntRect(0, 0, extent.width(), extent.height()),
-      activityView.windowScreenOrigin() - overlayView.windowScreenOrigin(),
-    )
-  } else {
-    null
+    return null
   }
+  val extent = WindowMetricsCalculator.getOrCreate().computeCurrentWindowMetrics(activity).bounds
+  return OverlayWindowGeometry(
+    IntRect(0, 0, extent.width(), extent.height()),
+    activityView.windowScreenOrigin() - overlayView.windowScreenOrigin(),
+  )
 }
 
 @Composable

@@ -26,7 +26,7 @@ export function getCodexTestToolFactory(
 
 /** Minimal host authority for tests that do not exercise host policy or approvals. */
 export function createCodexTestHostCapabilities(
-  overrides: Partial<Omit<HostCapabilities, "createToolSurface">> = {},
+  overrides: Partial<Omit<HostCapabilities, "createToolSurfaceAsync">> = {},
 ): HostCapabilities {
   const host: HostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability",
@@ -39,7 +39,7 @@ export function createCodexTestHostCapabilities(
       release: () => {},
     }),
     bindToolSurface: (tools) => tools,
-    createToolSurface: (options, bindingOptions) =>
+    createToolSurfaceAsync: async (options, bindingOptions) =>
       host.bindToolSurface(
         (toolFactories.get(host) ?? createOpenClawCodingTools)(options),
         bindingOptions,

@@ -114,7 +114,7 @@ export function createGatewayAuxHandlers(
     approvalKind: "exec" | "plugin" | "system-agent",
     resolveAllowedDecisions: (request: TPayload) => readonly ExecApprovalDecision[],
     resolveStandingGrantMint?: (request: TPayload) => OperatorStandingGrantMintSpec | null,
-    retainPlacementStandingGrant?: PlacementStandingGrantRuntime["retain"],
+    retainPlacementStandingGrantAsync?: PlacementStandingGrantRuntime["retainAsync"],
   ) =>
     new ExecApprovalManager<TPayload>({
       scheduler: params.scheduler,
@@ -123,7 +123,7 @@ export function createGatewayAuxHandlers(
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
       resolveAllowedDecisions,
       ...(resolveStandingGrantMint ? { resolveStandingGrantMint } : {}),
-      ...(retainPlacementStandingGrant ? { retainPlacementStandingGrant } : {}),
+      ...(retainPlacementStandingGrantAsync ? { retainPlacementStandingGrantAsync } : {}),
       ...(params.resolveGrantDefaultExpiresAtMs
         ? { resolveStandingGrantExpiresAtMs: params.resolveGrantDefaultExpiresAtMs }
         : {}),
@@ -181,12 +181,9 @@ export function createGatewayAuxHandlers(
     { cacheRejections: true },
   );
   const reloadSecrets = createGatewaySecretsReloader(params);
-  const loadSecretsModule = createLazyPromise(() => import("./server-methods/secrets.js"), {
-    cacheRejections: true,
-  });
   const loadSecretStoreWriteService = createLazyPromise(
     async () => {
-      const { createSecretStoreWriteService } = await loadSecretsModule();
+      const { createSecretStoreWriteService } = await import("./server-methods/secrets.js");
       return createSecretStoreWriteService({ reloadSecrets, log: params.log });
     },
     { cacheRejections: true },
@@ -231,7 +228,7 @@ export function createGatewayAuxHandlers(
       }
       return { kind: "placement", ...request.placementGrant };
     },
-    placementStandingGrants.retain,
+    placementStandingGrants.retainAsync,
   );
   const systemAgentApprovalManager = createApprovalManager<SystemAgentApprovalRequestPayload>(
     "system-agent",
@@ -322,10 +319,6 @@ export function createGatewayAuxHandlers(
       questionManager.cancelClosedAuthorities({ runId: claim.runId });
     },
   );
-  const unregisterApprovalAuthorityObserver = () => {
-    unregisterWorkerTurnClaimClosedObserver?.();
-    unregisterApprovalAuthorityClosedObserver();
-  };
   const cancelRunBoundApprovals = (
     target: string | AgentRunDelegatedAuthority,
     context: GatewayRequestContext,
@@ -382,7 +375,7 @@ export function createGatewayAuxHandlers(
   const loadSecretsHandlers = createLazyPromise(
     async () => {
       const [{ createSecretsHandlers }, storeWriteService] = await Promise.all([
-        loadSecretsModule(),
+        import("./server-methods/secrets.js"),
         loadSecretStoreWriteService(),
       ]);
       return createSecretsHandlers({
@@ -424,7 +417,8 @@ export function createGatewayAuxHandlers(
       stopPromise = (async () => {
         // Preserve the existing authority-observer stop boundary. Retirement is
         // local only; pending durable approvals belong to next-start epoch recovery.
-        unregisterApprovalAuthorityObserver();
+        unregisterWorkerTurnClaimClosedObserver?.();
+        unregisterApprovalAuthorityClosedObserver();
         beginCloseApprovalObservers();
         for (const manager of approvalManagers) {
           manager.retire();

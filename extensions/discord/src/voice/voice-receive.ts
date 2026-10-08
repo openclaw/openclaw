@@ -7,11 +7,11 @@ import type { Client } from "../internal/discord.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import type { DiscordAudioFrame } from "./audio-worker-protocol.js";
 import {
-  beginVoiceCapture,
   clearVoiceCaptureFinalizeTimer,
   finishVoiceCapture,
   scheduleVoiceCaptureFinalize,
   waitForVoiceCaptureAdmission,
+  type VoiceCaptureEntry,
 } from "./capture-state.js";
 import {
   type DiscordVoiceIngressContext,
@@ -80,7 +80,7 @@ export class DiscordVoiceReceive {
     },
   ) {}
 
-  scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string, _reason: string): void {
+  scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string): void {
     // Before admission there is no worker subscription. Main expires only its
     // reservation; subscribed stream deadlines are driven by the worker receiver.
     if (entry.capture.get(userId)?.stream) {
@@ -139,7 +139,8 @@ export class DiscordVoiceReceive {
     }
     // A recorder can promote this reservation while native conversation admission
     // waits, without repeating admission or subscribing before either authority exists.
-    const reservation = beginVoiceCapture(entry.capture, userId);
+    const reservation: VoiceCaptureEntry = {};
+    entry.capture.set(userId, reservation);
     try {
       let realtimeIngress: Promise<DiscordVoiceIngressContext | null> | undefined;
       if (realtime && !capture) {
@@ -181,16 +182,9 @@ export class DiscordVoiceReceive {
 
   private responseContext(entry: VoiceSessionEntry, userId: string) {
     return {
-      readPolicy: this.params.readPolicy,
+      ...this.params,
       entry,
       userId,
-      accountId: this.params.accountId,
-      cfg: this.params.cfg,
-      discordConfig: this.params.discordConfig,
-      admissionAllowFrom: this.params.admissionAllowFrom,
-      runtime: this.params.runtime,
-      speakerContext: this.params.speakerContext,
-      client: this.params.client,
       enqueuePlayback: (playbackEntry: VoiceSessionEntry, task: () => Promise<void>) => {
         playbackEntry.playbackQueue = playbackEntry.playbackQueue
           .then(task)
@@ -204,7 +198,7 @@ export class DiscordVoiceReceive {
   private async receiveSpeaker(
     entry: VoiceSessionEntry,
     userId: string,
-    reservation: ReturnType<typeof beginVoiceCapture>,
+    reservation: VoiceCaptureEntry,
     conversationAllowed: boolean,
     admittedIngress?: Promise<DiscordVoiceIngressContext | null>,
   ): Promise<void> {
@@ -430,7 +424,7 @@ export class DiscordVoiceReceive {
         }
       }
     } finally {
-      realtimeRecording?.sealBatch();
+      realtimeRecording?.seal("batch");
       if (conversationCompletion) {
         void conversationCompletion.catch((error: unknown) =>
           logger.warn(`discord voice: conversation failed: ${formatErrorMessage(error)}`),
@@ -486,15 +480,10 @@ export class DiscordVoiceReceive {
     userId: string,
   ): Promise<DiscordVoiceIngressContext | null> {
     return await resolveDiscordVoiceIngressContextWithParticipants({
-      readPolicy: this.params.readPolicy,
-      client: this.params.client,
+      ...this.params,
       entry,
       userId,
-      cfg: this.params.cfg,
-      discordConfig: this.params.discordConfig,
-      admissionAllowFrom: this.params.admissionAllowFrom,
       botUserId: this.params.botUserId(),
-      speakerContext: this.params.speakerContext,
     });
   }
 

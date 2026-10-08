@@ -1,10 +1,10 @@
+import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-helpers";
 import {
   asNonArrayRecord,
   isRecord,
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { configuredChannels } from "./policy-state-core.js";
 import { ocPathSegment } from "./policy-state-helpers.js";
 import { IMPLICIT_DEFAULT_ACCOUNT_FIELDS } from "./policy-state-tool-posture.js";
 import { RESERVED_CHANNEL_CONFIG_KEYS } from "./policy-state-types.js";
@@ -24,9 +24,10 @@ const ALLOWLIST_DEFAULT_INGRESS_GROUP_POLICY_CHANNELS = new Set([
 const OPEN_GROUPS_DEFAULT_TO_NO_MENTION_CHANNELS = new Set(["feishu", "qa-channel"]);
 
 export function scanPolicyIngress(cfg: Record<string, unknown>): readonly PolicyIngressEvidence[] {
-  const channels = configuredChannels(cfg);
+  const channels = asNonArrayRecord(cfg.channels);
   const channelDefaults = asNonArrayRecord(channels.defaults);
-  const inheritedChannelDefaults = pickSupportedIngressDefaults(channelDefaults);
+  const inheritedChannelDefaults =
+    channelDefaults.groupPolicy === undefined ? {} : { groupPolicy: channelDefaults.groupPolicy };
   const channelDefaultsSource = "oc://openclaw.config/channels/defaults";
   const entries: PolicyIngressEvidence[] = [];
   const session = asNonArrayRecord(cfg.session);
@@ -77,14 +78,6 @@ export function scanPolicyIngress(cfg: Record<string, unknown>): readonly Policy
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
 
-function pickSupportedIngressDefaults(config: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  if (config.groupPolicy !== undefined) {
-    result.groupPolicy = config.groupPolicy;
-  }
-  return result;
-}
-
 function hasImplicitDefaultAccountConfig(
   channel: string,
   config: Record<string, unknown>,
@@ -128,12 +121,6 @@ function hasImplicitDefaultAccountConfig(
   }
 }
 
-function hasConfiguredAccountValue(value: unknown): boolean {
-  return typeof value === "string"
-    ? value.trim().length > 0
-    : value !== undefined && value !== null;
-}
-
 type ChannelIngressParams = {
   readonly channel: string;
   readonly accountId?: string;
@@ -148,56 +135,52 @@ type ChannelIngressParams = {
 };
 
 function pushChannelIngress(entries: PolicyIngressEvidence[], params: ChannelIngressParams): void {
-  const localDmPolicy = channelDmPolicy(params.config);
-  const inheritedDmPolicy = channelDmPolicy(params.inheritedConfig);
-  const fallbackDmPolicy = channelDmPolicy(params.fallbackConfig ?? {});
-  const effectiveDmPolicy = [localDmPolicy, inheritedDmPolicy, fallbackDmPolicy].find(
-    (policy) => policy.value !== undefined,
-  );
-  const dmPolicySource =
-    effectiveDmPolicy?.sourceSuffix === undefined
-      ? `${params.fallbackSourceBase}/dmPolicy`
-      : effectiveDmPolicy === localDmPolicy
-        ? `${params.sourceBase}/${effectiveDmPolicy.sourceSuffix}`
-        : effectiveDmPolicy === inheritedDmPolicy
-          ? `${params.inheritedSourceBase}/${effectiveDmPolicy.sourceSuffix}`
-          : `${params.fallbackSourceBase}/${effectiveDmPolicy.sourceSuffix}`;
+  const dmPolicy =
+    channelDmPolicy(params.config, params.sourceBase) ??
+    channelDmPolicy(params.inheritedConfig, params.inheritedSourceBase) ??
+    channelDmPolicy(params.fallbackConfig ?? {}, params.fallbackSourceBase);
   entries.push({
     id: channelIngressId(params, "dm-policy"),
     kind: "channelDmPolicy",
-    source: dmPolicySource,
+    source: dmPolicy?.source ?? `${params.fallbackSourceBase}/dmPolicy`,
     channel: params.channel,
     ...(params.accountId === undefined ? {} : { accountId: params.accountId }),
-    value: effectiveDmPolicy?.value ?? "pairing",
-    explicit: effectiveDmPolicy !== undefined,
+    value: dmPolicy?.value ?? "pairing",
+    explicit: dmPolicy !== undefined,
   });
 
-  const localGroupPolicy = readString(params.config.groupPolicy);
-  const inheritedGroupPolicy = readString(params.inheritedConfig.groupPolicy);
-  const fallbackGroupPolicy = readString(params.fallbackConfig?.groupPolicy);
+  const groupPolicy = channelIngressValue(params, "groupPolicy", readString);
   const implicitGroupPolicy = channelImplicitGroupPolicy(params);
+  const effectiveGroupPolicy = groupPolicy ?? implicitGroupPolicy;
   entries.push({
     id: channelIngressId(params, "group-policy"),
     kind: "channelGroupPolicy",
-    source:
-      localGroupPolicy !== undefined
-        ? `${params.sourceBase}/groupPolicy`
-        : inheritedGroupPolicy !== undefined
-          ? `${params.inheritedSourceBase}/groupPolicy`
-          : fallbackGroupPolicy !== undefined
-            ? `${params.fallbackSourceBase}/groupPolicy`
-            : implicitGroupPolicy.source,
+    source: effectiveGroupPolicy.source,
     channel: params.channel,
     ...(params.accountId === undefined ? {} : { accountId: params.accountId }),
-    value:
-      localGroupPolicy ?? inheritedGroupPolicy ?? fallbackGroupPolicy ?? implicitGroupPolicy.value,
-    explicit:
-      localGroupPolicy !== undefined ||
-      inheritedGroupPolicy !== undefined ||
-      fallbackGroupPolicy !== undefined,
+    value: effectiveGroupPolicy.value,
+    explicit: groupPolicy !== undefined,
   });
 
-  pushChannelRequireMentionIngress(entries, params);
+  pushChannelRequireMentionIngress(entries, params, effectiveGroupPolicy.value);
+}
+
+function channelIngressValue<T>(
+  params: ChannelIngressParams,
+  field: "groupPolicy" | "requireMention",
+  read: (value: unknown) => T | undefined,
+): { value: T; source: string } | undefined {
+  for (const [config, sourceBase] of [
+    [params.config, params.sourceBase],
+    [params.inheritedConfig, params.inheritedSourceBase],
+    [params.fallbackConfig, params.fallbackSourceBase],
+  ] as const) {
+    const value = read(config?.[field]);
+    if (value !== undefined) {
+      return { value, source: `${sourceBase}/${field}` };
+    }
+  }
+  return undefined;
 }
 
 function channelImplicitGroupPolicy(params: ChannelIngressParams): {
@@ -225,38 +208,22 @@ function channelImplicitGroupPolicy(params: ChannelIngressParams): {
 function pushChannelRequireMentionIngress(
   entries: PolicyIngressEvidence[],
   params: ChannelIngressParams,
+  groupPolicy: string,
 ): void {
-  const localRequireMention = readBoolean(params.config.requireMention);
-  const inheritedRequireMention = readBoolean(params.inheritedConfig.requireMention);
-  const fallbackRequireMention = readBoolean(params.fallbackConfig?.requireMention);
-  const wildcardRequireMention = channelWildcardRequireMention(params);
-  const defaultRequireMention = channelDefaultRequireMention(params);
+  const requireMention =
+    channelWildcardRequireMention(params) ??
+    channelIngressValue(params, "requireMention", readBoolean);
+  const defaultRequireMention = !(
+    groupPolicy === "open" && OPEN_GROUPS_DEFAULT_TO_NO_MENTION_CHANNELS.has(params.channel)
+  );
   entries.push({
     id: channelIngressId(params, "require-mention"),
     kind: "channelRequireMention",
-    source:
-      wildcardRequireMention !== undefined
-        ? wildcardRequireMention.source
-        : localRequireMention !== undefined
-          ? `${params.sourceBase}/requireMention`
-          : inheritedRequireMention !== undefined
-            ? `${params.inheritedSourceBase}/requireMention`
-            : fallbackRequireMention !== undefined
-              ? `${params.fallbackSourceBase}/requireMention`
-              : `${params.sourceBase}/requireMention`,
+    source: requireMention?.source ?? `${params.sourceBase}/requireMention`,
     channel: params.channel,
     ...(params.accountId === undefined ? {} : { accountId: params.accountId }),
-    value:
-      wildcardRequireMention?.value ??
-      localRequireMention ??
-      inheritedRequireMention ??
-      fallbackRequireMention ??
-      defaultRequireMention,
-    explicit:
-      wildcardRequireMention !== undefined ||
-      localRequireMention !== undefined ||
-      inheritedRequireMention !== undefined ||
-      fallbackRequireMention !== undefined,
+    value: requireMention?.value ?? defaultRequireMention,
+    explicit: requireMention !== undefined,
   });
 
   for (const containerKey of ["groups", "guilds", "channels", "rooms", "teams"] as const) {
@@ -279,17 +246,6 @@ function pushChannelRequireMentionIngress(
       );
     }
   }
-}
-
-function channelDefaultRequireMention(params: ChannelIngressParams): boolean {
-  const groupPolicy =
-    readString(params.config.groupPolicy) ??
-    readString(params.inheritedConfig.groupPolicy) ??
-    readString(params.fallbackConfig?.groupPolicy) ??
-    channelImplicitGroupPolicy(params).value;
-  return !(
-    groupPolicy === "open" && OPEN_GROUPS_DEFAULT_TO_NO_MENTION_CHANNELS.has(params.channel)
-  );
 }
 
 function channelWildcardRequireMention(
@@ -384,20 +340,20 @@ function pushNestedRequireMentionIngress(
   }
 }
 
-function channelDmPolicy(config: Record<string, unknown>): {
-  readonly value?: string;
-  readonly sourceSuffix?: string;
-} {
+function channelDmPolicy(
+  config: Record<string, unknown>,
+  sourceBase: string,
+): { readonly value: string; readonly source: string } | undefined {
   const dm = asNonArrayRecord(config.dm);
   if (dm.enabled === false) {
-    return { value: "disabled", sourceSuffix: "dm/enabled" };
+    return { value: "disabled", source: `${sourceBase}/dm/enabled` };
   }
   const direct = readString(config.dmPolicy);
   if (direct !== undefined) {
-    return { value: direct, sourceSuffix: "dmPolicy" };
+    return { value: direct, source: `${sourceBase}/dmPolicy` };
   }
   const legacy = readString(dm.policy);
-  return legacy === undefined ? {} : { value: legacy, sourceSuffix: "dm/policy" };
+  return legacy === undefined ? undefined : { value: legacy, source: `${sourceBase}/dm/policy` };
 }
 
 function channelIngressId(params: ChannelIngressParams, suffix: string): string {

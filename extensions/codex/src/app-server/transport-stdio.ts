@@ -25,7 +25,6 @@ const RUNTIME_INJECTION_ENVIRONMENT_KEYS = new Set([
   "LD_LIBRARY_PATH",
   "LD_PRELOAD",
 ]);
-const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
 
 /** Resolves the concrete command/argv/shell settings used to spawn Codex app-server. */
 export function resolveCodexAppServerSpawnInvocation(
@@ -68,46 +67,28 @@ export function resolveCodexAppServerSpawnEnv(
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const env = Object.create(null) as NodeJS.ProcessEnv;
-  copySafeEnvironmentEntries(env, baseEnv);
-  copySafeEnvironmentEntries(env, options.env ?? {});
-  const keysToClear = (options.clearEnv ?? []).map((key) => key.trim()).filter(Boolean);
-  if (platform === "win32") {
-    const lowerCaseKeysToClear = new Set(keysToClear.map((key) => key.toLowerCase()));
-    for (const candidate of Object.keys(env)) {
-      if (lowerCaseKeysToClear.has(candidate.toLowerCase())) {
-        delete env[candidate];
+  for (const source of [baseEnv, options.env ?? {}]) {
+    for (const [key, value] of Object.entries(source)) {
+      if (!UNSAFE_ENVIRONMENT_KEYS.has(key)) {
+        env[key] = value;
       }
     }
-  } else {
-    for (const key of keysToClear) {
-      delete env[key];
-    }
   }
+  const normalizeKey = (key: string) => (platform === "win32" ? key.toLowerCase() : key);
+  const keysToClear = new Set(
+    (options.clearEnv ?? []).map((key) => normalizeKey(key.trim())).filter(Boolean),
+  );
   for (const key of Object.keys(env)) {
-    if (isCodexRuntimeInjectionEnvironmentKey(key)) {
+    const upperKey = key.toUpperCase();
+    const runtimeInjection =
+      RUNTIME_INJECTION_ENVIRONMENT_KEYS.has(upperKey) || upperKey.startsWith("DYLD_");
+    if (keysToClear.has(normalizeKey(key)) || runtimeInjection) {
       // Package managers and agent hosts may inject loader paths into their children. Codex does
       // not need them, so strip them before attestation and spawn instead of self-failing setup.
       delete env[key];
     }
   }
   return env;
-}
-
-function isCodexRuntimeInjectionEnvironmentKey(rawKey: string): boolean {
-  const key = rawKey.toUpperCase();
-  return RUNTIME_INJECTION_ENVIRONMENT_KEYS.has(key) || key.startsWith("DYLD_");
-}
-
-function copySafeEnvironmentEntries(
-  target: NodeJS.ProcessEnv,
-  source: NodeJS.ProcessEnv | Record<string, string | undefined>,
-): void {
-  for (const [key, value] of Object.entries(source)) {
-    if (UNSAFE_ENVIRONMENT_KEYS.has(key)) {
-      continue;
-    }
-    target[key] = value;
-  }
 }
 
 /** Spawns the Codex app-server process and returns the shared transport interface. */
@@ -117,6 +98,7 @@ export async function createStdioTransport(
   assertCurrent?: () => void,
   onSpawn?: (child: ChildProcessWithoutNullStreams) => void,
 ): Promise<ChildProcessWithoutNullStreams> {
+  const isHostedGateway = baseEnv.OPENCLAW_GATEWAY_HOST_LIFELINE?.trim() === "stdin";
   const env = resolveCodexAppServerSpawnEnv(options, baseEnv);
   const invocation = resolveCodexAppServerSpawnInvocation(options, env);
   const nativeCommand =
@@ -152,8 +134,8 @@ export async function createStdioTransport(
       // config discovery may depend on the endpoint's process working directory.
       ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
       env,
-      // QA children stay inside the Gateway's process-group cleanup boundary.
-      detached: process.platform !== "win32" && !env[QA_PARENT_PID_ENV]?.trim(),
+      // Child environment overrides cannot change the Gateway's containment boundary.
+      detached: process.platform !== "win32" && !isHostedGateway,
       shell: invocation.shell,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: invocation.windowsHide,

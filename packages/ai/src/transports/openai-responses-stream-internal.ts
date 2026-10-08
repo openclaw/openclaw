@@ -51,7 +51,7 @@ import type {
   ResponsesStreamOptions,
   ResponsesStreamOutputMessage,
 } from "./openai-responses-stream-types-internal.js";
-import { IncompleteToolCallError, transportAbortError } from "./transport-stream-shared.js";
+import { transportAbortError } from "./transport-stream-shared.js";
 
 export type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
 
@@ -140,9 +140,7 @@ export async function processResponsesStream<TApi extends Api>(
     }
     return undefined;
   };
-  const materializeDeferredTextSlot = (
-    slot: Extract<ResponsesOutputSlot, { type: "text" }>,
-  ): void => {
+  const materializeDeferredTextSlot = (slot: TextOutputSlot): void => {
     if (slot.block || slot.pendingText === null) {
       return;
     }
@@ -206,6 +204,7 @@ export async function processResponsesStream<TApi extends Api>(
     model,
     options,
     outputs,
+    toolCalls: streamingToolCalls,
     getLastTextBlock: () => lastTextBlock,
     setLastTextBlock: (block) => {
       lastTextBlock = block;
@@ -329,6 +328,7 @@ export async function processResponsesStream<TApi extends Api>(
         try {
           resolveCompletedResponsesToolCall(event.item);
         } catch (error) {
+          terminal.recordIncompleteToolCall(event, event.item);
           rejectedToolCall = { error };
         }
       }
@@ -423,44 +423,36 @@ export async function processResponsesStream<TApi extends Api>(
         ) {
           slot.item.content.push(event.part);
         }
-      } else if (event.type === "response.output_text.delta") {
+      } else if (
+        event.type === "response.output_text.delta" ||
+        isAzureResponsesTextDeltaEvent(event) ||
+        event.type === "response.refusal.delta"
+      ) {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
           continue;
         }
         slot.item.content ||= [];
         let lastPart = slot.item.content[slot.item.content.length - 1];
-        if (!isResponsesTextContentPartType(lastPart?.type)) {
-          lastPart = { type: "output_text", text: "", annotations: [] };
-          slot.item.content.push(lastPart);
+        if (event.type === "response.refusal.delta") {
+          if (lastPart?.type !== "refusal") {
+            lastPart = { type: "refusal", refusal: "" };
+            slot.item.content.push(lastPart);
+          }
+          lastPart.refusal += event.delta;
+        } else {
+          const azure = isAzureResponsesTextDeltaEvent(event);
+          if (
+            !isResponsesTextContentPartType(lastPart?.type) ||
+            (azure && lastPart.type !== "text")
+          ) {
+            lastPart = azure
+              ? { type: "text", text: "" }
+              : { type: "output_text", text: "", annotations: [] };
+            slot.item.content.push(lastPart);
+          }
+          lastPart.text += event.delta;
         }
-        lastPart.text += event.delta;
-        projectTextDelta(slot, event.delta);
-      } else if (isAzureResponsesTextDeltaEvent(event)) {
-        const slot = outputSlots.resolve(event, "text");
-        if (!slot) {
-          continue;
-        }
-        slot.item.content = slot.item.content || [];
-        let lastPart = slot.item.content[slot.item.content.length - 1];
-        if (lastPart?.type !== "text") {
-          lastPart = { type: "text", text: "" };
-          slot.item.content.push(lastPart);
-        }
-        lastPart.text += event.delta;
-        projectTextDelta(slot, event.delta);
-      } else if (event.type === "response.refusal.delta") {
-        const slot = outputSlots.resolve(event, "text");
-        if (!slot) {
-          continue;
-        }
-        slot.item.content ||= [];
-        let lastPart = slot.item.content[slot.item.content.length - 1];
-        if (lastPart?.type !== "refusal") {
-          lastPart = { type: "refusal", refusal: "" };
-          slot.item.content.push(lastPart);
-        }
-        lastPart.refusal += event.delta;
         projectTextDelta(slot, event.delta);
       } else if (event.type === "response.function_call_arguments.delta") {
         const toolCall = streamingToolCalls.resolve(event);
@@ -684,14 +676,9 @@ export async function processResponsesStream<TApi extends Api>(
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         // Preserve reported accounting before rejecting unfinished tool calls.
-        terminal.finalizeResponse(event.response, event.type);
+        terminal.finalizeResponse(event.response, event.type, Boolean(rejectedToolCall));
         if (rejectedToolCall) {
           throw output.errorMessage ? new Error(output.errorMessage) : rejectedToolCall.error;
-        }
-        if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
-          throw output.errorMessage
-            ? new Error(output.errorMessage)
-            : new IncompleteToolCallError("Responses stream completed with unresolved tool calls");
         }
         if (event.type === "response.completed" || output.stopReason === "length") {
           const items = event.response.output ?? [];

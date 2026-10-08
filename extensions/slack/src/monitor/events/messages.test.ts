@@ -746,7 +746,10 @@ describe("registerSlackMessageEvents", () => {
       const actualSystemEvents = await vi.importActual<
         typeof import("openclaw/plugin-sdk/system-event-runtime")
       >("openclaw/plugin-sdk/system-event-runtime");
-      actualSystemEvents.resetSystemEventsForTest();
+      const { resetSystemEventsForTest } = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/test-fixtures")
+      >("openclaw/plugin-sdk/test-fixtures");
+      resetSystemEventsForTest();
       messageQueueMock.mockImplementation(
         (text: string, { sessionKey, ...options }: { sessionKey: string }) =>
           actualSystemEvents.enqueueRoutedSystemEvent(
@@ -840,7 +843,7 @@ describe("registerSlackMessageEvents", () => {
       expect(actualSystemEvents.peekSystemEventEntries(threadSessionKey)).toHaveLength(
         threadSession ? 1 : 0,
       );
-      actualSystemEvents.resetSystemEventsForTest();
+      resetSystemEventsForTest();
     },
   );
 
@@ -983,13 +986,9 @@ describe("registerSlackMessageEvents", () => {
     );
   });
 
-  it("drops typeless app_mention when metadata lookup fails", async () => {
-    const { ctx, handler, handleSlackMessage } = createHandlers("app_mention", {
-      dmPolicy: "open",
-    });
-    ctx.resolveChannelName = vi.fn(async () => {
-      throw new Error("missing_scope");
-    });
+  it("logs a bounded diagnostic when typeless app_mention metadata lookup fails", async () => {
+    const { ctx, handler, handleSlackMessage } = createHandlers("app_mention");
+    ctx.resolveChannelName = () => Promise.reject(new Error("private lookup payload"));
 
     await requireMessageHandler(handler)({
       event: { ...makeAppMentionEvent({ channel: "C123" }), channel_type: undefined },
@@ -997,7 +996,11 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
-    expect(inboundLogLines()).toEqual([]);
+    expect(inboundInfoSpy).toHaveBeenCalledWith(
+      "Slack app_mention skipped: conversation type unresolved; channelId=C123 lookupFailureCategory=other; waiting for message event",
+      { channelId: "C123", lookupFailureCategory: "other" },
+    );
+    expect(JSON.stringify(inboundInfoSpy.mock.calls)).not.toMatch(/private|hello/);
   });
 
   it("routes app_mention events from channels to the message handler", async () => {

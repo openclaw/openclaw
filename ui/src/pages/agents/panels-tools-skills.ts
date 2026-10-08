@@ -33,6 +33,7 @@ import {
 } from "../../lib/agents/tool-catalog.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { renderAgentConfigActions, type AgentConfigActions } from "./config-actions.ts";
 import {
   resolveToolAvailability,
   renderToolPolicyDetails,
@@ -183,28 +184,24 @@ function renderEffectiveToolBadge(tool: {
   return t("agentTools.builtIn");
 }
 
-export function renderAgentTools(params: {
-  agentId: string;
-  configForm: Record<string, unknown> | null;
-  configLoading: boolean;
-  configSaving: boolean;
-  configDirty: boolean;
-  toolsCatalogLoading: boolean;
-  toolsCatalogError: string | null;
-  toolsCatalogResult: ToolsCatalogResult | null;
-  toolsEffectiveLoading: boolean;
-  toolsEffectiveError: string | null;
-  toolsEffectiveResult: ToolsEffectiveResult | null;
-  runtimeSessionKey: string;
-  runtimeSessionMatchesSelectedAgent: boolean;
-  canUpdateConfig: boolean;
-  githubIdentity: GitHubIdentityController;
-  onOpenGitHubConnections: () => void;
-  onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
-  onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
-  onConfigReload: () => void;
-  onConfigSave: () => void;
-}) {
+export function renderAgentTools(
+  params: AgentConfigActions & {
+    agentId: string;
+    configForm: Record<string, unknown> | null;
+    toolsCatalogLoading: boolean;
+    toolsCatalogError: string | null;
+    toolsCatalogResult: ToolsCatalogResult | null;
+    toolsEffectiveLoading: boolean;
+    toolsEffectiveError: string | null;
+    toolsEffectiveResult: ToolsEffectiveResult | null;
+    runtimeSessionKey: string;
+    runtimeSessionMatchesSelectedAgent: boolean;
+    githubIdentity: GitHubIdentityController;
+    onOpenGitHubConnections: () => void;
+    onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
+    onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
+  },
+) {
   const config = resolveAgentConfig(params.configForm, params.agentId);
   const agentTools = config.entry?.tools ?? {};
   const globalTools = config.globalTools ?? {};
@@ -276,21 +273,13 @@ export function renderAgentTools(params: {
   );
 
   const sortSectionTools = (tools: AgentToolEntry[]) =>
-    tools.toSorted((left, right) => {
-      const leftId = normalizeToolPolicyName(left.id);
-      const rightId = normalizeToolPolicyName(right.id);
-      const leftActive = activeToolIds.has(leftId) ? 1 : 0;
-      const rightActive = activeToolIds.has(rightId) ? 1 : 0;
-      if (leftActive !== rightActive) {
-        return rightActive - leftActive;
-      }
-      const leftAllowed = resolveAllowed(left.id).allowed ? 1 : 0;
-      const rightAllowed = resolveAllowed(right.id).allowed ? 1 : 0;
-      if (leftAllowed !== rightAllowed) {
-        return rightAllowed - leftAllowed;
-      }
-      return left.label.localeCompare(right.label);
-    });
+    tools.toSorted(
+      (left, right) =>
+        Number(activeToolIds.has(normalizeToolPolicyName(right.id))) -
+          Number(activeToolIds.has(normalizeToolPolicyName(left.id))) ||
+        Number(resolveAllowed(right.id).allowed) - Number(resolveAllowed(left.id).allowed) ||
+        left.label.localeCompare(right.label),
+    );
 
   const updateTools = (targetIds: string[], nextEnabled: boolean) => {
     const nextAllow = new Set(normalizeToolList(alsoAllow));
@@ -360,26 +349,16 @@ export function renderAgentTools(params: {
               `;
 
   return html`
-    ${
-      !params.configForm
-        ? html`<div class="callout info">${t("agentTools.loadConfig")}</div>`
-        : nothing
-    }
-    ${
-      hasAgentAllow
-        ? html`<div class="callout info">${t("agentTools.explicitAllowlist")}</div>`
-        : nothing
-    }
-    ${
-      hasGlobalAllow
-        ? html`<div class="callout info">${t("agentTools.globalAllowlist")}</div>`
-        : nothing
-    }
-    ${
-      params.toolsCatalogError
-        ? html`<div class="callout info">${t("agentTools.catalogFallback")}</div>`
-        : nothing
-    }
+    ${(
+      [
+        [!params.configForm, "agentTools.loadConfig"],
+        [hasAgentAllow, "agentTools.explicitAllowlist"],
+        [hasGlobalAllow, "agentTools.globalAllowlist"],
+        [params.toolsCatalogError, "agentTools.catalogFallback"],
+      ] as const
+    ).map(([visible, label]) =>
+      visible ? html`<div class="callout info">${t(label)}</div>` : nothing,
+    )}
     ${renderSettingsSection(
       {
         title: t("agentTools.title"),
@@ -391,34 +370,18 @@ export function renderAgentTools(params: {
             })}</span
           >`,
         actions: html`
-          <button
-            class="btn btn--sm"
-            ?disabled=${!editable}
-            @click=${() => updateTools(toolIds, true)}
-          >
-            ${t("agentTools.enableAll")}
-          </button>
-          <button
-            class="btn btn--sm"
-            ?disabled=${!editable}
-            @click=${() => updateTools(toolIds, false)}
-          >
-            ${t("agentTools.disableAll")}
-          </button>
-          <button
-            class="btn btn--sm"
-            ?disabled=${params.configLoading}
-            @click=${params.onConfigReload}
-          >
-            ${t("common.reloadConfig")}
-          </button>
-          <button
-            class="btn btn--sm primary"
-            ?disabled=${!params.canUpdateConfig || params.configSaving || !params.configDirty}
-            @click=${params.onConfigSave}
-          >
-            ${params.configSaving ? t("common.saving") : t("common.save")}
-          </button>
+          ${[true, false].map(
+            (enabled) => html`
+              <button
+                class="btn btn--sm"
+                ?disabled=${!editable}
+                @click=${() => updateTools(toolIds, enabled)}
+              >
+                ${t(enabled ? "agentTools.enableAll" : "agentTools.disableAll")}
+              </button>
+            `,
+          )}
+          ${renderAgentConfigActions(params)}
         `,
       },
       html`
@@ -539,37 +502,24 @@ export function renderAgentTools(params: {
                     </span>
                   </span>
                   <span class="agent-tools-group__counts">
-                    <span
-                      >${t(
-                        section.tools.length === 1 ? "agentTools.toolsOne" : "agentTools.tools",
-                        {
-                          count: String(section.tools.length),
-                        },
-                      )}</span
-                    >
-                    <span
-                      >${t(
-                        enabledSectionCount === 1
-                          ? "agentTools.enabledToolsOne"
-                          : "agentTools.enabledTools",
-                        { count: String(enabledSectionCount) },
-                      )}</span
-                    >
-                    ${
-                      activeSectionCount > 0
-                        ? html`<span
-                            >${t(
-                              activeSectionCount === 1
-                                ? "agentTools.listedToolsOne"
-                                : "agentTools.listedTools",
-                              { count: String(activeSectionCount) },
-                            )}</span
-                          >`
-                        : nothing
-                    }
+                    ${(
+                      [
+                        ["tools", section.tools.length],
+                        ["enabledTools", enabledSectionCount],
+                        ["listedTools", activeSectionCount],
+                      ] as const
+                    ).map(([label, count]) =>
+                      label === "listedTools" && count === 0
+                        ? nothing
+                        : html`<span
+                            >${t(`agentTools.${label}${count === 1 ? "One" : ""}`, {
+                              count: String(count),
+                            })}</span
+                          >`,
+                    )}
                   </span>
                 </summary>
-                <div class="agent-tools-list agent-tools-list--stacked">
+                <div class="agent-tools-list">
                   ${sortedTools.map((tool) => {
                     const anchorId = toToolAnchorId(tool.id);
                     const resolved = resolveAllowed(tool.id);

@@ -45,13 +45,12 @@ import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import { assertGitHubCliAvailable } from "./github-cli-preflight.js";
 import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-device-flow.js";
 import {
   authorizationStillOwned,
   configuredOAuthIdentities,
-  currentIdentityForRecord,
-  defaultGitAuthor,
   identityStillSelected,
   MAINTENANCE_INTERVAL_MS,
   REFRESH_SKEW_MS,
@@ -205,7 +204,10 @@ export function createGitHubOAuthLifecycle(params: {
             kind: "oauth",
             gitAuthor: record.expectedIdentity?.gitAuthor
               ? structuredClone(record.expectedIdentity.gitAuthor)
-              : defaultGitAuthor(account),
+              : {
+                  name: account.login,
+                  email: `${account.accountId}+${account.login}@users.noreply.github.com`,
+                },
           };
           nextConfig = await updateGitHubToolIdentityConfig({
             scope: record.scope,
@@ -351,7 +353,10 @@ export function createGitHubOAuthLifecycle(params: {
     if (!currentRecord.pendingRefresh && currentRecord.accessExpiresAtMs > now + REFRESH_SKEW_MS) {
       return;
     }
-    const currentIdentity = currentIdentityForRecord(params.getConfig(), currentRecord);
+    const currentIdentity = resolveConfiguredGitHubToolIdentity({
+      config: params.getConfig(),
+      ...currentRecord,
+    });
     if (currentIdentity?.kind !== "oauth" || currentIdentity.profileId !== profileId) {
       return;
     }
@@ -434,7 +439,10 @@ export function createGitHubOAuthLifecycle(params: {
         } catch {
           continue;
         }
-        const persistedIdentity = currentIdentityForRecord(persistedConfig, record);
+        const persistedIdentity = resolveConfiguredGitHubToolIdentity({
+          config: persistedConfig,
+          ...record,
+        });
         const agentBindingMatches =
           record.scope === "system" ||
           (record.pendingInitial.agentLifecycleBinding !== undefined &&
@@ -463,7 +471,10 @@ export function createGitHubOAuthLifecycle(params: {
         ).catch(() => undefined);
         continue;
       }
-      const current = currentIdentityForRecord(params.getConfig(), record);
+      const current = resolveConfiguredGitHubToolIdentity({
+        config: params.getConfig(),
+        ...record,
+      });
       if (current?.profileId !== profileId || current.kind !== "oauth") {
         queueOAuthCleanup(profileId);
         continue;
@@ -506,10 +517,7 @@ export function createGitHubOAuthLifecycle(params: {
     if (stopping && !maintenance) {
       return Promise.resolve();
     }
-    if (maintenance) {
-      return maintenance;
-    }
-    maintenance = runMaintenance()
+    maintenance ??= runMaintenance()
       .catch(warnMaintenanceError)
       .finally(() => {
         maintenance = undefined;
@@ -638,20 +646,7 @@ export function createGitHubOAuthLifecycle(params: {
           await runMaintenance();
         }
       })();
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          drain,
-          new Promise<void>((resolve) => {
-            timeout = setTimeout(resolve, SHUTDOWN_DRAIN_TIMEOUT_MS);
-            timeout.unref?.();
-          }),
-        ]);
-      } finally {
-        if (timeout) {
-          clearTimeout(timeout);
-        }
-      }
+      await settlesWithin(drain, SHUTDOWN_DRAIN_TIMEOUT_MS);
     },
   };
 }

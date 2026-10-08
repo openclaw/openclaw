@@ -1,4 +1,3 @@
-/** Prepares queued follow-up payloads for source-channel delivery. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
@@ -47,6 +46,10 @@ import {
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
 import {
+  isReplyOperationStalledBeforeOutput,
+  STALLED_TURN_NOTICE_TEXT,
+} from "./stalled-turn-recovery.js";
+import {
   buildStrandedReplyDeliveryFailurePayload,
   resolveStrandedReplyRecovery,
 } from "./stranded-reply-recovery.js";
@@ -70,6 +73,19 @@ type FollowupDeliveryDecision =
       resolved: { provider: string; model: string };
     };
 
+function resolveFollowupPayloadContext(turn: AdmittedFollowupTurn) {
+  return {
+    cfg: turn.config,
+    messageProvider: turn.queued.run.messageProvider,
+    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
+    originatingChannel: turn.queued.originatingChannel,
+    originatingChatType: turn.queued.originatingChatType,
+    originatingReplyToMode: turn.queued.originatingReplyToMode,
+    originatingTo: turn.queued.originatingTo,
+    originatingThreadId: turn.queued.originatingThreadId,
+  };
+}
+
 /** Resolves one final queued delivery action without performing transport I/O. */
 export async function resolveFollowupDeliveryDecision(params: {
   turn: AdmittedFollowupTurn;
@@ -90,16 +106,6 @@ export async function resolveFollowupDeliveryDecision(params: {
   ) {
     return { kind: "suppress", reason: "room-event" };
   }
-  if (execution.outcome.kind === "aborted") {
-    return { kind: "suppress", reason: "aborted" };
-  }
-  const postCompactionModelFailure = execution.outcome.postCompactionModelFailure;
-  const renderFailurePayloads = (payloads: ReplyPayload[]) =>
-    payloads.map((payload) =>
-      renderPostCompactionModelFailurePayload(
-        markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),
-      ),
-    );
   const sourcePolicy = resolveSourceReplyVisibilityPolicy({
     cfg: turn.config,
     ctx: {
@@ -131,16 +137,7 @@ export async function resolveFollowupDeliveryDecision(params: {
         opts?.onBlockReply ||
         turn.queued.queuedFollowupReplyDisposition?.kind === "deliver",
       ));
-  const deliveryContext = {
-    cfg: turn.config,
-    messageProvider: turn.queued.run.messageProvider,
-    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-    originatingChannel: turn.queued.originatingChannel,
-    originatingChatType: turn.queued.originatingChatType,
-    originatingReplyToMode: turn.queued.originatingReplyToMode,
-    originatingTo: turn.queued.originatingTo,
-    originatingThreadId: turn.queued.originatingThreadId,
-  };
+  const deliveryContext = resolveFollowupPayloadContext(turn);
   const preparePayloads = (
     payloads: ReplyPayload[],
     options: Omit<
@@ -148,6 +145,32 @@ export async function resolveFollowupDeliveryDecision(params: {
       "payloads" | keyof typeof deliveryContext
     > = {},
   ) => resolveFollowupDeliveryPayloads({ ...deliveryContext, ...options, payloads });
+  if (execution.outcome.kind === "aborted") {
+    // The one recovery run for a stalled turn stalled too: the notice is the last resort.
+    // Like the dispatch-owned notice it replaces, it bypasses message-tool-only suppression.
+    if (
+      turn.queued.stalledTurnRecovery === true &&
+      isReplyOperationStalledBeforeOutput(turn.operation)
+    ) {
+      const payloads = preparePayloads([
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: STALLED_TURN_NOTICE_TEXT,
+          isError: true,
+        }),
+      ]);
+      if (payloads.length > 0) {
+        return { kind: "deliver", payloads };
+      }
+    }
+    return { kind: "suppress", reason: "aborted" };
+  }
+  const postCompactionModelFailure = execution.outcome.postCompactionModelFailure;
+  const renderFailurePayloads = (payloads: ReplyPayload[]) =>
+    payloads.map((payload) =>
+      renderPostCompactionModelFailurePayload(
+        markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),
+      ),
+    );
   if (execution.outcome.kind === "rejected") {
     if (!isInteractive) {
       return { kind: "suppress", reason: "silent" };
@@ -499,7 +522,6 @@ async function sendFollowupPayloads(params: {
   return queuedPayloads;
 }
 
-/** Performs the already-resolved follow-up delivery action. */
 export type FollowupDeliveryResult =
   | { kind: "completed"; payloads: ReplyPayload[] }
   | { kind: "source-retry" };
@@ -517,6 +539,7 @@ export async function deliverFollowupDecision(params: {
     logVerbose(`followup queue: delivery suppressed (${decision.reason})`);
     return { kind: "completed", payloads: [] };
   }
+  let payloads: ReplyPayload[];
   if (decision.kind === "retry-source-delivery") {
     warnPrivateMessageToolFinal({
       sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
@@ -556,35 +579,22 @@ export async function deliverFollowupDecision(params: {
     if (enqueued) {
       return { kind: "source-retry" };
     }
-    const diagnosticPayloads = resolveFollowupDeliveryPayloads({
-      cfg: turn.config,
+    payloads = resolveFollowupDeliveryPayloads({
+      ...resolveFollowupPayloadContext(turn),
       payloads: [buildStrandedReplyDeliveryFailurePayload()],
-      messageProvider: turn.queued.run.messageProvider,
-      originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-      originatingChannel: turn.queued.originatingChannel,
-      originatingChatType: turn.queued.originatingChatType,
-      originatingReplyToMode: turn.queued.originatingReplyToMode,
-      originatingTo: turn.queued.originatingTo,
-      originatingThreadId: turn.queued.originatingThreadId,
     });
-    const payloads = await sendFollowupPayloads({
-      payloads: diagnosticPayloads,
-      turn,
-      defaults,
-      runId: params.runId,
-      kind: params.kind ?? "final",
-      resolved: decision.resolved,
-    });
-    return { kind: "completed", payloads };
+  } else {
+    payloads = decision.payloads;
   }
-  const payloads = await sendFollowupPayloads({
-    payloads: decision.payloads,
+  const delivered = await sendFollowupPayloads({
+    payloads,
     turn,
     defaults,
     runId: params.runId,
     kind: params.kind ?? "final",
-    mirror: params.kind && params.kind !== "final" ? false : undefined,
+    mirror:
+      decision.kind === "deliver" && params.kind && params.kind !== "final" ? false : undefined,
     resolved: decision.resolved,
   });
-  return { kind: "completed", payloads };
+  return { kind: "completed", payloads: delivered };
 }

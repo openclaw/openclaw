@@ -1,5 +1,5 @@
-// Config CLI command implementation for get/set/unset/patch/validate and secret refs.
 import type { Command } from "commander";
+import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
@@ -144,8 +144,15 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     );
     const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
     if (!res.found || res.value === undefined) {
+      const autoManaged = AUTO_MANAGED_CONFIG_META_PATHS.some(
+        (managedPath) =>
+          parsedPath.every((segment, index) => managedPath[index] === segment) ||
+          managedPath.every((segment, index) => parsedPath[index] === segment),
+      );
       const message = isConfigSchemaPath(schema, parsedPath)
-        ? `Config path is valid but unset: ${opts.path}. The runtime default applies until you set an authored value with ${formatCliCommand(`openclaw config set ${quoteCliArg(opts.path)} <value>`)}.`
+        ? autoManaged
+          ? `Config path is valid but unset: ${opts.path}. This path contains metadata managed automatically by OpenClaw on config writes; it cannot be authored with config set.`
+          : `Config path is valid but unset: ${opts.path}. The runtime default applies until you set an authored value with ${formatCliCommand(`openclaw config set ${quoteCliArg(opts.path)} <value>`)}.`
         : `Unknown config path: ${opts.path}. Run ${formatCliCommand("openclaw config schema")} to inspect valid paths.`;
       if (opts.json) {
         writeRuntimeJson(runtime, formatCliJsonFailure(message));
@@ -154,12 +161,11 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       runtime.error(danger(message));
       exitCliAfterOutput(runtime, 1);
     }
-    if (opts.json) {
-      writeRuntimeJson(runtime, res.value);
-    } else if (
-      typeof res.value === "string" ||
-      typeof res.value === "number" ||
-      typeof res.value === "boolean"
+    if (
+      !opts.json &&
+      (typeof res.value === "string" ||
+        typeof res.value === "number" ||
+        typeof res.value === "boolean")
     ) {
       writeRuntimeStdout(runtime, `${String(res.value)}\n`);
     } else {
@@ -232,11 +238,13 @@ async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const { readBestEffortRuntimeConfigSchema } = await import("../config/runtime-schema.js");
-    const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
+    const schema = (await readBestEffortRuntimeConfigSchema()).schema as {
       properties?: Record<string, unknown>;
     };
-    schema.properties = { $schema: { type: "string" }, ...schema.properties };
-    writeRuntimeJson(runtime, schema);
+    writeRuntimeJson(runtime, {
+      ...schema,
+      properties: { $schema: { type: "string" }, ...schema.properties },
+    });
   } catch (err) {
     runtime.error(danger(`Config schema error: ${formatErrorMessage(err)}`));
     exitCliAfterOutput(runtime, 1);

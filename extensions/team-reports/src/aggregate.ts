@@ -435,7 +435,7 @@ export function aggregateDays(options: {
         members.set(login, member);
       }
       sumGithub(member.github, source.github);
-      member.github.items.push(...source.github.items.map(evidenceItem));
+      member.github.items.push(...source.github.items);
       member.discord.total += source.discord.total;
       sumMap(member.discord.channels, source.discord.channels);
       member.discord.excerpts.push(...structuredClone(source.discord.excerpts));
@@ -484,12 +484,10 @@ export function boundReportDocument(input: ReportDocument): ReportDocument {
     .flatMap((member) => [
       ...member.github.items.map((item) => ({
         atMs: item.atMs,
-        value: item,
         list: member.github.items,
       })),
       ...member.discord.excerpts.map((excerpt) => ({
         atMs: excerpt.atMs,
-        value: excerpt,
         list: member.discord.excerpts,
       })),
     ])

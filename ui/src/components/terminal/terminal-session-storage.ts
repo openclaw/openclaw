@@ -80,10 +80,7 @@ export function persistTerminalSessionIds(ids: readonly string[], scope = ""): v
 }
 
 export function loadPersistedTerminalActions(): TerminalPanelAction[] {
-  return loadPersistedArray(TERMINAL_ACTIONS_KEY).flatMap((value) => {
-    const action = terminalAction(value);
-    return action ? [action] : [];
-  });
+  return loadPersistedArray(TERMINAL_ACTIONS_KEY).flatMap((value) => terminalAction(value) ?? []);
 }
 
 export function persistTerminalActions(actions: readonly TerminalPanelAction[]): void {

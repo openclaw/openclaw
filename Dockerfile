@@ -76,6 +76,7 @@ COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
 COPY node-runtime-update.mjs ./
 COPY node-runtime-recovery.mjs ./
+COPY node-runtime-env.mjs ./
 COPY cli-root-options.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs ./
 COPY node-host-launcher.mjs ./
 COPY node-compile-cache.mjs ./
@@ -221,7 +222,8 @@ RUN node scripts/postinstall-bundled-plugins.mjs && \
         -name 'claude-agent-sdk-linux-*' -exec rm -rf {} +; \
     fi && \
     node --input-type=module -e 'await import("grammy")' && \
-    node scripts/check-package-dist-imports.mjs /app
+    node scripts/check-package-dist-imports.mjs /app && \
+    node scripts/docker/copy-bootstrap-scripts.mjs /app/.runtime-bootstrap
 
 # ── Runtime base image ──────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime
@@ -286,11 +288,14 @@ COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-sqlite.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-update.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-recovery.mjs .
+COPY --from=runtime-assets --chown=node:node /app/node-runtime-env.mjs .
 COPY --from=runtime-assets --chown=node:node /app/cli-root-options.mjs /app/gateway-run-argv.mjs /app/gateway-shutdown-budget.mjs ./
 COPY --from=runtime-assets --chown=node:node /app/node-host-launcher.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-compile-cache.mjs .
 COPY --from=runtime-assets --chown=node:node /app/docker-entrypoint.mjs .
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
+COPY --from=runtime-assets --chown=node:node /app/.runtime-bootstrap/scripts ./scripts
+COPY --from=runtime-assets --chown=node:node /app/scripts/lib/guard-inventory-utils.mjs ./scripts/lib/
 COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs

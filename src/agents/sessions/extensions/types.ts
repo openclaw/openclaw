@@ -19,20 +19,12 @@ import type {
   OverlayOptions,
   TUI,
 } from "@earendil-works/pi-tui";
-import type {
-  AssistantMessageEvent,
-  ImageContent,
-  Model,
-  TextContent,
-  ToolResultMessage,
-} from "openclaw/plugin-sdk/llm";
+import type { ImageContent, Model, TextContent } from "openclaw/plugin-sdk/llm";
 import type { Static, TSchema } from "typebox";
-import type {
-  OAuthCredentials,
-  OAuthLoginCallbacks as ProviderOAuthLoginCallbacks,
-} from "../../../plugin-sdk/provider-oauth-runtime.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import type {
+  AfterToolCallResult,
+  AgentEvent,
   AgentMessage,
   AgentTool,
   AgentToolResult,
@@ -49,7 +41,7 @@ import type { ReadonlyFooterDataProvider } from "../footer-data-provider.js";
 import type { KeybindingsManager } from "../keybindings.js";
 import type { CustomMessage } from "../messages.js";
 import type { ModelRegistry } from "../model-registry.js";
-import type { ProviderConfigBase, ProviderModelConfig } from "../provider-config.js";
+import type { ProviderConfig } from "../provider-config.js";
 import type {
   BranchSummaryEntry,
   CompactionEntry,
@@ -59,7 +51,7 @@ import type {
 } from "../session-manager.js";
 import type { SlashCommandInfo } from "../slash-commands.js";
 import type { SourceInfo } from "../source-info.js";
-import type { BuildSystemPromptOptions } from "../system-prompt.js";
+import type { BuildSystemPromptOptions } from "../system-prompt-metadata.js";
 import type { BashOperations } from "../tools/bash-operations.js";
 import type {
   BashToolDetails,
@@ -77,6 +69,7 @@ import type {
   WriteToolInput,
 } from "../tools/tool-contracts.js";
 
+export type { ProviderConfig, OAuthLoginCallbacks } from "../provider-config.js";
 export type {
   OAuthAuthInfo,
   OAuthCredentials,
@@ -85,11 +78,6 @@ export type {
   OAuthSelectPrompt,
 } from "../../../plugin-sdk/provider-oauth-runtime.js";
 
-export interface OAuthLoginCallbacks extends ProviderOAuthLoginCallbacks {}
-
-// UI Context
-
-/** Options for extension UI dialogs. */
 interface ExtensionUIDialogOptions {
   /** AbortSignal to programmatically dismiss the dialog. */
   signal?: AbortSignal;
@@ -97,16 +85,13 @@ interface ExtensionUIDialogOptions {
   timeout?: number;
 }
 
-/** Placement for extension widgets. */
 type WidgetPlacement = "aboveEditor" | "belowEditor";
 
-/** Options for extension widgets. */
 interface ExtensionWidgetOptions {
   /** Where the widget is rendered. Defaults to "aboveEditor". */
   placement?: WidgetPlacement;
 }
 
-/** Raw terminal input listener for extensions. */
 type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
 
 /** Working indicator configuration for the interactive streaming loader. */
@@ -117,7 +102,6 @@ interface WorkingIndicatorOptions {
   intervalMs?: number;
 }
 
-/** Wrap the current autocomplete provider with additional behavior. */
 type AutocompleteProviderFactory = (current: AutocompleteProvider) => AutocompleteProvider;
 type EditorFactory = (
   tui: TUI,
@@ -130,24 +114,20 @@ type EditorFactory = (
  * Each mode (interactive, RPC, print) provides its own implementation.
  */
 export interface ExtensionUIContext {
-  /** Show a selector and return the user's choice. */
   select(
     title: string,
     options: string[],
     opts?: ExtensionUIDialogOptions,
   ): Promise<string | undefined>;
 
-  /** Show a confirmation dialog. */
   confirm(title: string, message: string, opts?: ExtensionUIDialogOptions): Promise<boolean>;
 
-  /** Show a text input dialog. */
   input(
     title: string,
     placeholder?: string,
     opts?: ExtensionUIDialogOptions,
   ): Promise<string | undefined>;
 
-  /** Show a notification to the user. */
   notify(message: string, type?: "info" | "warning" | "error"): void;
 
   /** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
@@ -227,10 +207,8 @@ export interface ExtensionUIContext {
   /** Paste text into the editor, triggering paste handling (collapse for large content). */
   pasteToEditor(text: string): void;
 
-  /** Set the text in the core input editor. */
   setEditorText(text: string): void;
 
-  /** Get the current text from the core input editor. */
   getEditorText(): string;
 
   /** Show a multi-line editor for text editing. */
@@ -277,26 +255,19 @@ export interface ExtensionUIContext {
   /** Get the currently configured custom editor factory, or undefined when using the default editor. */
   getEditorComponent(): EditorFactory | undefined;
 
-  /** Get the current theme for styling. */
   readonly theme: Theme;
 
-  /** Get all available themes with their names and file paths. */
   getAllThemes(): { name: string; path: string | undefined }[];
 
   /** Load a theme by name without switching to it. Returns undefined if not found. */
   getTheme(name: string): Theme | undefined;
 
-  /** Set the current theme by name or Theme object. */
   setTheme(theme: string | Theme): { success: boolean; error?: string };
 
-  /** Get current tool output expansion state. */
   getToolsExpanded(): boolean;
 
-  /** Set tool output expansion state. */
   setToolsExpanded(expanded: boolean): void;
 }
-
-// Extension Context
 
 export interface ContextUsage {
   /** Estimated context tokens, or null if any (e.g. right after compaction, before next LLM response). */
@@ -312,37 +283,26 @@ export interface CompactOptions {
   onError?: (error: Error) => void;
 }
 
-/**
- * Context passed to extension event handlers.
- */
 export interface ExtensionContext {
-  /** UI methods for user interaction */
   ui: ExtensionUIContext;
   /** Whether UI is available (false in print/RPC mode) */
   hasUI: boolean;
-  /** Current working directory */
   cwd: string;
-  /** Session manager (read-only) */
   sessionManager: ReadonlySessionManager;
   /** Model registry for API key resolution */
   modelRegistry: ModelRegistry;
-  /** Current model (may be undefined) */
   model: Model | undefined;
   /** Whether the agent is idle (not streaming) */
   isIdle(): boolean;
   /** The current abort signal, or undefined when the agent is not streaming. */
   signal: AbortSignal | undefined;
-  /** Abort the current agent operation */
   abort(): void;
-  /** Whether there are queued messages waiting */
   hasPendingMessages(): boolean;
   /** Gracefully shut down OpenClaw and exit. Available in all contexts. */
   shutdown(): void;
-  /** Get current context usage for the active model. */
   getContextUsage(): ContextUsage | undefined;
   /** Trigger compaction without awaiting completion. */
   compact(options?: CompactOptions): void;
-  /** Get the current effective system prompt. */
   getSystemPrompt(): string;
 }
 
@@ -408,18 +368,16 @@ export interface ReplacedSessionContext extends ExtensionCommandContext {
   ): Promise<void>;
 }
 
-// Tool Types
-
-/** Rendering options for tool results */
 export interface ToolRenderResultOptions {
-  /** Whether the result view is expanded */
   expanded: boolean;
   /** Whether this is a partial/streaming result */
   isPartial: boolean;
 }
 
-/** Context passed to tool renderers. */
-export interface ToolRenderContext<TState = unknown, TArgs = unknown> {
+export interface ToolRenderContext<
+  TState = unknown,
+  TArgs = unknown,
+> extends ToolRenderResultOptions {
   /** Current tool call arguments. Shared across call/result renders for the same tool call. */
   args: TArgs;
   /** Unique id for this tool execution. Stable across call/result renders for the same tool call. */
@@ -430,19 +388,14 @@ export interface ToolRenderContext<TState = unknown, TArgs = unknown> {
   lastComponent: Component | undefined;
   /** Shared renderer state for this tool row. Initialized by tool-execution.ts. */
   state: TState;
-  /** Working directory for this tool execution. */
   cwd: string;
-  /** Whether the tool execution has started. */
   executionStarted: boolean;
-  /** Whether the tool call arguments are complete. */
   argsComplete: boolean;
   /** Whether the tool result is partial/streaming. */
   isPartial: boolean;
-  /** Whether the result view is expanded. */
   expanded: boolean;
   /** Whether inline images are currently shown in the TUI. */
   showImages: boolean;
-  /** Whether the current result is an error. */
   isError: boolean;
 }
 
@@ -450,48 +403,29 @@ type BivariantCallback<TArgs extends unknown[], TResult> = {
   bivarianceHack(...args: TArgs): TResult;
 }["bivarianceHack"];
 
-/**
- * Tool definition for registerTool().
- */
 export interface ToolDefinition<
   TParams extends TSchema = TSchema,
   TDetails = unknown,
   TState = unknown,
+> extends Pick<
+  AgentTool<TParams, TDetails>,
+  | "name"
+  | "label"
+  | "hideFromChannelProgress"
+  | "resultContentSource"
+  | "description"
+  | "parameters"
+  | "outputSchema"
+  | "prepareArguments"
 > {
-  /** Tool name (used in LLM tool calls) */
-  name: string;
-  /** Human-readable label for UI */
-  label: string;
-  /** Preserve lifecycle telemetry without rendering transient channel progress. */
-  hideFromChannelProgress?: boolean;
-  /** Tool results contain externally controlled network content. */
-  resultContentSource?: AgentTool["resultContentSource"];
-  /** Description for LLM */
-  description: string;
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */
   promptSnippet?: string;
   /** Optional guideline bullets appended to the default system prompt Guidelines section when this tool is active. */
   promptGuidelines?: string[];
-  /** Parameter schema (TypeBox) */
-  parameters: TParams;
-  /** Exact schema for the structured value returned in AgentToolResult.details. */
-  outputSchema?: TSchema;
   /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
   renderShell?: "default" | "self";
-
-  /** Optional compatibility shim to prepare raw tool call arguments before schema validation. Must return an object conforming to TParams. */
-  prepareArguments?: (args: unknown) => Static<TParams>;
-
-  /**
-   * Per-tool execution mode override.
-   * - "sequential": this tool must execute one at a time with other tool calls.
-   * - "parallel": this tool can execute concurrently with other tool calls.
-   *
-   * If omitted, the default execution mode applies.
-   */
   executionMode?: ToolExecutionMode;
 
-  /** Execute the tool. */
   execute(
     toolCallId: string,
     params: Static<TParams>,
@@ -500,13 +434,11 @@ export interface ToolDefinition<
     ctx: ExtensionContext,
   ): Promise<AgentToolResult<TDetails>>;
 
-  /** Custom rendering for tool call display */
   renderCall?: BivariantCallback<
     [args: Static<TParams>, theme: Theme, context: ToolRenderContext<TState, Static<TParams>>],
     Component
   >;
 
-  /** Custom rendering for tool result display */
   renderResult?: BivariantCallback<
     [
       result: AgentToolResult<TDetails>,
@@ -533,8 +465,6 @@ export function defineTool<TParams extends TSchema, TDetails = unknown, TState =
   return tool as ToolDefinition<TParams, TDetails, TState> & AnyToolDefinition;
 }
 
-// Resource Events
-
 /** Fired after session_start to allow extensions to provide additional resource paths. */
 export interface ResourcesDiscoverEvent {
   type: "resources_discover";
@@ -542,19 +472,15 @@ export interface ResourcesDiscoverEvent {
   reason: "startup" | "reload";
 }
 
-/** Result from resources_discover event handler */
 export interface ResourcesDiscoverResult {
   skillPaths?: string[];
   promptPaths?: string[];
   themePaths?: string[];
 }
 
-// Session Events
-
 /** Fired when a session is started, loaded, or reloaded */
 export interface SessionStartEvent {
   type: "session_start";
-  /** Why this session start happened. */
   reason: "startup" | "reload" | "new" | "resume" | "fork";
   /** Previously active session file. Present for "new", "resume", and "fork". */
   previousSessionFile?: string;
@@ -602,14 +528,12 @@ export interface SessionShutdownEvent {
   targetSessionFile?: string;
 }
 
-/** Preparation data for tree navigation */
 export interface TreePreparation {
   targetId: string;
   oldLeafId: string | null;
   commonAncestorId: string | null;
   entriesToSummarize: SessionEntry[];
   userWantsSummary: boolean;
-  /** Custom instructions for summarization */
   customInstructions?: string;
   /** If true, customInstructions replaces the default prompt instead of being appended */
   replaceInstructions?: boolean;
@@ -643,8 +567,6 @@ type SessionEvent =
   | SessionBeforeTreeEvent
   | SessionTreeEvent;
 
-// Agent Events
-
 /** Fired before each LLM call. Can modify messages. */
 export interface ContextEvent {
   type: "context";
@@ -669,95 +591,58 @@ export interface BeforeAgentStartEvent {
   type: "before_agent_start";
   /** The raw user prompt text (after expansion). */
   prompt: string;
-  /** Images attached to the user prompt, if any. */
   images?: ImageContent[];
-  /** The fully assembled system prompt string. */
   systemPrompt: string;
   /** Structured options used to build the system prompt. Extensions can inspect this without re-discovering resources. */
   systemPromptOptions: BuildSystemPromptOptions;
 }
 
-/** Fired when an agent loop starts */
-interface AgentStartEvent {
-  type: "agent_start";
-}
+type RuntimeAgentEvent<Type extends AgentEvent["type"]> = Extract<AgentEvent, { type: Type }>;
 
-/** Fired when an agent loop ends */
-interface AgentEndEvent {
-  type: "agent_end";
-  messages: AgentMessage[];
-}
+interface AgentStartEvent extends RuntimeAgentEvent<"agent_start"> {}
+
+interface AgentEndEvent extends RuntimeAgentEvent<"agent_end"> {}
 
 /** Fired once the session has no automatic retry, compaction, or queued continuation left. */
 interface AgentSettledEvent {
   type: "agent_settled";
 }
 
-/** Fired at the start of each turn */
-export interface TurnStartEvent {
-  type: "turn_start";
+export interface TurnStartEvent extends RuntimeAgentEvent<"turn_start"> {
   turnIndex: number;
   timestamp: number;
 }
 
-/** Fired at the end of each turn */
-export interface TurnEndEvent {
-  type: "turn_end";
+export interface TurnEndEvent extends RuntimeAgentEvent<"turn_end"> {
   turnIndex: number;
-  message: AgentMessage;
-  toolResults: ToolResultMessage[];
 }
 
 /** Fired when a message starts (user, assistant, or toolResult) */
-export interface MessageStartEvent {
-  type: "message_start";
-  message: AgentMessage;
-}
+export interface MessageStartEvent extends RuntimeAgentEvent<"message_start"> {}
 
 /** Fired during assistant message streaming with token-by-token updates */
-export interface MessageUpdateEvent {
-  type: "message_update";
-  message: AgentMessage;
-  assistantMessageEvent: AssistantMessageEvent;
-}
+export interface MessageUpdateEvent extends RuntimeAgentEvent<"message_update"> {}
 
-/** Fired when a message ends */
-export interface MessageEndEvent {
-  type: "message_end";
-  message: AgentMessage;
-}
+export interface MessageEndEvent extends RuntimeAgentEvent<"message_end"> {}
 
-/** Fired when a tool starts executing */
-export interface ToolExecutionStartEvent {
-  type: "tool_execution_start";
-  toolCallId: string;
-  toolName: string;
-  args: unknown;
-}
+export interface ToolExecutionStartEvent extends Omit<
+  RuntimeAgentEvent<"tool_execution_start">,
+  "hideFromChannelProgress"
+> {}
 
 /** Fired during tool execution with partial/streaming output */
-export interface ToolExecutionUpdateEvent {
-  type: "tool_execution_update";
-  toolCallId: string;
-  toolName: string;
-  args: unknown;
-  partialResult: unknown;
-}
+export interface ToolExecutionUpdateEvent extends Omit<
+  RuntimeAgentEvent<"tool_execution_update">,
+  "hideFromChannelProgress"
+> {}
 
-/** Fired when a tool finishes executing */
-export interface ToolExecutionEndEvent {
-  type: "tool_execution_end";
-  toolCallId: string;
-  toolName: string;
-  result: unknown;
-  isError: boolean;
-}
-
-// Model Events
+export interface ToolExecutionEndEvent extends Omit<
+  RuntimeAgentEvent<"tool_execution_end">,
+  "assistantTurnId" | "executionStarted" | "errorKind" | "hideFromChannelProgress"
+> {}
 
 type ModelSelectSource = "set" | "cycle" | "restore";
 
-/** Fired when a new model is selected */
 interface ModelSelectEvent {
   type: "model_select";
   model: Model;
@@ -765,49 +650,35 @@ interface ModelSelectEvent {
   source: ModelSelectSource;
 }
 
-/** Fired when a new thinking level is selected */
 export interface ThinkingLevelSelectEvent {
   type: "thinking_level_select";
   level: ThinkingLevel;
   previousLevel: ThinkingLevel;
 }
 
-// User Bash Events
-
 /** Fired when user executes a bash command via ! or !! prefix */
 export interface UserBashEvent {
   type: "user_bash";
-  /** The command to execute */
   command: string;
   /** True if !! prefix was used (excluded from LLM context) */
   excludeFromContext: boolean;
-  /** Current working directory */
   cwd: string;
 }
 
-// Input Events
-
-/** Source of user input */
 export type InputSource = "interactive" | "rpc" | "extension";
 
 /** Fired when user input is received, before agent processing */
 export interface InputEvent {
   type: "input";
-  /** The input text */
   text: string;
-  /** Attached images, if any */
   images?: ImageContent[];
-  /** Where the input came from */
   source: InputSource;
 }
 
-/** Result from input event handler */
 export type InputEventResult =
   | { action: "continue" }
   | { action: "transform"; text: string; images?: ImageContent[] }
   | { action: "handled" };
-
-// Tool Events
 
 interface ToolCallEventBase<TName extends string, TInput> {
   type: "tool_call";
@@ -872,7 +743,6 @@ export type ToolResultEvent =
   | LsToolResultEvent
   | CustomToolResultEvent;
 
-// Type guards for ToolResultEvent
 export function isBashToolResult(e: ToolResultEvent): e is BashToolResultEvent {
   return e.toolName === "bash";
 }
@@ -948,7 +818,6 @@ export function isToolCallEventType(toolName: string, event: ToolCallEvent): boo
   return event.toolName === toolName;
 }
 
-/** Union of all event types */
 export type ExtensionEvent =
   | ResourcesDiscoverEvent
   | SessionEvent
@@ -974,8 +843,6 @@ export type ExtensionEvent =
   | ToolCallEvent
   | ToolResultEvent;
 
-// Event Results
-
 export interface ContextEventResult {
   messages?: AgentMessage[];
 }
@@ -986,7 +853,6 @@ export interface ToolCallEventResult {
   reason?: string;
 }
 
-/** Result from user_bash event handler */
 export interface UserBashEventResult {
   /** Custom operations to use for execution */
   operations?: BashOperations;
@@ -994,12 +860,7 @@ export interface UserBashEventResult {
   result?: BashResult;
 }
 
-export interface ToolResultEventResult {
-  content?: (TextContent | ImageContent)[];
-  details?: unknown;
-  isError?: boolean;
-  terminate?: boolean;
-}
+export interface ToolResultEventResult extends AfterToolCallResult {}
 
 export interface MessageEndEventResult {
   /** Replace the finalized message. The replacement must keep the original message role. */
@@ -1040,8 +901,6 @@ export interface SessionBeforeTreeResult {
   label?: string;
 }
 
-// Message Rendering
-
 interface MessageRenderOptions {
   expanded: boolean;
 }
@@ -1051,8 +910,6 @@ export type MessageRenderer<T = unknown> = (
   options: MessageRenderOptions,
   theme: Theme,
 ) => Component | undefined;
-
-// Command Registration
 
 export interface RegisteredCommand {
   name: string;
@@ -1068,21 +925,13 @@ export interface ResolvedCommand extends RegisteredCommand {
   invocationName: string;
 }
 
-// Extension API
-
-/** Handler function type for events */
 // biome-ignore lint/suspicious/noConfusingVoidType: void allows bare return statements
 type ExtensionHandler<E, R = undefined> = (
   event: E,
   ctx: ExtensionContext,
 ) => Promise<R | void> | R | void;
 
-/**
- * ExtensionAPI passed to extension factory functions.
- */
 export interface ExtensionAPI {
-  // Event Subscription
-
   on(
     event: "resources_discover",
     handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>,
@@ -1135,46 +984,23 @@ export interface ExtensionAPI {
   on(event: "user_bash", handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
   on(event: "input", handler: ExtensionHandler<InputEvent, InputEventResult>): void;
 
-  // Tool Registration
-
-  /** Register a tool that the LLM can call. */
   registerTool<TParams extends TSchema = TSchema, TDetails = unknown, TState = unknown>(
     tool: ToolDefinition<TParams, TDetails, TState>,
   ): void;
 
-  // Command, Shortcut, Flag Registration
-
-  /** Register a custom command. */
   registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">): void;
 
-  /** Register a keyboard shortcut. */
   registerShortcut(
     shortcut: KeyId,
-    options: {
-      description?: string;
-      handler: (ctx: ExtensionContext) => Promise<void> | void;
-    },
+    options: Omit<ExtensionShortcut, "shortcut" | "extensionPath">,
   ): void;
 
-  /** Register a CLI flag. */
-  registerFlag(
-    name: string,
-    options: {
-      description?: string;
-      type: "boolean" | "string";
-      default?: boolean | string;
-    },
-  ): void;
+  registerFlag(name: string, options: Omit<ExtensionFlag, "name" | "extensionPath">): void;
 
-  /** Get the value of a registered CLI flag. */
   getFlag(name: string): boolean | string | undefined;
-
-  // Message Rendering
 
   /** Register a custom renderer for CustomMessageEntry. */
   registerMessageRenderer<T = unknown>(customType: string, renderer: MessageRenderer<T>): void;
-
-  // Actions
 
   /** Send a custom message to the session. */
   sendMessage<T = unknown>(
@@ -1191,47 +1017,45 @@ export interface ExtensionAPI {
     options?: { deliverAs?: "steer" | "followUp" },
   ): void;
 
-  /** Append a custom entry to the session for state persistence (not sent to LLM). */
+  /** @deprecated Use appendEntryAsync; removed at the next Plugin SDK major. */
   appendEntry(customType: string, data?: unknown): void;
 
-  // Session Metadata
+  /** Persist a custom entry and return its id after the worker commits. */
+  appendEntryAsync(customType: string, data?: unknown): Promise<string>;
 
-  /** Set the session display name (shown in session selector). */
+  /** @deprecated Use setSessionNameAsync; removed at the next Plugin SDK major. */
   setSessionName(name: string): void;
 
-  /** Get the current session name, if set. */
+  /** Set the display name and publish the change after the worker commits. */
+  setSessionNameAsync(name: string): Promise<void>;
+
   getSessionName(): string | undefined;
 
-  /** Set or clear a label on an entry. Labels are user-defined markers for bookmarking/navigation. */
+  /** @deprecated Use setLabelAsync; removed at the next Plugin SDK major. */
   setLabel(entryId: string, label: string | undefined): void;
 
-  /** Execute a shell command. */
+  /** Set or clear an entry label after the worker commits. */
+  setLabelAsync(entryId: string, label: string | undefined): Promise<void>;
+
   exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
 
-  /** Get the list of currently active tool names. */
   getActiveTools(): string[];
 
   /** Get all configured tools with parameter schema and source metadata. */
   getAllTools(): ToolInfo[];
 
-  /** Set the active tools by name. */
   setActiveTools(toolNames: string[]): void;
 
   /** Get available slash commands in the current session. */
   getCommands(): SlashCommandInfo[];
 
-  // Model and Thinking Level
-
   /** Set the current model. Returns false if no API key available. */
   setModel(model: Model): Promise<boolean>;
 
-  /** Get current thinking level. */
   getThinkingLevel(): ThinkingLevel;
 
   /** Set thinking level (clamped to model capabilities). */
   setThinkingLevel(level: ThinkingLevel): Promise<void>;
-
-  // Provider Registration
 
   /**
    * Register a model provider.
@@ -1304,31 +1128,7 @@ export interface ExtensionAPI {
   events: EventBus;
 }
 
-// Provider Registration Types
-
-/** Configuration for registering a provider via api.registerProvider(). */
-export interface ProviderConfig extends ProviderConfigBase {
-  /** Models to register. If provided, replaces all existing models for this provider. */
-  models?: ProviderModelConfig[];
-  /** OAuth provider for /login support. The `id` is set automatically from the provider name. */
-  oauth?: {
-    /** Display name for the provider in login UI. */
-    name: string;
-    /** Run the login flow, return credentials to persist. */
-    login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
-    /** Refresh expired credentials, return updated credentials to persist. */
-    refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
-    /** Convert credentials to API key string for the provider. */
-    getApiKey(credentials: OAuthCredentials): string;
-    /** Optional: modify models for this provider (e.g., update baseUrl based on credentials). */
-    modifyModels?(models: Model[], credentials: OAuthCredentials): Model[];
-  };
-}
-
-/** Extension factory function type. Supports both sync and async initialization. */
 export type ExtensionFactory = (api: ExtensionAPI) => void | Promise<void>;
-
-// Loaded Extension Types
 
 export interface RegisteredTool {
   definition: ToolDefinition;
@@ -1356,7 +1156,6 @@ export type SetSessionNameHandler = ExtensionAPI["setSessionName"];
 export type GetSessionNameHandler = ExtensionAPI["getSessionName"];
 export type RefreshToolsHandler = () => void;
 
-/** Tool info with name, description, parameter schema, and source metadata */
 export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters"> & {
   sourceInfo: SourceInfo;
 };
@@ -1410,6 +1209,12 @@ export interface ExtensionActions extends Pick<
   refreshTools: RefreshToolsHandler;
 }
 
+/** Host actions with required worker-backed persistence capabilities. */
+export interface ExtensionActionsV2
+  extends
+    ExtensionActions,
+    Pick<ExtensionAPI, "appendEntryAsync" | "setSessionNameAsync" | "setLabelAsync"> {}
+
 /** Actions for the live extension context, supplied by each runtime mode. */
 export interface ExtensionContextActions extends Pick<
   ExtensionContext,
@@ -1435,7 +1240,16 @@ export interface ExtensionCommandContextActions extends Pick<
  * Full runtime = state + actions.
  * Created by loader with throwing action stubs, completed by runner.initialize().
  */
-export interface ExtensionRuntime extends ExtensionRuntimeState, ExtensionActions {}
+export interface ExtensionRuntime
+  extends
+    ExtensionRuntimeState,
+    ExtensionActions,
+    Partial<
+      Pick<ExtensionActionsV2, "appendEntryAsync" | "setSessionNameAsync" | "setLabelAsync">
+    > {}
+
+/** Host runtime with required worker-backed persistence capabilities. */
+export interface ExtensionRuntimeV2 extends ExtensionRuntimeState, ExtensionActionsV2 {}
 
 /** Loaded extension with all registered items. */
 export interface Extension {
@@ -1450,15 +1264,12 @@ export interface Extension {
   shortcuts: Map<KeyId, ExtensionShortcut>;
 }
 
-/** Result of loading extensions. */
 export interface LoadExtensionsResult {
   extensions: Extension[];
   errors: Array<{ path: string; error: string }>;
   /** Shared runtime - actions are throwing stubs until runner.initialize() */
   runtime: ExtensionRuntime;
 }
-
-// Extension Error
 
 export interface ExtensionError {
   extensionPath: string;

@@ -18,6 +18,7 @@ import {
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
 } from "../../infra/update-check.js";
+import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
 import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
 import {
   canResolveRegistryVersionForPackageTarget,
@@ -29,13 +30,14 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
-import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
+import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   describeUpdateInstallRoot,
   resolveUnmanagedUpdateInstallReason,
   resolveUpdateInstallSurface,
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -62,14 +64,11 @@ import {
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
 import { readUpdateCandidateSource } from "./update-command-managed-context.js";
+import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import { inspectNpmGlobalDestination } from "./update-command-package-destination.js";
 import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
-import {
-  assertUpdatePackageActivationAdmission,
-  readDevUpdateTarget,
-  recordUpdateCommandTarget,
-  type prepareUpdateCommand,
-} from "./update-command-run.js";
+import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
+import type { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
@@ -157,29 +156,42 @@ export async function resolveUpdateCommandTarget(
       const pkgOwnership = createFreeBsdPkgOwnershipInspection(updateStepTimeoutMs);
       await pkgOwnership.assertUnowned(discoveredRoot);
       let { devTarget } = prepared;
-      let root = discoveredRoot;
+      let root = prepared.servicePlan?.rootRedirect?.root ?? discoveredRoot;
       let updateInstallKind = installKind;
+      let managedServiceRoot = prepared.servicePlan?.serviceRoot;
       let packageManager: ResolvedGlobalInstallTarget["manager"] | undefined;
+      const preflightSteps: UpdateStepResult[] = [];
+      const warn = (message: string) =>
+        opts.json
+          ? defaultRuntime.error(`Warning: ${message}`)
+          : defaultRuntime.log(theme.warn(message));
+      const recordPreflightStep = (result: UpdateStepResult) => {
+        if (!opts.run) {
+          preflightSteps.push(result);
+          return;
+        }
+        for (const step of updateRunStepsFromResultStep(result)) {
+          recordUpdateCommandTarget(opts.run, { step });
+        }
+      };
       const resolveMode = async (): Promise<UpdateRunResult["mode"]> => {
-        if (updateInstallKind === "git") {
-          return "git";
-        }
-        if (packageManager) {
-          return packageManager;
-        }
         // Policy/config refusals can precede target preparation. Inspect their owner too.
-        return (
-          await resolveUpdateInstallSurface({
-            root,
-            installKind,
-            timeoutMs: updateStepTimeoutMs,
-            runCommand: runCommandWithTimeout,
-          })
-        ).mode;
+        return updateInstallKind === "git"
+          ? "git"
+          : packageManager ||
+              (
+                await resolveUpdateInstallSurface({
+                  root,
+                  installKind,
+                  timeoutMs: updateStepTimeoutMs,
+                  runCommand: runCommandWithTimeout,
+                })
+              ).mode;
       };
       const refuseUpdate: RefuseUpdate = async (reason, message, failureFacts, recoverySteps) => {
         const report = {
           root,
+          serviceRoot: managedServiceRoot,
           installKind: updateInstallKind,
           // Config failures refuse before manager probes; retain the known install kind.
           mode:
@@ -190,6 +202,14 @@ export async function resolveUpdateCommandTarget(
           message,
           failureFacts,
           recoverySteps,
+          ...(preflightSteps.length
+            ? {
+                stepResult: {
+                  steps: preflightSteps,
+                  failedStep: preflightSteps.findLast(isFailedUpdateStep),
+                },
+              }
+            : {}),
           opts,
           controlPlaneUpdateSentinelMeta,
         };
@@ -208,6 +228,7 @@ export async function resolveUpdateCommandTarget(
         throw new UnreportedUpdateAdmissionOutcome(
           {
             root,
+            serviceRoot: servicePlan.serviceRoot,
             installKind,
             mode: "unknown",
             opts,
@@ -287,6 +308,10 @@ export async function resolveUpdateCommandTarget(
       const switchToPackage =
         requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
       updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
+      if (updateInstallKind !== "package") {
+        root = discoveredRoot;
+        managedServiceRoot = undefined;
+      }
       if (updateInstallKind !== "package" && configReadFailure) {
         throw configReadFailure;
       }
@@ -332,9 +357,8 @@ export async function resolveUpdateCommandTarget(
       let installedPackageName = DEFAULT_PACKAGE_NAME;
       let packageAlreadyCurrent = false;
       let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
-      let packageRuntimeTarget: { version: string; nodeEngine: string | null } | undefined;
+      let packageRuntimeTarget: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
       let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
-      let managedServiceRoot: string | undefined;
       // The service runtime can differ even when its package root matches the shell.
       let managedServiceNodeRunner: string | undefined;
       let packageUpdateNodeRunner: string | undefined;
@@ -353,9 +377,7 @@ export async function resolveUpdateCommandTarget(
         serviceUnitTarget = servicePlan.serviceUnitTarget;
         managedServiceRoot = servicePlan.serviceRoot;
         managedServiceNodeRunner = servicePlan.nodeRunner;
-        if (managedServiceRootRedirect) {
-          root = managedServiceRootRedirect.root;
-        }
+        root = managedServiceRootRedirect?.root ?? discoveredRoot;
         if (!opts.json) {
           printManagedServicePackageUpdatePlan(servicePlan);
         }
@@ -405,6 +427,7 @@ export async function resolveUpdateCommandTarget(
             }
             const report = {
               root,
+              serviceRoot: managedServiceRoot,
               installKind,
               reason: error.reason,
               message: error.message,
@@ -447,19 +470,16 @@ export async function resolveUpdateCommandTarget(
             purpose: "global package update",
           });
           if (diskWarning) {
-            if (opts.json) {
-              defaultRuntime.error(`Warning: ${diskWarning}`);
-            } else {
-              defaultRuntime.log(theme.warn(diskWarning));
-            }
+            warn(diskWarning);
             opts.run?.executorFence?.assertCurrent();
-            for (const step of updateRunStepsFromResultStep({
+            recordPreflightStep({
               name: "disk-space-preflight",
+              command: "disk-space-preflight",
+              cwd: root,
+              durationMs: 0,
               exitCode: 0,
               warnings: [diskWarning],
-            })) {
-              recordUpdateCommandTarget(opts.run, { step });
-            }
+            });
           }
           const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
           if (npmLifecycleGate.error) {
@@ -598,25 +618,20 @@ export async function resolveUpdateCommandTarget(
           env,
         });
         opts.run?.executorFence?.assertCurrent();
-        for (const step of updateRunStepsFromResultStep(snapshot)) {
-          recordUpdateCommandTarget(opts.run, { step });
-        }
+        recordPreflightStep(snapshot);
         if (snapshot.exitCode !== 0) {
           await refuseUpdate("snapshot-capacity-insufficient", snapshot.stderrTail ?? undefined);
           return undefined;
         }
         for (const warning of snapshot.warnings ?? []) {
-          if (opts.json) {
-            defaultRuntime.error(`Warning: ${warning}`);
-          } else {
-            defaultRuntime.log(theme.warn(warning));
-          }
+          warn(warning);
         }
       }
 
       return {
         root,
         ...(inspectionWarning ? { inspectionWarning } : {}),
+        ...(preflightSteps.length ? { preflightSteps } : {}),
         mode: await resolveMode(),
         updateInstallKind,
         refuseUpdate,

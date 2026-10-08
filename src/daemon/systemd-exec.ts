@@ -103,9 +103,6 @@ export function isSystemctlMissing(result: ExecResult): boolean {
 }
 
 export function isSystemdUnitNotEnabled(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.includes("disabled") ||
@@ -119,9 +116,6 @@ export function isSystemdUnitNotEnabled(detail: string): boolean {
 }
 
 export function isSystemdUnitMissingDetail(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     (normalized.includes("unit file") && normalized.includes("does not exist")) ||
@@ -146,9 +140,6 @@ export function isSystemdUserScopeUnavailable(detail: string): boolean {
 }
 
 function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.startsWith("command failed: systemctl") &&
@@ -164,13 +155,7 @@ function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
 
 export function isNonFatalSystemdInstallProbeError(error: unknown): boolean {
   const detail = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  if (!detail) {
-    return false;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(detail);
-  return (
-    isSystemdUserBusUnavailableDetail(normalized) || isGenericSystemctlIsEnabledFailure(normalized)
-  );
+  return isSystemdUserBusUnavailableDetail(detail) || isGenericSystemctlIsEnabledFailure(detail);
 }
 
 async function execSystemdUserCommand(

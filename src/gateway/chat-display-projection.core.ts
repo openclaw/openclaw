@@ -39,7 +39,6 @@ import {
   mergeTtsSupplementMessages,
   projectForwardedMessages,
   toProjectedMessages,
-  type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
 import {
   sanitizeChatHistoryContentBlock,
@@ -53,6 +52,7 @@ import type {
   CurrentUserProfileDisplay,
   CurrentUserProfileDisplayResolver,
 } from "./current-user-profile-display.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import { projectTranscriptImageArtifacts } from "./transcript-image-artifacts.js";
 
 export type ChatDisplayProjectionOptions = {
@@ -189,9 +189,11 @@ function sanitizeAssistantErrorDisplayMessage(
     next.text = next.text.slice(STREAM_ERROR_FALLBACK_TEXT.length);
   }
   const terminalCopy =
+    formatProviderRefusalText(message) ??
     renderAssistantRequestFailureCopy({
       code: typeof message.errorCode === "string" ? message.errorCode : undefined,
-    }) ?? renderRecordedAssistantFailureCopy(message);
+    }) ??
+    renderRecordedAssistantFailureCopy(message);
   if (terminalCopy) {
     // Apply the normal visibility rules before adding host-owned failure copy.
     // Put it first in surviving text so phase filtering and display caps retain it.
@@ -319,51 +321,62 @@ export function isPendingAssistantError(value: unknown): boolean {
   );
 }
 
-function createRecoveredAssistantErrorProjection(initialPending = false) {
+export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecoveryOptions) {
+  const projectCoordination = createSubagentCoordinationHistoryProjection(
+    options?.subagentCoordination,
+  );
   const messages: Array<Record<string, unknown>> = [];
-  let unseenPending = initialPending;
+  let unseenPending = options?.assistantErrorPending ?? false;
   let recoveryObserved = false;
   let pendingIndexes: number[] = [];
   const repairedIndexes = new Set<number>();
-  return {
-    append(message: Record<string, unknown>) {
-      const index = messages.length;
-      messages.push(message);
-      if (message.role === "user") {
-        unseenPending = false;
-        pendingIndexes = [];
-        return;
-      }
-      if (isPendingAssistantError(message)) {
-        pendingIndexes.push(index);
-        return;
-      }
-      if (
-        (!unseenPending && pendingIndexes.length === 0) ||
-        !hasVisibleAssistantDisplayContent(message)
-      ) {
-        return;
-      }
-      // An incremental reader carries only a pending bit. It must reload raw
-      // history before deciding which previously emitted failures were recovered.
-      recoveryObserved ||= unseenPending;
+  const append = (message: Record<string, unknown>) => {
+    const index = messages.length;
+    messages.push(message);
+    if (message.role === "user") {
       unseenPending = false;
-      const completedRunId =
-        (message.stopReason === "stop" || message.stopReason === "length") &&
-        !isTranscriptOnlyOpenClawAssistantMessage(message)
-          ? readSessionTranscriptRunId(message)
-          : undefined;
-      pendingIndexes = pendingIndexes.filter((pendingIndex) => {
-        const failedRunId = readSessionTranscriptRunId(messages[pendingIndex]);
-        // Unattributed legacy stream sentinels retain their existing turn-local
-        // repair. Runtime attempt failures require completion of the exact run.
-        if (failedRunId && failedRunId !== completedRunId) {
-          return true;
+      pendingIndexes = [];
+      return;
+    }
+    if (isPendingAssistantError(message)) {
+      pendingIndexes.push(index);
+      return;
+    }
+    if (
+      (!unseenPending && pendingIndexes.length === 0) ||
+      !hasVisibleAssistantDisplayContent(message)
+    ) {
+      return;
+    }
+    // An incremental reader carries only a pending bit. It must reload raw
+    // history before deciding which previously emitted failures were recovered.
+    recoveryObserved ||= unseenPending;
+    unseenPending = false;
+    const completedRunId =
+      (message.stopReason === "stop" || message.stopReason === "length") &&
+      !isTranscriptOnlyOpenClawAssistantMessage(message)
+        ? readSessionTranscriptRunId(message)
+        : undefined;
+    pendingIndexes = pendingIndexes.filter((pendingIndex) => {
+      const failedRunId = readSessionTranscriptRunId(messages[pendingIndex]);
+      // Unattributed legacy stream sentinels retain their existing turn-local
+      // repair. Runtime attempt failures require completion of the exact run.
+      if (failedRunId && failedRunId !== completedRunId) {
+        return true;
+      }
+      repairedIndexes.add(pendingIndex);
+      recoveryObserved = true;
+      return false;
+    });
+  };
+  return {
+    append(input: unknown[]) {
+      const projected = projectCoordination(prepareChatHistoryRecoveryMessages(input, options));
+      for (const message of toProjectedMessages(projected)) {
+        if (!isOpenClawMessageToolMirrorAssistantMessage(message)) {
+          append(message);
         }
-        repairedIndexes.add(pendingIndex);
-        recoveryObserved = true;
-        return false;
-      });
+      }
     },
     get pending() {
       return unseenPending || pendingIndexes.length > 0;
@@ -462,39 +475,14 @@ export function prepareChatHistoryRecoveryMessages(
     : stripEnvelopeFromMessages(projectedMessages);
 }
 
-export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecoveryOptions) {
-  const projectCoordination = createSubagentCoordinationHistoryProjection(
-    options?.subagentCoordination,
-  );
-  const recovery = createRecoveredAssistantErrorProjection(options?.assistantErrorPending);
-  return {
-    append(messages: unknown[]) {
-      const projected = projectCoordination(prepareChatHistoryRecoveryMessages(messages, options));
-      for (const message of toProjectedMessages(projected)) {
-        if (!isOpenClawMessageToolMirrorAssistantMessage(message)) {
-          recovery.append(message);
-        }
-      }
-    },
-    get pending() {
-      return recovery.pending;
-    },
-    result: recovery.result.bind(recovery),
-  };
-}
-
-function projectChatHistoryRecovery(messages: unknown[], options?: ChatHistoryRecoveryOptions) {
-  const projection = createChatHistoryRecoveryProjection(options);
-  projection.append(messages);
-  return projection.result();
-}
-
 export function projectChatDisplayMessagesWithState(
   messages: unknown[],
   options?: ChatDisplayProjectionOptions,
 ): ChatDisplayProjectionResult {
   options?.subagentCoordination?.assertCurrent?.();
-  const recoveredErrors = projectChatHistoryRecovery(messages, options);
+  const recovery = createChatHistoryRecoveryProjection(options);
+  recovery.append(messages);
+  const recoveredErrors = recovery.result();
   const projectedErrors = projectEmptyAssistantErrorMessages(recoveredErrors.messages);
   const activity =
     options?.activity === false
@@ -551,5 +539,34 @@ export function projectChatDisplayMessage(
   message: unknown,
   options?: ChatDisplayProjectionOptions,
 ): Record<string, unknown> | undefined {
-  return projectChatDisplayMessages([message], options)[0];
+  const projected = projectChatDisplayMessages([message], options);
+  if (
+    !options?.includeCommentaryFallbacks ||
+    !projected.some((entry) => entry.openclawStreamFallback)
+  ) {
+    return projected[0];
+  }
+  // A fetched source row restores all its visible fragments as one message.
+  const result: Record<string, unknown> = {
+    ...projected.at(-1),
+    content: projected.flatMap(({ content }) =>
+      Array.isArray(content)
+        ? content
+        : typeof content === "string"
+          ? [{ type: "text", text: content }]
+          : [],
+    ),
+  };
+  const truncated = projected
+    .map((entry) => asOptionalRecord(entry["__openclaw"]))
+    .find((metadata) => metadata?.truncated === true);
+  if (truncated) {
+    result["__openclaw"] = {
+      ...asOptionalRecord(result["__openclaw"]),
+      truncated: true,
+      reason: truncated.reason,
+    };
+  }
+  delete result.openclawStreamFallback;
+  return result;
 }

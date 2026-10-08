@@ -19,8 +19,7 @@ const { executeMock, historyMock, hookHistoryMock, hookRunnerMock, beforeReplyMo
 
 let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
 let runPreparedCliAgent: typeof import("./cli-runner.js").runPreparedCliAgent;
-let restoreCliRunnerTestDeps: typeof import("./cli-runner.js").restoreCliRunnerTestDeps;
-let setCliRunnerTestDeps: typeof import("./cli-runner.js").setCliRunnerTestDeps;
+let cliTranscript: typeof import("./command/attempt-execution.helpers.js");
 
 vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: executeMock,
@@ -164,8 +163,8 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
 
 describe("runPreparedCliAgent context engine lifecycle", () => {
   beforeAll(async () => {
-    ({ restoreCliRunnerTestDeps, runCliAgent, runPreparedCliAgent, setCliRunnerTestDeps } =
-      await import("./cli-runner.js"));
+    ({ runCliAgent, runPreparedCliAgent } = await import("./cli-runner.js"));
+    cliTranscript = await import("./command/attempt-execution.helpers.js");
   });
 
   beforeEach(() => {
@@ -187,14 +186,11 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     hookRunnerMock.mockReset().mockReturnValue(null);
     beforeReplyMock.mockClear();
     prepareMock.mockReset();
-    restoreCliRunnerTestDeps();
-    setCliRunnerTestDeps({
-      claudeCliSessionTranscriptHasContent: vi.fn(async () => true),
-    });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockResolvedValue(true);
   });
 
   afterEach(() => {
-    restoreCliRunnerTestDeps();
+    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockRestore();
   });
 
   it("keeps valid-empty isolated completion outside the turn lifecycle", async () => {
@@ -314,27 +310,22 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
-  it.each(["admission", "terminal"] as const)(
-    "does not emit CLI turn facts without %s",
-    async (missing) => {
-      const { afterTurn, maintain, dispose } = createLifecycle();
-      const context = buildPreparedContext(createContextEngine({ afterTurn, maintain, dispose }));
-      const onContextEngineTurnCandidate = vi.fn();
-      context.params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
-      if (missing === "terminal") {
-        context.params.userTurnTranscriptRecorder = createAdmittedCliRecorder("cli-user").recorder;
-        context.params.persistAssistantTranscript = false;
-      }
-      prepareMock.mockResolvedValue(context);
+  it("does not emit CLI turn facts without a terminal transcript", async () => {
+    const { afterTurn, maintain, dispose } = createLifecycle();
+    const context = buildPreparedContext(createContextEngine({ afterTurn, maintain, dispose }));
+    const onContextEngineTurnCandidate = vi.fn();
+    context.params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
+    context.params.userTurnTranscriptRecorder = createAdmittedCliRecorder("cli-user").recorder;
+    context.params.persistAssistantTranscript = false;
+    prepareMock.mockResolvedValue(context);
 
-      await runCliAgent(context.params);
+    await runCliAgent(context.params);
 
-      expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
-      expect(afterTurn).not.toHaveBeenCalled();
-      expect(maintain).toHaveBeenCalledTimes(1);
-      expect(dispose).not.toHaveBeenCalled();
-    },
-  );
+    expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+    expect(afterTurn).not.toHaveBeenCalled();
+    expect(maintain).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
+  });
 
   it.each(["messaging", "room_event"] as const)(
     "uses the admitted user anchor for transcriptless %s",
@@ -345,7 +336,11 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       context.params.onContextEngineTurnCandidate = candidate;
       context.params.userTurnTranscriptRecorder = recorder;
       if (kind === "messaging") {
-        executeMock.mockResolvedValue({ text: "", didSendViaMessagingTool: true });
+        executeMock.mockResolvedValue({
+          text: "",
+          didSendViaMessagingTool: true,
+          sourceReplyDelivered: true,
+        });
       } else {
         context.params.currentInboundEventKind = "room_event";
         context.params.persistAssistantTranscript = false;

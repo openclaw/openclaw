@@ -641,7 +641,7 @@ describe("setActivePluginRegistry", () => {
       }
     });
     try {
-      expect(() => loadAndActivateRootPluginRegistry(options)).toThrow(
+      await expect(loadAndActivateRootPluginRegistry(options)).rejects.toThrow(
         "Plugin registry activation was superseded",
       );
       expect(heldCommand).toBeDefined();

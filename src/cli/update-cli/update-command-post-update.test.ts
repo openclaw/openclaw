@@ -13,6 +13,7 @@ import {
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { registerCurrentCoreServiceReceiptTests } from "./update-command-current-core-service-receipt.test-support.js";
 import {
   createManagedServiceIdentityFixture,
   registerServiceInstallationConvergenceTests,
@@ -50,7 +51,7 @@ const mocks = vi.hoisted(() => ({
     >(),
   revalidateService:
     vi.fn<
-      typeof import("./update-command-service.js").revalidateManagedGatewayServiceAfterUpdate
+      typeof import("./update-command-service-revalidation.js").revalidateManagedGatewayServiceAfterUpdate
     >(),
   updatePlugins: vi.fn(),
   writeSentinel: vi.fn<
@@ -114,11 +115,14 @@ vi.mock("./update-command-fresh-doctor.js", () => ({
 vi.mock("./update-command-plugins.js", () => ({
   updatePluginsAfterCoreUpdate: mocks.updatePlugins,
 }));
+vi.mock("./update-command-service-revalidation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-revalidation.js")>()),
+  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
+}));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restartService,
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stopService,
-  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
 vi.mock("./update-command-result.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-result.js")>()),
@@ -179,6 +183,10 @@ describe("successful update finalization ordering", () => {
   });
 
   registerForegroundFinalizationTests({ tempDirs, mocks });
+  registerCurrentCoreServiceReceiptTests({
+    makeHome: () => tempDirs.make("current-core-service-receipt-"),
+    mocks,
+  });
   registerServiceInstallationConvergenceTests(() => tempDirs.make("update-install-drift-"), mocks);
 
   it("keeps an absent service out of already-current maintenance steps", async () => {

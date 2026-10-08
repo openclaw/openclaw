@@ -1,4 +1,5 @@
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { z } from "zod";
 import { isRetryableError, MattermostPostSchema, type MattermostUser } from "./client.js";
 import {
@@ -251,23 +252,26 @@ export function createMattermostThreadBackfill(params: {
     const owner = recovery;
     const controller = new AbortController();
     const deadlineAt = performance.now() + TIMEOUT_MS;
-    let timer: ReturnType<typeof setTimeout>;
-    const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
+    const boundedOperation = raceWithTimeout(
+      () => {
+        const operation = fetchEntries(turn, controller.signal);
+        inFlight.add(operation);
+        void operation.then(
+          () => inFlight.delete(operation),
+          () => inFlight.delete(operation),
+        );
+        return operation;
+      },
+      TIMEOUT_MS,
+      () => {
         const error = new DOMException("Mattermost thread recovery deadline", "TimeoutError");
         controller.abort(error);
-        reject(error);
-      }, TIMEOUT_MS);
-    });
-    const operation = fetchEntries(turn, controller.signal);
-    inFlight.add(operation);
-    void operation.then(
-      () => inFlight.delete(operation),
-      () => inFlight.delete(operation),
+        throw error;
+      },
     );
     owner.completion = (async () => {
       try {
-        const entries = await Promise.race([operation, deadline]);
+        const entries = await boundedOperation;
         if (performance.now() >= deadlineAt) {
           throw new DOMException("Mattermost thread recovery deadline", "TimeoutError");
         }
@@ -314,7 +318,6 @@ export function createMattermostThreadBackfill(params: {
         );
         return undefined;
       } finally {
-        clearTimeout(timer!);
         // Only this unique attempt owns its completion; newer records are untouched.
         owner.completion = undefined;
       }

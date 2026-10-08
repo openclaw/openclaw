@@ -9,6 +9,7 @@ import {
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
+import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 
 function questionPrompt(id: string, question: string): QuestionPrompt {
   return {
@@ -85,11 +86,7 @@ describe("composer question takeover", () => {
 
       composerProps.gatewayQuestionPrompts = [prompt];
       draw();
-      let panel = container.querySelector("openclaw-chat-question-panel") as HTMLElement & {
-        updateComplete: Promise<unknown>;
-        props: { onCollapsedChange: (collapsed: boolean) => void };
-      };
-      await panel.updateComplete;
+      let panel = await questionPanelIn(container);
       expect(container.querySelector(".agent-chat__input")).toBeNull();
       expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
       expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
@@ -100,7 +97,7 @@ describe("composer question takeover", () => {
 
       composerProps.draft = "Host updated this draft while the question was open";
 
-      panel.props.onCollapsedChange(true);
+      panel.props!.onCollapsedChange!(true);
       draw();
       await Promise.resolve();
       let textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -110,10 +107,10 @@ describe("composer question takeover", () => {
       expect(textarea.value).toBe("Host updated this draft while the question was open");
       expect(document.activeElement).toBe(textarea);
 
-      panel = container.querySelector("openclaw-chat-question-panel") as typeof panel;
-      panel.props.onCollapsedChange(false);
+      panel = await questionPanelIn(container);
+      panel.props!.onCollapsedChange!(false);
       draw();
-      await panel.updateComplete;
+      await questionPanelIn(container);
       expect(container.querySelector(".agent-chat__input")).toBeNull();
       expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
 

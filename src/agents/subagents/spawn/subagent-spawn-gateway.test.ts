@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
-import { callNativeSubagentGateway } from "./subagent-spawn-gateway.js";
+import { resolveSubagentRunDurationMs } from "../registry/subagent-run-timeout.js";
+import {
+  callNativeSubagentGateway,
+  resolveSubagentAgentGatewayTimeoutMs,
+} from "./subagent-spawn-gateway.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 vi.mock("./subagent-spawn.runtime.js", async () => {
@@ -26,6 +30,13 @@ vi.mock("../../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 afterEach(() => spawnTesting.setDepsForTest());
 
 describe("native subagent Gateway transport ownership", () => {
+  it("caps Gateway timer delays without shortening semantic run durations", () => {
+    const thirtyDaysSeconds = 30 * 24 * 60 * 60;
+
+    expect(resolveSubagentAgentGatewayTimeoutMs(thirtyDaysSeconds)).toBe(300_000);
+    expect(resolveSubagentRunDurationMs(thirtyDaysSeconds)).toBe(2_592_000_000);
+  });
+
   it.each(["caller", "captured", "scoped"])(
     "rejects a retired %s binding without opening a socket",
     async (binding) => {

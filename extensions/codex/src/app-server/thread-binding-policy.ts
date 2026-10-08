@@ -112,15 +112,13 @@ export function shouldRecheckRecoverablePluginBinding(params: {
   const recoverablePluginConfigKeys =
     params.pluginThreadConfig.recoverablePluginConfigKeys ?? enabledPluginConfigKeys;
   const recoverablePluginConfigKeySet = new Set(recoverablePluginConfigKeys);
-  const settledPluginConfigKeys = enabledPluginConfigKeys.filter(
-    (configKey) => !recoverablePluginConfigKeySet.has(configKey),
-  );
-  const bindingContainsSettledPlugin = settledPluginConfigKeys.some(
+  const bindingContainsSettledPlugin = enabledPluginConfigKeys.some(
     (configKey) =>
-      (policyContext.pluginAppIds[configKey]?.length ?? 0) > 0 ||
-      Object.values(policyContext.apps).some(
-        (app) => app.source !== "account" && app.configKey === configKey,
-      ),
+      !recoverablePluginConfigKeySet.has(configKey) &&
+      ((policyContext.pluginAppIds[configKey]?.length ?? 0) > 0 ||
+        Object.values(policyContext.apps).some(
+          (app) => app.source !== "account" && app.configKey === configKey,
+        )),
   );
   const accountAppRecoveryEnabled =
     params.pluginThreadConfig.accountAppRecoveryEnabled ?? enabledPluginConfigKeys.length === 0;

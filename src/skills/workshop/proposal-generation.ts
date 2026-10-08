@@ -121,21 +121,6 @@ export async function cleanupSkillProposalGenerations(
   if (!activeGenerationId) {
     return;
   }
-  await retireLegacyProposalBundle(record, store);
-}
-
-function proposalGenerationId(draftFile: SkillProposalDraftFile): string | null {
-  return GENERATION_DRAFT_PATTERN.exec(draftFile)?.[1] ?? null;
-}
-
-async function retireLegacyProposalBundle(
-  record: SkillProposalRecord,
-  store?: SkillWorkshopStoreOptions,
-): Promise<void> {
-  const stateDir = resolveSkillWorkshopStateDir(store);
-  const stateRoot = await root(stateDir);
-  const proposalDir = proposalRelativeDir(record.id);
-  let entries: string[];
   try {
     entries = await stateRoot.list(proposalDir);
   } catch (error) {
@@ -149,6 +134,10 @@ async function retireLegacyProposalBundle(
       await removeGenerationPath(stateDir, path.join(proposalDir, entry));
     }
   }
+}
+
+function proposalGenerationId(draftFile: SkillProposalDraftFile): string | null {
+  return GENERATION_DRAFT_PATTERN.exec(draftFile)?.[1] ?? null;
 }
 
 async function removeGenerationPath(stateDir: string, relativePath: string): Promise<void> {

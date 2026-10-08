@@ -14,10 +14,6 @@ import {
   type ExecApprovalRecord,
 } from "./exec-approval-manager.js";
 import {
-  systemRunApprovalGuardError,
-  systemRunApprovalRequired,
-} from "./node-invoke-system-run-approval-errors.js";
-import {
   evaluateSystemRunApprovalMatch,
   toSystemRunApprovalMismatchError,
 } from "./node-invoke-system-run-approval-match.js";
@@ -48,6 +44,14 @@ const BACKEND_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS = new Set<string>([
   GATEWAY_CLIENT_NAMES.WEBCHAT,
   GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
 ]);
+
+function systemRunApprovalGuardError(code: string, message: string, runId?: string) {
+  return { ok: false as const, message, details: { code, ...(runId ? { runId } : {}) } };
+}
+
+function systemRunApprovalRequired(runId: string) {
+  return systemRunApprovalGuardError("APPROVAL_REQUIRED", "approval required", runId);
+}
 
 function normalizeApprovalDecision(value: unknown): "allow-once" | "allow-always" | null {
   const s = normalizeNullableString(value);
@@ -107,28 +111,15 @@ function normalizeComparableString(
   return opts.lowercase ? normalized.toLowerCase() : normalized;
 }
 
-function matchesRequiredString(params: {
-  expected: unknown;
-  actual: unknown;
-  lowercase?: boolean;
-}): boolean {
-  const expected = normalizeComparableString(params.expected, { lowercase: params.lowercase });
-  if (!expected) {
-    return false;
-  }
-  return expected === normalizeComparableString(params.actual, { lowercase: params.lowercase });
-}
-
-function matchesOptionalString(params: {
-  expected: unknown;
-  actual: unknown;
-  lowercase?: boolean;
-}): boolean {
-  const expected = normalizeComparableString(params.expected, { lowercase: params.lowercase });
-  if (!expected) {
-    return true;
-  }
-  return expected === normalizeComparableString(params.actual, { lowercase: params.lowercase });
+function matchesReplayBinding(
+  expected: unknown,
+  actual: unknown,
+  options: { lowercase?: boolean; optional?: boolean } = {},
+): boolean {
+  const normalized = normalizeComparableString(expected, options);
+  return normalized
+    ? normalized === normalizeComparableString(actual, options)
+    : options.optional === true;
 }
 
 function canBridgeNoDeviceChatApprovalFromBackend(params: {
@@ -147,36 +138,21 @@ function canBridgeNoDeviceChatApprovalFromBackend(params: {
   const request = params.snapshot.request;
   const plan = request.systemRunPlan ?? null;
   return (
-    matchesRequiredString({
-      expected: request.turnSourceChannel,
-      actual: params.rawParams.turnSourceChannel,
+    matchesReplayBinding(request.turnSourceChannel, params.rawParams.turnSourceChannel, {
       lowercase: true,
     }) &&
-    // turnSourceTo is channel-specific: required for messaging channels with a
-    // recipient (e.g. telegram chat id), null for channels without a "to"
-    // concept (webchat, control-ui). matchesRequiredString returns false on
-    // null expected, which broke webchat node exec approval replay. Treat it
-    // as optional so null-on-both-sides matches; required fields below
-    // (turnSourceChannel, sessionKey) still gate cross-channel replays.
-    matchesOptionalString({
-      expected: request.turnSourceTo,
-      actual: params.rawParams.turnSourceTo,
+    // Webchat/control-ui have no recipient. Channel and session remain required;
+    // optional bindings constrain replay only when recorded on the approval.
+    matchesReplayBinding(request.turnSourceTo, params.rawParams.turnSourceTo, { optional: true }) &&
+    matchesReplayBinding(plan?.sessionKey ?? request.sessionKey, params.rawParams.sessionKey) &&
+    matchesReplayBinding(plan?.agentId ?? request.agentId, params.rawParams.agentId, {
+      optional: true,
     }) &&
-    matchesRequiredString({
-      expected: plan?.sessionKey ?? request.sessionKey,
-      actual: params.rawParams.sessionKey,
+    matchesReplayBinding(request.turnSourceAccountId, params.rawParams.turnSourceAccountId, {
+      optional: true,
     }) &&
-    matchesOptionalString({
-      expected: plan?.agentId ?? request.agentId,
-      actual: params.rawParams.agentId,
-    }) &&
-    matchesOptionalString({
-      expected: request.turnSourceAccountId,
-      actual: params.rawParams.turnSourceAccountId,
-    }) &&
-    matchesOptionalString({
-      expected: request.turnSourceThreadId,
-      actual: params.rawParams.turnSourceThreadId,
+    matchesReplayBinding(request.turnSourceThreadId, params.rawParams.turnSourceThreadId, {
+      optional: true,
     })
   );
 }
@@ -191,6 +167,7 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
     "systemRunPlan",
     "cwd",
     "env",
+    "executionContext",
     "timeoutMs",
     "needsScreenRecording",
     "agentId",
@@ -247,17 +224,14 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
   const requestedDecision = normalizeApprovalDecision(p.approvalDecision);
   const hasApprovalSource = p.approvalSource != null;
   if (hasApprovalSource && p.approvalSource !== "ask-fallback") {
-    return systemRunApprovalGuardError({
-      code: "INVALID_APPROVAL_SOURCE",
-      message: "approval source invalid",
-    });
+    return systemRunApprovalGuardError("INVALID_APPROVAL_SOURCE", "approval source invalid");
   }
   const approvalSource = p.approvalSource === "ask-fallback" ? "ask-fallback" : null;
   if (approvalSource !== null && (p.approved !== undefined || p.approvalDecision !== undefined)) {
-    return systemRunApprovalGuardError({
-      code: "APPROVAL_SOURCE_MISMATCH",
-      message: "approval source cannot be combined with explicit approval",
-    });
+    return systemRunApprovalGuardError(
+      "APPROVAL_SOURCE_MISMATCH",
+      "approval source cannot be combined with explicit approval",
+    );
   }
   const wantsApprovalOverride = approved || requestedDecision !== null || approvalSource !== null;
 
@@ -282,45 +256,39 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
 
   const runId = normalizeNullableString(p.runId);
   if (!runId) {
-    return systemRunApprovalGuardError({
-      code: "MISSING_RUN_ID",
-      message: "approval override requires params.runId",
-    });
+    return systemRunApprovalGuardError("MISSING_RUN_ID", "approval override requires params.runId");
   }
 
   const manager = opts.execApprovalManager;
   if (!manager) {
-    return systemRunApprovalGuardError({
-      code: "APPROVALS_UNAVAILABLE",
-      message: "exec approvals unavailable",
-    });
+    return systemRunApprovalGuardError("APPROVALS_UNAVAILABLE", "exec approvals unavailable");
   }
 
   const snapshot = await manager.getSnapshot(runId);
   if (!snapshot) {
-    return systemRunApprovalGuardError({
-      code: "UNKNOWN_APPROVAL_ID",
-      message: "unknown or expired approval id",
-      details: { runId },
-    });
+    return systemRunApprovalGuardError(
+      "UNKNOWN_APPROVAL_ID",
+      "unknown or expired approval id",
+      runId,
+    );
   }
   const recordedResolutionSource = snapshot.resolutionSource ?? "operator";
   if (recordedResolutionSource !== "operator" && recordedResolutionSource !== "auto-review") {
-    return systemRunApprovalGuardError({
-      code: "INVALID_APPROVAL_SOURCE",
-      message: "approval record source invalid",
-      details: { runId },
-    });
+    return systemRunApprovalGuardError(
+      "INVALID_APPROVAL_SOURCE",
+      "approval record source invalid",
+      runId,
+    );
   }
   if (recordedResolutionSource === "auto-review" && snapshot.decision !== "allow-once") {
     if (snapshot.consumedDecision === "allow-once") {
       return systemRunApprovalRequired(runId);
     }
-    return systemRunApprovalGuardError({
-      code: "APPROVAL_SOURCE_MISMATCH",
-      message: "auto-review source does not match approval decision",
-      details: { runId },
-    });
+    return systemRunApprovalGuardError(
+      "APPROVAL_SOURCE_MISMATCH",
+      "auto-review source does not match approval decision",
+      runId,
+    );
   }
 
   const timedOut =
@@ -337,35 +305,27 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
     ? nowMs > timeoutReplayExpiresAtMs
     : nowMs > snapshot.expiresAtMs;
   if (approvalExpired) {
-    return systemRunApprovalGuardError({
-      code: "APPROVAL_EXPIRED",
-      message: "approval expired",
-      details: { runId },
-    });
+    return systemRunApprovalGuardError("APPROVAL_EXPIRED", "approval expired", runId);
   }
 
   const targetNodeId = normalizeNullableString(opts.nodeId);
   if (!targetNodeId) {
-    return systemRunApprovalGuardError({
-      code: "MISSING_NODE_ID",
-      message: "node.invoke requires nodeId",
-      details: { runId },
-    });
+    return systemRunApprovalGuardError("MISSING_NODE_ID", "node.invoke requires nodeId", runId);
   }
   const approvalNodeId = normalizeNullableString(snapshot.request.nodeId);
   if (!approvalNodeId) {
-    return systemRunApprovalGuardError({
-      code: "APPROVAL_NODE_BINDING_MISSING",
-      message: "approval id missing node binding",
-      details: { runId },
-    });
+    return systemRunApprovalGuardError(
+      "APPROVAL_NODE_BINDING_MISSING",
+      "approval id missing node binding",
+      runId,
+    );
   }
   if (approvalNodeId !== targetNodeId) {
-    return systemRunApprovalGuardError({
-      code: "APPROVAL_NODE_MISMATCH",
-      message: "approval id not valid for this node",
-      details: { runId },
-    });
+    return systemRunApprovalGuardError(
+      "APPROVAL_NODE_MISMATCH",
+      "approval id not valid for this node",
+      runId,
+    );
   }
 
   // Prefer binding by device identity (stable across reconnects / per-call clients like callGateway()).
@@ -374,11 +334,11 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
   const clientDeviceId = opts.client?.connect?.device?.id ?? null;
   if (snapshotDeviceId) {
     if (snapshotDeviceId !== clientDeviceId) {
-      return systemRunApprovalGuardError({
-        code: "APPROVAL_DEVICE_MISMATCH",
-        message: "approval id not valid for this device",
-        details: { runId },
-      });
+      return systemRunApprovalGuardError(
+        "APPROVAL_DEVICE_MISMATCH",
+        "approval id not valid for this device",
+        runId,
+      );
     }
   } else if (
     snapshot.requestedByConnId &&
@@ -386,11 +346,11 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
     !canBridgeNoDeviceApprovalFromBackend({ snapshot, client: opts.client }) &&
     !canBridgeNoDeviceChatApprovalFromBackend({ snapshot, rawParams: p, client: opts.client })
   ) {
-    return systemRunApprovalGuardError({
-      code: "APPROVAL_CLIENT_MISMATCH",
-      message: "approval id not valid for this client",
-      details: { runId },
-    });
+    return systemRunApprovalGuardError(
+      "APPROVAL_CLIENT_MISMATCH",
+      "approval id not valid for this client",
+      runId,
+    );
   }
 
   const runtimeContext = resolveSystemRunApprovalRuntimeContext({
@@ -449,22 +409,22 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
   const approvalDecision = snapshot.decision;
   if (approvalDecision === "allow-once" || approvalDecision === "allow-always") {
     if (approvalSource !== null) {
-      return systemRunApprovalGuardError({
-        code: "APPROVAL_SOURCE_MISMATCH",
-        message: "approval source does not match approval record",
-        details: { runId },
-      });
+      return systemRunApprovalGuardError(
+        "APPROVAL_SOURCE_MISMATCH",
+        "approval source does not match approval record",
+        runId,
+      );
     }
     if (
       approvalDecision === "allow-once" &&
       recordedResolutionSource === "auto-review" &&
       !runtimeContext.plan
     ) {
-      return systemRunApprovalGuardError({
-        code: "APPROVAL_PLAN_REQUIRED",
-        message: "auto-review approval requires an approved execution plan",
-        details: { runId },
-      });
+      return systemRunApprovalGuardError(
+        "APPROVAL_PLAN_REQUIRED",
+        "auto-review approval requires an approved execution plan",
+        runId,
+      );
     }
     if (
       approvalDecision === "allow-once" &&
@@ -497,11 +457,11 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
     clientHasApprovals(opts.client)
   ) {
     if (!runtimeContext.plan) {
-      return systemRunApprovalGuardError({
-        code: "APPROVAL_PLAN_REQUIRED",
-        message: "ask fallback requires an approved execution plan",
-        details: { runId },
-      });
+      return systemRunApprovalGuardError(
+        "APPROVAL_PLAN_REQUIRED",
+        "ask fallback requires an approved execution plan",
+        runId,
+      );
     }
     if (typeof manager.consumeAskFallback !== "function" || !manager.consumeAskFallback(runId)) {
       return systemRunApprovalRequired(runId);

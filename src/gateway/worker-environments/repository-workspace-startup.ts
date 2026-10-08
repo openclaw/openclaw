@@ -110,13 +110,14 @@ export async function syncSessionRepositoryWorkspace(params: {
     throw new Error("Repository preparation changed its attested prepared workspace");
   }
   if (!repository.baseCommit || !repository.baseManifestHash) {
-    repository = store.bindBase({
+    repository = await store.bindBase({
       workspaceId: repository.workspaceId,
       expectedRevision: repository.revision,
       baseCommit: synced.baseCommit,
       baseManifestHash: synced.baseManifestRef,
       assertCurrent: params.assertCurrent,
     });
+    params.assertCurrent();
   } else if (
     repository.baseCommit !== synced.baseCommit ||
     repository.baseManifestHash !== synced.baseManifestRef

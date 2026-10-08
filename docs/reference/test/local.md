@@ -24,6 +24,11 @@ batches of at most 64 files. Each batch keeps isolated fork workers within the
 existing full-suite worker budget. Focused selections and watch mode retain their
 usual routing.
 
+Gateway configurations marked exclusive drain other test plans before starting
+and finish before later plans are admitted. This applies to full-suite runs and
+explicit `OPENCLAW_TEST_PROJECTS_PARALLEL` overrides as well as automatic
+exact-target scheduling. Ordinary plans retain their configured parallelism.
+
 Tests that create real managed worktrees must satisfy the
 [capacity and disk-space requirements](/concepts/managed-worktrees#capacity-and-disk-space),
 including the additional allowance for executable setup scripts. Keep that space
@@ -99,11 +104,11 @@ OPENCLAW_VITEST_RUNTIME=bun pnpm test <path-or-filter>
 Install the exact Bun fork build pinned by `.github/actions/setup-test-bun/action.yml`
 for comparable results. This selects the
 actual Vitest process and workers while retaining Node for orchestration and
-compiler preparation. It does not use Bun's native test runner. `bun run` alone
-does not select Bun for tests. Node remains the local default.
+compiler preparation. Source-runner CLI fixtures also use the selected runtime
+after Node completes build preparation. This does not use Bun's native test runner.
+`bun run` alone does not select Bun for tests. Node remains the local default.
 
-For the CI Control UI comparison, run the full Node selection followed by its
-compatible Bun partition:
+For the CI Control UI comparison, run the full selection on Node followed by Bun:
 
 ```sh
 OPENCLAW_NODE_TEST_CONFIGS_JSON='["ui/vitest.config.ts"]' \
@@ -112,9 +117,9 @@ OPENCLAW_CI_TEST_RUNTIME_POLICY=dual \
 node --import tsx scripts/ci-run-node-test-shard.mts
 ```
 
-The Bun partition deliberately excludes two whole GC-sensitive files, which
-remain covered by Node. Running the complete UI config directly with
-`OPENCLAW_VITEST_RUNTIME=bun` also runs those currently incompatible assertions.
+Both passes include the retention assertions, which use runtime-neutral garbage
+collection and WeakRef checks. Run the complete UI selection only on Bun with
+`OPENCLAW_VITEST_RUNTIME=bun`.
 
 Test processes and their CLI fixtures keep Sparkplug baseline compilation enabled
 but run it synchronously. This avoids a Node 24 shutdown deadlock where a
@@ -124,6 +129,16 @@ mitigation; production CLI exit behavior, assertions, and deadlines are unchange
 
 The script erasability gate uses Node's strip-only parser, including when package
 checks run under Bun. It selects an installed Node runtime and skips Bun's `node` shim.
+Maintainer-tooling tests that need `node:module.registerHooks` or
+`stripTypeScriptTypes` also select Node explicitly for their tooling children.
+Use `requireNodeTool("node")` and `stripNodeTypeScriptTypes` from
+`test/helpers/node-toolchain.ts`, which share that Node-selection owner, while
+keeping the Vitest worker on the selected test runtime.
+
+Isolated native worker and subprocess fixtures use `mockNativeModuleExports` from
+`test/helpers/native-module-mock.ts` for controlled module exports on either runtime.
+The mocks live until that child exits. Capture original call-through functions before
+registering replacements because Bun updates existing module namespace bindings.
 
 The test toolchain pins stable Vitest `5.0.1`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
@@ -234,11 +249,6 @@ The session-title and child-link retention tests declare their title-reader,
 session-utils, and listing roots in this same generation. Each fresh
 heap-measurement child runs their JavaScript without spending its execution
 deadline on TypeScript imports.
-
-Native Bash output-lifecycle fixtures also prepare the real tool and executor
-roots in this generation. Each scenario still uses a fresh process and real
-shell, pipe, and spill file; its unchanged child deadline covers prepared
-JavaScript startup and output handling instead of repeated TypeScript compilation.
 
 Automatic-triage process fixtures share this generation for admission, failure handling, execution, process identity, and respawn checks. Compilation finishes before readiness deadlines begin, so children load prepared JavaScript. The detached helper uses the same sealed lease runtime as the installed package.
 

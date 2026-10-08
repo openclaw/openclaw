@@ -39,16 +39,12 @@ type SkillWorkshopSection = {
   selected: SkillWorkshopProposal | undefined;
 };
 
-function resolveSection(props: SkillWorkshopProps): SkillWorkshopSection {
+export function renderSkillWorkshop(props: SkillWorkshopProps) {
   const filtered = filterSkillWorkshopProposals(props.proposals, props.query);
-  return {
+  const section = {
     groups: groupByRecency(filtered),
     selected: filtered.find((proposal) => proposal.key === props.selectedKey) ?? filtered[0],
   };
-}
-
-export function renderSkillWorkshop(props: SkillWorkshopProps) {
-  const section = resolveSection(props);
   const selected = section.selected;
   const preview =
     selected && props.filePreviewKey
@@ -209,8 +205,6 @@ function renderSuggestions(props: SkillWorkshopProps, section: SkillWorkshopSect
         groups: section.groups,
         selected: section.selected,
         emptyText: queueEmptyText(props),
-        searchLabel: t("skillWorkshop.queue.suggestionsLabel"),
-        searchPlaceholder: t("skillWorkshop.queue.searchSuggestions"),
       })}
       ${renderQueueResizer(props)}
       ${
@@ -248,13 +242,12 @@ function renderQueueResizer(props: SkillWorkshopProps) {
 function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
   const editedAt =
     proposal.updatedAt && proposal.updatedAt > proposal.createdAt ? proposal.updatedAt : null;
-  const createdLabel = editedAt
-    ? t("skillWorkshop.detail.edited", {
-        time: formatRelativeTimestamp(editedAt, { dateFallback: true }),
-      })
-    : t("skillWorkshop.detail.created", {
-        time: formatRelativeTimestamp(proposal.createdAt, { dateFallback: true }),
-      });
+  const createdLabel = t(
+    editedAt ? "skillWorkshop.detail.edited" : "skillWorkshop.detail.created",
+    {
+      time: formatRelativeTimestamp(editedAt || proposal.createdAt, { dateFallback: true }),
+    },
+  );
   const detailLoading = props.inspectingKey === proposal.key && !proposal.bodyLoaded;
   const firstSupportFile = proposal.supportFiles[0];
   return html`
@@ -300,13 +293,11 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
             <h1>${proposal.slug}</h1>
           </div>
           ${
-            proposal.degradedState
+            proposal.degradedState || detailLoading
               ? html`<p class="sw-muted" role="status">
-                  ${t("skillWorkshop.detail.draftMissing")}
+                  ${t(proposal.degradedState ? "skillWorkshop.detail.draftMissing" : "skillWorkshop.detail.loading")}
                 </p>`
-              : detailLoading
-                ? html`<p class="sw-muted" role="status">${t("skillWorkshop.detail.loading")}</p>`
-                : renderSkillDocument(proposal.body)
+              : renderSkillDocument(proposal.body)
           }
         </div>
 
@@ -367,46 +358,25 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
   const busy = props.actionBusy?.key === proposal.key ? props.actionBusy.action : null;
   const disabled = Boolean(props.actionBusy);
   const draftUnavailable = disabled || Boolean(proposal.degradedState);
+  const action = (
+    kind: "evaluate" | "apply" | "revise" | "reject",
+    pendingLabel: string,
+    unavailable: boolean,
+    onClick: () => void,
+    className = "sw-btn",
+  ) => html`<button
+    class="${className} ${busy === kind ? "is-busy" : ""}"
+    ?disabled=${unavailable}
+    @click=${onClick}
+  >
+    ${t(`skillWorkshop.actions.${busy === kind ? pendingLabel : kind}`)}
+  </button>`;
   return html`
     <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
-      <button
-        class="sw-btn ${busy === "evaluate" ? "is-busy" : ""}"
-        ?disabled=${draftUnavailable || !props.access.canEvaluate}
-        @click=${() => props.onEvaluate(proposal.key)}
-      >
-        ${
-          busy === "evaluate"
-            ? t("skillWorkshop.actions.evaluating")
-            : t("skillWorkshop.actions.evaluate")
-        }
-      </button>
-      <button
-        class="sw-btn sw-btn--primary ${busy === "apply" ? "is-busy" : ""}"
-        ?disabled=${draftUnavailable || !props.access.canApply}
-        @click=${() => props.onApply(proposalDecision(proposal))}
-      >
-        ${busy === "apply" ? t("skillWorkshop.actions.applying") : t("skillWorkshop.actions.apply")}
-      </button>
-      <button
-        class="sw-btn ${busy === "revise" ? "is-busy" : ""}"
-        ?disabled=${draftUnavailable || !props.access.canRevise}
-        @click=${() => props.onRevise(proposal.key)}
-      >
-        ${
-          busy === "revise" ? t("skillWorkshop.actions.opening") : t("skillWorkshop.actions.revise")
-        }
-      </button>
-      <button
-        class="sw-btn sw-btn--ghost sw-btn--danger ${busy === "reject" ? "is-busy" : ""}"
-        ?disabled=${disabled || !props.access.canReject}
-        @click=${() => props.onReject(proposalDecision(proposal))}
-      >
-        ${
-          busy === "reject"
-            ? t("skillWorkshop.actions.rejecting")
-            : t("skillWorkshop.actions.reject")
-        }
-      </button>
+      ${action("evaluate", "evaluating", draftUnavailable || !props.access.canEvaluate, () => props.onEvaluate(proposal.key))}
+      ${action("apply", "applying", draftUnavailable || !props.access.canApply, () => props.onApply(proposalDecision(proposal)), "sw-btn sw-btn--primary")}
+      ${action("revise", "opening", draftUnavailable || !props.access.canRevise, () => props.onRevise(proposal.key))}
+      ${action("reject", "rejecting", disabled || !props.access.canReject, () => props.onReject(proposalDecision(proposal)), "sw-btn sw-btn--ghost sw-btn--danger")}
     </div>
   `;
 }
@@ -418,16 +388,13 @@ function resolveSkillWorkshopAgentName(props: SkillWorkshopProps, fallback: stri
 function groupByRecency(
   proposals: SkillWorkshopProposal[],
 ): Array<{ label: string; items: SkillWorkshopProposal[] }> {
-  const buckets = new Map<SkillWorkshopProposal["recencyGroup"], SkillWorkshopProposal[]>();
-  for (const proposal of proposals) {
-    const list = buckets.get(proposal.recencyGroup) ?? [];
-    list.push(proposal);
-    buckets.set(proposal.recencyGroup, list);
-  }
   const order: Array<SkillWorkshopProposal["recencyGroup"]> = ["today", "yesterday", "earlier"];
   return order
-    .filter((key) => buckets.has(key))
-    .map((key) => ({ label: GROUP_LABEL[key], items: buckets.get(key) ?? [] }));
+    .map((key) => ({
+      label: GROUP_LABEL[key],
+      items: proposals.filter((proposal) => proposal.recencyGroup === key),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 function queueEmptyText(props: SkillWorkshopProps): string {

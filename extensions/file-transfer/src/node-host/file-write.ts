@@ -42,18 +42,6 @@ type FileWriteParams = {
   expectedBinding?: unknown;
 };
 
-type FileWriteSuccess = {
-  ok: true;
-  path: string;
-  size: number;
-  sha256: string;
-  overwritten: boolean;
-  binding: PathBinding;
-  rejectHardlinks?: true;
-};
-
-type FileWriteResult = FileWriteSuccess | FileWriteError;
-
 function sha256Hex(buf: Buffer): string {
   return crypto.createHash("sha256").update(buf).digest("hex");
 }
@@ -139,9 +127,7 @@ async function writeBoundTarget(input: {
   }
 }
 
-export async function handleFileWrite(
-  params: Partial<FileWriteParams> & Record<string, unknown>,
-): Promise<FileWriteResult> {
+export async function handleFileWrite(params: Partial<FileWriteParams> & Record<string, unknown>) {
   const rawPath = typeof params?.path === "string" ? params.path : "";
   const hasContentBase64 = typeof params?.contentBase64 === "string";
   const contentBase64 = hasContentBase64 ? (params.contentBase64 as string) : "";
@@ -238,7 +224,7 @@ export async function handleFileWrite(
         );
       }
       return {
-        ok: true,
+        ok: true as const,
         path: canonicalTargetPath,
         size: buf.length,
         sha256: computedSha256,
@@ -320,7 +306,7 @@ export async function handleFileWrite(
 
   if (preflightOnly) {
     return {
-      ok: true,
+      ok: true as const,
       path: canonicalTargetPath,
       size: buf.length,
       sha256: computedSha256,
@@ -341,12 +327,12 @@ export async function handleFileWrite(
       return writeResult;
     }
     return {
-      ok: true,
+      ok: true as const,
       path: writeResult.path,
       size: buf.length,
       sha256: computedSha256,
       overwritten: writeResult.overwritten,
-      binding: { kind: "existing", ...writeResult.identity },
+      binding: { kind: "existing", ...writeResult.identity } satisfies PathBinding,
     };
   }
 
@@ -382,7 +368,7 @@ export async function handleFileWrite(
   }
 
   return {
-    ok: true,
+    ok: true as const,
     path: canonicalPath,
     size: buf.length,
     sha256: computedSha256,
@@ -390,6 +376,6 @@ export async function handleFileWrite(
     binding: {
       kind: "existing",
       ...(finalIdentity ?? fileIdentity(await fs.stat(canonicalPath, { bigint: true }))),
-    },
+    } satisfies PathBinding,
   };
 }

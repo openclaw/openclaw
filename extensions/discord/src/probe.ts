@@ -45,28 +45,6 @@ const DISCORD_APP_FLAG_GATEWAY_GUILD_MEMBERS_LIMITED = 1 << 15;
 const DISCORD_APP_FLAG_GATEWAY_MESSAGE_CONTENT = 1 << 18;
 const DISCORD_APP_FLAG_GATEWAY_MESSAGE_CONTENT_LIMITED = 1 << 19;
 
-async function fetchDiscordApplicationMe(
-  token: string,
-  timeoutMs: number,
-  fetcher: typeof fetch,
-  endpointRuntime: DiscordEndpointRuntime | null,
-): Promise<{ id?: string; flags?: number } | undefined> {
-  try {
-    const normalized = normalizeDiscordToken(token, "channels.discord.token");
-    if (!normalized) {
-      return undefined;
-    }
-    return await fetchDiscord<{ id?: string; flags?: number }>(
-      "/oauth2/applications/@me",
-      normalized,
-      fetcher,
-      { endpointRuntime, retry: { attempts: 1 }, timeoutMs },
-    );
-  } catch {
-    return undefined;
-  }
-}
-
 export function resolveDiscordPrivilegedIntentsFromFlags(
   flags: number,
 ): DiscordPrivilegedIntentsSummary {
@@ -100,7 +78,21 @@ export async function fetchDiscordApplicationSummary(
 ): Promise<DiscordApplicationSummary | undefined> {
   const retainedEndpoint =
     endpointRuntime === undefined ? getDiscordEndpointRuntime() : endpointRuntime;
-  const json = await fetchDiscordApplicationMe(token, timeoutMs, fetcher, retainedEndpoint ?? null);
+  let json: { id?: string; flags?: number } | undefined;
+  try {
+    const normalized = normalizeDiscordToken(token, "channels.discord.token");
+    if (!normalized) {
+      return undefined;
+    }
+    json = await fetchDiscord<{ id?: string; flags?: number }>(
+      "/oauth2/applications/@me",
+      normalized,
+      fetcher,
+      { endpointRuntime: retainedEndpoint ?? null, retry: { attempts: 1 }, timeoutMs },
+    );
+  } catch {
+    return undefined;
+  }
   if (!json) {
     return undefined;
   }
@@ -112,14 +104,6 @@ export async function fetchDiscordApplicationSummary(
     intents:
       typeof flags === "number" ? resolveDiscordPrivilegedIntentsFromFlags(flags) : undefined,
   };
-}
-
-function getResolvedFetch(fetcher: typeof fetch): typeof fetch {
-  const fetchImpl = resolveFetch(fetcher);
-  if (!fetchImpl) {
-    throw new Error("fetch is not available");
-  }
-  return fetchImpl;
 }
 
 async function readDiscordProbeGetMeJson(
@@ -171,11 +155,15 @@ export async function probeDiscord(
       try {
         const getMeUrl = `${endpoint?.descriptor.restApiBaseUrl ?? DISCORD_API_BASE}/users/@me`;
         const getMeDeadlineMs = Date.now() + timeoutMs;
+        const fetchImpl = resolveFetch(fetcher);
+        if (!fetchImpl) {
+          throw new Error("fetch is not available");
+        }
         res = await fetchWithTimeout(
           getMeUrl,
           { headers: { Authorization: `Bot ${normalized}` } },
           timeoutMs,
-          getResolvedFetch(fetcher),
+          fetchImpl,
         );
         if (!res.ok) {
           return { ...result, status: res.status, error: `getMe failed (${res.status})` };
@@ -220,14 +208,7 @@ export async function probeDiscord(
   );
 }
 
-/**
- * Extract the application (bot user) ID from a Discord bot token by
- * base64-decoding the first segment.  Discord tokens have the format:
- *   base64(user_id) . timestamp . hmac
- * The decoded first segment is the numeric snowflake ID as a plain string,
- * so we keep it as a string to avoid precision loss for IDs that exceed
- * Number.MAX_SAFE_INTEGER.
- */
+// Tokens start with base64(user_id). Keep snowflakes as strings to avoid precision loss.
 export function parseApplicationIdFromToken(token: string): string | undefined {
   const normalized = normalizeDiscordToken(token, "channels.discord.token");
   if (!normalized) {
@@ -239,10 +220,7 @@ export function parseApplicationIdFromToken(token: string): string | undefined {
   }
   try {
     const decoded = Buffer.from(normalized.slice(0, firstDot), "base64").toString("utf-8");
-    if (/^\d+$/.test(decoded)) {
-      return decoded;
-    }
-    return undefined;
+    return /^\d+$/.test(decoded) ? decoded : undefined;
   } catch {
     return undefined;
   }

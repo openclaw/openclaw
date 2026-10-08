@@ -124,12 +124,9 @@ export function resolveServicePrefixedChatTarget<TService extends string, TTarge
     ...(params.extraChatPrefixes ?? []),
   ];
   return resolveServicePrefixedTarget({
-    trimmed: params.trimmed,
-    lower: params.lower,
-    servicePrefixes: params.servicePrefixes,
+    ...params,
     isChatTarget: (remainderLower) =>
       chatPrefixes.some((prefix) => remainderLower.startsWith(prefix)),
-    parseTarget: params.parseTarget,
   });
 }
 
@@ -229,11 +226,7 @@ export function createAllowedChatSenderMatcher(params: {
 }): (input: ChatSenderAllowParams) => boolean {
   return (input) =>
     isAllowedParsedChatSender({
-      allowFrom: input.allowFrom,
-      sender: input.sender,
-      chatId: input.chatId,
-      chatGuid: input.chatGuid,
-      chatIdentifier: input.chatIdentifier,
+      ...input,
       allowConversationTargets:
         input.allowConversationTargets ?? params.allowConversationTargets ?? false,
       normalizeSender: params.normalizeSender,
@@ -246,4 +239,21 @@ export function parseChatAllowTargetPrefixes(
   params: ChatTargetPrefixesParams,
 ): ParsedChatTarget | null {
   return parseChatTargetPrefixes(params, false);
+}
+
+/** Remove one of the known provider prefixes from a free-form target string. */
+export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
+  const trimmed = raw.trim();
+  for (const provider of providers) {
+    const prefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
+    if (normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)) {
+      return trimmed.slice(prefix.length).trim();
+    }
+  }
+  return trimmed;
+}
+
+/** Remove generic target-kind prefixes such as `user:` or `group:`. */
+export function stripTargetKindPrefix(raw: string): string {
+  return raw.replace(/^(user|channel|group|conversation|room|dm):/i, "").trim();
 }

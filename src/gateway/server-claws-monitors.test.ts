@@ -308,15 +308,13 @@ describe("Claw serving monitor cleanup", () => {
     },
   );
 
-  it("closes idle databases but waits for an agent still configured through agents.list", async () => {
+  it("closes idle databases but waits for an agent still configured through agents.entries", async () => {
     const current = await fixture(false);
     const database = openOpenClawAgentDatabase({ agentId: "worker" });
     const monitors = await current.gateway.inspect("worker");
     await current.withDeletion(async (deletion) => {
       await current.gateway.quiesce("worker", deletion.entry.operationId, monitors);
       expect(() => database.db.prepare("SELECT 1")).toThrow();
-      const config = current.getConfig();
-      config.agents = { ...config.agents, entries: undefined, list: listAgentEntries(config) };
       for (const monitor of monitors) {
         await current.cron.remove(monitor.id, { systemOwned: true });
       }

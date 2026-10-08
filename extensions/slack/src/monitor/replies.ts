@@ -1,10 +1,10 @@
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   getGroupThreadDeliverySession,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
@@ -301,12 +301,10 @@ export async function deliverReplies(params: {
       if (acceptedResults.length === 0) {
         throw error;
       }
-      const receipt = createMessageReceiptFromOutboundResults({ results: acceptedResults });
-      throw createChannelPartialDeliveryError(error, {
-        messageIds: receipt.platformMessageIds,
-        receipt,
-        visibleReplySent: true,
-      });
+      throw createChannelPartialDeliveryError(
+        error,
+        createAcceptedChannelDeliveryResult({ results: acceptedResults }),
+      );
     }
     if (delivered) {
       const hookContent = hookParts.join("\n\n") || textRaw || spokenText || "";
@@ -332,19 +330,13 @@ type SlackRespondFn = (payload: {
 
 type SlackResponseUrlBudget = ResponseUrlBudget<Parameters<SlackRespondFn>[0]>;
 
-type SlackReplyDeliveryPlan = {
-  peekThreadTs: () => string | undefined;
-  nextThreadTs: () => string | undefined;
-  markSent: () => void;
-};
-
 export function createSlackReplyDeliveryPlan(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasRepliedRef: { value: boolean };
   isThreadReply?: boolean;
-}): SlackReplyDeliveryPlan {
+}) {
   // Older/internal callers may not pass explicit thread classification. Keep
   // genuine thread replies sticky, but do not let Slack's auto-populated
   // top-level thread_ts override the configured replyToMode.
@@ -536,7 +528,7 @@ export async function deliverSlackSlashReplies(params: {
       ...(message.blocks ? { blocks: message.blocks } : {}),
       ...(message.mrkdwn === false ? { mrkdwn: false as const } : {}),
     });
-  const emitDeliveryFailure = (delivery: SlashReplyDelivery, error: unknown) => {
+  const emitDelivery = (delivery: SlashReplyDelivery, success: boolean, error?: unknown) => {
     if (!params.messageSentHookTarget) {
       return;
     }
@@ -545,8 +537,8 @@ export async function deliverSlackSlashReplies(params: {
       to: params.messageSentHookTarget,
       accountId: params.accountId,
       content: delivery.hookContent,
-      success: false,
-      error: formatErrorMessage(error),
+      success,
+      ...(success ? {} : { error: formatErrorMessage(error) }),
       isGroup: params.isGroup,
       groupId: params.groupId,
     });
@@ -574,7 +566,7 @@ export async function deliverSlackSlashReplies(params: {
       }
     }
     for (const delivery of deliveries) {
-      emitDeliveryFailure(delivery, failure);
+      emitDelivery(delivery, false, failure);
       params.onReplySettled?.({
         replyIndex: delivery.replyIndex,
         visibleReplySent: false,
@@ -584,7 +576,7 @@ export async function deliverSlackSlashReplies(params: {
     throw failure;
   };
   const initialRemaining = responseBudget.remaining();
-  const initialMinimumCalls = minimumCalls.reduce((total, calls) => total + calls, 0);
+  const initialMinimumCalls = minimumRemainingCalls[0] ?? 0;
   if (initialRemaining !== undefined && initialMinimumCalls > initialRemaining) {
     await failOversizedDelivery();
   }
@@ -650,7 +642,7 @@ export async function deliverSlackSlashReplies(params: {
             visibleReplySent: true,
           })
         : error;
-      emitDeliveryFailure(delivery, deliveryError);
+      emitDelivery(delivery, false, deliveryError);
       params.onReplySettled?.({
         replyIndex: delivery.replyIndex,
         visibleReplySent,
@@ -658,17 +650,7 @@ export async function deliverSlackSlashReplies(params: {
       });
       throw deliveryError;
     }
-    if (params.messageSentHookTarget) {
-      emitSlackMessageSentHooks({
-        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-        to: params.messageSentHookTarget,
-        accountId: params.accountId,
-        content: delivery.hookContent,
-        success: true,
-        isGroup: params.isGroup,
-        groupId: params.groupId,
-      });
-    }
+    emitDelivery(delivery, true);
     params.onReplySettled?.({ replyIndex: delivery.replyIndex, visibleReplySent: true });
   }
 }

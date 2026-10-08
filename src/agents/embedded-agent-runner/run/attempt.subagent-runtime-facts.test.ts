@@ -80,9 +80,9 @@ describe("subagent facts through full attempt history preparation", () => {
     await preloadRunEmbeddedAttemptForTests();
     registry = await import("../../subagents/registry/subagent-registry.test-helpers.js");
   });
-  beforeEach(() => registry.resetSubagentRegistryForTests());
+  beforeEach(() => registry.resetSubagentRegistryForTests({ persist: false }));
   afterEach(async () => {
-    registry.resetSubagentRegistryForTests();
+    await registry.resetSubagentRegistryForTests({ persist: false });
     await cleanupTempPaths(tempPaths);
   });
 
@@ -107,14 +107,14 @@ describe("subagent facts through full attempt history preparation", () => {
       createdAt: Date.now(),
       execution: { status: "queued" },
     } satisfies SubagentRunRecord;
-    registry.addSubagentRunForTests(run);
+    registry.seedSubagentRunForReadTest(run);
     const queued = await captureAttempt(codeModeOverride, sessionStore);
-    registry.addSubagentRunForTests({
+    registry.seedSubagentRunForReadTest({
       ...run,
       execution: { status: "running", startedAt: Date.now() },
     });
     const running = await captureAttempt(codeModeOverride, sessionStore);
-    registry.resetSubagentRegistryForTests();
+    await registry.resetSubagentRegistryForTests({ persist: false });
     const empty = await captureAttempt(codeModeOverride, sessionStore);
 
     expect(queued.systemPrompt).toContain("system prompt");
@@ -123,6 +123,8 @@ describe("subagent facts through full attempt history preparation", () => {
     expect(queued.systemPrompt).not.toContain("run-worker");
     expectSubagentCarrier(queued.messages, "status=queued");
     expectSubagentCarrier(running.messages, "status=running");
-    expectSubagentCarrier(empty.messages, "## Active Subagents\nnone");
+    expect(empty.messages).not.toContainEqual(
+      expect.objectContaining({ customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE }),
+    );
   });
 });

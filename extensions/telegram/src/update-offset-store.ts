@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTelegramRuntime } from "./runtime.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 import {
@@ -39,45 +40,39 @@ function extractBotIdFromToken(token?: string): string | null {
 
 function fingerprintFromToken(token?: string): string | null {
   const trimmed = token?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return fingerprintTelegramBotToken(trimmed);
+  return trimmed ? fingerprintTelegramBotToken(trimmed) : null;
 }
 
-function safeParseState(parsed: unknown): TelegramUpdateOffsetState | null {
-  try {
-    const state = parsed as {
-      version?: number;
-      lastUpdateId?: number | null;
-      botId?: string | null;
-      tokenFingerprint?: string | null;
-    };
-    if (state?.version !== STORE_VERSION && state?.version !== 2 && state?.version !== 1) {
-      return null;
-    }
-    if (state.lastUpdateId !== null && !isValidUpdateId(state.lastUpdateId)) {
-      return null;
-    }
-    if (state.version >= 2 && state.botId !== null && typeof state.botId !== "string") {
-      return null;
-    }
-    if (
-      state.version === STORE_VERSION &&
-      state.tokenFingerprint !== null &&
-      typeof state.tokenFingerprint !== "string"
-    ) {
-      return null;
-    }
-    return {
-      version: state.version,
-      lastUpdateId: state.lastUpdateId ?? null,
-      botId: state.version >= 2 ? (state.botId ?? null) : null,
-      tokenFingerprint: state.version === STORE_VERSION ? (state.tokenFingerprint ?? null) : null,
-    };
-  } catch {
+function updateOffsetState(lastUpdateId: number | null, token?: string) {
+  return {
+    version: STORE_VERSION,
+    lastUpdateId,
+    botId: extractBotIdFromToken(token),
+    tokenFingerprint: fingerprintFromToken(token),
+  };
+}
+
+function safeParseState(state: unknown): TelegramUpdateOffsetState | null {
+  if (!isRecord(state)) {
     return null;
   }
+  if (state.version === 1 || state.version === 2) {
+    throw new Error("Telegram update offsets require migration; run openclaw doctor --fix.");
+  }
+  if (
+    state.version !== STORE_VERSION ||
+    (state.lastUpdateId !== null && !isValidUpdateId(state.lastUpdateId)) ||
+    (state.botId !== null && typeof state.botId !== "string") ||
+    (state.tokenFingerprint !== null && typeof state.tokenFingerprint !== "string")
+  ) {
+    return null;
+  }
+  return {
+    version: STORE_VERSION,
+    lastUpdateId: state.lastUpdateId,
+    botId: state.botId,
+    tokenFingerprint: state.tokenFingerprint,
+  };
 }
 
 export type TelegramOffsetRotationReason = "bot-id-changed" | "token-rotated" | "legacy-state";
@@ -180,12 +175,7 @@ export async function prepareTelegramAccount(params: {
     if (!parsed || rotation) {
       // Keep the old identity until purge commits, then replace it without an absent-marker window.
       // Webhook-only accounts need this marker even though they have no polling cursor.
-      await store.register(accountId, {
-        version: STORE_VERSION,
-        lastUpdateId: null,
-        botId: extractBotIdFromToken(params.botToken),
-        tokenFingerprint: fingerprintFromToken(params.botToken),
-      });
+      await store.register(accountId, updateOffsetState(null, params.botToken));
     }
     return rotation ? null : (parsed?.lastUpdateId ?? null);
   } catch (err) {
@@ -205,12 +195,7 @@ export async function writeTelegramUpdateOffset(params: {
   if (!isValidUpdateId(params.updateId)) {
     throw new Error("Telegram update offset must be a non-negative safe integer.");
   }
-  const payload: TelegramUpdateOffsetState = {
-    version: STORE_VERSION,
-    lastUpdateId: params.updateId,
-    botId: extractBotIdFromToken(params.botToken),
-    tokenFingerprint: fingerprintFromToken(params.botToken),
-  };
+  const payload = updateOffsetState(params.updateId, params.botToken);
   await openUpdateOffsetStore(params.env).register(
     normalizeTelegramStateAccountId(params.accountId),
     payload,

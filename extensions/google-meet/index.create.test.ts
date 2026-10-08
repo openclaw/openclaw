@@ -1,18 +1,17 @@
 import { runInNewContext } from "node:vm";
 import { Command } from "commander";
+import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
 import { createRequireRecord, useMeetingTestState } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { registerGoogleMeetCli } from "./src/cli.js";
 import { resolveGoogleMeetConfig } from "./src/config.js";
-import type { GoogleMeetRuntime } from "./src/runtime.js";
 import {
   captureStdout,
   invokeGoogleMeetGatewayMethodForTest,
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
-import { testing as googleMeetPluginTesting } from "./test-api.js";
 
 let meetingTestState: ReturnType<typeof useMeetingTestState>;
 
@@ -67,14 +66,13 @@ function setup(
     },
     options,
   );
-  googleMeetPluginTesting.setCallGatewayFromCliForTests(
+  vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(
     async (method, _opts, params) =>
       (await invokeGoogleMeetGatewayMethodForTest(harness.methods, method, params)) as Record<
         string,
         unknown
       >,
   );
-  googleMeetPluginTesting.setPlatformForTests(() => options?.registerPlatform ?? "darwin");
   return harness;
 }
 
@@ -235,8 +233,7 @@ describe("google-meet create flow", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    googleMeetPluginTesting.setCallGatewayFromCliForTests();
-    googleMeetPluginTesting.setPlatformForTests();
+    vi.restoreAllMocks();
   });
 
   afterAll(() => {
@@ -271,12 +268,15 @@ describe("google-meet create flow", () => {
     vi.stubGlobal("fetch", fetchMock);
     const program = new Command();
     const stdout = captureStdout();
+    const ensureRuntime = vi.fn(async () => {
+      throw new Error("URL-only creation must not start the runtime");
+    });
     registerGoogleMeetCli({
       program,
       config: resolveGoogleMeetConfig({
         oauth: { clientId: "client-id", refreshToken: "refresh-token" },
       }),
-      ensureRuntime: async () => ({}) as GoogleMeetRuntime,
+      ensureRuntime,
     });
 
     try {
@@ -292,6 +292,7 @@ describe("google-meet create flow", () => {
         ],
         { from: "user" },
       );
+      expect(ensureRuntime).not.toHaveBeenCalled();
       expect(stdout.output()).toContain("meeting uri: https://meet.google.com/new-abcd-xyz");
       expect(stdout.output()).toContain("space: spaces/new-space");
       expect(stdout.output()).toContain("meeting code: new-abcd-xyz");
@@ -340,7 +341,7 @@ describe("google-meet create flow", () => {
   });
 
   it("rejects access policy flags when tool create would use browser fallback", async () => {
-    const { methods } = setup(
+    const { methods, nodesInvoke } = setup(
       {},
       {
         nodesInvokeHandler: async () => {
@@ -355,6 +356,7 @@ describe("google-meet create flow", () => {
         accessType: "OPEN",
       }),
     ).rejects.toThrow("access policy options require OAuth/API room creation");
+    expect(nodesInvoke).not.toHaveBeenCalled();
   });
 
   it("reports structured manual action when browser creation needs Google login", async () => {
@@ -445,6 +447,9 @@ describe("google-meet create flow", () => {
     expect(result.details.joined).toBe(true);
     expect(result.details.meetingUri).toBe("https://meet.google.com/new-abcd-xyz");
     expect(result.details.join?.session.url).toBe("https://meet.google.com/new-abcd-xyz");
+    expectBrowserProxyCall(nodesInvoke, "/tabs/open", {
+      url: "https://meet.google.com/new?hl=en",
+    });
     expect(nodesInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
         command: "googlemeet.chrome",
@@ -471,6 +476,7 @@ describe("google-meet create flow", () => {
             },
             browserUrl: "https://meet.google.com/new",
             browserTitle: "Meet",
+            notes: ["Permission prompt detected."],
           }),
         }),
       },
@@ -482,6 +488,9 @@ describe("google-meet create flow", () => {
     const result = await tool.execute("id", { action: "create" });
 
     expect(result.details.source).toBe("browser");
+    expect(result.details.error).toBe(
+      "meet-permission-required: Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
+    );
     expect(result.details.manualAction).toEqual({
       reason: "meet-permission-required",
       message:
@@ -492,6 +501,7 @@ describe("google-meet create flow", () => {
     expect(browser.targetId).toBe("permission-tab");
     expect(browser.browserUrl).toBe("https://meet.google.com/new");
     expect(browser.browserTitle).toBe("Meet");
+    expect(browser.notes).toEqual(["Permission prompt detected."]);
   });
 
   it("reuses an existing browser create tab instead of opening duplicates", async () => {
@@ -520,6 +530,7 @@ describe("google-meet create flow", () => {
     );
     expect(payload.source).toBe("browser");
     expect(payload.meetingUri).toBe("https://meet.google.com/reu-sedx-tab");
+    expect(payload.joined).toBe(false);
     const browser = requireRecord(payload.browser, "browser payload");
     expect(browser.nodeId).toBe("node-1");
     expect(browser.targetId).toBe("navigated-create-tab");
@@ -557,7 +568,24 @@ describe("google-meet create flow", () => {
         }),
       },
     );
-    await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.create", { join: false });
+    const payload = requireRecord(
+      await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.create", { join: false }),
+      "response payload",
+    );
+    expect(payload.source).toBe("browser");
+    expect(payload.meetingUri).toBe("https://meet.google.com/eng-lish-tab");
+    expect(payload.joined).toBe(false);
+    const browser = requireRecord(payload.browser, "browser payload");
+    expect(browser.nodeId).toBe("node-1");
+    expect(browser.targetId).toBe("english-create-tab");
+    expectBrowserProxyCall(nodesInvoke, "/tabs/focus", { targetId: "english-create-tab" });
+    expectBrowserProxyCall(nodesInvoke, "/act", { targetId: "english-create-tab" });
+    expect(nodesInvoke).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({ path: "/tabs/open" }),
+      }),
+    );
 
     expect(nodesInvoke).not.toHaveBeenCalledWith(
       expect.objectContaining({
@@ -581,8 +609,8 @@ describe("google-meet create flow", () => {
       expect(result.retryAfterMs).toBe(1000);
       expect(result.notes).toEqual([note]);
       expect(button.click).toHaveBeenCalledTimes(1);
-      expect(result.meetingUri).toBeUndefined();
-      expect(result.manualAction).toBeUndefined();
+      expect(result).not.toHaveProperty("meetingUri");
+      expect(result).not.toHaveProperty("manualAction");
     },
   );
 });

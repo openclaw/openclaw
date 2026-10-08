@@ -32,21 +32,20 @@ type SnapshotSelection = {
   source: "pre-compaction" | "current";
 };
 
+const CONTINUABLE_MESSAGE_ROLES = new Set([
+  "user",
+  "toolResult",
+  "branchSummary",
+  "compactionSummary",
+  "custom",
+  "bashExecution",
+]);
+
 export function canContinueFromMessage(message: AgentMessage | undefined): boolean {
   if (!message || ("excludeFromContext" in message && message.excludeFromContext === true)) {
     return false;
   }
-  switch (message.role) {
-    case "user":
-    case "toolResult":
-    case "branchSummary":
-    case "compactionSummary":
-    case "custom":
-    case "bashExecution":
-      return true;
-    default:
-      return false;
-  }
+  return CONTINUABLE_MESSAGE_ROLES.has(message.role);
 }
 
 // Drop trailing assistant/tool-call-only fragments before retrying. Those tails
@@ -72,15 +71,7 @@ export function selectCompactionTimeoutSnapshot(params: {
   currentSnapshot: AgentMessage[];
   currentSessionId: string;
 }): SnapshotSelection {
-  if (!params.timedOutDuringCompaction) {
-    return {
-      messagesSnapshot: params.currentSnapshot,
-      sessionIdUsed: params.currentSessionId,
-      source: "current",
-    };
-  }
-
-  if (params.preCompactionSnapshot) {
+  if (params.timedOutDuringCompaction && params.preCompactionSnapshot) {
     const continuablePreCompactionSnapshot = trimToContinuableTail(params.preCompactionSnapshot);
     if (continuablePreCompactionSnapshot) {
       return {
@@ -92,7 +83,9 @@ export function selectCompactionTimeoutSnapshot(params: {
   }
 
   return {
-    messagesSnapshot: trimToContinuableTail(params.currentSnapshot) ?? [],
+    messagesSnapshot: params.timedOutDuringCompaction
+      ? (trimToContinuableTail(params.currentSnapshot) ?? [])
+      : params.currentSnapshot,
     sessionIdUsed: params.currentSessionId,
     source: "current",
   };

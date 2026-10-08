@@ -36,10 +36,6 @@ function normalizeModelRef(value: unknown): string | undefined {
   return provider && model ? `${provider}/${model}` : undefined;
 }
 
-function normalizeModelMismatchKey(value: unknown): string | undefined {
-  return normalizeModelRef(value) ?? normalizeOptionalString(value)?.toLowerCase();
-}
-
 function formatSortedCounts(counts: Map<string, number>): string {
   return [...counts.entries()]
     .toSorted(([left], [right]) => left.localeCompare(right))
@@ -52,7 +48,8 @@ export function noteCronModelOverrides(params: {
   jobs: Array<Record<string, unknown>>;
 }) {
   const defaultModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
-  const defaultKey = normalizeModelMismatchKey(defaultModel);
+  const defaultKey =
+    normalizeModelRef(defaultModel) ?? normalizeOptionalString(defaultModel)?.toLowerCase();
   const providerCounts = new Map<string, number>();
   const mismatchExamples: string[] = [];
   let overrideCount = 0;
@@ -121,7 +118,7 @@ function listConcreteCronDeliveryTargets(
   for (const job of jobs) {
     // Only an explicit delivery object pins a concrete channel; without one the plan resolves
     // to the pseudo "last" route decided at run time, which doctor cannot validate ahead of time.
-    if (job.enabled === false || !isRecord(job.delivery)) {
+    if (job.enabled === false || !isRecord(job.delivery) || job.delivery.mode !== "announce") {
       continue;
     }
     const plan = resolveCronDeliveryPlan(job as unknown as CronJob);
@@ -203,14 +200,6 @@ export function noteCronDeliveryTargetAdvisory(params: {
   }
 }
 
-function findLegacyWhatsAppHealthCrontabLines(crontab: unknown): string[] {
-  return (normalizeStringifiedOptionalString(crontab) ?? "")
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"))
-    .filter((line) => LEGACY_WHATSAPP_HEALTH_SCRIPT_RE.test(line));
-}
-
 export async function collectLegacyWhatsAppCrontabHealthWarning(
   params: {
     platform?: NodeJS.Platform;
@@ -232,7 +221,11 @@ export async function collectLegacyWhatsAppCrontabHealthWarning(
     return null;
   }
 
-  const legacyLines = findLegacyWhatsAppHealthCrontabLines(crontab);
+  const legacyLines = (normalizeStringifiedOptionalString(crontab) ?? "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"))
+    .filter((line) => LEGACY_WHATSAPP_HEALTH_SCRIPT_RE.test(line));
   if (legacyLines.length === 0) {
     return null;
   }

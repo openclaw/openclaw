@@ -1,9 +1,4 @@
-/**
- * Reset command implementation.
- *
- * It removes selected config/state/workspace surfaces after confirmation and
- * stops managed gateway services before deleting broader state.
- */
+// Stop managed Gateway services before deleting broader state.
 import { cancel, confirm, isCancel } from "@clack/prompts";
 import { selectStyled } from "../../packages/terminal-core/src/prompt-select-styled.js";
 import {
@@ -24,7 +19,6 @@ import {
 
 type ResetScope = "config" | "config+creds+sessions" | "full";
 
-/** CLI options accepted by `openclaw reset`. */
 type ResetOptions = {
   scope?: ResetScope;
   yes?: boolean;
@@ -58,7 +52,6 @@ async function stopGatewayIfRunning(runtime: RuntimeEnv): Promise<boolean> {
   }
 }
 
-/** Runs the reset command for config, credential/session, or full state scopes. */
 export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   const interactive = !opts.nonInteractive;
   if (!interactive && !opts.yes) {

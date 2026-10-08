@@ -62,6 +62,17 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     !initialPluginHarnessOwnsTransport &&
     usesOpenAIAuthRouting &&
     params.getEffectiveModel().api === "openai-chatgpt-responses";
+  const resolveExternalCliAuthScope = (store?: AuthProfileStore) =>
+    resolveExternalCliAuthOverlayScopeFromSelection({
+      provider: params.provider,
+      cfg: runParams.config,
+      agentId: runParams.agentId,
+      modelId: params.modelId,
+      workspaceDir: params.workspaceDir,
+      ...(store ? { store } : {}),
+      userPinnedAuthProfileId:
+        runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
+    });
   let externalCliAuthScope = initialPluginHarnessOwnsTransport
     ? { ignoreAutoPreferredProfile: false }
     : openClawNativeCodexResponsesNeedsAuthBootstrap
@@ -69,15 +80,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           providerIds: [OPENAI_PROVIDER_ID],
           ignoreAutoPreferredProfile: false,
         }
-      : resolveExternalCliAuthOverlayScopeFromSelection({
-          provider: params.provider,
-          cfg: runParams.config,
-          agentId: runParams.agentId,
-          modelId: params.modelId,
-          workspaceDir: params.workspaceDir,
-          userPinnedAuthProfileId:
-            runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
-        });
+      : resolveExternalCliAuthScope();
   const authStoreOptions = {
     migrationProvider: params.provider,
     config: runParams.config,
@@ -90,16 +93,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       params.agentDir,
       authStoreOptions,
     );
-    externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
-      provider: params.provider,
-      cfg: runParams.config,
-      agentId: runParams.agentId,
-      modelId: params.modelId,
-      workspaceDir: params.workspaceDir,
-      store: noExternalAuthStore,
-      userPinnedAuthProfileId:
-        runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
-    });
+    externalCliAuthScope = resolveExternalCliAuthScope(noExternalAuthStore);
   }
   params.markStage?.("scope");
 
@@ -211,24 +205,20 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     });
 
   let resolvedAuthPreparation = createAuthPreparation();
-  let preparedAuthAttempts = resolvedAuthPreparation.attempts;
-  let activePreparedAuthPlan = resolvedAuthPreparation.plan;
-  params.applyResolvedRuntimeModel(await materializeAuthPlan(activePreparedAuthPlan));
+  params.applyResolvedRuntimeModel(await materializeAuthPlan(resolvedAuthPreparation.plan));
   params.markStage?.("prepare-plan");
 
   const finalizedHarness = params.selectHarnessForPreparedAttempts(
     params.getEffectiveModel(),
-    preparedAuthAttempts,
+    resolvedAuthPreparation.attempts,
   );
   if (finalizedHarness.id !== params.getAgentHarness().id) {
     params.setAgentHarness(finalizedHarness);
     resolvedAuthPreparation = createAuthPreparation();
-    preparedAuthAttempts = resolvedAuthPreparation.attempts;
-    activePreparedAuthPlan = resolvedAuthPreparation.plan;
-    params.applyResolvedRuntimeModel(await materializeAuthPlan(activePreparedAuthPlan));
+    params.applyResolvedRuntimeModel(await materializeAuthPlan(resolvedAuthPreparation.plan));
     const confirmedHarness = params.selectHarnessForPreparedAttempts(
       params.getEffectiveModel(),
-      preparedAuthAttempts,
+      resolvedAuthPreparation.attempts,
     );
     if (confirmedHarness.id !== params.getAgentHarness().id) {
       throw new Error(
@@ -239,14 +229,13 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   params.markStage?.("harness");
 
   return {
-    usesOpenAIAuthRouting,
     attemptAuthProfileStore,
     lockedProfileId,
     preferredProfileId,
     providerUsesProfileScopedModelMetadata,
     materializeAuthPlan,
     materializeAuthPlanUncached,
-    preparedAuthAttempts,
-    activePreparedAuthPlan,
+    preparedAuthAttempts: resolvedAuthPreparation.attempts,
+    activePreparedAuthPlan: resolvedAuthPreparation.plan,
   };
 }

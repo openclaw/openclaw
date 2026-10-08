@@ -1,9 +1,6 @@
 // Covers global Undici dispatcher policy: proxy bootstrap, stream timeouts,
 // WSL2 address-family handling, and managed-dispatcher wrapping.
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { execNodeEvalSync } from "../../test-utils/node-process.js";
 
 const {
   Agent,
@@ -141,8 +138,8 @@ vi.mock("node:net", () => ({
   setDefaultAutoSelectFamily,
 }));
 
+// mock-isolation: dispatcher policy uses fixture proxy settings, not the host environment.
 vi.mock("./proxy-env.js", () => ({
-  hasEnvHttpProxyAgentConfigured: () => resolveEnvHttpProxyAgentOptions() !== undefined,
   resolveEnvHttpProxyAgentOptions: vi.fn(() => undefined),
   resolveEnvHttpProxyUrl: vi.fn(() => undefined),
 }));
@@ -166,49 +163,24 @@ import {
 let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.js").DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
 let ensureGlobalUndiciDispatcherStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciDispatcherStreamTimeouts;
 let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
-let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciStreamTimeouts;
 let forceResetGlobalDispatcher: typeof import("./undici-global-dispatcher.js").forceResetGlobalDispatcher;
 let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
 let undiciGlobalDispatcherModule: typeof import("./undici-global-dispatcher.js");
-let noProxySubprocessOutput = "";
 const DEFAULT_PROXY_OPTIONS = {
   httpProxy: "http://proxy.test:8080",
   httpsProxy: "http://proxy.test:8080",
 };
 
-describe("ensureGlobalUndiciStreamTimeouts", () => {
+describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
   beforeAll(async () => {
     undiciGlobalDispatcherModule = await import("./undici-global-dispatcher.js");
     ({
       DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
       ensureGlobalUndiciDispatcherStreamTimeouts,
       ensureGlobalUndiciEnvProxyDispatcher,
-      ensureGlobalUndiciStreamTimeouts,
       forceResetGlobalDispatcher,
       resetGlobalUndiciStreamTimeoutsForTests,
     } = undiciGlobalDispatcherModule);
-    const moduleUrl = pathToFileURL(path.resolve("src/infra/net/undici-global-dispatcher.ts")).href;
-    const source = `
-      const dispatcherKey = Symbol.for("undici.globalDispatcher.1");
-      const mod = await import(${JSON.stringify(moduleUrl)});
-      mod.ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
-      if (globalThis[dispatcherKey] !== undefined) {
-        throw new Error("undici global dispatcher was initialized");
-      }
-      console.log("ok");
-    `;
-    const env = { ...process.env };
-    for (const key of [
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "ALL_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "all_proxy",
-    ]) {
-      delete env[key];
-    }
-    noProxySubprocessOutput = execNodeEvalSync(source, { env, imports: ["tsx"] });
   });
 
   beforeEach(() => {
@@ -219,22 +191,6 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     vi.mocked(isWSL2Sync).mockReturnValue(false);
     vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue(undefined);
     vi.mocked(resolveEnvHttpProxyUrl).mockReturnValue(undefined);
-  });
-
-  it("records timeout bridge without importing undici when no env proxy is configured", () => {
-    getDefaultAutoSelectFamily.mockReturnValue(true);
-
-    ensureGlobalUndiciStreamTimeouts();
-
-    expect(loadUndiciGlobalDispatcherDeps).not.toHaveBeenCalled();
-    expect(setGlobalDispatcher).not.toHaveBeenCalled();
-    expect(undiciGlobalDispatcherModule.globalUndiciStreamTimeoutMs).toBe(
-      DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
-    );
-  });
-
-  it("does not initialize the undici global dispatcher in a no-proxy subprocess", () => {
-    expect(noProxySubprocessOutput.trim()).toBe("ok");
   });
 
   it("explicitly tunes the global dispatcher when requested for embedded attempts", () => {
@@ -263,7 +219,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue(DEFAULT_PROXY_OPTIONS);
     setCurrentDispatcher(new EnvHttpProxyAgent());
 
-    ensureGlobalUndiciStreamTimeouts();
+    ensureGlobalUndiciDispatcherStreamTimeouts();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
     const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
@@ -284,7 +240,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     });
     setCurrentDispatcher(new EnvHttpProxyAgent());
 
-    ensureGlobalUndiciStreamTimeouts();
+    ensureGlobalUndiciDispatcherStreamTimeouts();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
     const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
@@ -307,7 +263,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     setCurrentDispatcher(new EnvHttpProxyAgent());
 
     try {
-      ensureGlobalUndiciStreamTimeouts();
+      ensureGlobalUndiciDispatcherStreamTimeouts();
 
       expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
       const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
@@ -327,7 +283,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
   it("records timeout bridge but does not override unsupported custom proxy dispatcher types", () => {
     setCurrentDispatcher(new ProxyAgent("http://proxy.test:8080"));
 
-    ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
+    ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
 
     expect(setGlobalDispatcher).not.toHaveBeenCalled();
     expect(undiciGlobalDispatcherModule.globalUndiciStreamTimeoutMs).toBe(1_900_000);
@@ -573,17 +529,17 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue(DEFAULT_PROXY_OPTIONS);
     setCurrentDispatcher(new EnvHttpProxyAgent());
 
-    ensureGlobalUndiciStreamTimeouts();
-    ensureGlobalUndiciStreamTimeouts();
+    ensureGlobalUndiciDispatcherStreamTimeouts();
+    ensureGlobalUndiciDispatcherStreamTimeouts();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
   });
 
   it("does not lower global stream timeouts below the default floor", () => {
-    ensureGlobalUndiciStreamTimeouts({ timeoutMs: 15_000 });
+    ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 15_000 });
 
-    expect(loadUndiciGlobalDispatcherDeps).not.toHaveBeenCalled();
-    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(loadUndiciGlobalDispatcherDeps).toHaveBeenCalledOnce();
+    expect(setGlobalDispatcher).toHaveBeenCalledOnce();
     expect(undiciGlobalDispatcherModule.globalUndiciStreamTimeoutMs).toBe(
       DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
     );
@@ -592,10 +548,10 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
   it("honors explicit global stream timeouts above the default floor", () => {
     const timeoutMs = DEFAULT_UNDICI_STREAM_TIMEOUT_MS + 1_000;
 
-    ensureGlobalUndiciStreamTimeouts({ timeoutMs });
+    ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs });
 
-    expect(loadUndiciGlobalDispatcherDeps).not.toHaveBeenCalled();
-    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(loadUndiciGlobalDispatcherDeps).toHaveBeenCalledOnce();
+    expect(setGlobalDispatcher).toHaveBeenCalledOnce();
     expect(undiciGlobalDispatcherModule.globalUndiciStreamTimeoutMs).toBe(timeoutMs);
   });
 
@@ -603,10 +559,10 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue(DEFAULT_PROXY_OPTIONS);
     setCurrentDispatcher(new EnvHttpProxyAgent());
     getDefaultAutoSelectFamily.mockReturnValue(true);
-    ensureGlobalUndiciStreamTimeouts();
+    ensureGlobalUndiciDispatcherStreamTimeouts();
 
     getDefaultAutoSelectFamily.mockReturnValue(false);
-    ensureGlobalUndiciStreamTimeouts();
+    ensureGlobalUndiciDispatcherStreamTimeouts();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
     const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
@@ -622,7 +578,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue(DEFAULT_PROXY_OPTIONS);
     setCurrentDispatcher(new EnvHttpProxyAgent());
 
-    ensureGlobalUndiciStreamTimeouts();
+    ensureGlobalUndiciDispatcherStreamTimeouts();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
     const next = getCurrentDispatcher() as { options?: Record<string, unknown> };

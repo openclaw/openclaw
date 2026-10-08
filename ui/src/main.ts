@@ -1,4 +1,3 @@
-// Control UI module implements main behavior.
 import "./styles.css";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
 import "./app/app-host.ts";
@@ -25,7 +24,17 @@ const keyboardHintStyles = document.createElement("style");
 keyboardHintStyles.textContent = kbdStyles.cssText;
 document.head.append(keyboardHintStyles);
 
-syncDocumentPublicAssetLinks();
+for (const [selector, asset] of [
+  ['link[rel="icon"][type="image/svg+xml"]', "favicon.svg"],
+  ['link[rel="icon"][type="image/png"]', "favicon-32.png"],
+  ['link[rel="apple-touch-icon"]', "apple-touch-icon.png"],
+  ['link[rel="manifest"]', "manifest.webmanifest"],
+] as const) {
+  const link = document.querySelector<HTMLLinkElement>(selector);
+  if (link) {
+    link.href = inferControlUiPublicAssetPath(asset);
+  }
+}
 installStaleChunkReloadListener();
 installMissingStylesheetRecovery();
 
@@ -62,22 +71,4 @@ if (isProd && "serviceWorker" in navigator) {
       void r.unregister();
     }
   });
-}
-
-function syncDocumentPublicAssetLinks() {
-  setDocumentLinkHref('link[rel="icon"][type="image/svg+xml"]', "favicon.svg");
-  setDocumentLinkHref('link[rel="icon"][type="image/png"]', "favicon-32.png");
-  setDocumentLinkHref('link[rel="apple-touch-icon"]', "apple-touch-icon.png");
-  setDocumentLinkHref('link[rel="manifest"]', "manifest.webmanifest");
-}
-
-function setDocumentLinkHref(
-  selector: string,
-  asset: Parameters<typeof inferControlUiPublicAssetPath>[0],
-) {
-  const link = document.querySelector<HTMLLinkElement>(selector);
-  if (!link) {
-    return;
-  }
-  link.href = inferControlUiPublicAssetPath(asset);
 }

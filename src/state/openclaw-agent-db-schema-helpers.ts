@@ -23,13 +23,13 @@ import {
 import { withoutCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import {
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
-  OPENCLAW_AGENT_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";
 import {
   readExistingAgentSchemaMeta,
   assertExistingAgentSchemaOwner,
+  assertCurrentAgentSchemaMetadata,
 } from "./openclaw-agent-db-schema-read.js";
 import {
   ensureSessionAdditiveColumns,
@@ -63,6 +63,7 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export {
   assertSupportedAgentSchemaVersion,
+  assertCurrentAgentSchemaMetadata,
   assertCanonicalAgentPersistenceVersion,
   readExistingAgentSchemaMeta,
   assertExistingAgentSchemaOwner,
@@ -105,7 +106,7 @@ export function assertOpenClawAgentSchemaContains(
   schemaSql: string,
   participantSchema: "current" | "legacy" = "current",
   allowStartupIndexRepair = false,
-): void {
+): boolean {
   const compatibility = {
     ...AGENT_SCHEMA_COMPATIBILITY,
     allowedMissingTables: [
@@ -120,7 +121,7 @@ export function assertOpenClawAgentSchemaContains(
   };
   if (!allowStartupIndexRepair) {
     assertSqliteSchemaContains(database, pathname, schemaSql, compatibility);
-    return;
+    return false;
   }
   // Admission is read-only; the writable schema owner rebuilds these projections
   // before session startup completes. Constraints and canonical data stay strict.
@@ -136,6 +137,7 @@ export function assertOpenClawAgentSchemaContains(
   ) {
     throwSqliteSchemaMismatches(pathname, legacySqliteSchemaIssueMessages(issues));
   }
+  return issues.length > 0;
 }
 
 export function assertOpenClawAgentCurrentRuntimeSchema(
@@ -144,17 +146,7 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
 ): void {
   const agentId = normalizeAgentId(options.agentId);
   const metadata = readExistingAgentSchemaMeta(database);
-  if (!metadata) {
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${options.pathname} has no schema ownership metadata. Run openclaw doctor --fix to inspect and repair its ownership.`,
-    );
-  }
-  assertExistingAgentSchemaOwner(metadata, agentId, options.pathname);
-  if (metadata.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before using it.`,
-    );
-  }
+  assertCurrentAgentSchemaMetadata(metadata, agentId, options.pathname);
   if (hasRetiredAgentStateLeaseSchema(database)) {
     throw new SqliteSchemaMismatchError(
       `OpenClaw agent database ${options.pathname} retains retired state_leases storage; run openclaw doctor --fix before using it.`,
@@ -197,6 +189,16 @@ export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): v
       errorMessage: "OpenClaw agent session-key contract schema markers are missing.",
     }),
   ); // sqlite-allow-raw -- Idempotent additive lazy ensure.
+}
+
+export function ensureSessionReactionsSchemaInTransaction(db: DatabaseSync): void {
+  db.exec(
+    extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_reactions", {
+      endMarker: "CREATE TABLE IF NOT EXISTS board_tabs (",
+      includeEndMarker: false,
+      errorMessage: "OpenClaw agent session-reactions schema markers are missing.",
+    }),
+  ); // sqlite-allow-raw -- Canonical additive DDL at database admission.
 }
 
 export function repairAndAssertOpenClawAgentV14SchemaForMigration(
@@ -329,6 +331,7 @@ function hasPendingSessionKeyContractSchemaMigration(db: DatabaseSync): boolean 
 
 export function hasPendingCurrentVersionAgentDatabaseMigration(database: DatabaseSync): boolean {
   return (
+    !tableExists(database, "session_reactions") ||
     hasPendingMemoryChunkMetadataMigration(database) ||
     hasPendingSessionKeyContractSchemaMigration(database) ||
     hasRetiredAgentStateLeaseSchema(database) ||

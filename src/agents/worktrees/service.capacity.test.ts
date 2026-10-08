@@ -4,19 +4,28 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as backoff from "../../infra/backoff.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import * as commandExec from "../../process/exec.js";
-import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
-import { getRegistryWorktree } from "./registry.js";
+import * as allocation from "./allocation.js";
+import { captureWorktreeMutationHeartbeat } from "./allocation.test-support.js";
+import * as capacity from "./capacity.js";
+import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import { readPendingWorktrees } from "./pending-slots.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
+import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   useManagedWorktreeTestRepository,
@@ -62,6 +71,7 @@ describe("ManagedWorktreeService capacity", () => {
   }
 
   beforeEach(async () => {
+    useInProcessWorktreeCapacityTransport();
     root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worktree-capacity-")),
     );
@@ -110,6 +120,127 @@ describe("ManagedWorktreeService capacity", () => {
     expect(await git(created.path, "status", "--porcelain")).toBe("");
     expect(await service.listRegistryRecords()).toEqual([created]);
   });
+
+  it.for(["ample", "constrained"] as const)(
+    "admits an unrelated create during retirement only with %s disk space",
+    async (space, { signal }) => {
+      const retiring = await service.create({ repoRoot: repo, name: "retiring", baseRef: "HEAD" });
+      await fs.writeFile(path.join(retiring.path, "draft.bin"), Buffer.alloc(8 * 1024 ** 2, 7));
+      availableBytes = space === "ample" ? 100 * GiB : 4 * GiB + 10 * 1024 ** 2;
+      const deleting = createDeferred();
+      const release = createDeferred();
+      const waiting = createDeferred();
+      const waitCapacity = allocation.waitForWorktreeCapacity;
+      vi.spyOn(allocation, "waitForWorktreeCapacity").mockImplementation(async (...args) => {
+        waiting.resolve();
+        return await waitCapacity(...args);
+      });
+      const runCommand = commandExec.runCommandWithTimeout;
+      vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        const command = argv.indexOf("worktree");
+        if (command >= 0 && argv[command + 1] === "remove" && argv.includes(retiring.path)) {
+          deleting.resolve();
+          await release.promise;
+        }
+        return await runCommand(argv, options);
+      });
+      const removal = service.remove({ id: retiring.id, reason: "owner-gc" });
+      const create = () => service.create({ repoRoot: repo, name: "parallel", baseRef: "HEAD" });
+      let creation: ReturnType<typeof create> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(deleting.promise, removal, "retirement never reached deletion"),
+          signal,
+        );
+        creation = create();
+        if (space === "constrained") {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              waiting.promise,
+              creation,
+              "creation did not wait for disk admission",
+            ),
+            signal,
+          );
+          expect(await git(repo, "branch", "--list", "openclaw/parallel")).toBe("");
+        } else {
+          const created = await withinTest(creation, signal);
+          expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+        }
+        expect(getRegistryWorktree(env, retiring.id)?.removedAt).toBeUndefined();
+        expect(await fs.stat(retiring.path)).toBeDefined();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([removal, creation]);
+      }
+      expect(getRegistryWorktree(env, retiring.id)?.removedAt).toEqual(expect.any(Number));
+      if (space === "constrained") {
+        const created = await creation!;
+        expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+      }
+    },
+  );
+
+  it.for(["linked create", "borrowed create", "borrowed restore"] as const)(
+    "retains managed Git sources until %s settles below the count cap",
+    async (operation, { signal }) => {
+      const source = await service.create({ repoRoot: repo, name: "source", baseRef: "HEAD" });
+      let consumerRoot = source.path;
+      if (operation !== "linked create") {
+        const donor = path.join(source.path, "donor");
+        consumerRoot = path.join(root, "borrower");
+        await git(root, "clone", "--no-local", "--", repo, donor);
+        await git(root, "clone", "--shared", "--", donor, consumerRoot);
+        expect(
+          (
+            await fs.readFile(path.join(consumerRoot, ".git/objects/info/alternates"), "utf8")
+          ).trim(),
+        ).toBe(path.join(donor, ".git/objects"));
+      }
+      const consumer = { repoRoot: consumerRoot, name: "consumer", baseRef: "HEAD" };
+      const retired = operation === "borrowed restore" ? await service.create(consumer) : undefined;
+      if (retired) {
+        await fs.writeFile(path.join(retired.path, "saved.txt"), "saved edits\n");
+        await service.remove({ id: retired.id, reason: "owner-gc" });
+      }
+      const adding = createDeferred();
+      const release = createDeferred();
+      const runCommand = commandExec.runCommandWithTimeout;
+      vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        if (isWorktreeAdd(argv)) {
+          adding.resolve();
+          await release.promise;
+        }
+        return await runCommand(argv, options);
+      });
+      const creation = retired ? service.restore({ id: retired.id }) : service.create(consumer);
+      let removal: ReturnType<typeof service.remove> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            adding.promise,
+            creation,
+            "creation never admitted its checkout",
+          ),
+          signal,
+        );
+        removal = service.remove({ id: source.id, reason: "owner-gc", allowSnapshotLoss: true });
+        await expect(withinTest(removal, signal)).rejects.toThrow(/busy|locked/);
+        expect(getRegistryWorktree(env, source.id)?.removedAt).toBeUndefined();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([creation, removal]);
+      }
+      const created = await creation;
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+      expect(await fs.stat(source.path)).toBeDefined();
+      if (retired) {
+        expect(await fs.readFile(path.join(created.path, "saved.txt"), "utf8")).toBe(
+          "saved edits\n",
+        );
+      }
+    },
+  );
 
   it.each(["source", "destination"] as const)(
     "refuses allocation when the separate %s volume lacks its reserve",
@@ -285,7 +416,7 @@ describe("ManagedWorktreeService capacity", () => {
   );
 
   it.each(["create", "restore"] as const)(
-    "preserves materialized files and their branch when %s loses allocation ownership",
+    "preserves materialized files and their branch when %s loses checkout ownership",
     async (operation) => {
       const params = { repoRoot: repo, name: "lost-allocation", baseRef: "HEAD" };
       const branch = `openclaw/${params.name}`;
@@ -296,6 +427,7 @@ describe("ManagedWorktreeService capacity", () => {
         await service.remove({ id: archived.id, reason: "test" });
       }
       const before = await service.listRegistryRecords();
+      const revokeCheckout = captureWorktreeMutationHeartbeat();
       let destination: string | undefined;
       const realRun = commandExec.runCommandWithTimeout;
       vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
@@ -307,20 +439,12 @@ describe("ManagedWorktreeService capacity", () => {
           result.code === 0
         ) {
           destination = argv[argv.indexOf("-C") + 1];
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              const changed = executeSqliteQuerySync(
-                db,
-                getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
-                  .updateTable("state_leases")
-                  .set({ owner: "successor" })
-                  .where("scope", "=", "core:managed-worktrees:create")
-                  .where("lease_key", "=", "capacity"),
-              );
-              expect(changed.numAffectedRows).toBe(1n);
-            },
-            { env },
-          );
+          const checkoutId =
+            archived?.id ??
+            (await readPendingWorktrees(env)).find(({ record }) => record.path === destination)
+              ?.record.id;
+          assert(checkoutId);
+          await revokeCheckout(checkoutId);
         }
         return result;
       });
@@ -335,6 +459,121 @@ describe("ManagedWorktreeService capacity", () => {
       expect(await fs.readFile(path.join(destination!, "README.md"), "utf8")).toBe(
         archived ? "saved restore state\n" : "base\n",
       );
+    },
+  );
+
+  it.each(["none", "files", "registration", "unknown"])(
+    "recovers an unprepared branch after lease loss (changed=%s)",
+    async (changed) => {
+      const params = {
+        repoRoot: repo,
+        name: "retry-hydration",
+        baseRef: "HEAD",
+        ownerKind: "session" as const,
+        ownerId: "agent:main:retry-hydration",
+      };
+      let sourceHeld = false;
+      let cleanupEntered = false;
+      const recoveryRegistryReads: string[] = [];
+      let destination: string | undefined;
+      const revokeCheckout = captureWorktreeMutationHeartbeat();
+      const nativeOutcomeUnknown = Object.assign(new Error("native hydration outcome unknown"), {
+        code: "outcome-unknown",
+      });
+      vi.spyOn(capacity, "estimateWorktreeGitBytes").mockImplementationOnce(async () => {
+        expect(sourceHeld).toBe(true);
+        // Hydration starts after Git has registered the new branch but before publication.
+        expect(await git(repo, "branch", "--list", "openclaw/retry-hydration")).not.toBe("");
+        const listing = await git(repo, "worktree", "list", "--porcelain");
+        destination = listing
+          .split("\n")
+          .find((line) => line.startsWith("worktree ") && line.endsWith("retry-hydration"))
+          ?.slice("worktree ".length);
+        const pending = (await readPendingWorktrees(env)).find(
+          ({ record }) => record.path === destination,
+        );
+        assert(pending);
+        expect(pending.record.path).toBe(destination);
+        await revokeCheckout(pending.record.id);
+        if (changed === "unknown") {
+          throw nativeOutcomeUnknown;
+        }
+        return 4096;
+      });
+
+      const creation = service.create({
+        ...params,
+        withSource: async (run) => {
+          sourceHeld = true;
+          try {
+            return await run({ assertCurrent() {} });
+          } finally {
+            sourceHeld = false;
+          }
+        },
+        withRollback: async (run) => {
+          // Recovery must release source custody before taking allocation → source again.
+          expect(sourceHeld).toBe(false);
+          cleanupEntered = true;
+          if (changed === "files") {
+            await fs.writeFile(path.join(destination!, "keep.txt"), "new owner data\n");
+          } else if (changed === "registration") {
+            await fs.writeFile(
+              path.join(destination!, ".git"),
+              `gitdir: ${path.join(repo, ".git")}\n`,
+            );
+          }
+          const sql = observeHostDataSql();
+          try {
+            return await run(() => {});
+          } finally {
+            recoveryRegistryReads.push(
+              ...sql.queries.filter((query) => /\bfrom\s+"?worktrees"?\b/i.test(query)),
+            );
+            sql.restore();
+          }
+        },
+      });
+      if (changed === "unknown") {
+        const failure = await creation.then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(failure).toMatchObject({ code: "outcome-unknown" });
+        const causes = collectNestedErrorCandidates(failure);
+        expect(causes).toContain(nativeOutcomeUnknown);
+        expect(causes).toContainEqual(
+          expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }),
+        );
+      } else {
+        await expect(creation).rejects.toThrow(/was lost/);
+      }
+      expect(recoveryRegistryReads).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([]);
+      if (changed === "unknown") {
+        expect(cleanupEntered).toBe(false);
+        expect(await fs.stat(destination!)).toBeDefined();
+        expect(await git(repo, "branch", "--list", "openclaw/retry-hydration")).not.toBe("");
+        return;
+      }
+      if (changed === "files") {
+        expect(await fs.readFile(path.join(destination!, "keep.txt"), "utf8")).toBe(
+          "new owner data\n",
+        );
+      }
+      if (changed !== "none") {
+        expect(cleanupEntered).toBe(true);
+        expect(await fs.stat(destination!)).toBeDefined();
+        expect(await git(repo, "branch", "--list", "openclaw/retry-hydration")).not.toBe("");
+        return;
+      }
+      const branchBeforeRetry = await git(repo, "branch", "--list", "openclaw/retry-hydration");
+      const retried = await service.create(params);
+      expect(cleanupEntered).toBe(true);
+      expect(branchBeforeRetry).toBe("");
+      expect(retried.ownerId).toBe(params.ownerId);
+      expect(await fs.readFile(path.join(retried.path, "README.md"), "utf8")).toBe("base\n");
+      expect(await service.listRegistryRecords()).toEqual([retried]);
     },
   );
 
@@ -424,9 +663,9 @@ describe("ManagedWorktreeService capacity", () => {
     expect(await git(rejectedRepo, "branch", "--list", "openclaw/*")).toBe("");
   });
 
-  it.each(["release", "abort"] as const)(
+  it.for(["release", "abort"] as const)(
     "waits beyond five minutes for allocation until %s",
-    async (ending) => {
+    async (ending, { signal }) => {
       const held = createDeferred();
       const release = createDeferred();
       const holder = withOpenClawStateLease(
@@ -447,7 +686,13 @@ describe("ManagedWorktreeService capacity", () => {
       const realNow = performance.now.bind(performance);
       let elapsedMs = 0;
       const clock = vi.spyOn(performance, "now").mockImplementation(() => realNow() + elapsedMs);
-      const waits = vi.spyOn(backoff, "sleepWithAbort");
+      const waiting = createDeferred();
+      const waitingAfterAdvance = createDeferred();
+      const sleepWithAbort = backoff.sleepWithAbort;
+      const waits = vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async (...args) => {
+        (elapsedMs === 0 ? waiting : waitingAfterAdvance).resolve();
+        await sleepWithAbort(...args);
+      });
       let settled = false;
       const pending = service
         .create({ repoRoot: repo, name: "waiting", baseRef: "HEAD", signal: controller.signal })
@@ -456,13 +701,24 @@ describe("ManagedWorktreeService capacity", () => {
         });
       const result = pending.catch((error: unknown) => error);
       try {
-        await vi.waitFor(() => expect(waits.mock.calls.length > 0 || settled).toBe(true));
+        await withinTest(
+          awaitGateBeforeSettlement(
+            waiting.promise,
+            pending,
+            "allocation settled before waiting for its holder",
+          ),
+          signal,
+        );
         expect(settled).toBe(false);
-        const previousWaits = waits.mock.calls.length;
         // Advance only elapsed acquisition time; keep the real holder's expiry and timers live.
         elapsedMs = 6 * 60_000;
-        await vi.waitFor(() =>
-          expect(waits.mock.calls.length > previousWaits || settled).toBe(true),
+        await withinTest(
+          awaitGateBeforeSettlement(
+            waitingAfterAdvance.promise,
+            pending,
+            "allocation settled before waiting beyond five minutes",
+          ),
+          signal,
         );
         expect(settled, "allocation must remain pending while another owner holds the lease").toBe(
           false,
@@ -470,7 +726,8 @@ describe("ManagedWorktreeService capacity", () => {
         expect(await service.listRegistryRecords()).toEqual([]);
         if (ending === "abort") {
           controller.abort(new Error("cancel queued worktree"));
-          await vi.waitFor(() => expect(settled).toBe(true));
+          await withinTest(result, signal);
+          expect(settled).toBe(true);
           await expect(result).resolves.toMatchObject({
             code: "OPENCLAW_STATE_LEASE_ABORTED",
           });
@@ -506,6 +763,35 @@ describe("ManagedWorktreeService capacity", () => {
     availableBytes = GiB;
     expect(await service.create(params)).toEqual(created);
     expect(await service.listRegistryRecords()).toHaveLength(100);
+  });
+
+  it("reconciles a missing owned checkout only after any removal claim has settled", async () => {
+    const params = {
+      repoRoot: repo,
+      suggestedName: "missing-owned",
+      baseRef: "HEAD",
+      ownerKind: "session" as const,
+      ownerId: "agent:main:missing-owned",
+    };
+    const original = await service.create(params);
+    await git(repo, "worktree", "remove", "--force", original.path);
+    const token = "pending-removal";
+    await claimWorktreeRemoval(env, { worktreeId: original.id, token });
+    try {
+      await expect(service.create(params)).rejects.toThrow(/removed|removal|busy/);
+      expect(getRegistryWorktree(env, original.id)?.removedAt).toBeUndefined();
+    } finally {
+      await abortWorktreeRemoval(env, original.id, token);
+    }
+
+    const replacement = await service.create(params);
+    expect(replacement.id).not.toBe(original.id);
+    expect(replacement.name).toBe("missing-owned-2");
+    expect(await fs.readFile(path.join(replacement.path, "README.md"), "utf8")).toBe("base\n");
+    expect(getRegistryWorktree(env, original.id)?.removedAt).toEqual(expect.any(Number));
+    expect(
+      (await service.listRegistryRecords()).filter((record) => record.removedAt === undefined),
+    ).toEqual([replacement]);
   });
 
   it.each(["sufficient", "insufficient"])(

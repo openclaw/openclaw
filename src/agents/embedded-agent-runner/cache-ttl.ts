@@ -14,10 +14,8 @@ type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
-type CacheTtlEntryData = {
+type CacheTtlEntryData = CacheTtlContext & {
   timestamp: number;
-  provider?: string;
-  modelId?: string;
 };
 
 type CacheTtlContext = {
@@ -47,6 +45,11 @@ export function isCacheTtlEligibleProvider(
     return pluginEligibility;
   }
   return (
+    // Config-only OpenAI-compatible providers have no hook; require an explicit opt-in.
+    (route?.supportsPromptCacheKey === true &&
+      (modelApi === "openai-responses" ||
+        modelApi === "openai-completions" ||
+        modelApi === "openai-chatgpt-responses")) ||
     isAnthropicFamilyCacheTtlEligible({
       provider: normalizedProvider,
       modelId: normalizedModelId,
@@ -64,15 +67,10 @@ function matchesCacheTtlContext(
   if (!context) {
     return true;
   }
-  const expectedProvider = normalizeOptionalLowercaseString(context.provider);
-  if (expectedProvider && normalizeOptionalLowercaseString(data?.provider) !== expectedProvider) {
-    return false;
-  }
-  const expectedModelId = normalizeOptionalLowercaseString(context.modelId);
-  if (expectedModelId && normalizeOptionalLowercaseString(data?.modelId) !== expectedModelId) {
-    return false;
-  }
-  return true;
+  return (["provider", "modelId"] as const).every((key) => {
+    const expected = normalizeOptionalLowercaseString(context[key]);
+    return !expected || normalizeOptionalLowercaseString(data?.[key]) === expected;
+  });
 }
 
 export function readLastCacheTtlTimestamp(

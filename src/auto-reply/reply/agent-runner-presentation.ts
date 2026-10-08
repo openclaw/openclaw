@@ -40,7 +40,7 @@ export function createAgentTurnPresentation(params: {
   directBlockDeliveries: DirectBlockDelivery[];
   heartbeatState: { didLogStrip: boolean };
 }) {
-  const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+  const classifyReplyText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
     let text = payload.text;
     const reply = resolveSendableOutboundReplyParts(payload, { text: "" });
     if (params.turn.followupRun.run.silentExpected) {
@@ -57,10 +57,8 @@ export function createAgentTurnPresentation(params: {
       }
       text = stripped.text;
     }
-    if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
-      return { skip: true };
-    }
     if (
+      isSilentReplyText(text, SILENT_REPLY_TOKEN) ||
       isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
       isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
     ) {
@@ -73,6 +71,18 @@ export function createAgentTurnPresentation(params: {
       return reply.hasMedia ? { text: undefined, skip: false } : { skip: true };
     }
     return { text, skip: false };
+  };
+
+  // Previews are cumulative, so a held lead reappears in the next partial or
+  // the final reply once the text diverges from NO_REPLY. Leading punctuation
+  // can wrap the complete marker, so hold its unfinished preview too.
+  const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+    const preview = payload.text?.trim();
+    const unwrapped = preview?.replace(/^\p{P}+/u, "").trimStart();
+    return unwrapped === SILENT_REPLY_TOKEN[0] ||
+      (unwrapped !== preview && isSilentReplyPrefixText(unwrapped, SILENT_REPLY_TOKEN))
+      ? { skip: true }
+      : classifyReplyText(payload);
   };
 
   const sanitizeStreamingText = (
@@ -93,7 +103,7 @@ export function createAgentTurnPresentation(params: {
   };
 
   const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
-    const classified = classifyStreamingPartial(payload);
+    const classified = classifyReplyText(payload);
     if (classified.skip || !classified.text) {
       return classified;
     }

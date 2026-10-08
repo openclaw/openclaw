@@ -38,7 +38,6 @@ import kotlinx.coroutines.yield
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ceil
 import kotlin.math.sqrt
 
@@ -53,7 +52,7 @@ internal class WearRealtimeTalkClient(
   private val audioLock = Any()
   private val audioFocus =
     WearAudioFocusController(context) {
-      activeAttempt?.let { attempt -> scope.launch { clearOutput(attempt, resumeCapture = true) } }
+      activeAttempt?.let { attempt -> scope.launch { clearOutput(attempt) } }
     }
   private val _isCapturing = MutableStateFlow(false)
   val isCapturing: StateFlow<Boolean> = _isCapturing
@@ -63,8 +62,6 @@ internal class WearRealtimeTalkClient(
   val mouthLevel: StateFlow<Float> = _mouthLevel
   private val _channelFailed = MutableStateFlow(false)
   val channelFailed: StateFlow<Boolean> = _channelFailed
-
-  private val attemptGeneration = AtomicLong()
 
   @Volatile private var activeAttempt: ActiveAttempt? = null
 
@@ -87,7 +84,6 @@ internal class WearRealtimeTalkClient(
   internal data class ActiveAttempt(
     val nodeId: String,
     val attemptId: String,
-    val generation: Long,
     val resources: ChannelResources,
   )
 
@@ -123,7 +119,6 @@ internal class WearRealtimeTalkClient(
           ActiveAttempt(
             nodeId = nodeId,
             attemptId = attemptId,
-            generation = attemptGeneration.incrementAndGet(),
             resources = checkNotNull(resources),
           )
         // A completed startup callback is not authority to capture after cancellation.
@@ -211,14 +206,13 @@ internal class WearRealtimeTalkClient(
             if (!isCurrent(attempt)) break
             when (frame.type) {
               WearRealtimeAudioFrameType.OUTPUT_PCM -> writeOutput(attempt, frame.payload)
-              WearRealtimeAudioFrameType.CLEAR_OUTPUT -> clearOutput(attempt, resumeCapture = true)
+              WearRealtimeAudioFrameType.CLEAR_OUTPUT -> clearOutput(attempt)
               WearRealtimeAudioFrameType.INPUT_PCM -> error("Phone sent an invalid Watch audio frame")
             }
           }
           handleChannelFailure(attempt)
-        } catch (err: CancellationException) {
-          throw err
-        } catch (_: Throwable) {
+        } catch (err: Throwable) {
+          if (err is CancellationException) throw err
           handleChannelFailure(attempt)
         }
       }
@@ -257,14 +251,8 @@ internal class WearRealtimeTalkClient(
       AudioRecord
         .Builder()
         .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-        .setAudioFormat(
-          AudioFormat
-            .Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ)
-            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-            .build(),
-        ).setBufferSizeInBytes(maxOf(minimumBuffer * 2, frameBytes * 4))
+        .setAudioFormat(audioFormat(AudioFormat.CHANNEL_IN_MONO))
+        .setBufferSizeInBytes(maxOf(minimumBuffer * 2, frameBytes * 4))
         .build()
     audioRecord = recorder
     check(recorder.state == AudioRecord.STATE_INITIALIZED)
@@ -290,11 +278,17 @@ internal class WearRealtimeTalkClient(
               yield()
               continue
             }
-            sendInputFrame(attempt, buffer.copyOf(evenBytes))
+            val payload = buffer.copyOf(evenBytes)
+            channelLock.withLock {
+              if (isCurrent(attempt)) {
+                withContext(Dispatchers.IO) {
+                  WearRealtimeAudioFraming.write(attempt.resources.output, WearRealtimeAudioFrameType.INPUT_PCM, payload)
+                }
+              }
+            }
           }
-        } catch (err: CancellationException) {
-          throw err
-        } catch (_: Throwable) {
+        } catch (err: Throwable) {
+          if (err is CancellationException) throw err
           handleChannelFailure(attempt)
         } finally {
           synchronized(audioLock) {
@@ -307,18 +301,6 @@ internal class WearRealtimeTalkClient(
           }
         }
       }
-  }
-
-  private suspend fun sendInputFrame(
-    attempt: ActiveAttempt,
-    payload: ByteArray,
-  ) {
-    channelLock.withLock {
-      if (!isCurrent(attempt)) return
-      withContext(Dispatchers.IO) {
-        WearRealtimeAudioFraming.write(attempt.resources.output, WearRealtimeAudioFrameType.INPUT_PCM, payload)
-      }
-    }
   }
 
   private fun writeOutput(
@@ -392,18 +374,20 @@ internal class WearRealtimeTalkClient(
     return AudioTrack
       .Builder()
       .setAudioAttributes(wearSpeechAudioAttributes)
-      .setAudioFormat(
-        AudioFormat
-          .Builder()
-          .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-          .setSampleRate(WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ)
-          .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-          .build(),
-      ).setTransferMode(AudioTrack.MODE_STREAM)
+      .setAudioFormat(audioFormat(AudioFormat.CHANNEL_OUT_MONO))
+      .setTransferMode(AudioTrack.MODE_STREAM)
       .setBufferSizeInBytes(maxOf(minimumBuffer * 2, frameBytes * 4))
       .build()
       .also { check(it.state == AudioTrack.STATE_INITIALIZED) }
   }
+
+  private fun audioFormat(channelMask: Int): AudioFormat =
+    AudioFormat
+      .Builder()
+      .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+      .setSampleRate(WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ)
+      .setChannelMask(channelMask)
+      .build()
 
   private fun schedulePlaybackIdle(attempt: ActiveAttempt) {
     playbackIdleJob?.cancel()
@@ -430,25 +414,19 @@ internal class WearRealtimeTalkClient(
             playbackEndsAtMillis == scheduledPlaybackEndMillis &&
             SystemClock.elapsedRealtime() >= scheduledPlaybackEndMillis
           ) {
-            clearOutputLocked(attempt, resumeCapture = true)
+            clearOutputLocked(attempt)
           }
         }
       }
   }
 
-  private fun clearOutput(
-    attempt: ActiveAttempt,
-    resumeCapture: Boolean,
-  ) {
+  private fun clearOutput(attempt: ActiveAttempt) {
     synchronized(audioLock) {
-      if (isCurrent(attempt)) clearOutputLocked(attempt, resumeCapture)
+      if (isCurrent(attempt)) clearOutputLocked(attempt)
     }
   }
 
-  private fun clearOutputLocked(
-    attempt: ActiveAttempt?,
-    resumeCapture: Boolean,
-  ) {
+  private fun clearOutputLocked(attempt: ActiveAttempt?) {
     playbackIdleJob?.cancel()
     playbackIdleJob = null
     playbackEndsAtMillis = 0L
@@ -467,7 +445,7 @@ internal class WearRealtimeTalkClient(
     runCatching { track?.release() }
     _isPlaying.value = false
     audioFocus.abandon()
-    if (resumeCapture && attempt != null && isCurrent(attempt)) {
+    if (attempt != null && isCurrent(attempt)) {
       runCatching { startCaptureLocked(attempt) }
         .onFailure { handleChannelFailure(attempt) }
     }
@@ -502,13 +480,13 @@ internal class WearRealtimeTalkClient(
   ): Boolean =
     synchronized(audioLock) {
       val current = activeAttempt ?: return false
-      if (expected != null && current.generation != expected.generation) return false
+      if (expected != null && current !== expected) return false
       activeAttempt = null
       if (failed) _channelFailed.value = true
       readJob?.cancel()
       readJob = null
       pauseCaptureLocked()
-      clearOutputLocked(attempt = null, resumeCapture = false)
+      clearOutputLocked(attempt = null)
       // Keep teardown serialized: a concurrent shutdown must not return and
       // cancel scope while another closeLocal still owns open streams.
       closeChannel(current.resources)
@@ -525,7 +503,7 @@ internal class WearRealtimeTalkClient(
     runCatching { channelClient.close(resources.channel) }
   }
 
-  private fun isCurrent(attempt: ActiveAttempt): Boolean = activeAttempt?.generation == attempt.generation
+  private fun isCurrent(attempt: ActiveAttempt): Boolean = activeAttempt === attempt
 
   private companion object {
     const val CHANNEL_OPEN_ATTEMPTS = 2
@@ -564,15 +542,13 @@ internal class Pcm16MouthLevelAccumulator(
   fun append(pcm: ByteArray): List<Float> {
     require(pcm.size % PCM_BYTES_PER_SAMPLE == 0)
     return buildList {
-      var byteIndex = 0
-      while (byteIndex < pcm.size) {
+      for (byteIndex in pcm.indices step PCM_BYTES_PER_SAMPLE) {
         val low = pcm[byteIndex].toInt() and 0xff
         val high = pcm[byteIndex + 1].toInt()
         val sample = ((high shl 8) or low).toShort().toInt()
         val normalized = sample / 32_768.0
         squareSum += normalized * normalized
         sampleCount += 1
-        byteIndex += PCM_BYTES_PER_SAMPLE
         if (sampleCount == samplesPerFrame) add(finishFrame())
       }
     }
@@ -585,12 +561,7 @@ internal class Pcm16MouthLevelAccumulator(
     sampleCount = 0
   }
 
-  fun pendingFrameDurationMillis(): Long =
-    if (sampleCount == 0) {
-      0L
-    } else {
-      ceil(sampleCount * 1_000.0 / sampleRateHz).toLong()
-    }
+  fun pendingFrameDurationMillis(): Long = ceil(sampleCount * 1_000.0 / sampleRateHz).toLong()
 
   private fun finishFrame(): Float {
     val rms = sqrt(squareSum / sampleCount)

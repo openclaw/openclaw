@@ -23,31 +23,21 @@ type TelegramGatewayClient = {
 
 const TELEGRAM_QA_DEFAULT_READY_TIMEOUT_MS = 45_000;
 
-export function buildTelegramQaConfig(
-  baseCfg: OpenClawConfig,
-  params: {
-    apiRoot?: string;
-    directMessageOnly?: boolean;
-    enableDirectMessages?: boolean;
-    additionalTesterUserIds?: string[];
-    forumGroupId?: string;
-    groupId: string;
-    sutAccountId: string;
-    sutToken: string;
-    testerUserId: string;
-  },
-): OpenClawConfig {
+export function buildTelegramQaConfig(params: {
+  apiRoot?: string;
+  additionalTesterUserIds?: string[];
+  forumGroupId?: string;
+  groupId: string;
+  sutAccountId: string;
+  sutToken: string;
+  testerUserId: string;
+}): OpenClawConfig {
   const testerUserIds = [params.testerUserId, ...(params.additionalTesterUserIds ?? [])];
   return {
-    ...baseCfg,
     agents: {
-      ...baseCfg.agents,
       defaults: {
-        ...baseCfg.agents?.defaults,
         models: {
-          ...baseCfg.agents?.defaults?.models,
           "openai/gpt-5.6-luna": {
-            ...baseCfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"],
             agentRuntime: { id: "openclaw" },
           },
         },
@@ -55,22 +45,17 @@ export function buildTelegramQaConfig(
       },
     },
     plugins: {
-      ...baseCfg.plugins,
-      allow: uniqueStrings([...(baseCfg.plugins?.allow ?? []), "telegram"]),
+      allow: ["telegram"],
       entries: {
-        ...baseCfg.plugins?.entries,
         telegram: { enabled: true },
       },
     },
     messages: {
-      ...baseCfg.messages,
       groupChat: {
-        ...baseCfg.messages?.groupChat,
         visibleReplies: "automatic",
       },
     },
     channels: {
-      ...baseCfg.channels,
       telegram: {
         enabled: true,
         defaultAccount: params.sutAccountId,
@@ -79,9 +64,8 @@ export function buildTelegramQaConfig(
             enabled: true,
             botToken: params.sutToken,
             ...(params.apiRoot ? { apiRoot: params.apiRoot } : {}),
-            ...(params.directMessageOnly || params.enableDirectMessages
-              ? { dmPolicy: "allowlist", allowFrom: testerUserIds }
-              : { dmPolicy: "disabled" }),
+            dmPolicy: "allowlist",
+            allowFrom: testerUserIds,
             groups: Object.fromEntries(
               uniqueStrings([
                 params.groupId,
@@ -138,7 +122,7 @@ export async function waitForTelegramChannelRunning(
   const details = lastStatus
     ? `; last status: ${JSON.stringify(lastStatus)}`
     : lastProbeError
-      ? `; last probe error: ${lastProbeError}`
+      ? `; last check error: ${lastProbeError}`
       : "";
   throw new Error(`telegram account "${accountId}" did not become ready${details}`);
 }

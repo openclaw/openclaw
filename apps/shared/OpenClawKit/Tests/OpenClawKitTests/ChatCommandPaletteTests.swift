@@ -11,7 +11,7 @@ struct ChatCommandPaletteTests {
     ]
 
     private func entry(_ key: String, title: String, updatedAt: Double = 1) -> OpenClawChatSessionEntry {
-        var row = OpenClawChatSessionEntry.placeholder(key: key)
+        var row = OpenClawChatSessionEntry(key: key)
         row.label = title
         row.updatedAt = updatedAt
         return row

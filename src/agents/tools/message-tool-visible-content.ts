@@ -169,17 +169,14 @@ function sanitizePresentationTextFields(
           return sanitizedButton;
         });
       }
-      if (Array.isArray(sanitizedBlock.options)) {
-        sanitizedBlock.options = sanitizeRecordArray(sanitizedBlock.options, "label");
-      }
-      if (Array.isArray(sanitizedBlock.categories)) {
-        sanitizedBlock.categories = sanitizeStrings(sanitizedBlock.categories);
-      }
-      if (Array.isArray(sanitizedBlock.segments)) {
-        sanitizedBlock.segments = sanitizeRecordArray(sanitizedBlock.segments, "label");
-      }
-      if (Array.isArray(sanitizedBlock.series)) {
-        sanitizedBlock.series = sanitizeRecordArray(sanitizedBlock.series, "name");
+      for (const field of ["options", "categories", "segments", "series"]) {
+        const entries = sanitizedBlock[field];
+        if (Array.isArray(entries)) {
+          sanitizedBlock[field] =
+            field === "categories"
+              ? sanitizeStrings(entries)
+              : sanitizeRecordArray(entries, field === "series" ? "name" : "label");
+        }
       }
       return sanitizedBlock;
     });
@@ -187,8 +184,8 @@ function sanitizePresentationTextFields(
   return presentation;
 }
 
-function readFirstStringParam(params: Record<string, unknown>, keys: readonly string[]): string {
-  for (const key of keys) {
+function readAttachmentMediaParam(params: Record<string, unknown>): string {
+  for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"]) {
     const value = readToolStringParam(params, key);
     if (value) {
       return value;
@@ -226,9 +223,7 @@ export function hasSanitizedSendPayloadContent(params: Record<string, unknown>):
   const attachmentMedia = readStructuredAttachmentMediaParam(params.attachments);
   const hasPayload = hasReplyPayloadContent({
     text,
-    mediaUrl:
-      readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]) ||
-      attachmentMedia,
+    mediaUrl: readAttachmentMediaParam(params) || attachmentMedia,
     mediaUrls,
     presentation: params.presentation,
     interactive: params.interactive,

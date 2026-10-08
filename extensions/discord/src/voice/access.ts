@@ -4,6 +4,7 @@ import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runti
 import type { Guild } from "../internal/discord.js";
 import {
   allowListMatches,
+  hasConfiguredDiscordChannels,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   resolveDiscordChannelConfigWithFallback,
@@ -20,7 +21,6 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
   discordConfig: DiscordAccountConfig;
   accountId?: string;
   groupPolicy?: "open" | "disabled" | "allowlist";
-  useAccessGroups?: boolean;
   guild?: Guild<true> | Guild | null;
   guildName?: string;
   guildId: string;
@@ -86,17 +86,10 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
     return { ok: false, message: "This channel is disabled." };
   }
 
-  const channelAllowlistConfigured =
-    Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
-  if (!params.channelId && groupPolicy === "allowlist" && channelAllowlistConfigured) {
-    return {
-      ok: false,
-      message: `${params.channelLabel ?? "This channel"} is not allowlisted for voice commands.`,
-    };
-  }
-
+  const channelAllowlistConfigured = hasConfiguredDiscordChannels(guildInfo?.channels);
   const channelAllowed = channelConfig ? channelConfig.allowed : !channelAllowlistConfigured;
   if (
+    (!params.channelId && groupPolicy === "allowlist" && channelAllowlistConfigured) ||
     !isDiscordGroupAllowedByPolicy({
       groupPolicy,
       guildAllowlisted: Boolean(guildInfo),
@@ -127,20 +120,12 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
     ? allowListMatches(admissionAllowList, params.sender, { allowNameMatching: false })
     : false;
 
-  const useAccessGroups = params.useAccessGroups ?? true;
-  const authorizers = useAccessGroups
-    ? [
-        {
-          configured: admissionAllowList != null,
-          allowed: admissionAllowed,
-        },
-        { configured: hasAccessRestrictions, allowed: memberAllowed },
-      ]
-    : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];
-
   const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups,
-    authorizers,
+    useAccessGroups: true,
+    authorizers: [
+      { configured: admissionAllowList != null, allowed: admissionAllowed },
+      { configured: hasAccessRestrictions, allowed: memberAllowed },
+    ],
     modeWhenAccessGroupsOff: "configured",
   });
   return commandAuthorized

@@ -1,11 +1,9 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
-import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "../shared/legacy-tool-name-migration.js";
-import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 
 type CronLegacyIssueCounts = Partial<Record<string, number>>;
 
@@ -72,7 +70,7 @@ export function formatScheduledToolPolicyAdvisory(params: {
   }
   lines.push(
     "- These jobs continue through restrictive sender-policy resolution; doctor will not infer authority from delivery or current configuration.",
-    "- Reauthorize with an exact explicit cap: `openclaw cron edit <id> --tools <tool,...>`.",
+    "- Recreate the job from a fresh authenticated creator turn, or reauthorize its complete tool cap from a trusted operator shell: `openclaw automations edit <id> --tools <tool,...>`.",
   );
   return lines.join("\n");
 }
@@ -89,19 +87,6 @@ export function formatLegacyGatewayExecAdvisory(names: string[]): string | null 
   ].join("\n");
 }
 
-/** Advisory for legacy default caps that were captured before configured MCP was final. */
-export function formatIncompleteInheritedAuthorityAdvisory(names: string[]): string | null {
-  if (names.length === 0) {
-    return null;
-  }
-  return [
-    `${pluralize(names.length, "automation")} ${names.length === 1 ? "has" : "have"} an inherited default tool cap captured before final configured-MCP provenance was recorded${formatJobNameList(names)}.`,
-    "- The stored finite cap remains unchanged; doctor will not silently widen or rewrite it.",
-    "- If the job uses Codex configured MCP, reauthorize in place with an exact explicit list: `openclaw automations edit <id> --tools <tool,...>`.",
-  ].join("\n");
-}
-
-/** Convert legacy cron issue counts into doctor preview lines. */
 export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
   const descriptions: Record<string, string> = {
     jobId: "still uses legacy `jobId`",
@@ -137,41 +122,6 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
   return lines;
 }
 
-function cronJobMigrationKey(job: Record<string, unknown>): string | undefined {
-  return (
-    normalizeOptionalStringifiedId(job.id) ??
-    normalizeOptionalStringifiedId(job.jobId) ??
-    resolveLegacyCronMigrationId(job)
-  );
-}
-
-/** Merge legacy JSON jobs into current jobs without duplicating matching ids/jobIds. */
-export function mergeLegacyCronJobs(params: {
-  currentJobs: Array<Record<string, unknown>>;
-  legacyJobs: Array<Record<string, unknown>>;
-}): { jobs: Array<Record<string, unknown>>; importedCount: number } {
-  const merged = [...params.currentJobs];
-  const currentKeys = new Set(
-    params.currentJobs.map((job) => cronJobMigrationKey(job)).filter((key) => key !== undefined),
-  );
-  let importedCount = 0;
-
-  for (const legacyJob of params.legacyJobs) {
-    const key = cronJobMigrationKey(legacyJob);
-    if (key && currentKeys.has(key)) {
-      continue;
-    }
-    if (key) {
-      currentKeys.add(key);
-    }
-    merged.push(legacyJob);
-    importedCount += 1;
-  }
-
-  return { jobs: merged, importedCount };
-}
-
-/** Attach runtime SQLite state columns back onto a config-defined cron job row. */
 export function mergeRuntimeEntryIntoConfigJob(params: {
   job: Record<string, unknown>;
   runtimeEntry?: { updatedAtMs?: number; state?: Record<string, unknown> };

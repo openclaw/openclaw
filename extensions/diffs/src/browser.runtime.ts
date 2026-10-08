@@ -15,21 +15,12 @@ import {
   getServedViewerAsset,
 } from "./viewer-assets.js";
 
-const DEFAULT_BROWSER_IDLE_MS = 30_000;
+const BROWSER_IDLE_MS = 30_000;
 const SHARED_BROWSER_KEY = "__default__";
 const IMAGE_SIZE_LIMIT_ERROR = "Diff frame did not render within image size limits.";
 const PDF_REFERENCE_PAGE_HEIGHT_PX = 1_056;
 const MAX_PDF_PAGES = 50;
 const LOCAL_VIEWER_BASE_HREF = "http://127.0.0.1/plugins/diffs/view/local/local";
-
-export type DiffScreenshotter = {
-  screenshotHtml(params: {
-    html: string;
-    outputPath: string;
-    theme: DiffTheme;
-    image: DiffRenderOptions["image"];
-  }): Promise<string>;
-};
 
 type BrowserInstance = Awaited<ReturnType<typeof chromium.launch>>;
 
@@ -54,13 +45,11 @@ type ExecutablePathCache = {
 let sharedBrowserState: SharedBrowserState | null = null;
 let executablePathCache: ExecutablePathCache | null = null;
 
-export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
+export class PlaywrightDiffScreenshotter {
   private readonly config: OpenClawConfig;
-  private readonly browserIdleMs: number;
 
-  constructor(params: { config: OpenClawConfig; browserIdleMs?: number }) {
+  constructor(params: { config: OpenClawConfig }) {
     this.config = params.config;
-    this.browserIdleMs = params.browserIdleMs ?? DEFAULT_BROWSER_IDLE_MS;
   }
 
   async screenshotHtml(params: {
@@ -71,10 +60,7 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
   }): Promise<string> {
     let lease: BrowserLease;
     try {
-      lease = await acquireSharedBrowser({
-        config: this.config,
-        idleMs: this.browserIdleMs,
-      });
+      lease = await acquireSharedBrowser(this.config);
     } catch (error) {
       throw buildBrowserUnavailableError(error);
     }
@@ -102,14 +88,8 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
             await route.continue();
             return;
           }
-          let parsed: URL;
-          try {
-            parsed = new URL(requestUrl);
-          } catch {
-            await route.abort();
-            return;
-          }
-          if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
+          const parsed = URL.parse(requestUrl);
+          if (!parsed || parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
             await route.abort();
             return;
           }
@@ -147,6 +127,7 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
               );
             });
           },
+          undefined,
           {
             timeout: 10_000,
           },
@@ -381,11 +362,8 @@ async function resolveBrowserExecutablePathUncached(
   return undefined;
 }
 
-async function acquireSharedBrowser(params: {
-  config: OpenClawConfig;
-  idleMs: number;
-}): Promise<BrowserLease> {
-  const executablePath = await resolveBrowserExecutablePath(params.config);
+async function acquireSharedBrowser(config: OpenClawConfig): Promise<BrowserLease> {
+  const executablePath = await resolveBrowserExecutablePath(config);
   const desiredKey = executablePath || SHARED_BROWSER_KEY;
   if (sharedBrowserState && sharedBrowserState.key !== desiredKey) {
     await closeSharedBrowser();
@@ -440,19 +418,19 @@ async function acquireSharedBrowser(params: {
       released = true;
       state.users = Math.max(0, state.users - 1);
       if (state.users === 0) {
-        scheduleIdleBrowserClose(state, params.idleMs);
+        scheduleIdleBrowserClose(state);
       }
     },
   };
 }
 
-function scheduleIdleBrowserClose(state: SharedBrowserState, idleMs: number): void {
+function scheduleIdleBrowserClose(state: SharedBrowserState): void {
   clearIdleTimer(state);
   state.idleTimer = setTimeout(() => {
     if (sharedBrowserState === state && state.users === 0) {
       void closeSharedBrowser();
     }
-  }, idleMs);
+  }, BROWSER_IDLE_MS);
   state.idleTimer.unref();
 }
 

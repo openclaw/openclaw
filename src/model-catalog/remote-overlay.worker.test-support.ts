@@ -1,13 +1,13 @@
 import { parentPort } from "node:worker_threads";
 import {
-  getRemoteModelCatalogPricing,
+  getActiveRemoteModelCatalog,
   getRemoteModelCatalogProviderOverlay,
 } from "./remote-overlay.js";
 
 parentPort!.postMessage(
   {
     overlay: getRemoteModelCatalogProviderOverlay({}, "anthropic"),
-    pricing: getRemoteModelCatalogPricing({}),
+    pricing: getActiveRemoteModelCatalog({})?.pricing,
   },
   [],
 );

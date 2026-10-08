@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {

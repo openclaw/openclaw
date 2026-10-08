@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timing.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
 import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
@@ -24,6 +25,13 @@ export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParamsV2,
   options: CodexRunAttemptOptions,
 ): Promise<EmbeddedRunAttemptResult> {
+  if (
+    params.requireWorkspaceOnly === true &&
+    (params.disableTools === true ||
+      typeof params.hostCapabilities?.createToolSurfaceAsync !== "function")
+  ) {
+    throw new Error("Codex required-root execution requires an enabled host-mediated tool surface");
+  }
   const preparation = createCodexAttemptPreparationTiming(params);
   const connection = await preparation.measure("connection", () =>
     prepareCodexAttemptConnection({ params, options }),
@@ -115,6 +123,9 @@ export async function runCodexAppServerAttempt(
               await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
             }
           } catch (error) {
+            // Rejected cleanup admission must not hide the model permission loss
+            // behind a secondary subscription-release error.
+            connection.assertModelExecutionCurrent();
             if (!finalizedResult || !turnRuntime.state.pluginRuntimeRefreshStop) {
               throw error;
             }
@@ -155,6 +166,8 @@ export async function runCodexAppServerAttempt(
         connection.runAbortController.signal.aborted ? "cancel" : "error",
       );
     }
+  } catch (error) {
+    throw codexPrewriteRejectionCause(error);
   } finally {
     // Preparation can fail before the active turn installs its terminal freeze.
     connection.cancellation.dispose();

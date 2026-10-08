@@ -1,3 +1,4 @@
+import { sleepWithAbort } from "@openclaw/retry";
 import type {
   SessionPlacement,
   SessionsDispatchResult,
@@ -203,9 +204,7 @@ async function resolveActivePlacement(
             : placementError,
         };
       }
-      await new Promise<void>((resolve) => {
-        globalThis.setTimeout(resolve, DISPATCH_RECONCILE_INTERVAL_MS);
-      });
+      await sleepWithAbort(DISPATCH_RECONCILE_INTERVAL_MS);
       continue;
     }
     lookupFailures = 0;
@@ -245,9 +244,7 @@ async function resolveActivePlacement(
         return { status: "rejected", placement };
       }
     }
-    await new Promise<void>((resolve) => {
-      globalThis.setTimeout(resolve, DISPATCH_RECONCILE_INTERVAL_MS);
-    });
+    await sleepWithAbort(DISPATCH_RECONCILE_INTERVAL_MS);
   }
   if (!isCurrent()) {
     return cancelSessionPlacement(client, params, params.cleanupOnCancellation);

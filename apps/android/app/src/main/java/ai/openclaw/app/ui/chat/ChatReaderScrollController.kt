@@ -409,15 +409,7 @@ internal fun ChatReaderState.onTimelineChanged(
     // A live turn follows the bottom so the reply streams into view (parity with the
     // iOS reader, #108692/#108693). Re-pinning the prompt here would hide the reply
     // below the fold behind a jump pill.
-    return ChatReaderTransition(
-      state =
-        updated.copy(
-          followTarget = ChatScrollFollowTarget.LatestContent,
-          hasNewerContent = false,
-        ),
-      scrollIndex = timeline.latestContentIndex ?: timeline.readAnchorIndex,
-      animated = true,
-    )
+    return updated.jumpToLatest(timeline)
   }
 
   val target = followTarget

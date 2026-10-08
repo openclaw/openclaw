@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { resolveProjectedSessionContextTokens } from "../../../config/sessions/context-token-provenance.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
@@ -72,6 +73,7 @@ async function prepareAttempt(input: {
   admittedRunContext?: ReturnType<typeof createTestAdmittedRunContext>;
   currentAttemptCompletedAssistant?: AssistantMessage;
   sourceReplyDeliveryMode?: "message_tool_only";
+  heartbeat?: { continuesConversation: boolean };
   terminalState: EmbeddedRunTerminalState;
 }) {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
@@ -82,7 +84,8 @@ async function prepareAttempt(input: {
       runId: "run-focused",
       workspaceDir: "/tmp/openclaw-test",
       prompt: "hi",
-      trigger: "user",
+      trigger: input.heartbeat ? "heartbeat" : "user",
+      ...(input.heartbeat?.continuesConversation ? { continuesConversation: true } : {}),
       timeoutMs: 60_000,
       ...(input.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: input.sourceReplyDeliveryMode }
@@ -599,6 +602,40 @@ describe("prepareEmbeddedRunTerminal", () => {
       expect.objectContaining({ runAborted: true, runStopReason: "restart" }),
     );
   });
+
+  it.each([
+    { continuesConversation: false, warns: true },
+    { continuesConversation: true, warns: false },
+  ])(
+    "keeps a failed command's NO_REPLY silent only when the heartbeat continues a conversation ($continuesConversation)",
+    async ({ continuesConversation, warns }) => {
+      const actual = await vi.importActual<{
+        buildEmbeddedRunPayloads: typeof buildEmbeddedRunPayloads;
+      }>("./payloads.js");
+      payloadMocks.buildEmbeddedRunPayloads.mockImplementation(actual.buildEmbeddedRunPayloads);
+      const silent: AssistantMessage = {
+        ...assistantMessage("stop"),
+        content: [{ type: "text", text: "NO_REPLY" }],
+      };
+      const prepared = await prepareAttempt({
+        attempt: attemptResult({
+          assistantTexts: ["NO_REPLY"],
+          messagesSnapshot: [silent],
+          lastAssistant: silent,
+          currentAttemptAssistant: silent,
+          currentAttemptCompletedAssistant: silent,
+          lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+        }),
+        heartbeat: { continuesConversation },
+        terminalState: {
+          outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+          signalOwnedInterruption: false,
+        },
+      });
+
+      expect(prepared.payloads.some((payload) => payload.isError === true)).toBe(warns);
+    },
+  );
 });
 
 describe("prepareEmbeddedRunTerminal run stats", () => {
@@ -610,6 +647,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     bridgeCalls?: { search: number; describe: number; call: number };
     config?: unknown;
     assistantProvider?: string;
+    assistantModel?: string;
     provider?: string;
     model?: string;
     outerContextTokenMeta?: OuterContextTokenMeta;
@@ -625,7 +663,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     const assistant = {
       ...assistantMessage("stop"),
       provider: statsInput.assistantProvider ?? provider,
-      model,
+      model: statsInput.assistantModel ?? model,
       ...(statsInput.responseModel ? { responseModel: statsInput.responseModel } : {}),
     };
     const usageAccumulator = createUsageAccumulator();
@@ -728,6 +766,30 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       contextTokensSource: "resolved-v1",
     });
   });
+
+  it.each([
+    { name: "provider", assistantProvider: "other-provider", assistantModel: undefined },
+    { name: "model", assistantProvider: undefined, assistantModel: "other-model" },
+  ])(
+    "does not let a reported $name inherit the prepared model's trusted window",
+    async (identity) => {
+      const { agentMeta } = await prepareStats({
+        ...identity,
+        attempt: { agentHarnessId: "openclaw" },
+        outerContextTokenMeta: { contextTokens: 1_000_000, contextTokensSource: "resolved-v1" },
+      });
+      expect(agentMeta.contextTokensSource).toBe("resolved");
+      expect(
+        resolveProjectedSessionContextTokens({
+          entry: { ...agentMeta, modelProvider: agentMeta.provider },
+          provider: agentMeta.provider,
+          model: agentMeta.model,
+          agentHarnessId: agentMeta.agentHarnessId,
+          resolvedContextTokens: undefined,
+        }),
+      ).toBeUndefined();
+    },
+  );
 
   it("reports the terminal physical attempt's redacted credential source", async () => {
     const prepared = await prepareStats({

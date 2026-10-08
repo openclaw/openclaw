@@ -189,11 +189,7 @@ final class WatchDirectNode {
         if enabled {
             self.connect()
         } else {
-            self.disconnectActiveSession()
-            self.connectionGeneration &+= 1
-            self.connectTask?.cancel()
-            self.connectTask = nil
-            self.isConnected = false
+            self.stopConnection()
             self.statusText = self.isConfigured
                 ? String(localized: "Direct connection is off")
                 : String(localized: "Use iPhone Settings to enable direct connection.")
@@ -202,9 +198,7 @@ final class WatchDirectNode {
 
     func connect() {
         guard self.isForeground, self.isEnabled, let configuration else { return }
-        self.disconnectActiveSession()
-        self.connectTask?.cancel()
-        self.connectionGeneration &+= 1
+        self.stopConnection()
         let generation = self.connectionGeneration
         self.connectTask = Task { [weak self] in
             await self?.run(configuration, generation: generation)
@@ -218,21 +212,14 @@ final class WatchDirectNode {
 
     func disconnectForBackground() {
         self.isForeground = false
-        self.disconnectActiveSession()
-        self.connectionGeneration &+= 1
-        self.connectTask?.cancel()
-        self.connectTask = nil
-        self.isConnected = false
+        self.stopConnection()
         if self.isEnabled, self.isConfigured {
             self.statusText = String(localized: "Reconnects when OpenClaw is active")
         }
     }
 
     func forget() {
-        self.disconnectActiveSession()
-        self.connectionGeneration &+= 1
-        self.connectTask?.cancel()
-        self.connectTask = nil
+        self.stopConnection()
         if let configuration {
             if let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: .primary) {
                 self.clearCredentials(deviceId: identity.deviceId, gatewayID: configuration.gatewayID)
@@ -243,7 +230,6 @@ final class WatchDirectNode {
             account: Self.keychainAccount)
         configuration = nil
         self.endpointText = nil
-        self.isConnected = false
         self.setEnabled(false)
     }
 
@@ -303,9 +289,6 @@ final class WatchDirectNode {
             role: "node",
             gatewayID: configuration.gatewayID,
             profile: .primary)?.token
-        guard storedToken != nil || link.bootstrapToken != nil else {
-            throw HTTPError(status: 401, detail: String(localized: "No watch device credential"))
-        }
         let response: WatchNodeConnectResponse
         let usedBootstrap: Bool
         if let bootstrapToken = link.bootstrapToken {
@@ -393,12 +376,7 @@ final class WatchDirectNode {
             let poll = try JSONDecoder().decode(PollResponse.self, from: pollData)
             guard let event = poll.event else { continue }
             guard event.event == "node.invoke.request", let invoke = event.payload else { continue }
-            let invokeRequest = BridgeInvokeRequest(
-                id: invoke.id,
-                command: invoke.command,
-                paramsJSON: invoke.paramsJSON,
-                nodeId: invoke.nodeId)
-            let result = await handleInvoke(invokeRequest)
+            let result = await handleInvoke(invoke)
             try requireCurrentConnection(generation, configuration: configuration)
             _ = try await self.request(
                 baseURL: baseURL,
@@ -570,7 +548,7 @@ final class WatchDirectNode {
         self.endpointText = sanitized.endpointText
     }
 
-    private func handleInvoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+    private func handleInvoke(_ request: InvokeRequest) async -> BridgeInvokeResponse {
         do {
             switch request.command {
             case OpenClawDeviceCommand.info.rawValue:
@@ -593,7 +571,7 @@ final class WatchDirectNode {
         }
     }
 
-    private func handleNotification(_ request: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+    private func handleNotification(_ request: InvokeRequest) async throws -> BridgeInvokeResponse {
         let params = try JSONDecoder().decode(
             OpenClawSystemNotifyParams.self, from: Data((request.paramsJSON ?? "{}").utf8))
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -717,10 +695,9 @@ final class WatchDirectNode {
     private static func loadConfiguration() -> WatchGatewayConfiguration? {
         guard let raw = GenericPasswordKeychainStore.loadString(
             service: keychainService,
-            account: keychainAccount),
-            let data = raw.data(using: .utf8)
+            account: keychainAccount)
         else { return nil }
-        return try? JSONDecoder().decode(WatchGatewayConfiguration.self, from: data)
+        return try? JSONDecoder().decode(WatchGatewayConfiguration.self, from: Data(raw.utf8))
     }
 
     private static func saveConfiguration(_ configuration: WatchGatewayConfiguration) -> Bool {
@@ -767,6 +744,13 @@ final class WatchDirectNode {
         guard let session = activeSession else { return }
         self.activeSession = nil
         self.sendDisconnect(session)
+    }
+
+    private func stopConnection() {
+        self.disconnectActiveSession()
+        self.connectionGeneration &+= 1
+        self.connectTask?.cancel()
+        self.connectTask = nil
     }
 
     private func releaseActiveSession(_ session: ActiveSession) {
