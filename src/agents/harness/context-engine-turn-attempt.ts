@@ -100,13 +100,22 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
       }
     }
     const enqueueAdmission = (admission: TranscriptTurnBoundary["admission"]) => {
-      if (
-        admission.agentId !== target.agentId ||
-        admission.sessionId !== target.sessionId ||
-        admission.sessionKey !== target.sessionKey ||
-        admission.storePath !== databasePath
-      ) {
-        throw new Error("context-engine transcript target changed before provider dispatch");
+      const agentIdMatches = admission.agentId === target.agentId;
+      const sessionIdMatches = admission.sessionId === target.sessionId;
+      const sessionKeyMatches = admission.sessionKey === target.sessionKey;
+      const storePathMatches = admission.storePath === databasePath;
+      if (!agentIdMatches || !sessionIdMatches || !sessionKeyMatches || !storePathMatches) {
+        // The delayed callback can reject outside the preparation catch. Carry only
+        // comparison results to the dispatch owner, never transcript identifiers.
+        throw new Error(
+          "context-engine transcript target changed before provider dispatch " +
+            JSON.stringify({
+              agentIdMatches,
+              sessionIdMatches,
+              sessionKeyMatches,
+              storePathMatches,
+            }),
+        );
       }
       return store.enqueueIntent({
         ...owner,

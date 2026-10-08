@@ -1,0 +1,41 @@
+name: Admission lifecycle investigation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "26.10.0"
+          install-bun: "false"
+          cache-mode: off
+      - name: Before-change diagnostic evidence
+        shell: bash
+        run: |
+          owner=src/agents/harness/context-engine-turn-attempt.ts
+          cp "$owner" /tmp/admission-owner-after.ts
+          trap 'cp /tmp/admission-owner-after.ts "$owner"' EXIT
+          git fetch --no-tags --depth=1 origin d9813e3489766284c105907f30065a83ff798a11
+          git show d9813e3489766284c105907f30065a83ff798a11:"$owner" > "$owner"
+          set +e
+          pnpm test src/agents/harness/context-engine-turn-outbox.test.ts --maxWorkers=1 -t 'reports only equality booleans' > /tmp/admission-before.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/admission-before.log
+          test "$status" -ne 0
+          grep -Eq '4 failed' /tmp/admission-before.log
+          grep -F 'context-engine transcript target changed before provider dispatch' /tmp/admission-before.log
+      - name: Pinned identity and focused boundary tests
+        run: |
+          git rev-parse HEAD
+          /usr/bin/time -p pnpm test src/agents/harness/context-engine-turn-outbox.test.ts src/agents/embedded-agent-runner/run/attempt-prompt-submit.admission.test.ts --maxWorkers=1
+      - name: Workflow ownership contracts
+        run: pnpm test test/scripts/ci-workflow-guards.test.ts --maxWorkers=1 -t 'pins every external GitHub Action reference|keeps setup cache access explicit'
