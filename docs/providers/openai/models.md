@@ -39,6 +39,10 @@ Embedding, image, video, audio, realtime, speech, transcription, moderation, and
 legacy completions models stay hidden, as do models past their OpenAI shutdown
 date. Search models stay hidden because they run only on Chat Completions; live,
 cyber, experiment, and alpha IDs stay hidden because Responses rejects them.
+GPT-3.5, GPT-4 (including GPT-4o and GPT-4.1), o1, o3, and o4 models stay hidden
+because they fail on the default Codex runtime. To use one, add it under
+`models.providers.openai.models` and set
+`agents.defaults.models["openai/<model>"].agentRuntime.id` to `"openclaw"`.
 
 ## Daybreak Blue and Red
 

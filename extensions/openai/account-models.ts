@@ -14,6 +14,9 @@ export const OPENAI_UNKNOWN_MODEL_COST = {
 // codename ids return 404/500 for API keys that list them.
 const OPENAI_RESPONSES_UNSUPPORTED_MODEL_ID_PATTERN =
   /(?:^|-)(?:search|live|cyber|exp|alpha)(?:-|$)/;
+// Pre-GPT-5 families fail on the default Codex runtime (400 "Invalid value: 'custom'") and
+// many reject hosted web search; explicit config with the OpenClaw runtime still runs them.
+const OPENAI_PRE_GPT5_MODEL_ID_PATTERN = /^(?:ft:)?(?:gpt-3\.5|gpt-4|o[134])/;
 
 /**
  * Keeps catalog rows for listed ids and gives every other runnable listed chat id
@@ -27,6 +30,9 @@ export function projectOpenAIAccountModels(params: {
 }): ModelDefinitionConfig[] {
   const catalogIds = new Set(params.catalogModels.map((model) => model.id));
   return params.listedModels.flatMap((model): ModelDefinitionConfig[] => {
+    if (OPENAI_PRE_GPT5_MODEL_ID_PATTERN.test(model.id)) {
+      return [];
+    }
     if (catalogIds.has(model.id)) {
       return [model];
     }

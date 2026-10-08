@@ -52,16 +52,13 @@ describe("OpenAI API-key catalog", () => {
   });
 
   it("shows every listed chat model that runs on Responses with conservative metadata", async () => {
-    const admittedIds = [
+    const admittedIds = ["gpt-5.3-codex", "gpt-5.5-2026-04-23", "gpt-6.2"];
+    const unadmittedIds = [
+      // Pre-GPT-5 families fail on the default runtime.
       "gpt-4-0613",
       "gpt-4.1-mini",
-      "gpt-5.3-codex",
-      "gpt-5.5-2026-04-23",
-      "gpt-6.2",
       "o3",
       "ft:gpt-4.1-mini:acme::abc123",
-    ];
-    const unadmittedIds = [
       "gpt-5.3-codex-spark",
       "gpt-5.6-cyber",
       "gpt-7-alpha",
@@ -96,15 +93,11 @@ describe("OpenAI API-key catalog", () => {
     expect(provider.models.map((model) => model.id).toSorted()).toEqual(
       ["gpt-5.5", ...admittedIds].toSorted(),
     );
-    for (const [id, reasoning] of [
-      ["gpt-4.1-mini", false],
-      ["gpt-6.2", true],
-      ["o3", true],
-    ] as const) {
+    for (const id of ["gpt-5.3-codex", "gpt-6.2"]) {
       expect(provider.models.find((model) => model.id === id)).toEqual({
         id,
         name: id,
-        reasoning,
+        reasoning: true,
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
         input: ["text"],
