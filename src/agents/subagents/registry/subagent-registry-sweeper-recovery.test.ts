@@ -25,11 +25,13 @@ import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
-import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
-import { registerSubagentSweeperSessionReadTests } from "./subagent-registry-sweeper-session-read.test-support.js";
+import {
+  registerSubagentSweeperSessionReadTests,
+  registerSubagentSweepCompletionRecoveryTests,
+} from "./subagent-registry-sweeper-session-read.test-support.js";
 import {
   createArchivedSubagentSweeperRun as archivedRun,
   createSubagentSweeperChildLookup as childRuns,
@@ -39,10 +41,7 @@ import {
 import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
-import {
-  loadSubagentSessionEntry,
-  resolveSubagentRunOrphanReason,
-} from "./subagent-session-reconciliation.js";
+import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 const recoverRow = vi.hoisted(() => vi.fn());
 const getAgentRunContext = vi.hoisted(() => vi.fn<(_runId: string) => unknown>(() => undefined));
@@ -261,63 +260,8 @@ describe("subagent registry recovery scheduling", () => {
     ).toBe(true);
   });
 
-  it.each(["lifecycle", "runtime"] as const)(
-    "keeps completion retries with the sweep's original Gateway %s",
-    async (change) => {
-      await vi.mocked(resolveSubagentRunOrphanReason).withImplementation(
-        () => null,
-        async () => {
-          recoverRow.mockResolvedValue({ status: "ignored" });
-          const gateway = { current: createMockGatewayRecoveryRuntime() };
-          const h = createHarness(gateway);
-          const entered = createDeferred();
-          const release = createDeferred();
-          const attempt = vi.fn(async () => {
-            entered.resolve();
-            await release.promise;
-            throw new Error("completion rejected during Gateway retirement");
-          });
-          const scheduleSweep = vi.fn();
-          const resumeRun = vi.fn();
-          const completion = createSubagentRegistryCompletionRuntime({
-            runs: h.runs,
-            resumed: new Set(),
-            retryTimers: new Set(),
-            completeSubagentRun: attempt,
-            scheduleSweep,
-            resumeRun,
-            warn: vi.fn(),
-          });
-          h.completeSubagentRunWithRecovery.mockImplementation(
-            completion.completeSubagentRunWithRecovery,
-          );
-          const pending = h.sweeper.sweepOnce();
-          try {
-            await awaitGateBeforeSettlement(
-              entered.promise,
-              pending,
-              "Sweep skipped completion recovery",
-            );
-            if (change === "lifecycle") {
-              rotateAgentEventLifecycleGeneration();
-            } else {
-              gateway.current = createMockGatewayRecoveryRuntime();
-            }
-            release.resolve();
-            await pending;
-            expect(attempt).toHaveBeenCalledOnce();
-            expect(scheduleSweep).not.toHaveBeenCalled();
-            expect(resumeRun).not.toHaveBeenCalled();
-            expect(h.runs.get(h.entry.runId)).toBe(h.entry);
-            expect(h.entry.execution.endedAt).toBeUndefined();
-          } finally {
-            release.resolve();
-            await pending;
-            await h.sweeper.reset();
-          }
-        },
-      );
-    },
+  registerSubagentSweepCompletionRecoveryTests(() =>
+    recoverRow.mockResolvedValue({ status: "ignored" }),
   );
 
   it.each(["replacement", "publication", "lifecycle", "runtime"] as const)(

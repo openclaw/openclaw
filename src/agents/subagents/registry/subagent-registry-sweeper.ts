@@ -199,12 +199,7 @@ export function createSubagentRegistrySweeper(params: {
     sweepInProgress = true;
     try {
       const now = Date.now();
-      const {
-        assertCurrent: assertSweepCurrent,
-        assertRunCurrent: assertRunReadCurrent,
-        retiredRead,
-        completionCurrent,
-      } = createSubagentSweepReadScope(runs, params.getGatewayRecoveryRuntime);
+      const readScope = createSubagentSweepReadScope(runs, params.getGatewayRecoveryRuntime);
       recovery.prune();
       if (recoveryOnly) {
         const restoredRuns = [...runs];
@@ -264,18 +259,20 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         try {
-          assertRunReadCurrent(entry);
-          const identity = await freezeSessionIdentity(entry, () => assertRunReadCurrent(entry));
-          assertRunReadCurrent(entry);
+          readScope.assertRunCurrent(entry);
+          const identity = await freezeSessionIdentity(entry, () =>
+            readScope.assertRunCurrent(entry),
+          );
+          readScope.assertRunCurrent(entry);
           cleanupIdentities.set(getSubagentRunRuntimeKey(entry), identity);
         } catch (error) {
-          if (error !== retiredRead) {
+          if (error !== readScope.retiredRead) {
             throw error;
           }
         }
       }
       for (const [runId, snapshot] of runEntries) {
-        assertSweepCurrent();
+        readScope.assertCurrent();
         const selected = runs.get(runId);
         if (!selected || !isSameSubagentRunOwner(selected, snapshot)) {
           continue;
@@ -360,7 +357,7 @@ export function createSubagentRegistrySweeper(params: {
           const activeAgeMs = now - (entry.execution.startedAt ?? entry.createdAt);
           if (!notStale && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
             const assertActiveReadCurrent = () => {
-              assertRunReadCurrent(entry);
+              readScope.assertRunCurrent(entry);
               if (
                 typeof entry.execution.endedAt === "number" ||
                 entry.execution.status === "queued" ||
@@ -368,7 +365,7 @@ export function createSubagentRegistrySweeper(params: {
                 entry.killReconciliation ||
                 getAgentRunContext(runId)
               ) {
-                throw retiredRead;
+                throw readScope.retiredRead;
               }
             };
             let observation;
@@ -388,7 +385,7 @@ export function createSubagentRegistrySweeper(params: {
                     };
               assertActiveReadCurrent();
             } catch (error) {
-              if (error === retiredRead) {
+              if (error === readScope.retiredRead) {
                 continue;
               }
               throw error;
@@ -401,7 +398,7 @@ export function createSubagentRegistrySweeper(params: {
               {
                 runId,
                 expectedEntry: entry,
-                recoveryCurrent: completionCurrent,
+                recoveryCurrent: readScope.completionCurrent,
                 ...(completion ?? {
                   endedAt: now,
                   outcome: {

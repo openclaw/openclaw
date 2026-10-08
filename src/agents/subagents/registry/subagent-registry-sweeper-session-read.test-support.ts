@@ -11,10 +11,16 @@ import {
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import * as sessionEntryReads from "../../../config/sessions/session-entry-read-runtime.js";
+import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
+import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { createSubagentSweeperHarness as createHarness } from "./subagent-registry-sweeper.test-support.js";
-import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
+import {
+  loadSubagentSessionEntry,
+  resolveSubagentRunOrphanReason,
+} from "./subagent-session-reconciliation.js";
 
 export function registerSubagentSweeperSessionReadTests(ignoreRecovery: () => void) {
   it("classifies orphanhood and completion from the same worker snapshot during a session rewrite", async () => {
@@ -127,4 +133,65 @@ export function registerSubagentSweeperSessionReadTests(ignoreRecovery: () => vo
         });
       });
   });
+}
+
+export function registerSubagentSweepCompletionRecoveryTests(ignoreRecovery: () => void) {
+  it.each(["lifecycle", "runtime"] as const)(
+    "keeps completion retries with the sweep's original Gateway %s",
+    async (change) => {
+      await vi.mocked(resolveSubagentRunOrphanReason).withImplementation(
+        () => null,
+        async () => {
+          ignoreRecovery();
+          const gateway = { current: createMockGatewayRecoveryRuntime() };
+          const h = createHarness(gateway);
+          const entered = createDeferred();
+          const release = createDeferred();
+          const attempt = vi.fn(async () => {
+            entered.resolve();
+            await release.promise;
+            throw new Error("completion rejected during Gateway retirement");
+          });
+          const scheduleSweep = vi.fn();
+          const resumeRun = vi.fn();
+          const completion = createSubagentRegistryCompletionRuntime({
+            runs: h.runs,
+            resumed: new Set(),
+            retryTimers: new Set(),
+            completeSubagentRun: attempt,
+            scheduleSweep,
+            resumeRun,
+            warn: vi.fn(),
+          });
+          h.completeSubagentRunWithRecovery.mockImplementation(
+            completion.completeSubagentRunWithRecovery,
+          );
+          const pending = h.sweeper.sweepOnce();
+          try {
+            await awaitGateBeforeSettlement(
+              entered.promise,
+              pending,
+              "Sweep skipped completion recovery",
+            );
+            if (change === "lifecycle") {
+              rotateAgentEventLifecycleGeneration();
+            } else {
+              gateway.current = createMockGatewayRecoveryRuntime();
+            }
+            release.resolve();
+            await pending;
+            expect(attempt).toHaveBeenCalledOnce();
+            expect(scheduleSweep).not.toHaveBeenCalled();
+            expect(resumeRun).not.toHaveBeenCalled();
+            expect(h.runs.get(h.entry.runId)).toBe(h.entry);
+            expect(h.entry.execution.endedAt).toBeUndefined();
+          } finally {
+            release.resolve();
+            await pending;
+            await h.sweeper.reset();
+          }
+        },
+      );
+    },
+  );
 }
