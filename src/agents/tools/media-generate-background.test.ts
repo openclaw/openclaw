@@ -139,7 +139,8 @@ describe("media requester provenance", () => {
       await backgroundWork();
       expect(run).toHaveBeenCalledOnce();
       expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
-      const completion = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0][0];
+      const completion = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0]?.[0];
+      assert(completion);
       expect(
         resolveGeneratedMediaSessionDeliveryRoute({
           ...completion,
