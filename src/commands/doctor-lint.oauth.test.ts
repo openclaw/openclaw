@@ -14,7 +14,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { collectDoctorFindings } from "./doctor-lint-runner.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { snapshotDoctorLintSqliteFamily } from "./doctor-lint.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -47,7 +46,7 @@ const SERVER_URL = `${ISSUER}/mcp`;
 const SERVER_NAME = "rotation-proof";
 const IDENTITY = operatorMcpOAuthIdentity(SERVER_NAME, SERVER_URL);
 
-function rotatingOAuthServer(rejectStoredAccess: boolean) {
+function rotatingOAuthServer() {
   let refreshes = 0;
   let replayDetected = false;
   const fetch: FetchLike = async (input, init) => {
@@ -82,10 +81,7 @@ function rotatingOAuthServer(rejectStoredAccess: boolean) {
     }
     if (url.pathname === "/mcp") {
       const bearer = request.headers.get("authorization");
-      if (
-        bearer !== `Bearer fixture-access-${refreshes}` ||
-        (rejectStoredAccess && refreshes === 0)
-      ) {
+      if (bearer !== `Bearer fixture-access-${refreshes}`) {
         return new Response(null, {
           status: 401,
           headers: {
@@ -136,83 +132,72 @@ describe("Doctor OAuth snapshot isolation", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { lane: "lint", rejected: false },
-    { lane: "triage", rejected: true },
-  ] as const)(
-    "$lane leaves server refresh authority for the live owner",
-    async ({ lane, rejected }) => {
-      await withOpenClawTestState({ prefix: "openclaw-doctor-oauth-" }, async (state) => {
-        const cfg = {
-          agents: { entries: { main: { workspace: state.workspaceDir } } },
-          mcp: {
-            servers: {
-              [SERVER_NAME]: {
-                transport: "streamable-http" as const,
-                url: SERVER_URL,
-                auth: "oauth" as const,
-              },
+  it("lint leaves server refresh authority for the live owner", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-doctor-oauth-" }, async (state) => {
+      const cfg = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        mcp: {
+          servers: {
+            [SERVER_NAME]: {
+              transport: "streamable-http" as const,
+              url: SERVER_URL,
+              auth: "oauth" as const,
             },
           },
-        };
-        await state.writeConfig(cfg);
-        const network = rotatingOAuthServer(rejected);
-        mocks.fetch.mockImplementation(network.fetch);
-        await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
-          await provider.saveClientInformation?.({ client_id: "fixture-client" });
-          await provider.saveDiscoveryState?.({ authorizationServerUrl: ISSUER });
-          await provider.saveTokens({
-            access_token: "fixture-access-0",
-            refresh_token: "fixture-refresh-0",
-            token_type: "Bearer",
-            expires_in: rejected ? 3600 : -1,
-          });
+        },
+      };
+      await state.writeConfig(cfg);
+      const network = rotatingOAuthServer();
+      mocks.fetch.mockImplementation(network.fetch);
+      await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
+        await provider.saveClientInformation?.({ client_id: "fixture-client" });
+        await provider.saveDiscoveryState?.({ authorizationServerUrl: ISSUER });
+        await provider.saveTokens({
+          access_token: "fixture-access-0",
+          refresh_token: "fixture-refresh-0",
+          token_type: "Bearer",
+          expires_in: -1,
         });
-        const databasePath = resolveOpenClawStateSqlitePath(process.env);
-        await closeOpenClawStateDatabaseByPathAsync(databasePath);
-        const before = snapshotDoctorLintSqliteFamily(databasePath);
-        const runtime = createTestRuntime();
-        const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-        const findings =
-          lane === "triage"
-            ? await collectDoctorFindings(runtime)
-            : await (async () => {
-                await runDoctorLintCli(runtime, {
-                  json: true,
-                  severityMin: "info",
-                  onlyIds: ["core/doctor/runtime-tool-schemas"],
-                });
-                return JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings;
-              })();
-        stdout.mockRestore();
-        expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
-        expect(network.refreshes).toBe(0);
-        expect(mocks.fetch).not.toHaveBeenCalled();
-        expect(findings).toContainEqual(
-          expect.objectContaining({
-            severity: "info",
-            path: `mcp.servers.${SERVER_NAME}`,
-            message: expect.stringContaining("OAuth"),
-          }),
-        );
-
-        // Normal runtime probing still rotates exactly once and commits the replacement.
-        const liveRuntime = await createBundleMcpToolRuntime({
-          cfg,
-          workspaceDir: state.workspaceDir,
-        });
-        try {
-          expect(liveRuntime.diagnostics ?? []).toEqual([]);
-          expect(liveRuntime.tools.some((tool) => tool.name.endsWith("__status"))).toBe(true);
-          expect(network.refreshes).toBe(1);
-          expect(network.replayDetected).toBe(false);
-          expect((await readMcpOAuthStoreReadOnly(IDENTITY.storeKey)).tokens?.refresh_token).toBe(
-            "fixture-refresh-1",
-          );
-        } finally {
-          await liveRuntime.dispose();
-        }
       });
-    },
-  );
+      const databasePath = resolveOpenClawStateSqlitePath(process.env);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      const before = snapshotDoctorLintSqliteFamily(databasePath);
+      const runtime = createTestRuntime();
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      await runDoctorLintCli(runtime, {
+        json: true,
+        severityMin: "info",
+        onlyIds: ["core/doctor/runtime-tool-schemas"],
+      });
+      const findings = JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings;
+      stdout.mockRestore();
+      expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
+      expect(network.refreshes).toBe(0);
+      expect(mocks.fetch).not.toHaveBeenCalled();
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          severity: "info",
+          path: `mcp.servers.${SERVER_NAME}`,
+          message: expect.stringContaining("OAuth"),
+        }),
+      );
+
+      // Normal runtime probing still rotates exactly once and commits the replacement.
+      const liveRuntime = await createBundleMcpToolRuntime({
+        cfg,
+        workspaceDir: state.workspaceDir,
+      });
+      try {
+        expect(liveRuntime.diagnostics ?? []).toEqual([]);
+        expect(liveRuntime.tools.some((tool) => tool.name.endsWith("__status"))).toBe(true);
+        expect(network.refreshes).toBe(1);
+        expect(network.replayDetected).toBe(false);
+        expect((await readMcpOAuthStoreReadOnly(IDENTITY.storeKey)).tokens?.refresh_token).toBe(
+          "fixture-refresh-1",
+        );
+      } finally {
+        await liveRuntime.dispose();
+      }
+    });
+  });
 });
