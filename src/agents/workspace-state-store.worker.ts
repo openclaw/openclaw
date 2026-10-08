@@ -49,27 +49,19 @@ function mergeSetup(
     ...(setupCompletedAt ? { setupCompletedAt } : {}),
   };
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
+  const values = {
+    workspace_path: identity.workspacePath,
+    version: WORKSPACE_SETUP_STATE_VERSION,
+    bootstrap_seeded_at: merged.bootstrapSeededAt ?? null,
+    setup_completed_at: merged.setupCompletedAt ?? null,
+    updated_at: nowMs,
+  };
   executeSqliteQuerySync(
     database.db,
     kysely
       .insertInto("workspace_setup_state")
-      .values({
-        workspace_key: identity.workspaceKey,
-        workspace_path: identity.workspacePath,
-        version: WORKSPACE_SETUP_STATE_VERSION,
-        bootstrap_seeded_at: merged.bootstrapSeededAt ?? null,
-        setup_completed_at: merged.setupCompletedAt ?? null,
-        updated_at: nowMs,
-      })
-      .onConflict((conflict) =>
-        conflict.column("workspace_key").doUpdateSet({
-          workspace_path: identity.workspacePath,
-          version: WORKSPACE_SETUP_STATE_VERSION,
-          bootstrap_seeded_at: merged.bootstrapSeededAt ?? null,
-          setup_completed_at: merged.setupCompletedAt ?? null,
-          updated_at: nowMs,
-        }),
-      ),
+      .values({ workspace_key: identity.workspaceKey, ...values })
+      .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(values)),
   );
   registerWorkspaceStateAliasIdentitiesInTransaction({
     database,
@@ -89,20 +81,17 @@ function expire(
   const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
   const identity = resolution.identity;
   const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
-  const preserveRecentState = () => {
+  if (
+    recentWorkspaceAttestation(snapshot.attestation, nowMs) ||
+    hasRecentWorkspaceSetupState(snapshot, nowMs)
+  ) {
     registerWorkspaceStateAliasIdentitiesInTransaction({
       database,
       identity,
       aliases: resolution.aliases,
       updatedAtMs: nowMs,
     });
-    return false as const;
-  };
-  if (
-    recentWorkspaceAttestation(snapshot.attestation, nowMs) ||
-    hasRecentWorkspaceSetupState(snapshot, nowMs)
-  ) {
-    return preserveRecentState();
+    return false;
   }
   deleteWorkspaceStateRowsInDatabase(database, identity);
   return identity.workspacePath;

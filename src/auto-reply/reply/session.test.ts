@@ -71,6 +71,10 @@ import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js"
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
+import {
+  registerSessionInitializationAdmissionTests,
+  telegramTurn,
+} from "./session.initialization-admission.test-support.js";
 import { resolveReplySessionPreprocessingState } from "./session.js";
 import { expectSessionParticipantInputs } from "./session.participant.test-support.js";
 import {
@@ -146,20 +150,6 @@ async function makeStorePath(prefix: string, agentId?: string): Promise<string> 
   const root = await makeCaseDir(prefix);
   const sessionsDir = agentId ? path.join(root, "agents", agentId, "sessions") : root;
   return path.join(sessionsDir, "sessions.json");
-}
-
-function telegramTurn(sessionKey: string, body: string, from: string) {
-  return {
-    Body: body,
-    RawBody: body,
-    CommandBody: body,
-    From: from,
-    To: "bot",
-    ChatType: "direct",
-    SessionKey: sessionKey,
-    Provider: "telegram",
-    Surface: "telegram",
-  };
 }
 
 const TEST_NATIVE_MODEL_PROFILE_ID = "openai:secondary@example.test";
@@ -313,6 +303,8 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 describe("initSessionState guarded initialization", () => {
+  registerSessionInitializationAdmissionTests({ makeStorePath });
+
   it("pins an admitted non-default-agent incognito session to its process-local store", async () => {
     const stateDir = await makeCaseDir("openclaw-session-incognito-init-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {

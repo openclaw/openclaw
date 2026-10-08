@@ -15,6 +15,7 @@ import {
   resolveCatalogDecisionRuntime,
   type ModelCatalogDecisionParams,
 } from "../../agents/model-catalog-decisions.js";
+import { createModelPickerRecommendationRank } from "../../agents/model-catalog-order.js";
 import { prepareModelCatalogView } from "../../agents/model-catalog-view.js";
 import {
   resolveLogicalModelCatalogEntryState,
@@ -622,6 +623,7 @@ async function prepareOwnedModelsListResult({
     read: () => {
       const currentCatalog = readCatalog();
       const keyOf = createModelCatalogIdentityKeyResolver();
+      const recommendationRank = createModelPickerRecommendationRank(cfg);
       return {
         models: omitCliRuntimeAliasTwins(
           currentCatalog.filter(matchesProvider).map((entry) => {
@@ -634,6 +636,9 @@ async function prepareOwnedModelsListResult({
             const projected = projectPublic(entry, evaluation);
             if (runtimeChoices?.length) {
               projected.runtimeChoices = runtimeChoices;
+            }
+            if (recommendationRank(entry) !== undefined) {
+              projected.recommended = true;
             }
             return { row: projected, twin: twinRoutes.get(key) };
           }),

@@ -91,7 +91,6 @@ const PROVIDER_ICON_NAMES = new Set([
 // Canonical provider id → icon asset name for providers whose brand mark ships
 // under a different slug than their catalog id.
 const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
-  "acp-copilot": "copilot",
   anthropic: "claude",
   "amazon-bedrock": "bedrock",
   "aws-bedrock": "bedrock",
@@ -129,6 +128,8 @@ const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
 // Brand display names for provider ids whose title-cased id reads wrong.
 const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   "acp-copilot": "GitHub Copilot CLI",
+  "acp-kilocode": "Kilo Code (ACP)",
+  "acp-qwen": "Qwen Code (ACP)",
   anthropic: "Anthropic",
   "claude-cli": "Claude CLI",
   google: "Google",
@@ -141,8 +142,12 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   opencode: "OpenCode",
   openrouter: "OpenRouter",
   qwen: "Qwen Cloud",
+  xai: "xAI",
   zai: "Z.AI",
 };
+
+// ACPX native harnesses publish their catalogs under `acp-<agent>` provider ids.
+const ACP_HARNESS_PROVIDER = /^acp-(.+)$/u;
 
 /** Title-cased fallback label built from the provider id ("z-ai" → "Z Ai"). */
 export function formatRawProviderLabel(provider: string): string {
@@ -155,9 +160,11 @@ export function formatRawProviderLabel(provider: string): string {
 
 /** Brand display name for a (normalized, lowercase) provider id. */
 export function providerDisplayLabel(provider: string): string {
-  return Object.hasOwn(PROVIDER_DISPLAY_LABELS, provider)
-    ? PROVIDER_DISPLAY_LABELS[provider]!
-    : formatRawProviderLabel(provider);
+  if (Object.hasOwn(PROVIDER_DISPLAY_LABELS, provider)) {
+    return PROVIDER_DISPLAY_LABELS[provider]!;
+  }
+  const acpAgent = ACP_HARNESS_PROVIDER.exec(provider)?.[1];
+  return acpAgent ? `${providerDisplayLabel(acpAgent)} (ACP)` : formatRawProviderLabel(provider);
 }
 
 /** Provider id from a canonical `provider/model` reference, or null when absent. */
@@ -171,7 +178,11 @@ export function providerIdFromModelRef(modelRef: string): string | null {
 function resolveProviderIconName(provider: string): string | null {
   const normalized = provider.trim().toLowerCase();
   const icon = PROVIDER_ICON_ALIASES[normalized] ?? normalized;
-  return PROVIDER_ICON_NAMES.has(icon) ? icon : null;
+  if (PROVIDER_ICON_NAMES.has(icon)) {
+    return icon;
+  }
+  const acpAgent = ACP_HARNESS_PROVIDER.exec(normalized)?.[1];
+  return acpAgent ? resolveProviderIconName(acpAgent) : null;
 }
 
 export function hasProviderBrandIcon(provider: string): boolean {

@@ -301,6 +301,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const trajectoryRecorder = await prepareEmbeddedAttemptTrajectory({
     ...sessionPreparation,
     activeSession,
+    transcriptOwner: sessionLock.ownedTranscriptWriteContext,
     clientToolCount: preparedAgentSession.clientToolDefs.length,
     effectiveToolCount,
     localModelLeanEnabled,

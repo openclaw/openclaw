@@ -51,6 +51,7 @@ import {
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export {
@@ -164,19 +165,28 @@ export function readExactSessionEntryCandidatesInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   requests: readonly (readonly string[])[],
   projection: SessionEntryReadScope["projection"] | "delivery",
-  options: { clone?: boolean } = {},
+  options: { clone?: boolean; validation?: "canonical" } = {},
 ): Array<Result<ExactSessionEntry[], unknown>> {
   const entries = new Map<string, Result<ExactSessionEntry | undefined, unknown>>();
-  const keys = [...new Set(requests.flat())];
+  const validationKeys = (sessionKey: string) =>
+    options.validation === "canonical"
+      ? [...new Set([sessionKey, ...collectSessionEntryLookupKeys(sessionKey)])]
+      : [sessionKey];
+  const keys = [...new Set(requests.flatMap((request) => request.flatMap(validationKeys)))];
   const cachedEntries =
-    projection === "list"
+    projection === "list" && options.validation === undefined
       ? readCachedExactSessionEntries(database, keys, options.clone !== false)
       : undefined;
   let readPrepared: (sessionKey: string) => InternalSessionEntry | undefined;
   if (cachedEntries) {
     readPrepared = (sessionKey) => cachedEntries.get(sessionKey);
   } else {
-    const readRows = prepareExactSessionEntryRowReads(database, keys, projection);
+    const readRows = prepareExactSessionEntryRowReads(
+      database,
+      keys,
+      projection,
+      options.validation,
+    );
     readPrepared = (sessionKey) => readRows(sessionKey)?.entry;
   }
   const readEntry = (sessionKey: string): Result<ExactSessionEntry | undefined, unknown> => {
@@ -197,6 +207,13 @@ export function readExactSessionEntryCandidatesInDatabase(
   return requests.map((sessionKeys) => {
     const matches: ExactSessionEntry[] = [];
     for (const sessionKey of sessionKeys) {
+      // Folded candidates guard the exact target; they never become returned aliases.
+      for (const candidate of validationKeys(sessionKey)) {
+        const checked = readEntry(candidate);
+        if (!checked.ok) {
+          return err(checked.error);
+        }
+      }
       const entry = readEntry(sessionKey);
       if (!entry.ok) {
         return err(entry.error);

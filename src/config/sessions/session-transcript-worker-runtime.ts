@@ -244,7 +244,6 @@ export function retainSessionHistoryWorkerDatabase(
       timeoutMs = 60_000,
     ) => {
       assertCurrent();
-      const deadline = performance.now() + timeoutMs;
       let sequence = 0;
       let retirement: Promise<void> | undefined;
       const hostEffects = new Set<Promise<WorkerTaskResponse>>();
@@ -267,17 +266,10 @@ export function retainSessionHistoryWorkerDatabase(
                   const effect = (async () => {
                     context.signal.throwIfAborted();
                     assertCurrent();
-                    const response = await onRequest(value);
+                    const response = await onRequest(value, context.signal);
                     context.signal.throwIfAborted();
                     assertCurrent();
-                    if (response) {
-                      return response;
-                    }
-                    const remaining = deadline - performance.now();
-                    if (remaining <= 0) {
-                      throw new WorkerTaskError("worker task timed out", "timeout");
-                    }
-                    return { input: null, timeoutMs: remaining };
+                    return response ?? { input: null, timeoutMs };
                   })();
                   hostEffects.add(effect);
                   owned.hostEffects.add(effect);
@@ -340,7 +332,7 @@ export function retainSessionHistoryWorkerDatabase(
         }
         throw error;
       } finally {
-        // A worker timeout does not cancel an admitted host-side status operation.
+        // Cancellation removes queued effects; accepted writes still retain settlement custody.
         await Promise.allSettled(hostEffects);
       }
     };

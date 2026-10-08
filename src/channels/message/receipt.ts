@@ -36,15 +36,11 @@ export function listMessageReceiptSourceTargets(value: unknown): string[] {
     const target = asOptionalRecord(record.target);
     const ids = [
       target?.id,
-      ...(
-        [
-          "chatId",
-          "channelId",
-          "roomId",
-          "conversationId",
-          "toJid",
-        ] as const satisfies readonly (keyof MessageReceiptSourceResult)[]
-      ).map((key) => record[key]),
+      record.chatId,
+      record.channelId,
+      record.roomId,
+      record.conversationId,
+      record.toJid,
     ];
     for (const id of ids) {
       const normalized = normalizeOptionalString(id);
@@ -155,11 +151,8 @@ export function listMessageReceiptPlatformIds(receipt: MessageReceipt): string[]
 
 /** Resolves the explicit primary platform id, falling back to the first unique receipt id. */
 export function resolveMessageReceiptPrimaryId(receipt: MessageReceipt): string | undefined {
-  const primary = normalizeOptionalString(receipt.primaryPlatformMessageId);
-  if (primary) {
-    return primary;
-  }
   return (
+    normalizeOptionalString(receipt.primaryPlatformMessageId) ??
     listMessageReceiptPlatformIds(receipt)[0] ??
     receipt.parts.map((part) => normalizeOptionalString(part.platformMessageId)).find(Boolean)
   );

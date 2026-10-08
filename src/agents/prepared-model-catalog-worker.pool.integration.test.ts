@@ -838,6 +838,8 @@ describe("Gateway catalog worker pool", () => {
     signal,
   }) => {
     const fixture = await createFleetFixture();
+    // Startup discovery must finish before the pool is expected to drain.
+    await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
     await Promise.all(
       fixture.snapshots.map((snapshot) =>
         loadPreparedModelRuntimeAuth(snapshot, { providerIds: [] }),

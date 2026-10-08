@@ -260,15 +260,12 @@ function createRecoveryReplayPacer() {
     });
 }
 
-/** Own one queue namespace's live claims, drain exclusion, and replay pacing. */
-export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntry>() {
-  const activeDrains = new Set<string>();
+function createRecoveryClaim() {
   const activeEntries = new Set<string>();
-
-  async function withClaim<Result>(
+  return async <Result>(
     entryId: string,
     run: () => Promise<Result>,
-  ): Promise<ActiveDeliveryRecoveryClaimResult<Result>> {
+  ): Promise<ActiveDeliveryRecoveryClaimResult<Result>> => {
     if (activeEntries.has(entryId)) {
       return { status: "claimed-by-other-owner" };
     }
@@ -278,22 +275,19 @@ export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntr
     } finally {
       activeEntries.delete(entryId);
     }
-  }
+  };
+}
+
+/** Own one queue namespace's live claims, drain exclusion, and replay pacing. */
+export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntry>() {
+  const withClaim = createRecoveryClaim();
+  const withDrainClaim = createRecoveryClaim();
 
   return {
     withClaim,
 
     async withDrain(drainKey: string, run: () => Promise<void>): Promise<boolean> {
-      if (activeDrains.has(drainKey)) {
-        return false;
-      }
-      activeDrains.add(drainKey);
-      try {
-        await run();
-        return true;
-      } finally {
-        activeDrains.delete(drainKey);
-      }
+      return (await withDrainClaim(drainKey, run)).status === "claimed";
     },
 
     async scan(options: DeliveryRecoveryScanOptions<T>): Promise<void> {
