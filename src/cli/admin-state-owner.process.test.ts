@@ -263,8 +263,14 @@ describe("administrative CLI state owner routing", () => {
     const succeeded = scenario === "live" || scenario === "offline";
     expect(result.code, result.stderr).toBe(succeeded ? 0 : 1);
     if (scenario === "offline") {
-      expect(observation.adminSql).toBeGreaterThan(0);
-      expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
+      if (operation.kind.startsWith("pairing-")) {
+        expect(observation.adminSql).toBeGreaterThan(0);
+      }
+      // Policy SQL runs in workers; any caller-side admission still needs offline custody.
+      expect(observation.missingCustody).toBe(0);
+      for (const pid of observation.ownerPids) {
+        expect(pid).toBe(observation.pid);
+      }
       expect(methods).toEqual([]);
     } else {
       expect(observation.adminSql).toBe(0);
