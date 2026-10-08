@@ -3249,6 +3249,16 @@ event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
+Append receipts read active identity, projection readiness, and the latest sequence
+in one transaction-local query. A clean latest message shares that result with
+the visible-tail consumer; native reentry or pending-input mutations require a
+fresh tail read. Dirty and unclassified projections still use canonical navigation.
+No-op maintenance plans return their next deadline with the existing read and
+consume it synchronously under the selected writer queue and native mutation
+witness. New kicks and activity invalidate that scheduling decision; explicit
+later metadata reads still refresh foreign commits. Schemas, stored bytes,
+durability, retention, permissions, and update behavior are unchanged.
+
 Runtime custom messages, prompt cache markers, bootstrap completion and prompt-error
 markers, and nested tool activity use the same awaited writer. The manager captures
 custom payloads before queueing, rechecks its current parent at admission, and adopts

@@ -427,12 +427,26 @@ async function runPendingMaintenance(
         );
       }
     };
+    const readOnlyPhase: { deadline?: { nextAt: number | undefined } } = {};
     const runPlanning = async () => {
+      delete readOnlyPhase.deadline;
       const pending = capturePendingAgeChanges(owner);
       operation.ageChanges = pending.changes;
       const result = await runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-plan" },
         assertCommitAllowed: assertInputsCurrent,
+        consumeReadOnlyMaintenancePlan(read, assertCurrent) {
+          assertInputsCurrent();
+          pending.acknowledge();
+          if (owner.ageChanges.size > 0) {
+            planningChanged = true;
+            throw new SqliteReclamationInputsChangedError(
+              "SQLite automatic maintenance activity changed before age consumption",
+            );
+          }
+          assertCurrent();
+          readOnlyPhase.deadline = { nextAt: read.nextAt };
+        },
         refreshMaintenanceProtection: () => {
           // Refresh only at writer admission; commit still checks this exact live capture.
           admitted = false;
@@ -505,7 +519,11 @@ async function runPendingMaintenance(
     };
     const noChanges = plan.archived === 0 && plan.entryRemovals.length === 0;
     const noFinalization = noChanges && plan.stateDeletePlans.length === 0;
-    const verifiedNextAt = noChanges ? await readAge(true) : undefined;
+    const verifiedNextAt = noChanges
+      ? readOnlyPhase.deadline
+        ? readOnlyPhase.deadline.nextAt
+        : await readAge(true)
+      : undefined;
     if (!noFinalization) {
       await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(owner.scope, [plan], {
         isCurrent,
@@ -515,7 +533,7 @@ async function runPendingMaintenance(
     // A deadline-probe retry cannot restore a completed pass's write protection.
     activeSessionKeys = [];
     if (isCurrent() && owner.generation === generation) {
-      // Empty finalization has no yield; the verified receipt also owns this deadline.
+      // Reuse only this pass's consumed decision; newer kicks and changes win after settlement.
       nextMaintenanceAt = noFinalization ? verifiedNextAt : await readAge(false);
       if (owner.ageChanges.size > 0) {
         planningChanged = true;
@@ -568,7 +586,7 @@ async function runPendingMaintenance(
     retireMaintenanceOwner(databasePath, owner);
     return;
   }
-  if (owner.generation === generation) {
+  if (owner.generation === generation && owner.ageChanges.size === 0) {
     if (nextMaintenanceAt === undefined) {
       retireMaintenanceOwner(databasePath, owner);
       return;
