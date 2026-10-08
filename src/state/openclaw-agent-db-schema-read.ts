@@ -9,7 +9,6 @@ import {
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
-  type OpenClawAgentDatabaseOwnerInspection,
 } from "./openclaw-agent-db-contract.js";
 import {
   readExistingAgentSchemaMeta,
@@ -30,19 +29,6 @@ export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: st
     );
   }
   return userVersion;
-}
-
-export function inspectOpenClawAgentDatabaseOwnerInDatabase(
-  db: DatabaseSync,
-  pathname: string,
-): OpenClawAgentDatabaseOwnerInspection {
-  assertSupportedAgentSchemaVersion(db, pathname);
-  const existing = readExistingAgentSchemaMeta(db);
-  return !existing
-    ? { status: "unowned" }
-    : existing.role !== "agent" || !existing.agentId
-      ? { status: "unreadable" }
-      : { status: "owned", agentId: normalizeAgentId(existing.agentId) };
 }
 
 /** Readers may pass their immediate check; writers reread the version after integrity work. */

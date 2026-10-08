@@ -15,7 +15,9 @@ import { ExitError } from "../runtime.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
+  withOpenClawAgentDatabaseAsync,
 } from "../state/openclaw-agent-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -30,8 +32,8 @@ vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => {
       return checks.filter((check) =>
         [
           "core/doctor/agent-database-admission",
-          "core/doctor/state-schema",
           "core/doctor/gateway-config",
+          "core/doctor/legacy-state",
           "core/doctor/telegram-general-topic-conversations",
         ].includes(check.id),
       );
@@ -86,6 +88,7 @@ function seedStoppedWalDatabase(filename: string, sql: string): void {
 it.each([
   { args: ["--lint", "--json"], exitCode: 1, customStore: false },
   { args: ["--json"], exitCode: 0, customStore: true },
+  { args: ["--lint", "--all", "--json"], exitCode: 1, customStore: false },
 ])(
   "doctor $args preserves previous-schema SQLite artifacts and reports pending repairs",
   async ({ args, exitCode, customStore }) => {
@@ -135,6 +138,13 @@ it.each([
          'telegram:-1001234567890:topic:1', '1', 1, 1
        );`,
         );
+        if (args.includes("--all")) {
+          const legacyPath = state.statePath("agent", "openclaw-agent.sqlite");
+          fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+          for (const suffix of ["", "-wal", "-shm"]) {
+            fs.copyFileSync(`${agentPath}${suffix}`, `${legacyPath}${suffix}`);
+          }
+        }
         let configRead = false;
         registerHealthCheck({
           id: "fixture/current-config",
@@ -175,6 +185,26 @@ it.each([
             return [];
           },
         });
+        for (const [name, write] of Object.entries({
+          "async-agent": () =>
+            withOpenClawAgentDatabaseAsync(
+              { agentId: "main", env: state.env, path: storePath },
+              () => {},
+            ),
+          shared: () => runOpenClawStateWriteTransaction(() => {}, { env: state.env }),
+          agent: () =>
+            openOpenClawAgentDatabase({ agentId: "main", env: state.env, path: storePath }),
+        })) {
+          registerHealthCheck({
+            id: `fixture/forbidden-${name}-write`,
+            kind: "plugin",
+            description: "A detector must not open a writer.",
+            async detect() {
+              await write();
+              return [];
+            },
+          });
+        }
         const before = snapshotSqliteFiles(state.stateDir);
         expect(before.map((artifact) => artifact.path)).toEqual(
           expect.arrayContaining(
@@ -199,6 +229,13 @@ it.each([
         expect(report.checksRun).toBeGreaterThanOrEqual(5);
         expect(report.findings).toEqual(
           expect.arrayContaining([
+            ...["shared", "agent", "async-agent"].map((name) =>
+              expect.objectContaining({
+                checkId: `fixture/forbidden-${name}-write`,
+                severity: "error",
+                message: expect.stringContaining("Programming error:"),
+              }),
+            ),
             expect.objectContaining({
               checkId: "core/doctor/gateway-config",
               message: expect.stringContaining("gateway.mode is unset"),

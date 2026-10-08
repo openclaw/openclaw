@@ -7,7 +7,11 @@ import {
   createRetainedOperation,
   type RetainedOperation,
 } from "@openclaw/worker-runtime/lifecycle";
-import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
+import {
+  artifactPreservingReads,
+  isArtifactPreservingStateRead,
+} from "../state/artifact-preserving-state-reads.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { prepareSqliteSnapshotFromLiveOwner } from "./sqlite-live-snapshot.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
@@ -15,6 +19,7 @@ import {
   adoptRetainedPreparedLocation,
   removeTempDirectory,
   removeTempDirectoryAsync,
+  retainSnapshotTempDirectory,
   SqliteSnapshotCleanupError,
 } from "./sqlite-readonly-location-cleanup.js";
 import type {
@@ -39,6 +44,40 @@ import {
   createSqliteSnapshotStagingDirectorySync,
 } from "./sqlite-snapshot-staging.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
+
+/** The inspection scope owns private readers until native close and snapshot disposal settle. */
+export function openSqliteReadOnlyDatabase(
+  pathname: string,
+  options: Parameters<typeof openNodeSqliteDatabase>[1] = {},
+) {
+  const scope = artifactPreservingReads.getStore();
+  if (!scope || !scope.agentDatabases) {
+    return openNodeSqliteDatabase(pathname, { ...options, readOnly: true });
+  }
+  const snapshot = prepareSqliteReadOnlyLocationSync(pathname);
+  const release = retainSnapshotTempDirectory(
+    snapshot.cleanupRoot ?? path.dirname(snapshot.location),
+  );
+  const native: { close?: () => void } = {};
+  const close = () => {
+    native.close?.();
+    release();
+    if (!snapshot.cleanup()) {
+      throw new SqliteSnapshotCleanupError("SQLite inspection snapshot cleanup failed.");
+    }
+    scope.readers.delete(close);
+  };
+  scope.readers.add(close);
+  const db = openNodeSqliteDatabase(snapshot.location, { ...options, readOnly: true });
+  const dispose = db.close.bind(db);
+  native.close = () => {
+    if (db.isOpen) {
+      dispose();
+    }
+  };
+  db.close = close;
+  return db;
+}
 
 // Keep parent launch orchestration out of the native snapshot child's import graph.
 export async function prepareSqliteReadOnlyLocation(

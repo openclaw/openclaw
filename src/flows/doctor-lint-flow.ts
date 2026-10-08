@@ -1,3 +1,7 @@
+import { formatCliCommand } from "../cli/command-format.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { readStateSchemaMigrationVersion } from "../state/openclaw-state-db-schema-version.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { listHealthChecks } from "./health-check-registry.js";
@@ -10,6 +14,35 @@ import {
   type HealthFinding,
   type HealthFindingSeverity,
 } from "./health-checks.js";
+
+export const stateSchemaHealthCheck: HealthCheck = {
+  id: "core/doctor/state-schema",
+  kind: "core",
+  description: "Shared state migrations require explicit repair.",
+  async detect(ctx) {
+    const command = formatCliCommand("openclaw doctor --fix", ctx.env);
+    return (
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db, path }) => {
+          const version = readStateSchemaMigrationVersion(db);
+          return version < OPENCLAW_STATE_SCHEMA_VERSION
+            ? [
+                {
+                  checkId: "core/doctor/state-schema",
+                  severity: "warning" as const,
+                  path,
+                  requirement: "state-schema-migration-pending",
+                  message: `Shared state schema migration pending (${version} → ${OPENCLAW_STATE_SCHEMA_VERSION}); run ${command}.`,
+                  fixHint: `Run \`${command}\` to migrate the shared state database.`,
+                },
+              ]
+            : [];
+        },
+        { env: ctx.env },
+      ) ?? []
+    );
+  },
+};
 
 // Non-mutating health-check runner used by `openclaw doctor --lint`.
 export interface DoctorLintRunOptions {

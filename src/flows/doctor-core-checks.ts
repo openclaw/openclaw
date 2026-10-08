@@ -36,7 +36,6 @@ import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
 import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
-import { legacyStateCheck } from "./doctor-legacy-state-check.js";
 import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import {
@@ -240,6 +239,38 @@ const hooksModelCheck: CoreHealthCheck = {
       }
       return finding;
     });
+  },
+};
+
+const legacyStateCheck: CoreHealthCheck = {
+  id: "core/doctor/legacy-state",
+  description: "Legacy sessions, agent state, and channel auth paths have been migrated.",
+  defaultEnabled: false,
+  async detect(ctx) {
+    const { detectLegacyStateMigrations } = await import("../infra/state-migrations.doctor.js");
+    const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
+    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
+    const detected = await detectLegacyStateMigrations({
+      cfg: ctx.cfg,
+      doctorOnlyStateMigrations: true,
+      legacySessionSurfaces,
+    });
+    return [
+      ...detected.preview.map((line): HealthFinding => ({
+        checkId: "core/doctor/legacy-state",
+        severity: "warning",
+        message: line.replace(/^- /, ""),
+        path: detected.stateDir,
+        fixHint: "Run `openclaw doctor --fix` to migrate legacy state.",
+      })),
+      ...detected.warnings.map((warning): HealthFinding => ({
+        checkId: "core/doctor/legacy-state",
+        severity: "warning",
+        message: warning,
+        path: detected.stateDir,
+        fixHint: "Resolve the warning, then rerun `openclaw doctor --fix`.",
+      })),
+    ];
   },
 };
 

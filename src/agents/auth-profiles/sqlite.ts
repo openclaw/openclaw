@@ -36,9 +36,9 @@ import {
   deleteAuthProfileJsonCell,
 } from "./sqlite-json.js";
 import {
+  acquireAuthProfileReadDatabase,
   closeAuthProfileReadPool,
   isMissingDatabasePath,
-  withAuthProfileReadDatabase,
 } from "./sqlite-read-pool.js";
 import type {
   AuthProfileStoreOwner,
@@ -166,19 +166,18 @@ function resolveAuthProfileDatabaseKind(
 /** Validate selected-agent ownership without requiring a current session schema. */
 export function assertAuthProfileStoreAgentOwner(agentDir: string, agentId: string): void {
   const pathname = resolveAuthProfileDatabasePath(agentDir);
-  withAuthProfileReadDatabase(pathname, (acquired) => {
-    if (acquired.status === "missing") {
-      return;
-    }
-    if (acquired.status === "unreadable") {
-      throw new Error(`Unable to read agent auth database ${pathname}.`);
-    }
-    assertExistingAgentSchemaOwner(
-      readExistingAgentSchemaMeta(acquired.db),
-      normalizeAgentId(agentId),
-      pathname,
-    );
-  });
+  const acquired = acquireAuthProfileReadDatabase(pathname);
+  if (acquired.status === "missing") {
+    return;
+  }
+  if (acquired.status === "unreadable") {
+    throw new Error(`Unable to read agent auth database ${pathname}.`);
+  }
+  assertExistingAgentSchemaOwner(
+    readExistingAgentSchemaMeta(acquired.db),
+    normalizeAgentId(agentId),
+    pathname,
+  );
 }
 
 export function inspectAuthProfileJsonCellReadOnly(
@@ -212,12 +211,11 @@ export function readAuthProfileStateJsonTextReadOnly(
       { path: target.path, ...(target.env ? { env: target.env } : {}) },
     );
   }
-  return withAuthProfileReadDatabase(target.path, (acquired) => {
-    if (acquired.status !== "readable") {
-      throw new Error("Auth profile rotation-state source is unavailable; retry Doctor.");
-    }
-    return readAuthProfileJsonCellText(acquired.db, "state", "agent");
-  });
+  const acquired = acquireAuthProfileReadDatabase(target.path);
+  if (acquired.status !== "readable") {
+    throw new Error("Auth profile rotation-state source is unavailable; retry Doctor.");
+  }
+  return readAuthProfileJsonCellText(acquired.db, "state", "agent");
 }
 
 function inspectPersistedAuthProfileCell(

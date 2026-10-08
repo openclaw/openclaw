@@ -11,15 +11,9 @@ import {
   clearNodeSqliteKyselyCacheForDatabase,
   enableNodeSqliteKyselyStatementCache,
 } from "../../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { setSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
-import { runWithSqliteCleanup } from "../../infra/sqlite-lifecycle-errors.js";
-import {
-  retainSnapshotTempDirectory,
-  SqliteSnapshotCleanupError,
-} from "../../infra/sqlite-readonly-location-cleanup.js";
-import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
+import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import {
   registerSqliteCacheExitClose,
@@ -44,6 +38,9 @@ type AuthProfileReadPoolCloseScope =
   | { kind: "root"; rootPath: string };
 
 export function closeAuthProfileReadDatabase(databasePath: string): void {
+  if (isArtifactPreservingStateRead("agent")) {
+    return;
+  }
   const pathname = path.resolve(databasePath);
   const entry = authProfileReadDatabases.get(pathname);
   if (!entry) {
@@ -121,57 +118,15 @@ export function isMissingDatabasePath(pathname: string): boolean {
   }
 }
 
-/** Inspection owns its private reader through native close and snapshot disposal. */
-export function withAuthProfileReadDatabase<T>(
-  pathname: string,
-  read: (acquired: ReturnType<typeof acquireAuthProfileReadDatabase>, inspectedPath: string) => T,
-): T {
-  if (!isArtifactPreservingStateRead("agent")) {
-    return read(acquireAuthProfileReadDatabase(pathname), pathname);
-  }
-  const sourcePath = path.resolve(pathname);
-  if (isDeletedAgentDatabasePath(sourcePath) || isMissingDatabasePath(sourcePath)) {
-    return read({ status: "missing" }, sourcePath);
-  }
-  let snapshot: ReturnType<typeof prepareSqliteReadOnlyLocationSync>;
-  try {
-    snapshot = prepareSqliteReadOnlyLocationSync(sourcePath);
-  } catch (error) {
-    if (error instanceof SqliteSnapshotCleanupError) {
-      throw error;
-    }
-    return read(
-      { status: isMissingDatabasePath(sourcePath) ? "missing" : "unreadable" },
-      sourcePath,
-    );
-  }
-  const release = retainSnapshotTempDirectory(
-    snapshot.cleanupRoot ?? path.dirname(snapshot.location),
-  );
-  return runWithSqliteCleanup(
-    {
-      release() {
-        closeAuthProfileReadDatabase(snapshot.location);
-        release();
-        if (!snapshot.cleanup()) {
-          throw new SqliteSnapshotCleanupError("Auth profile inspection snapshot cleanup failed.");
-        }
-      },
-    },
-    "Auth profile inspection",
-    () => read(acquireAuthProfileReadDatabase(snapshot.location, true), snapshot.location),
-  );
-}
-
 export function acquireAuthProfileReadDatabase(
   pathname: string,
-  inspectionSnapshot = false,
 ): { status: "missing" } | { status: "unreadable" } | { status: "readable"; db: DatabaseSync } {
   const resolvedPath = path.resolve(pathname);
   if (isDeletedAgentDatabasePath(resolvedPath)) {
     return { status: "missing" };
   }
-  const cached = authProfileReadDatabases.get(resolvedPath);
+  const inspection = isArtifactPreservingStateRead("agent");
+  const cached = inspection ? undefined : authProfileReadDatabases.get(resolvedPath);
   if (cached?.ready && cached.db.isOpen) {
     authProfileReadDatabases.delete(resolvedPath);
     authProfileReadDatabases.set(resolvedPath, cached);
@@ -181,24 +136,25 @@ export function acquireAuthProfileReadDatabase(
   if (cached) {
     closeAuthProfileReadDatabase(resolvedPath);
   }
-  // Live acquisition settles failed candidates; private inspection must not close source handles.
-  if (!inspectionSnapshot) {
-    for (const [pendingPath, entry] of authProfileReadDatabases) {
-      if (!entry.ready) {
-        closeAuthProfileReadDatabase(pendingPath);
-      }
+  // A failed candidate close must be retried before another handle is opened.
+  // This bounds custody to the pool plus one unadmitted candidate.
+  for (const [pendingPath, entry] of inspection ? [] : authProfileReadDatabases) {
+    if (!entry.ready) {
+      closeAuthProfileReadDatabase(pendingPath);
     }
   }
   let db: DatabaseSync;
   try {
-    db = openNodeSqliteDatabase(resolvedPath, { readOnly: true });
+    db = openSqliteReadOnlyDatabase(resolvedPath);
   } catch {
     return isMissingDatabasePath(resolvedPath) ? { status: "missing" } : { status: "unreadable" };
   }
   const candidate: AuthProfileReadHandle = { db, ready: false };
-  authProfileReadDatabases.set(resolvedPath, candidate);
-  unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(closeAuthProfileReadPool);
-  armReadHandleIdleClose(resolvedPath, candidate);
+  if (!inspection) {
+    authProfileReadDatabases.set(resolvedPath, candidate);
+    unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(closeAuthProfileReadPool);
+    armReadHandleIdleClose(resolvedPath, candidate);
+  }
   let readable = false;
   try {
     enableNodeSqliteKyselyStatementCache(db);
@@ -210,18 +166,23 @@ export function acquireAuthProfileReadDatabase(
     // Invalid readers are disposed below, where native close failures propagate.
   }
   if (!readable) {
-    closeAuthProfileReadDatabase(resolvedPath);
+    if (inspection) {
+      db.close();
+    } else {
+      closeAuthProfileReadDatabase(resolvedPath);
+    }
     return { status: "unreadable" };
   }
+  if (inspection) {
+    return { status: "readable", db };
+  }
   try {
-    if (!inspectionSnapshot) {
-      while (authProfileReadDatabases.size > AUTH_PROFILE_READ_HANDLE_CAP) {
-        const oldestPath = authProfileReadDatabases.keys().next().value;
-        if (oldestPath === undefined) {
-          break;
-        }
-        closeAuthProfileReadDatabase(oldestPath);
+    while (authProfileReadDatabases.size > AUTH_PROFILE_READ_HANDLE_CAP) {
+      const oldestPath = authProfileReadDatabases.keys().next().value;
+      if (oldestPath === undefined) {
+        break;
       }
+      closeAuthProfileReadDatabase(oldestPath);
     }
   } catch (error) {
     try {

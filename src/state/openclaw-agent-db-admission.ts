@@ -35,6 +35,7 @@ import {
   assertAgentDeletionDatabaseCleanupAccess,
   getAgentDeletionDatabaseCleanup,
 } from "./agent-deletion-cleanup.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -119,6 +120,14 @@ function assertAgentDatabaseOperationCurrent(
   assertCurrent?.();
 }
 
+function assertAgentDatabaseWriteAllowed(): void {
+  if (isArtifactPreservingStateRead("agent")) {
+    throw new Error(
+      "Programming error: writable agent database open during artifact-preserving inspection.",
+    );
+  }
+}
+
 /** Bind admission drivers to the canonical private database-open generator. */
 export function createOpenClawAgentDatabaseAdmissionOwner(
   openSteps: (
@@ -144,6 +153,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
     repairAdmission?: OpenClawAgentDatabaseRepairAdmission,
   ): OpenClawAgentDatabase {
+    assertAgentDatabaseWriteAllowed();
     const run = () => {
       const steps = openSteps(
         options,
@@ -255,6 +265,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     signal?: AbortSignal,
     prepared?: "native" | "worker",
   ): Promise<T> {
+    assertAgentDatabaseWriteAllowed();
     signal?.throwIfAborted();
     assertCurrent?.();
     // Admission retains its original path, registration, and permission inputs across awaits.
@@ -341,6 +352,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     withAdmission: OpenClawAgentDatabaseWriteAdmission,
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
   ): Promise<T> {
+    assertAgentDatabaseWriteAllowed();
     const options = {
       ...inputOptions,
       env: cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env),

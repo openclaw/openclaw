@@ -5,7 +5,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { prepareSqliteReadCache } from "../../infra/sqlite-read-cache.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -13,7 +12,6 @@ import {
   acquireAuthProfileReadDatabase,
   closeAuthProfileReadDatabase,
   closeAuthProfileReadPool,
-  withAuthProfileReadDatabase,
 } from "./sqlite-read-pool.js";
 import { recordAuthProfileNativeCommit } from "./store-update-commit.js";
 import type { AuthProfileRowRead, PersistedAuthProfileStoreInspection } from "./types.js";
@@ -106,31 +104,19 @@ export function inspectAgentAuthProfileJsonCellReadOnly(
   databasePath: string,
   target: "store" | "state",
 ): PersistedAuthProfileStoreInspection {
-  return withAuthProfileReadDatabase<PersistedAuthProfileStoreInspection>(
-    databasePath,
-    (acquired, inspectedPath) => {
-      if (acquired.status === "missing") {
-        return { status: "missing", reason: "database" };
-      }
-      if (acquired.status === "unreadable") {
-        return { status: "unreadable" };
-      }
-      try {
-        return inspectAuthProfileJsonCell(acquired.db, target, "agent");
-      } catch (error) {
-        try {
-          closeAuthProfileReadDatabase(inspectedPath);
-        } catch (cleanupError) {
-          throw createSqliteLifecycleAggregateError(
-            [error, cleanupError],
-            "Auth profile inspection and reader close failed.",
-            error,
-          );
-        }
-        return { status: "unreadable" };
-      }
-    },
-  );
+  const acquired = acquireAuthProfileReadDatabase(databasePath);
+  if (acquired.status === "missing") {
+    return { status: "missing", reason: "database" };
+  }
+  if (acquired.status === "unreadable") {
+    return { status: "unreadable" };
+  }
+  try {
+    return inspectAuthProfileJsonCell(acquired.db, target, "agent");
+  } catch {
+    closeAuthProfileReadDatabase(databasePath);
+    return { status: "unreadable" };
+  }
 }
 
 /** The isolated reader closes its native pool before transferring credential rows. */

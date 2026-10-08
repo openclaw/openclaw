@@ -15,6 +15,7 @@ import { configValidationIssuesToHealthFindings } from "../flows/doctor-config-v
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { DoctorHealthCheckContext } from "../flows/doctor-health-contribution-types.js";
 import {
+  stateSchemaHealthCheck,
   exitCodeFromFindings,
   runDoctorLintChecks,
   selectUpdateReadinessChecks,
@@ -440,7 +441,8 @@ async function executeDoctorLint(
     deferInspectionDisposal: stateView.deferInspectionDisposal,
   };
 
-  const checks = [
+  const checks: HealthCheck[] = [
+    stateSchemaHealthCheck,
     ...coreChecks.map((check) => withCoreLintContext(check, coreCtx, availabilityFindings)),
     ...extensionChecks,
   ];

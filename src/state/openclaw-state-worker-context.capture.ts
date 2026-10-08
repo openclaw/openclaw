@@ -56,13 +56,7 @@ export function captureOpenClawStateReadContextWithAdmission(
     existingSchemaPath: schema?.path,
     stateIntegrity: integrity,
     runInCapturedSchemaScope,
-    ...(isArtifactPreservingStateRead()
-      ? {
-          artifactPreservingReads: isArtifactPreservingStateRead("agent")
-            ? { agentDatabases: true as const }
-            : {},
-        }
-      : {}),
+    artifactPreservingReads: isArtifactPreservingStateRead("agent") || undefined,
   };
 }
 

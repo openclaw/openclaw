@@ -33,16 +33,9 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
-import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
-import {
-  retainSnapshotTempDirectory,
-  SqliteSnapshotCleanupError,
-} from "./sqlite-readonly-location-cleanup.js";
-import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
+import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 
@@ -452,36 +445,14 @@ function readSessionDatabase<T>(
     return { ok: true, value: undefined };
   }
   let database: DatabaseSync | undefined;
-  let snapshot: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
-  let releaseSnapshot: (() => void) | undefined;
-  let outcome: ReadOnlySqliteResult<T | undefined>;
   try {
-    if (isArtifactPreservingStateRead("agent")) {
-      snapshot = prepareSqliteReadOnlyLocationSync(sqlitePath);
-      releaseSnapshot = retainSnapshotTempDirectory(
-        snapshot.cleanupRoot ?? path.dirname(snapshot.location),
-      );
-    }
-    database = openNodeSqliteDatabase(snapshot?.location ?? sqlitePath, { readOnly: true });
-    outcome = { ok: true, value: read(database) };
+    database = openSqliteReadOnlyDatabase(sqlitePath, { readOnly: true });
+    return { ok: true, value: read(database) };
   } catch (error) {
-    outcome = { error, ok: false };
-  }
-  try {
+    return { error, ok: false };
+  } finally {
     database?.close();
-    releaseSnapshot?.();
-    if (snapshot && !snapshot.cleanup()) {
-      throw new SqliteSnapshotCleanupError(
-        `Session database inspection snapshot cleanup failed: ${snapshot.cleanupRoot ?? snapshot.location}`,
-      );
-    }
-  } catch (cleanupError) {
-    throwSqliteLifecycleErrors(
-      outcome.ok ? [cleanupError] : [outcome.error, cleanupError],
-      "Session database inspection and cleanup failed.",
-    );
   }
-  return outcome;
 }
 
 function resolveSessionIdentityProjection(database: DatabaseSync) {
@@ -498,7 +469,20 @@ function resolveSessionIdentityProjection(database: DatabaseSync) {
 
 export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqliteDbStatsResult {
   const sqlitePath = resolveTargetSqlitePath(target);
-  const result = readSessionDatabase(target, (database) => {
+  if (!fs.existsSync(sqlitePath)) {
+    return {
+      ok: true,
+      stats: {
+        dbSizeBytes: 0,
+        largestSessions: [],
+        totalTranscriptRowBytes: 0,
+        walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
+      },
+    };
+  }
+  let database: DatabaseSync | undefined;
+  try {
+    database = openSqliteReadOnlyDatabase(sqlitePath, { readOnly: true });
     const hasTranscriptEvents = tableExists(database, "transcript_events");
     const integrityRow = database.prepare("PRAGMA quick_check").get();
     let totalRow: { row_bytes?: unknown } | undefined;
@@ -524,36 +508,32 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
         .all();
     }
     return {
-      dbSizeBytes: safeStatSync(sqlitePath)?.size ?? 0,
-      integrityCheck:
-        typeof integrityRow?.quick_check === "string" ? integrityRow.quick_check : undefined,
-      largestSessions: largestRows.flatMap((row) => {
-        if (typeof row.session_id !== "string") {
-          return [];
-        }
-        return [
-          {
-            events: sqliteNumber(row.events),
-            rowBytes: sqliteNumber(row.row_bytes),
-            sessionId: row.session_id,
-          },
-        ];
-      }),
-      totalTranscriptRowBytes: sqliteNumber(totalRow?.row_bytes),
-      walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
+      ok: true,
+      stats: {
+        dbSizeBytes: safeStatSync(sqlitePath)?.size ?? 0,
+        integrityCheck:
+          typeof integrityRow?.quick_check === "string" ? integrityRow.quick_check : undefined,
+        largestSessions: largestRows.flatMap((row) => {
+          if (typeof row.session_id !== "string") {
+            return [];
+          }
+          return [
+            {
+              events: sqliteNumber(row.events),
+              rowBytes: sqliteNumber(row.row_bytes),
+              sessionId: row.session_id,
+            },
+          ];
+        }),
+        totalTranscriptRowBytes: sqliteNumber(totalRow?.row_bytes),
+        walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
+      },
     };
-  });
-  return result.ok
-    ? {
-        ok: true,
-        stats: result.value ?? {
-          dbSizeBytes: 0,
-          largestSessions: [],
-          totalTranscriptRowBytes: 0,
-          walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
-        },
-      }
-    : result;
+  } catch (error) {
+    return { error, ok: false };
+  } finally {
+    database?.close();
+  }
 }
 
 export function resolveTargetSqliteOptions(target: SessionStoreTarget, env?: NodeJS.ProcessEnv) {

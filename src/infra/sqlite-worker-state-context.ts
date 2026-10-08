@@ -16,7 +16,7 @@ export type SqliteWorkerStateContext = {
   initializationAgentPaths?: readonly string[];
   existingSchemaPath?: string;
   stateIntegrity?: OpenClawStateIntegrityAdmission;
-  artifactPreservingReads?: { agentDatabases?: true };
+  artifactPreservingReads?: true;
 };
 
 export function captureSqliteWorkerStateContext(
@@ -32,9 +32,7 @@ export function captureSqliteWorkerStateContext(
       : {}),
     existingSchemaPath: context.existingSchemaPath,
     stateIntegrity: context.stateIntegrity,
-    ...(context.artifactPreservingReads
-      ? { artifactPreservingReads: { ...context.artifactPreservingReads } }
-      : {}),
+    artifactPreservingReads: context.artifactPreservingReads,
   };
 }
 
@@ -109,7 +107,7 @@ export function runWithSqliteWorkerStateContext<T>(
         : withExistingOpenClawStateSchema({ path: context.existingSchemaPath }, operation),
     );
   return context.artifactPreservingReads
-    ? withArtifactPreservingStateReads(run, context.artifactPreservingReads)
+    ? withArtifactPreservingStateReads(run, { agentDatabases: true })
     : run();
 }
 

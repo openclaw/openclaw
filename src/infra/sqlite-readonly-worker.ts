@@ -346,25 +346,13 @@ export function runSqliteReadOnlyWorker(
 ): Promise<string[]>;
 export function runSqliteReadOnlyWorker(
   pathname: string,
-  options: SqliteReadOnlyWorkerOptions,
+  inputOptions: SqliteReadOnlyWorkerOptions,
 ): Promise<SqliteReadOnlyWorkerValue> {
-  if (
-    options.mode === "auth-profile-rows" &&
-    options.source === "canonical" &&
+  const options: SqliteReadOnlyWorkerOptions =
+    (inputOptions.mode === "auth-profile-rows" || inputOptions.mode === "operation") &&
     isArtifactPreservingStateRead("agent")
-  ) {
-    const captured = { ...options, env: { ...options.env } };
-    return runScopedSqliteInspection(captured.signal, async (signal) => {
-      // Keep copying and disposal inside admission, before the recursive read queue.
-      const { readArtifactPreservingAuthRows } =
-        await import("./sqlite-readonly-auth-inspection.js");
-      return readArtifactPreservingAuthRows(
-        pathname,
-        { ...captured, signal },
-        (location, readOptions) => runSqliteReadOnlyWorker(location, readOptions),
-      );
-    });
-  }
+      ? { ...inputOptions, artifactPreserving: true }
+      : inputOptions;
   if (options.mode === "reclaim") {
     // Shared reclamation belongs to the allocation owner, not its first caller's scope.
     return readOnlyWorkerScope.exit(() => runSqliteReadOnlyWorkerOnce(pathname, options));

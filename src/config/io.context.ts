@@ -71,7 +71,7 @@ export function createConfigIoContext(
   transformRecoveryCandidate?: ConfigRecoveryCandidateTransform,
 ) {
   const deps = normalizeConfigIoDeps(
-    isArtifactPreservingStateRead() ? { ...options, observe: false } : options,
+    isArtifactPreservingStateRead("agent") ? { ...options, observe: false } : options,
   );
   const configPath = resolveConfigPathForDeps(deps);
   // The normalized default homedir already applies OPENCLAW_HOME. Path
