@@ -8,7 +8,7 @@ import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
-  installSqliteTempGenerationSchema,
+  installSqliteTempTrackingSchema,
   readSqliteCacheDataVersion,
 } from "../../infra/sqlite-schema-facts.js";
 
@@ -46,21 +46,19 @@ function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
   }
   const hasParticipants = schema.tables.has("session_participants");
   // A main-schema change advances the counter before reinstalling its raw-DML observers.
-  installSqliteTempGenerationSchema(
-    database,
-    {
-      table: "openclaw_session_nodes_cache_generation",
-      triggers: ["session_nodes", "session_participants"].flatMap((table) =>
-        (["INSERT", "UPDATE", "DELETE"] as const).map((operation) => ({
-          name: `openclaw_${table}_cache_generation_${operation.toLowerCase()}`,
-          table,
-          operation,
-          enabled: table === "session_nodes" || hasParticipants,
-        })),
-      ),
-    },
-    trackedSchemaVersion !== undefined,
-  );
+  installSqliteTempTrackingSchema(database, {
+    kind: "generation",
+    table: "openclaw_session_nodes_cache_generation",
+    triggers: ["session_nodes", "session_participants"].flatMap((table) =>
+      (["INSERT", "UPDATE", "DELETE"] as const).map((operation) => ({
+        name: `openclaw_${table}_cache_generation_${operation.toLowerCase()}`,
+        table,
+        operation,
+        enabled: table === "session_nodes" || hasParticipants,
+      })),
+    ),
+    advance: trackedSchemaVersion !== undefined,
+  });
   // A rolled-back schema change can reuse its version on retry after SQLite removes the triggers.
   if (!database.isTransaction) {
     sessionNodesGenerationTrackerSchemaVersions.set(database, schemaVersion);
