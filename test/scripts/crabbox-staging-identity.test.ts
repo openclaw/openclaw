@@ -51,15 +51,21 @@ vi.mock("node:child_process", async (importOriginal) => {
             ? injected.volume
               ? `<key>VolumeUUID</key><string>${injected.volume}</string>`
               : ""
-            : args[0] === "/usr/sbin/sysctl"
-              ? "aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff\n"
-              : undefined;
+            : args[0] === "/usr/sbin/ioreg"
+              ? '"IOPlatformUUID" = "aaaaaaaa-bbbb-4ccc-8ddd-dddddddddddd"'
+              : args[0] === "/usr/sbin/sysctl"
+                ? "aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff\n"
+                : undefined;
       return stdout === undefined
         ? Reflect.apply(actual.spawnSync, actual, args)
         : { status: 0, stdout };
     },
   };
 });
+vi.mock("../../scripts/crabbox-staging-users.mts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/crabbox-staging-users.mts")>()),
+  verifyNoStagingUsers: async () => ({ ok: true }),
+}));
 
 const temporary = useAutoCleanupTempDirTracker(afterAll);
 const posixIt = it.skipIf(process.platform === "win32");
@@ -312,3 +318,16 @@ posixIt.each([false, true])(
     expect(existsSync(f.owner.staging.root)).toBe(renumbered);
   },
 );
+
+posixIt("keeps an idle mirror with an existing recovery lock protected", async () => {
+  const f = stage();
+  const before = readFileSync(f.receiptPath, "utf8");
+  mkdirSync(join(f.owner.staging.root, "recovery.lock"));
+  const result = await command(f.syncRoot, ["recover", f.receipt.id]);
+  expect(result.report).toMatchObject({
+    recovered: false,
+    reason: expect.stringContaining("recovery lock"),
+  });
+  expect(existsSync(f.owner.staging.payload)).toBe(true);
+  expect(readFileSync(f.receiptPath, "utf8")).toBe(before);
+});
