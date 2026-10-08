@@ -142,6 +142,9 @@ function poolFor(
         : owner === "workspace"
           ? "compute"
           : "writer",
+    // Overlay retains three maximum-size manifests plus its decoded result.
+    workerOptions:
+      owner === "workspace" ? { resourceLimits: { maxOldGenerationSizeMb: 1024 } } : undefined,
     sharedCompute: owner === "workspace",
     idleTimeoutMs: 30_000,
   }));
