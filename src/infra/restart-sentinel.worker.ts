@@ -1,8 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type {
-  WorkerOperationContext,
+  WorkerWriteOperationContext,
   WorkerOperationHandlers,
 } from "../state/worker-operation-registry.js";
 import { gitCommitPrefixesMatch } from "./git-commit.js";
@@ -15,26 +14,148 @@ import {
   writeUpdateInstallReceiptRowSync,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
-import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
+import {
+  reserveUpdateFailureReportReceiptRowSync,
+  beginUpdateFailureReportReceiptCleanupRowSync,
+  beginStaleUpdateFailureReportReceiptCleanupRowSync,
+  completeUpdateFailureReportReceiptCleanupRowSync,
+  claimUpdateFailureReportArtifactSweepRowSync,
+  releaseUpdateFailureReportArtifactSweepRowSync,
+  refreshUpdateFailureReportReceiptPreparationRowSync,
+  finalizeUpdateFailureReportReceiptRowSync,
+  markUpdateFailureReportReceiptPendingRowSync,
+  markUpdateFailureReportReceiptPreparedRowSync,
+} from "./update-failure-report-receipt-store.js";
+import type { UpdateFailureReportReceipt } from "./update-failure-report-receipt.js";
 
 function transaction<Input, Output>(
   label: string,
   operation: (db: DatabaseSync, input: Input) => Output,
+  acknowledgeResult = false,
 ) {
-  return (input: Input, { open, stateOptions }: WorkerOperationContext): Output =>
-    runOpenClawStateWriteTransaction(
+  return (input: Input, { write }: WorkerWriteOperationContext): Output =>
+    write(
       ({ db }) => {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const result = operation(db, input);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        if (acknowledgeResult) {
+          deferSqliteWorkerCommitReceipt(db, { kind: "update-report-result", value: result });
+        }
         return result;
       },
-      { database: open(), ...stateOptions() },
       { operationLabel: label },
     );
 }
 
 export const restartSentinelOperations = {
+  "restartSentinel.reserve": transaction(
+    "update-failure-report.reserve",
+    (db, input: { attemptId: string; reservationId: string; previewDigest: string }) =>
+      reserveUpdateFailureReportReceiptRowSync(
+        db,
+        input.attemptId,
+        input.reservationId,
+        input.previewDigest,
+      ),
+    true,
+  ),
+  "restartSentinel.beginCleanup": transaction(
+    "update-failure-report.beginCleanup",
+    (db, input: { attemptId: string; reservationId: string }) =>
+      beginUpdateFailureReportReceiptCleanupRowSync(db, input.attemptId, input.reservationId),
+    true,
+  ),
+  "restartSentinel.beginStaleCleanup": transaction(
+    "update-failure-report.beginStaleCleanup",
+    (db, input: { attemptId: string; reservationId: string }) =>
+      beginStaleUpdateFailureReportReceiptCleanupRowSync(db, input.attemptId, input.reservationId),
+    true,
+  ),
+  "restartSentinel.completeCleanup": transaction(
+    "update-failure-report.completeCleanup",
+    (db, input: { attemptId: string; reservationId: string }) =>
+      completeUpdateFailureReportReceiptCleanupRowSync(db, input.attemptId, input.reservationId),
+    true,
+  ),
+  "restartSentinel.claimSweep": transaction(
+    "update-failure-report.claimSweep",
+    (
+      db,
+      input: {
+        attemptId: string;
+        expectedReservationId: string;
+        sweepOwnerId: string;
+        sweepGeneration: string;
+      },
+    ) =>
+      claimUpdateFailureReportArtifactSweepRowSync(
+        db,
+        input.attemptId,
+        input.expectedReservationId,
+        input.sweepOwnerId,
+        input.sweepGeneration,
+      ),
+    true,
+  ),
+  "restartSentinel.releaseSweep": transaction(
+    "update-failure-report.releaseSweep",
+    (
+      db,
+      input: {
+        attemptId: string;
+        expectedReservationId: string;
+        sweepOwnerId: string;
+        sweepGeneration: string;
+      },
+    ) =>
+      releaseUpdateFailureReportArtifactSweepRowSync(
+        db,
+        input.attemptId,
+        input.expectedReservationId,
+        input.sweepOwnerId,
+        input.sweepGeneration,
+      ),
+    true,
+  ),
+  "restartSentinel.refreshPreparation": transaction(
+    "update-failure-report.refreshPreparation",
+    (db, input: { attemptId: string; reservationId: string }) =>
+      refreshUpdateFailureReportReceiptPreparationRowSync(db, input.attemptId, input.reservationId),
+    true,
+  ),
+  "restartSentinel.finalizeReceipt": transaction(
+    "update-failure-report.finalizeReceipt",
+    (db, input: { attemptId: string; receipt: UpdateFailureReportReceipt }) =>
+      finalizeUpdateFailureReportReceiptRowSync(db, input.attemptId, input.receipt),
+    true,
+  ),
+  "restartSentinel.markPending": transaction(
+    "update-failure-report.markPending",
+    (db, input: { attemptId: string; reservationId: string; previewDigest: string }) =>
+      markUpdateFailureReportReceiptPendingRowSync(
+        db,
+        input.attemptId,
+        input.reservationId,
+        input.previewDigest,
+      ),
+    true,
+  ),
+  "restartSentinel.markPrepared": transaction(
+    "update-failure-report.markPrepared",
+    (db, input: { attemptId: string; reservationId: string; previewDigest: string }) =>
+      markUpdateFailureReportReceiptPreparedRowSync(
+        db,
+        input.attemptId,
+        input.reservationId,
+        input.previewDigest,
+      ),
+    true,
+  ),
   "restartSentinel.admit": (_input: undefined, { open }) => {
     open();
   },
@@ -161,4 +282,4 @@ export const restartSentinelOperations = {
       return changed ? finalized : null;
     },
   ),
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

@@ -762,6 +762,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/harness/native-hook-relay.test.ts",
   "src/cli/native-hook-relay-cli.locator-worker.test.ts",
   "src/cli/command-execution-startup.test.ts",
+  "src/cli/daemon-cli/lifecycle.restart-intent.test.ts",
   "src/cli/config-cli.integration.test.ts",
   "src/cli/config-cli.secrets.integration.test.ts",
   "src/cli/config-model-validation.runtime.test.ts",

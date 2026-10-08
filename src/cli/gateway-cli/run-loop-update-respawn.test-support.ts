@@ -32,7 +32,7 @@ export function registerUpdateRespawnTests(fixtures: UpdateRespawnFixtures): voi
     waitForLoopCondition,
     createSignaledLoopHarness,
     markUpdateRestartSentinelFailure,
-    writeGatewayRestartHandoffSync,
+    writeGatewayRestartHandoff,
     consumeGatewayRestartIntent,
     managedUpdateSuccessorOwner,
     isForegroundUpdateHandoff,
@@ -43,7 +43,7 @@ export function registerUpdateRespawnTests(fixtures: UpdateRespawnFixtures): voi
     completeForegroundUpdateHandoffAfterClose,
     killProcessTree,
     flushLogger,
-    consumeGatewayRestartIntentPayloadSync,
+    consumeGatewayRestartIntentPayload,
     commitManagedServiceUpdateHandoff,
     setPlatform,
     expectRestartHandoffCall,
@@ -153,10 +153,10 @@ export function registerUpdateRespawnTests(fixtures: UpdateRespawnFixtures): voi
           expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
           expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
           expect(runtime.exit).not.toHaveBeenCalled();
-          const consumedIntents = consumeGatewayRestartIntentPayloadSync.mock.calls.length;
+          const consumedIntents = consumeGatewayRestartIntentPayload.mock.calls.length;
           captureSignal("SIGUSR2")();
           await setImmediate();
-          expect(consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledTimes(consumedIntents);
+          expect(consumeGatewayRestartIntentPayload).toHaveBeenCalledTimes(consumedIntents);
           updater.resolve({ respawn: outcome !== "unsafe" });
           if (readinessRejected) {
             await waitForLoopCondition(
@@ -185,7 +185,7 @@ export function registerUpdateRespawnTests(fixtures: UpdateRespawnFixtures): voi
           expect(commitManagedServiceUpdateHandoff).not.toHaveBeenCalled();
           expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
           expect(markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
-          expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
+          expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
           if (outcome === "unsafe") {
             expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
           } else {
@@ -286,7 +286,7 @@ process.send("parked");`,
         expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
         expect(commitManagedServiceUpdateHandoff).not.toHaveBeenCalled();
         expect(markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
-        expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
+        expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
 
         const listening = once(child, "message");
         child.send("listen");
@@ -396,7 +396,7 @@ process.send("parked");`,
       ...(launchd ? { handoffSpawned: Promise.resolve(false) } : {}),
     });
     if (!launchd) {
-      writeGatewayRestartHandoffSync.mockReturnValueOnce(null);
+      writeGatewayRestartHandoff.mockResolvedValueOnce(null);
     }
     try {
       if (launchd) {

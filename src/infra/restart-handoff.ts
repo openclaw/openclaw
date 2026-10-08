@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Selectable } from "kysely";
@@ -7,11 +8,17 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
 
 // Restart handoff rows let a supervisor explain a recent gateway restart after
 // the old process exits. The row is short-lived, bounded, and replaced on write.
@@ -278,17 +285,20 @@ function readGatewayRestartHandoffRowSync(env: NodeJS.ProcessEnv) {
 }
 
 /** Write the bounded supervisor restart handoff atomically. */
-export function writeGatewayRestartHandoffSync(opts: {
-  env?: NodeJS.ProcessEnv;
-  pid?: number;
-  processInstanceId?: string;
-  reason?: string;
-  restartKind: GatewayRestartHandoffRestartKind;
-  supervisorMode?: GatewayRestartHandoffSupervisorMode | null;
-  restartTrace?: GatewayRestartHandoff["restartTrace"];
-  ttlMs?: number;
-  createdAt?: number;
-}): GatewayRestartHandoff | null {
+export async function writeGatewayRestartHandoff(
+  opts: {
+    env?: NodeJS.ProcessEnv;
+    pid?: number;
+    processInstanceId?: string;
+    reason?: string;
+    restartKind: GatewayRestartHandoffRestartKind;
+    supervisorMode?: GatewayRestartHandoffSupervisorMode | null;
+    restartTrace?: GatewayRestartHandoff["restartTrace"];
+    ttlMs?: number;
+    createdAt?: number;
+  },
+  assertCurrent?: () => void,
+): Promise<GatewayRestartHandoff | null> {
   const pid = asPositiveSafeInteger(opts.pid ?? process.pid) ?? null;
   if (pid === null) {
     return null;
@@ -316,38 +326,34 @@ export function writeGatewayRestartHandoffSync(opts: {
     ...(restartTrace ? { restartTrace } : {}),
   };
 
+  const context = captureOpenClawStateWorkerContext({ env });
+  const check = () => {
+    context.admission.assertCurrent();
+    assertCurrent?.();
+  };
+  let admission: SqliteWorkerOperationAdmission | undefined;
   try {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const stateDb = getNodeSqliteKysely<GatewayRestartHandoffDatabase>(db);
-        const row = {
-          kind: payload.kind,
-          version: payload.version,
-          intent_id: payload.intentId,
-          pid: payload.pid,
-          process_instance_id: payload.processInstanceId ?? null,
-          created_at: payload.createdAt,
-          expires_at: payload.expiresAt,
-          reason: payload.reason ?? null,
-          restart_trace_started_at: payload.restartTrace?.startedAt ?? null,
-          restart_trace_last_at: payload.restartTrace?.lastAt ?? null,
-          source: payload.source,
-          restart_kind: payload.restartKind,
-          supervisor_mode: payload.supervisorMode,
-          updated_at_ms: Date.now(),
-        };
-        executeSqliteQuerySync(
-          db,
-          stateDb
-            .insertInto("gateway_restart_handoff")
-            .values({ handoff_key: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KEY, ...row })
-            .onConflict((conflict) => conflict.column("handoff_key").doUpdateSet(row)),
-        );
+    await runOpenClawStateWorkerOperation(
+      context,
+      (scope) => scope.execute({ type: "restartLifecycle.writeHandoff", input: payload }),
+      {
+        assertCurrent: check,
+        createAdmission: () => {
+          admission = createSqliteWorkerOperationAdmission((_request, grant) => {
+            check();
+            grant();
+          });
+          return { admission, nativeLocations: [context.admission.databasePath] };
+        },
       },
-      { env },
     );
+    check();
     return payload;
   } catch (err) {
+    check();
+    if (admission?.committed && isDeepStrictEqual(admission.committed.facts, payload)) {
+      return payload;
+    }
     handoffLog.warn(`failed to write gateway restart handoff: ${String(err)}`);
     return null;
   }

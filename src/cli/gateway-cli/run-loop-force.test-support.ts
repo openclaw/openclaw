@@ -20,7 +20,7 @@ export function registerGatewayForcedRestartTests({
   runLoopWithStart,
   waitForGatewayActiveWork,
   consumeGatewayRestartIntent,
-  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewayRestartIntentPayload,
   isGatewayWorkAdmissionClosed,
   gatewayLog,
   readCgroup,
@@ -114,10 +114,12 @@ export function registerGatewayForcedRestartTests({
   ] as const)(
     "drains admitted work before a forced $signal restart (budget=$budget)",
     async ({ signal, waitMs, budget }) => {
-      (signal === "SIGTERM"
-        ? consumeGatewayRestartIntentPayloadSync
-        : consumeGatewayRestartIntent
-      ).mockReturnValueOnce({ force: true, ...(waitMs === undefined ? {} : { waitMs }) });
+      const intent = { force: true, ...(waitMs === undefined ? {} : { waitMs }) };
+      if (signal === "SIGTERM") {
+        consumeGatewayRestartIntentPayload.mockResolvedValueOnce(intent);
+      } else {
+        consumeGatewayRestartIntent.mockReturnValueOnce(intent);
+      }
       createGatewayActiveWorkSnapshot.mockReturnValueOnce(
         createActiveWorkSnapshot({ agentRuns: 1, embeddedRuns: 1 }, [
           {

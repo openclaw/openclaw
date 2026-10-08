@@ -6,7 +6,7 @@ import { setPlatform, withIsolatedSignals } from "./run-loop.test-support.js";
 const {
   readLaunchdStopTimeout,
   acquireGatewayLock,
-  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewayRestartIntentPayload,
   restartGatewayProcessWithFreshPid,
   respawnGatewayProcessForUpdate,
   gatewayLog,
@@ -68,7 +68,7 @@ describe("runGatewayLoop darwin launchd supervision", () => {
   );
 
   it("leaves the successor to launchd after a SIGTERM restart intent", async () => {
-    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: "gateway.restart" });
+    consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ reason: "gateway.restart" });
     restartGatewayProcessWithFreshPid.mockReturnValueOnce({
       mode: "supervised",
       handoffSpawned: Promise.resolve(true),

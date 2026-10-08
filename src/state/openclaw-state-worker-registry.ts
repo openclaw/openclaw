@@ -29,6 +29,7 @@ import type { CurrentConversationBindingWorkerOperations } from "../infra/outbou
 import type { PromotionWorkerOperations } from "../infra/promotions-feed.worker.js";
 import type { ApnsRegistrationWorkerOperations } from "../infra/push-apns-store.worker-contract.js";
 import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-contract.js";
+import type { RestartLifecycleWorkerOperations } from "../infra/restart-lifecycle.worker.js";
 import type { RestartSentinelWorkerOperations } from "../infra/restart-sentinel.worker-contract.js";
 import type { SessionDeliveryWorkerOperations } from "../infra/session-delivery-queue.worker.js";
 import type { DiagnosticWorkerOperations } from "../infra/sqlite-audit-record.worker-contract.js";
@@ -60,6 +61,7 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBoo
   ConfigSnapshotWorkerOperations &
   DiagnosticWorkerOperations &
   RestartSentinelWorkerOperations &
+  RestartLifecycleWorkerOperations &
   WebPushWorkerOperations &
   PreparedPoolPresenceWorkerOperations &
   ProjectRegistryWorkerOperations &
@@ -124,6 +126,8 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
     import("../config/config-journal-snapshot.worker.js").then((m) => m.configSnapshotOperations),
   diagnostic: () =>
     import("../infra/sqlite-audit-record.worker.js").then((m) => m.diagnosticOperations),
+  restartLifecycle: () =>
+    import("../infra/restart-lifecycle.worker.js").then((m) => m.restartLifecycleOperations),
   restartSentinel: () =>
     import("../infra/restart-sentinel.worker.js").then((m) => m.restartSentinelOperations),
   preparedPoolPresence: () =>

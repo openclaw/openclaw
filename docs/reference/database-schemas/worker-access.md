@@ -42,6 +42,20 @@ the committing worker still compares the complete current target before changing
 it. ACP transactions use the shared writer's retained handle and validate ownership
 after `BEGIN`, without a duplicate ownership read before the transaction.
 
+Update failure-report reservations, transitions, and artifact cleanup use the
+existing shared-state worker. A report retains its original physical database
+through upload and finalization; shutdown joins accepted reports before closing
+storage. Pending issue creation rereads its receipt in the worker transaction
+and rechecks current host authority immediately before the external request.
+
+Restart signals capture their physical store before yielding and consume the
+intent in one worker `DELETE ... RETURNING` transaction. Signal dispatch remains
+FIFO under the run loop's admission fence; close and successor handoff join
+accepted signal work. Supervisor handoff writes use the same writer, while boot
+handoff consumption and native service-control lock operations retain their
+existing synchronous contracts. Schemas, stored formats, retention, permissions,
+and published-driver update behavior are unchanged.
+
 Conversation directory registration and outbound binding predicates use the existing
 agent writer. Registration retains the selected physical store across directory
 discovery; transaction and commit grants recheck live routing authority. Delivery
