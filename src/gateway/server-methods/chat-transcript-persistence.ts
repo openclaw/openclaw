@@ -6,7 +6,7 @@ import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
-  patchSessionEntryCore,
+  applySessionEntryOperation,
   publishTranscriptUpdate,
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
@@ -370,14 +370,17 @@ async function touchAssistantTranscriptSessionEntry(
     return;
   }
   const transcriptMarkerUpdatedAt = Date.now();
-  await patchSessionEntryCore(
+  await applySessionEntryOperation(
     {
       storePath: scope.storePath,
       sessionKey: scope.sessionKey,
       ...(scope.agentId ? { agentId: scope.agentId } : {}),
     },
-    (current) =>
-      current.sessionId === scope.sessionId ? { updatedAt: transcriptMarkerUpdatedAt } : null,
+    {
+      kind: "fields",
+      expected: { sessionId: scope.sessionId },
+      patch: { updatedAt: transcriptMarkerUpdatedAt },
+    },
     {
       skipMaintenance: true,
     },
