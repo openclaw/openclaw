@@ -245,6 +245,7 @@ it.each(["ok", "error"] as const)(
     const pending = runOpenClawAgentWriteAdmission(options, () => {
       clock.now = 1_100;
       if (outcome === "error") {
+        // oxlint-disable-next-line typescript/only-throw-error -- Diagnostics must preserve non-Error rejection identity.
         throw result;
       }
       return result;

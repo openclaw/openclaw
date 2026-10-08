@@ -45,7 +45,7 @@ function observeSlowWriters(
   const getChildLogger = logging.getChildLogger;
   vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
     const logger = getChildLogger(...args);
-    vi.spyOn(logger, "warn").mockImplementation((first, second) => {
+    vi.spyOn(logger, "warn").mockImplementation((first: unknown, second: unknown) => {
       if (second === "slow SQLite session write") {
         const fields = first;
         assert(fields && typeof fields === "object");
