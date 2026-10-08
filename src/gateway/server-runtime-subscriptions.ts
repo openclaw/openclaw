@@ -640,6 +640,10 @@ export function startGatewayEventSubscriptions(params: {
       ?.then((handler) => handler.dispose())
       .catch(() => undefined);
     await sessionLifecyclePersistence.drain();
+    // Terminal persistence can publish further committed transcript updates.
+    while (agentEventDispatches.size > 0) {
+      await Promise.allSettled(agentEventDispatches);
+    }
     await auditRecorder.stop();
   };
 
@@ -651,21 +655,25 @@ export function startGatewayEventSubscriptions(params: {
     sessionActivitySummaries.handleTranscript(evt);
     // Share the agent queue so a later cumulative update cannot outrun retirement.
     const agentHandler = agentEventHandlerLoader.peek();
-    void dispatchEventHandler<InternalSessionTranscriptUpdate>({
-      loadHandler: agentHandler
-        ? () =>
-            agentHandler
-              .then(
-                (handler) => handler.retireTranscript(evt),
-                () => undefined,
-              )
-              .then(getTranscriptUpdateHandler)
-        : getTranscriptUpdateHandler,
-      event: evt,
-      log: params.log,
-      failureMessage: "Transcript update dispatch failed",
-      context: { sessionKey: evt.sessionKey },
-    });
+    const dispatch = runOutsideAsyncWorkScope(() =>
+      dispatchEventHandler<InternalSessionTranscriptUpdate>({
+        loadHandler: agentHandler
+          ? () =>
+              agentHandler
+                .then(
+                  (handler) => handler.retireTranscript(evt),
+                  () => undefined,
+                )
+                .then(getTranscriptUpdateHandler)
+          : getTranscriptUpdateHandler,
+        event: evt,
+        log: params.log,
+        failureMessage: "Transcript update dispatch failed",
+        context: { sessionKey: evt.sessionKey },
+      }),
+    );
+    agentEventDispatches.add(dispatch);
+    void dispatch.then(() => agentEventDispatches.delete(dispatch));
   });
 
   // Committed resets/rotations can change access after the originating run is gone.

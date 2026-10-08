@@ -244,23 +244,16 @@ async function loadChatSendSessionContext(params: {
     },
   );
   assertConfigCurrent();
+  const preparationFor = (config: OpenClawConfig) =>
+    chatSendPreparationConfig(
+      config,
+      requestedAgentId,
+      sessionLoadResult.entry,
+      request,
+      sessionLoadKey,
+    );
   if (
-    !isDeepStrictEqual(
-      chatSendPreparationConfig(
-        runtimeConfig,
-        requestedAgentId,
-        sessionLoadResult.entry,
-        request,
-        sessionLoadKey,
-      ),
-      chatSendPreparationConfig(
-        context.getRuntimeConfig(),
-        requestedAgentId,
-        sessionLoadResult.entry,
-        request,
-        sessionLoadKey,
-      ),
-    )
+    !isDeepStrictEqual(preparationFor(runtimeConfig), preparationFor(context.getRuntimeConfig()))
   ) {
     throw new Error("Session preparation changed; retry.");
   }

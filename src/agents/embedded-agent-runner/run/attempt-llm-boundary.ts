@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
@@ -265,10 +266,7 @@ export function installRuntimeContextMessageForPrompt(params: {
       return;
     }
     const canonicalUser = owner.transcriptUser ?? owner.user;
-    const canonicalKey =
-      typeof canonicalUser === "object" && canonicalUser !== null
-        ? Reflect.get(canonicalUser, "idempotencyKey")
-        : undefined;
+    const canonicalKey = asOptionalObjectRecord(canonicalUser)?.idempotencyKey;
     const userIdempotencyKey =
       owner.transcriptUser === undefined
         ? (params.persistedUserIdempotencyKey ?? canonicalKey)
@@ -366,30 +364,6 @@ function transformUserTextContent(
   return { content: changed ? projected : content, changed };
 }
 
-function replaceUserTextPrompt(params: {
-  messages: AgentMessage[];
-  userIndex: number;
-  transcriptText?: string;
-  replace: (text: string) => string | undefined;
-}): AgentMessage[] {
-  const { userIndex } = params;
-  const message = params.messages[userIndex];
-  if (!message || message.role !== "user") {
-    return params.messages;
-  }
-  const content = (message as { content?: unknown }).content;
-  const transformed = transformUserTextContent(content, params.replace, "first");
-  if (!transformed.changed) {
-    return params.messages;
-  }
-  const next = params.messages.slice();
-  next[userIndex] = { ...message, content: transformed.content } as AgentMessage;
-  if (params.transcriptText !== undefined) {
-    markTranscriptPromptText(next[userIndex], params.transcriptText);
-  }
-  return next;
-}
-
 function composeModelPromptContext(params: {
   prompt: string;
   prependContext?: string;
@@ -440,10 +414,7 @@ export function installModelPromptTransform(params: {
       }
     }
     const canonicalPrompt = promptOwner?.transcriptUser ?? targetPrompt;
-    const key =
-      typeof canonicalPrompt === "object" && canonicalPrompt !== null
-        ? Reflect.get(canonicalPrompt, "idempotencyKey")
-        : undefined;
+    const key = asOptionalObjectRecord(canonicalPrompt)?.idempotencyKey;
     let userIndex = messages.findIndex(
       (message) => message === targetPrompt || message === canonicalPrompt,
     );
@@ -466,25 +437,38 @@ export function installModelPromptTransform(params: {
       );
       userIndex = matches.length === 1 ? (matches[0] ?? -1) : -1;
     }
-    const promptMessages = replaceUserTextPrompt({
-      messages,
-      userIndex,
-      transcriptText: params.transcriptPrompt,
-      replace: (text) => {
-        if (modelPrompt?.trim() && text === params.transcriptPrompt) {
-          return modelPrompt;
+    const transcriptPrompt = params.transcriptPrompt;
+    const targetIndex = userIndex;
+    const message = messages[targetIndex];
+    let promptMessages = messages;
+    if (message && message.role === "user") {
+      const transformed = transformUserTextContent(
+        message.content,
+        (text) => {
+          if (modelPrompt?.trim() && text === params.transcriptPrompt) {
+            return modelPrompt;
+          }
+          if (!hasPromptContext) {
+            return undefined;
+          }
+          const replacement = composeModelPromptContext({
+            prompt: text,
+            prependContext: params.prependContext,
+            appendContext: params.appendContext,
+          });
+          return replacement === text ? undefined : replacement;
+        },
+        "first",
+      );
+      if (transformed.changed) {
+        const nextMessages = messages.slice();
+        nextMessages[targetIndex] = { ...message, content: transformed.content } as AgentMessage;
+        if (transcriptPrompt !== undefined) {
+          markTranscriptPromptText(nextMessages[targetIndex], transcriptPrompt);
         }
-        if (!hasPromptContext) {
-          return undefined;
-        }
-        const replacement = composeModelPromptContext({
-          prompt: text,
-          prependContext: params.prependContext,
-          appendContext: params.appendContext,
-        });
-        return replacement === text ? undefined : replacement;
-      },
-    });
+        promptMessages = nextMessages;
+      }
+    }
     return originalTransformContext
       ? await originalTransformContext.call(agent, promptMessages, signal)
       : promptMessages;
@@ -641,16 +625,11 @@ function normalizeUserMessagesForLlmBoundary(
 function stripUnsafeBlockedRunMetadata(messages: AgentMessage[]): AgentMessage[] {
   let changed = false;
   const nextMessages = messages.map((message) => {
-    const openclaw = Reflect.get(message, "__openclaw");
-    if (!openclaw || typeof openclaw !== "object") {
+    const openclaw = asOptionalObjectRecord(Reflect.get(message, "__openclaw"));
+    const blocked = asOptionalObjectRecord(openclaw?.beforeAgentRunBlocked);
+    if (!blocked) {
       return message;
     }
-    const beforeAgentRunBlocked = (openclaw as { beforeAgentRunBlocked?: unknown })
-      .beforeAgentRunBlocked;
-    if (!beforeAgentRunBlocked || typeof beforeAgentRunBlocked !== "object") {
-      return message;
-    }
-    const blocked = beforeAgentRunBlocked as Record<string, unknown>;
     const safeBlocked: Record<string, unknown> = {};
     if (typeof blocked.blockedBy === "string") {
       safeBlocked.blockedBy = blocked.blockedBy;
@@ -659,7 +638,7 @@ function stripUnsafeBlockedRunMetadata(messages: AgentMessage[]): AgentMessage[]
       safeBlocked.blockedAt = blocked.blockedAt;
     }
     const nextOpenClaw = {
-      ...(openclaw as Record<string, unknown>),
+      ...openclaw,
       beforeAgentRunBlocked: safeBlocked,
     };
     changed = true;

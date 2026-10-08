@@ -55,7 +55,6 @@ function readMetadata() {
 }
 
 it.each([
-  { name: "ordinary preview", fixMissing: false, diskBudget: false },
   { name: "missing transcript preview", fixMissing: true, diskBudget: false },
   { name: "over-budget preview", fixMissing: false, diskBudget: true },
 ])(

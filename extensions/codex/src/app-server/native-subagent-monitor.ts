@@ -86,6 +86,7 @@ import {
   type NativeParentRegistration,
 } from "./native-subagent-parent-owner.js";
 import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
+import { canPrepareNativeReceiver } from "./native-subagent-receiver.js";
 import {
   CodexNativeSubagentRecoveryCoordinator,
   logRecoveryFailure,
@@ -603,6 +604,7 @@ class Monitor {
           this.childStates,
         ),
       admissions: this.admissionCustody.entries,
+      canPrepareReceiver: (state, threadId) => this.canPrepareReceiverChild(state, threadId),
       prepareReceiver: (state, threadId, nativeParentThreadId) =>
         this.prepareReceiverChild(state, threadId, nativeParentThreadId),
       registerChildThread: (state, threadId, options) =>
@@ -1166,43 +1168,34 @@ class Monitor {
     return known?.parent === state ? known.deliveryReceipts : state.deliveryReceipts;
   }
 
+  private canPrepareReceiverChild(state: ParentState, threadId: string): boolean {
+    const child = this.knownChildren.get(threadId);
+    return canPrepareNativeReceiver(
+      state,
+      child?.parent ?? this.parentStates.get(threadId),
+      child,
+      threadId,
+      {
+        isCurrent: (parent) => this.isCurrentParent(parent),
+        isRetired: (parent) => this.retiredParentStates.has(parent),
+        hasChildCustody: (parent, id) => this.submissions.hasChildCustody(parent, id),
+      },
+    );
+  }
+
   private prepareReceiverChild(
     state: ParentState,
     threadId: string,
     nativeParentThreadId?: string,
   ): boolean {
+    if (!this.canPrepareReceiverChild(state, threadId)) {
+      return false;
+    }
     const known = this.knownChildren.get(threadId);
-    if (known?.parent === state) {
+    if (!known || known.parent === state) {
       return true;
     }
-    if (
-      !this.isCurrentParent(state) ||
-      (known &&
-        (!known.assignment.terminal ||
-          known.pendingTurns.length > 0 ||
-          this.submissions.hasChildCustody(known.parent, threadId)))
-    ) {
-      return false;
-    }
-    if (!known) {
-      return true;
-    }
-    const previous = known.parent;
-    if (
-      nativeParentThreadId !== known.nativeParentThreadId ||
-      this.retiredParentStates.has(previous) ||
-      !state.requesterSessionKey ||
-      previous.requesterSessionKey !== state.requesterSessionKey ||
-      !previous.historyOwner ||
-      !state.historyOwner ||
-      !matchesNativeAssignmentLifecycle(previous.historyOwner, state.historyOwner) ||
-      ![...state.owners.values()].some((owner) => owner.completionCustody?.isCurrent())
-    ) {
-      return false;
-    }
-    try {
-      state.assignmentStore?.assertCurrent();
-    } catch {
+    if (nativeParentThreadId !== known.nativeParentThreadId) {
       return false;
     }
     // Only admitted input with freshly read lineage can transfer observation.

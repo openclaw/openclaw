@@ -18,6 +18,17 @@ JavaScript context: variables and functions never carry over to another cell.
 declare const catalog: ToolCatalog;
 declare const MCP: Record<string, unknown>;
 declare const namespaces: Record<string, unknown>;
+declare const API: {
+  list(prefix?: string): Promise<{
+    files: Array<{ path: string; description?: string; bytes?: number }>;
+  }>;
+  read(path: string): Promise<{
+    path: string;
+    description?: string;
+    content: string;
+    bytes: number;
+  }>;
+};
 
 declare function setTimeout(
   callback: (...args: unknown[]) => void,
@@ -31,6 +42,10 @@ declare function yield_control(reason?: string): Promise<void>;
 declare function store(key: string, value: unknown): Promise<void>;
 declare function load(key: string): Promise<unknown>;
 ```
+
+`API.read(path)` returns a file record, not a string. The declaration text is
+`(await API.read(path)).content`; for example,
+`(await API.read("mcp/lab.d.ts")).content.match(/function\s+\w+/g)`.
 
 `TextEncoder` and `TextDecoder` are available for local text and byte transforms.
 Encoder and decoder instances survive `wait` under either executor. These APIs
@@ -139,8 +154,9 @@ MCP handles invoke the existing namespace path with one object argument, includi
 its input defaults, policy checks, approvals, and native MCP result projection.
 Their `describe()` returns the exact tool's `$api(method, { schema: true })`
 header and schemas. A normalized method name takes precedence over a colliding
-original tool name when selecting a `$api` declaration. Use `API.read(handle.apiPath)` for the entire server's
-TypeScript declaration. Search also accepts the fully qualified `callableName`.
+original tool name when selecting a `$api` declaration. Use
+`(await API.read(handle.apiPath)).content` for the entire server's TypeScript
+declaration. Search also accepts the fully qualified `callableName`.
 `catalog.all()` continues to list only native and client handles; searching does
 not add remote tools to that list or to the trusted quick index.
 

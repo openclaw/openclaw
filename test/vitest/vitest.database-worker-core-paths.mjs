@@ -282,7 +282,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/wizard/setup.gateway-config.test.ts",
   "src/state/openclaw-state-lease-async.test.ts",
   "src/state/openclaw-state-db.wal.test.ts",
-  "src/state/openclaw-state-lease-heartbeat.activation.test.ts",
   "src/plugins/diffs-cleanup.lifecycle.test.ts",
   "src/agents/agent-tools-agent-config.exec.test.ts",
   "src/agents/agent-tools.safe-bins.test.ts",

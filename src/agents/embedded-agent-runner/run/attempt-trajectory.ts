@@ -4,6 +4,7 @@ import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js"
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { resolveAttemptTrajectorySessionFile } from "./attempt-transcript-helpers.js";
+import { projectTrajectorySessionTarget } from "./shared-run-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export async function prepareEmbeddedAttemptTrajectory(input: {
@@ -36,18 +37,7 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
     throw new Error("trajectory preparation requires an active admitted run");
   }
   assertActive();
-  const sessionTarget =
-    attempt.sessionTarget?.agentId &&
-    attempt.sessionTarget.sessionId &&
-    attempt.sessionTarget.sessionKey &&
-    attempt.sessionTarget.storePath
-      ? {
-          agentId: attempt.sessionTarget.agentId,
-          sessionId: attempt.sessionTarget.sessionId,
-          sessionKey: attempt.sessionTarget.sessionKey,
-          storePath: attempt.sessionTarget.storePath,
-        }
-      : undefined;
+  const { sessionTarget } = projectTrajectorySessionTarget(attempt.sessionTarget);
   const recorder = await createTrajectoryRuntimeRecorder({
     cfg: attempt.config,
     env: process.env,

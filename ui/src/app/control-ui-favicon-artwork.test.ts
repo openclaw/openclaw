@@ -2,7 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TabIconPreference } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
+import { recordLobsterVisit } from "../components/lobster-dex.ts";
+import { loadUnlockedLobsterFavicon } from "../components/lobster-favicon.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { applyControlUiFaviconImage } from "./control-ui-environment-presentation.runtime.ts";
 import { connectControlUiFaviconArtwork } from "./control-ui-favicon-artwork.runtime.ts";
 import { client, createGatewayHarness } from "./overlays-access.test-support.ts";
@@ -16,6 +19,8 @@ vi.mock("../lib/identity-avatar-loader.ts", () => ({
   resolveAvatarImageUrl: vi.fn(),
   retainAvatarImageUrl: vi.fn(() => vi.fn()),
 }));
+// mock-isolation: Pixel decoding is covered at the real browser boundary; this owner fences asynchronous results.
+vi.mock("../components/lobster-favicon.ts", () => ({ loadUnlockedLobsterFavicon: vi.fn() }));
 const cleanups: Array<() => void> = [];
 function setup(preference?: TabIconPreference) {
   const gateway = createGatewayHarness(client(async () => ({})));
@@ -60,9 +65,56 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  vi.mocked(loadUnlockedLobsterFavicon).mockReset();
 });
 
 describe("tab icon artwork lifecycle", () => {
+  it("re-bakes selected lobster artwork on theme and unlock changes, retaining an unavailable choice", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const image = document.createElement("img");
+    vi.mocked(loadUnlockedLobsterFavicon).mockResolvedValue(null);
+    const fixture = setup("lobster:crimson");
+    await vi.dynamicImportSettled();
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(null);
+    expect(fixture.theme.settings.tabIcon).toBe("lobster:crimson");
+    vi.mocked(loadUnlockedLobsterFavicon).mockResolvedValue(image);
+    recordLobsterVisit("crimson", { name: "Pinchy" });
+    await vi.dynamicImportSettled();
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(image);
+    const afterUnlock = vi.mocked(loadUnlockedLobsterFavicon).mock.calls.length;
+    fixture.publish();
+    await vi.dynamicImportSettled();
+    expect(loadUnlockedLobsterFavicon).toHaveBeenCalledTimes(afterUnlock + 1);
+    fixture.disconnect();
+    recordLobsterVisit("blue");
+    fixture.publish();
+    await vi.dynamicImportSettled();
+    expect(loadUnlockedLobsterFavicon).toHaveBeenCalledTimes(afterUnlock + 1);
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(null);
+  });
+
+  it("fences late lobster images after selection, Gateway replacement, and teardown", async () => {
+    for (const retire of ["selection", "gateway", "disconnect"] as const) {
+      const pending = createDeferred<HTMLImageElement | null>();
+      vi.mocked(loadUnlockedLobsterFavicon).mockReturnValue(pending.promise);
+      const fixture = setup("lobster:crimson");
+      await vi.dynamicImportSettled();
+      if (retire === "selection") {
+        fixture.theme.settings.tabIcon = "default";
+        fixture.publish();
+      } else if (retire === "gateway") {
+        fixture.gateway.gateway.connectionRevision += 1;
+      } else {
+        fixture.disconnect();
+      }
+      pending.resolve(document.createElement("img"));
+      await pending.promise;
+      await Promise.resolve();
+      expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(null);
+      fixture.disconnect();
+    }
+  });
+
   it("does not load agent artwork for the default choice", () => {
     const fixture = setup();
     fixture.selection.state.selectedId = "other";
@@ -70,6 +122,7 @@ describe("tab icon artwork lifecycle", () => {
     expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(null);
     expect(resolveAvatarImageUrl).not.toHaveBeenCalled();
     expect(fixture.identity.ensure).not.toHaveBeenCalled();
+    expect(loadUnlockedLobsterFavicon).not.toHaveBeenCalled();
   });
 
   it("discards superseded protected-avatar results and stops reacting after disconnect", async () => {

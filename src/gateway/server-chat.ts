@@ -96,7 +96,6 @@ import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
-import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 import { readTranscriptMessageIdempotencyKey } from "./session-transcript-entry-message.js";
@@ -563,61 +562,55 @@ export function createAgentEventHandler({
           sessionId: evt.sessionId,
           persistence,
         });
-        const broadcastSessionChange = (
-          snapshotEvent?: AgentEventPayload,
-          read?: SessionRowReadView,
-        ) => {
-          if (opts?.publishLifecycle === false || parseCronRunScopeSuffix(sessionKey).runId) {
-            return;
-          }
-          const sessionEventConnIds = sessionEventSubscribers.getAll();
-          if (!hasSessionChangeReceivers(sessionEventConnIds)) {
-            return;
-          }
-          broadcastToConnIds(
-            "sessions.changed",
-            {
-              sessionKey,
-              ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-              phase: lifecyclePhase,
-              runId: evt.runId,
-              ...(clientRunId !== evt.runId ? { clientRunId } : {}),
-              ts: evt.ts,
-              ...buildSessionEventSnapshot(
+        const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) =>
+          withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, (read) => {
+            if (opts?.publishLifecycle === false || parseCronRunScopeSuffix(sessionKey).runId) {
+              return;
+            }
+            const sessionEventConnIds = sessionEventSubscribers.getAll();
+            if (!hasSessionChangeReceivers(sessionEventConnIds)) {
+              return;
+            }
+            broadcastToConnIds(
+              "sessions.changed",
+              {
                 sessionKey,
-                snapshotEvent,
-                sessionAgentId,
-                true,
-                true,
-                evt,
-                read,
-              ),
-            },
-            sessionEventConnIds,
-            {
-              dropIfSlow: true,
-              ...(read && projection
-                ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
-                : {}),
-            },
-          );
-        };
+                ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+                phase: lifecyclePhase,
+                runId: evt.runId,
+                ...(clientRunId !== evt.runId ? { clientRunId } : {}),
+                ts: evt.ts,
+                ...buildSessionEventSnapshot(
+                  sessionKey,
+                  snapshotEvent,
+                  sessionAgentId,
+                  true,
+                  true,
+                  evt,
+                  read,
+                ),
+              },
+              sessionEventConnIds,
+              {
+                dropIfSlow: true,
+                ...(read && projection
+                  ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
+                  : {}),
+              },
+            );
+          });
         // Terminal writes serialize with restart markers. Reload only after the
         // write so subscribers see the canonical post-race session state.
         void persistence
           .then(
             async () => {
-              await withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, (read) =>
-                broadcastSessionChange(undefined, read),
-              );
+              await broadcastSessionChange();
             },
             async (err: unknown) => {
               logError(
                 `gateway: terminal session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(evt.runId)} error=${formatForLog(err)}`,
               );
-              await withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, (read) =>
-                broadcastSessionChange(evt, read),
-              );
+              await broadcastSessionChange(evt);
             },
           )
           .catch((error: unknown) => {
@@ -754,6 +747,22 @@ export function createAgentEventHandler({
       broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, "", opts);
       return;
     }
+    const broadcastCurrent = (broadcastOptions: typeof opts) => {
+      const projected = chatRunState.resolveBuffer(clientRunId);
+      if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId, opts?.isHeartbeat)) {
+        return;
+      }
+      const mergedText = projected.suppress ? "" : projected.text;
+      broadcastChatDelta(
+        sessionKey,
+        agentId,
+        clientRunId,
+        sourceRunId,
+        seq,
+        mergedText,
+        broadcastOptions,
+      );
+    };
     if (run.deltaSentAt !== undefined && !input.replace) {
       scheduleLiveTextFlush(run, "chat", LIVE_TEXT_PACING_MS - (now - run.deltaSentAt), () => {
         if (run.bufferIsCurrent?.() === false) {
@@ -761,28 +770,11 @@ export function createAgentEventHandler({
           agentRunSeq.delete(sourceRunId);
           return;
         }
-        const projected = chatRunState.resolveBuffer(clientRunId);
-        if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId, opts?.isHeartbeat)) {
-          return;
-        }
-        broadcastChatDelta(
-          sessionKey,
-          agentId,
-          clientRunId,
-          sourceRunId,
-          seq,
-          projected.suppress ? "" : projected.text,
-          { controlUiVisible: opts?.controlUiVisible },
-        );
+        broadcastCurrent({ controlUiVisible: opts?.controlUiVisible });
       });
       return;
     }
-    const projected = chatRunState.resolveBuffer(clientRunId);
-    if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId, opts?.isHeartbeat)) {
-      return;
-    }
-    const mergedText = projected.suppress ? "" : projected.text;
-    broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, mergedText, opts);
+    broadcastCurrent(opts);
   };
 
   const flushBufferedChatDeltaIfNeeded = (
@@ -1253,18 +1245,17 @@ export function createAgentEventHandler({
 
     // Include sessionKey so Control UI can filter tool streams per session.
     const spawnedBy = sessionKey ? resolveSpawnedBy(sessionKey) : null;
-    const agentPayload = sessionKey
-      ? {
-          ...eventForClients,
-          sessionKey,
-          ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-          ...(spawnedBy && { spawnedBy }),
-          ...(isHeartbeat !== undefined && { isHeartbeat }),
-        }
-      : {
-          ...eventForClients,
-          ...(isHeartbeat !== undefined && { isHeartbeat }),
-        };
+    const agentPayload = {
+      ...eventForClients,
+      ...(sessionKey
+        ? {
+            sessionKey,
+            ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+            ...(spawnedBy && { spawnedBy }),
+          }
+        : {}),
+      ...(isHeartbeat !== undefined && { isHeartbeat }),
+    };
     const hasSessionMessageSubscribers =
       projectSessionMessages && sessionKey
         ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId).some(
