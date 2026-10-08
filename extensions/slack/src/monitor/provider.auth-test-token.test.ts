@@ -23,6 +23,7 @@ import { assertSlackDetachedTargetAllowed } from "../detached-target-admission.j
 import { getSlackInstallationKind } from "../installation-identity-state.js";
 import {
   disposeSlackTestRuntime,
+  flush,
   getSlackClient,
   getSlackHandlerOrThrow,
   getSlackHandlers,
@@ -433,6 +434,51 @@ describe("user identity provider transport", () => {
       WasMentioned: true,
     });
     expect(sendMock).toHaveBeenCalledWith("channel:C1", "acknowledged", expect.any(Object));
+    await stopSlackMonitor(monitor);
+  });
+
+  it("delivers another user's DM and drops a self-authored DM", async () => {
+    const config = userSocketConfig();
+    await resetSlackTestState(config);
+    getSlackClient().auth.test.mockResolvedValueOnce({
+      app_id: "A_TEST",
+      user_id: "U_SELF",
+      team_id: "T_TEST",
+      is_enterprise_install: false,
+    });
+    const { replyMock, sendMock } = getSlackTestState();
+    replyMock.mockResolvedValue({ text: "hello back" });
+    const monitor = await startWithoutBotToken(config);
+    const handler = await getSlackHandlerOrThrow("message");
+    const baseEvent = {
+      type: "message",
+      channel: "D1",
+      channel_type: "im",
+      text: "hello",
+    };
+
+    await runSlackHandlerWithDispatch(handler, {
+      event: { ...baseEvent, user: "U_OTHER", ts: "100.000" },
+      context: { botUserId: "U_SELF" },
+      body: {},
+    });
+    const dispatchedContext = replyMock.mock.calls[0]?.[0];
+    expect(dispatchedContext).toMatchObject({
+      Body: expect.stringMatching(/Ada: hello\n\[slack message id: 100\.000 channel: D1\]$/u),
+      ChatType: "direct",
+      WasMentioned: false,
+    });
+    expect(sendMock).toHaveBeenCalledWith("channel:D1", "hello back", expect.any(Object));
+
+    await handler({
+      event: { ...baseEvent, user: "U_SELF", ts: "101.000" },
+      context: { botUserId: "U_SELF" },
+      body: {},
+    });
+    await flush();
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledTimes(1);
     await stopSlackMonitor(monitor);
   });
 

@@ -167,6 +167,39 @@ describe("msteams adaptive card action invoke", () => {
     expect(ctxPayload.CommandBody).toBe("/codex plugins menu");
   });
 
+  it("preserves legacy presentation submit values as structured data", async () => {
+    const registered = createMSTeamsActivityHandler(createDeps());
+    const data = { value: "/codex permissions yolo", label: "Run" };
+
+    await runAdaptiveCardInvoke(registered, {
+      action: {
+        type: "Action.Submit",
+        data,
+      },
+    });
+
+    const ctxPayload = lastDispatchedCtxPayload();
+    expect(ctxPayload.BodyForAgent).toBe(JSON.stringify(data));
+    expect(ctxPayload.CommandBody).toBe(JSON.stringify(data));
+  });
+
+  it("preserves generic Action.Execute verb metadata", async () => {
+    const registered = createMSTeamsActivityHandler(createDeps());
+    const payload = {
+      action: {
+        type: "Action.Execute",
+        verb: "ticket.approve",
+        data: { ticketId: "ticket-123" },
+      },
+    };
+
+    await runAdaptiveCardInvoke(registered, payload);
+
+    const ctxPayload = lastDispatchedCtxPayload();
+    expect(ctxPayload.BodyForAgent).toBe(JSON.stringify(payload));
+    expect(ctxPayload.CommandBody).toBe(JSON.stringify(payload));
+  });
+
   it.each([
     { activity: "invoke", token: "" },
     { activity: "message", token: "unknown-token" },

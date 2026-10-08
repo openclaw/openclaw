@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
-import { gzipSync } from "node:zlib";
+import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolvePluginRoutePathContext } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
@@ -70,8 +70,49 @@ function requireRegisteredMSTeamsConfig(): OpenClawConfig {
   return registered.cfg;
 }
 
+function requireRegisteredMSTeamsMediaMaxBytes(): number {
+  const registered = createMSTeamsActivityHandler.mock.calls[0]?.[0];
+  if (!registered) {
+    throw new Error("expected registered MSTeams handler dependencies");
+  }
+  return registered.mediaMaxBytes;
+}
+
 describe("monitorMSTeamsProvider lifecycle", () => {
   afterEach(resetMSTeamsMonitorMocks);
+
+  it("prefers the Teams media limit over the agent default", async () => {
+    const abort = new AbortController();
+    const cfg = createConfig();
+    updateMSTeamsConfig(cfg, { mediaMaxMb: 12 });
+    cfg.agents = { defaults: { mediaMaxMb: 3 } };
+
+    const task = runProvider(abort, cfg);
+
+    await waitForMSTeamsTestState(() => {
+      expect(createMSTeamsActivityHandler).toHaveBeenCalledTimes(1);
+    });
+    expect(requireRegisteredMSTeamsMediaMaxBytes()).toBe(12 * 1024 * 1024);
+
+    abort.abort();
+    await task;
+  });
+
+  it("falls back to the agent media limit when Teams has no override", async () => {
+    const abort = new AbortController();
+    const cfg = createConfig();
+    cfg.agents = { defaults: { mediaMaxMb: 3 } };
+
+    const task = runProvider(abort, cfg);
+
+    await waitForMSTeamsTestState(() => {
+      expect(createMSTeamsActivityHandler).toHaveBeenCalledTimes(1);
+    });
+    expect(requireRegisteredMSTeamsMediaMaxBytes()).toBe(3 * 1024 * 1024);
+
+    abort.abort();
+    await task;
+  });
 
   it("gates the real SDK token exchange route and persists its signin event", async () => {
     const name = "signin/tokenExchange";
@@ -766,7 +807,11 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
     });
   });
 
-  it("retains gzip decoding and the decoded body limit", async () => {
+  it.each([
+    ["gzip", gzipSync],
+    ["deflate", deflateSync],
+    ["br", brotliCompressSync],
+  ] as const)("retains %s decoding and the decoded body limit", async (encoding, compress) => {
     await withMonitor(async () => {
       for (const [payload, status] of [
         ["ok", 200],
@@ -776,9 +821,9 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
           headers: {
             authorization: "Bearer valid-token",
             "content-type": "application/json",
-            "content-encoding": "gzip",
+            "content-encoding": encoding,
           },
-          body: gzipSync(JSON.stringify({ payload })),
+          body: compress(JSON.stringify({ payload })),
         });
         expect(response.status).toBe(status);
         if (status === 413) {

@@ -439,6 +439,35 @@ describe("debug proxy runtime", () => {
     }
   });
 
+  it("skips capturing the body when Content-Length exceeds the cap", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    captureHttpExchange(
+      {
+        url: "https://api.openai.com/v1/files/big",
+        method: "GET",
+        response: new Response("{}", {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "content-length": String(32 * 1024 * 1024),
+          },
+        }),
+      },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const response = events.find((event) => event.kind === "response");
+    expect(response).toBeDefined();
+    expect(response?.status).toBe(200);
+    // Metadata is recorded, but the oversized body is never buffered/persisted.
+    expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "too-large" });
+    expect(response).not.toHaveProperty("dataText");
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
+
   it("skips capturing decimal Content-Length values above the safe integer range", async () => {
     initializeDebugProxyCapture("test", settings, deps);
     captureHttpExchange(

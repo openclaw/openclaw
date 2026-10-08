@@ -58,6 +58,9 @@ function readDatabase(databasePath: string) {
             )
             .get()?.value_json
         : undefined,
+      ledger: tableExists(db, "update_runs")
+        ? db.prepare("SELECT * FROM update_runs ORDER BY run_id").all()
+        : [],
       captureSessions: tableExists(db, "capture_sessions")
         ? db.prepare("SELECT id, mode FROM capture_sessions ORDER BY id").all()
         : [],
@@ -76,6 +79,59 @@ describe("Doctor schema bumps under an updating parent", () => {
     mocks.outro.mockClear();
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
   });
+
+  it.each([
+    { kind: "state", updaterVersion: "2026.9.2", missingMetadata: true },
+    { kind: "agent", updaterVersion: "2026.9.2", missingMetadata: false },
+    { kind: "agent", updaterVersion: "2026.9.2-rebuild.1", missingMetadata: false },
+  ])(
+    "refuses a $kind bump driven by $updaterVersion before changing database bytes, ledger, or config",
+    async ({ kind, updaterVersion, missingMetadata }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const shared = openOpenClawStateDatabase({ env: state.env }).path;
+        const agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
+        createUpdateRun({ trigger: "cli", before: { version: updaterVersion } });
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        const target = kind === "state" ? shared : agent;
+        const supported =
+          kind === "state" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
+        setSchemaVersion(target, supported - 1);
+        if (missingMetadata) {
+          const db = new DatabaseSync(shared);
+          db.exec("DROP TABLE config_machine_state");
+          db.close();
+        }
+        const before = readDatabase(shared);
+        const quarantine = state.statePath("state", "openclaw-quarantine.sqlite");
+        fs.writeFileSync(quarantine, "unreadable quarantine fixture");
+        const files = [shared, agent, state.configPath, quarantine];
+        const bytes = files.map((file) => fs.readFileSync(file));
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+        const failure = await runDoctorHealthFlow(runtime, {
+          repair: true,
+          nonInteractive: true,
+        }).catch((error: unknown) => error);
+        expect(failure).toMatchObject({
+          code: "update-schema-bump-unfenced",
+          updaterVersion,
+          databases: [
+            { kind, path: target, foundVersion: supported - 1, supportedVersion: supported },
+          ],
+          commands: [
+            "openclaw gateway stop",
+            `npm install -g openclaw@${VERSION} --allow-scripts=openclaw`,
+            "openclaw doctor --fix",
+            "openclaw gateway start",
+          ],
+        });
+        expect(files.map((file) => fs.readFileSync(file))).toEqual(bytes);
+        expect(readDatabase(shared)).toEqual(before);
+        expect(mocks.runContributions).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it.each([
     { driver: "2026.9.2", deferred: true },
