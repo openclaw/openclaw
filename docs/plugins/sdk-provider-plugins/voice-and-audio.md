@@ -404,7 +404,11 @@ Register each capability inside `register(api)` alongside your existing
     loading each audio file. The request includes the audio bytes, filename,
     model, prompt, language, timeout, transport settings, configuration,
     agent directory, and selected profile. Resolve credentials for that call;
-    do not retain credentials across attachment downloads.
+    do not retain credentials across attachment downloads. The host carries its
+    request authority through the provider callback and checks it again in the
+    guarded transport after DNS resolution and immediately before network dispatch.
+    Use the host guarded transport for uploads; plugins do not receive or manage
+    the admission callback.
 
     Return `{ ok: true, value: { text, model } }` after transcription. Return
     `{ ok: false, error }` only for authentication or configuration rejected

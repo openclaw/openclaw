@@ -1,13 +1,22 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { DEFAULT_ECHO_TRANSCRIPT_FORMAT } from "../../media-understanding/echo-transcript.js";
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
+import { formatAudioTranscriptForAgent } from "../../plugin-sdk/media-understanding-runtime.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
-import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  isBrowserOperatorUiClient,
+  isOperatorUiClient,
+  isWebchatClient,
+} from "../../utils/message-channel.js";
 import {
   type ChatImageContent,
   type OffloadedRef,
@@ -38,6 +47,74 @@ type ChatSendUserTurnInputController = {
 type PersistedChatSendMedia = Awaited<
   ReturnType<typeof persistInboundImagesForTranscript>
 >["entries"];
+
+const audioPreflightLoader = createLazyImportLoader(
+  () => import("../../media-understanding/audio-preflight.js"),
+);
+
+async function resolveChatUiTranscriptEcho(params: {
+  clientInfo: NormalizedChatSendRequest["clientInfo"];
+  agentId: string;
+  cfg: OpenClawConfig | undefined;
+  ctx: MsgContext;
+  assertCurrent: () => void;
+}): Promise<string | undefined> {
+  const audio = params.cfg?.tools?.media?.audio;
+  const transcriptEchoClient =
+    isWebchatClient(params.clientInfo) ||
+    isOperatorUiClient(params.clientInfo) ||
+    params.clientInfo?.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
+    params.clientInfo?.id === GATEWAY_CLIENT_IDS.IOS_APP ||
+    params.clientInfo?.id === GATEWAY_CLIENT_IDS.ANDROID_APP;
+  if (!transcriptEchoClient || !audio?.echoTranscript || !params.ctx.media?.length) {
+    return undefined;
+  }
+
+  // Use the actual admitted turn context: audio scope rules depend on its
+  // channel, chat type, and session key, and transcribeFirstAudio marks the
+  // same media facts later passed to agent dispatch as already transcribed.
+  params.assertCurrent();
+  const transcript = await audioPreflightLoader
+    .load()
+    .then(({ transcribeFirstAudio }) =>
+      transcribeFirstAudio({
+        ctx: params.ctx,
+        ...(params.cfg
+          ? {
+              agentDir: resolveAgentDir(params.cfg, params.agentId),
+              workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+            }
+          : {}),
+        // Gateway chat.send persists the echo in the canonical user turn;
+        // never also send an outbound transcript message.
+        cfg: {
+          ...params.cfg,
+          tools: {
+            ...params.cfg?.tools,
+            media: {
+              ...params.cfg?.tools?.media,
+              audio: { ...audio, echoTranscript: false },
+            },
+          },
+        },
+        assertCurrent: params.assertCurrent,
+      }),
+    )
+    .catch(() => undefined);
+  params.assertCurrent();
+  if (!transcript) {
+    return undefined;
+  }
+
+  // Audio is marked transcribed before the normal media pipeline runs, so
+  // retain the result for the approval-aware agent context and canonical user
+  // turn. Do not add it to the prompt until the canonical text is approved.
+  params.ctx.Transcript = transcript;
+  return (audio.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT).replace(
+    "{transcript}",
+    () => transcript,
+  );
+}
 
 async function persistChatSendImages(params: {
   images: ChatImageContent[];
@@ -143,26 +220,6 @@ export function prepareChatSendUserTurn(params: {
       admission.assertClientUploadAllowed?.();
     },
   });
-  userTurn.setInputPromise(
-    persistedMediaForTranscriptPromise.then((result) => {
-      const media = result.entries.map((entry) => entry.fact);
-      const slots = result.entries.flatMap((entry, factIndex) =>
-        entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
-      );
-      return {
-        ...userTurn.baseInput,
-        ...(result.omission === "inline-image-save-failed"
-          ? {
-              text: [userTurn.baseInput.text, INLINE_IMAGE_DURABLE_OMISSION_MARKER]
-                .filter(Boolean)
-                .join("\n"),
-            }
-          : {}),
-        ...(media.length > 0 ? { media } : {}),
-        ...(slots.length > 0 ? { mediaImageLayout: { slots } } : {}),
-      };
-    }),
-  );
   const pluginBoundMediaPromise =
     attachments.parsedImages.length > 0
       ? persistedMediaForTranscriptPromise.then((result) => {
@@ -286,6 +343,50 @@ export function prepareChatSendUserTurn(params: {
   const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloads.some((fact) =>
     fact.contentType?.startsWith("image/"),
   );
+  let transcriptEchoForAgent: string | undefined;
+  let machineTranscriptForAgent: string | undefined;
+  userTurn.setInputPromise(
+    persistedMediaForTranscriptPromise.then(async (result) => {
+      const media = result.entries.map((entry) => entry.fact);
+      const slots = result.entries.flatMap((entry, factIndex) =>
+        entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
+      );
+      const assertTranscriptCurrent = () => {
+        admission.assertWorkAdmissionCurrent?.();
+        admission.assertClientUploadAllowed?.();
+      };
+      const transcriptEcho = await resolveChatUiTranscriptEcho({
+        clientInfo: request.clientInfo,
+        agentId: session.agentId,
+        cfg: session.cfg,
+        ctx,
+        assertCurrent: assertTranscriptCurrent,
+      });
+      if (transcriptEcho !== undefined && ctx.Transcript) {
+        transcriptEchoForAgent = transcriptEcho;
+        const echoFormat =
+          session.cfg?.tools?.media?.audio?.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT;
+        if (echoFormat.includes("{transcript}")) {
+          machineTranscriptForAgent = formatAudioTranscriptForAgent(ctx.Transcript);
+        }
+      }
+      return {
+        ...userTurn.baseInput,
+        ...(transcriptEcho
+          ? { text: [userTurn.baseInput.text, transcriptEcho].filter(Boolean).join("\n") }
+          : {}),
+        ...(result.omission === "inline-image-save-failed"
+          ? {
+              text: [userTurn.baseInput.text, transcriptEcho, INLINE_IMAGE_DURABLE_OMISSION_MARKER]
+                .filter(Boolean)
+                .join("\n"),
+            }
+          : {}),
+        ...(media.length > 0 ? { media } : {}),
+        ...(slots.length > 0 ? { mediaImageLayout: { slots } } : {}),
+      };
+    }),
+  );
   const participant = resolveGatewayInputParticipant(client, request.systemInputProvenance);
   if (participant) {
     prepareSessionParticipantInput(ctx, participant, userTurn.baseInput.timestamp);
@@ -307,8 +408,38 @@ export function prepareChatSendUserTurn(params: {
         return;
       }
       Object.assign(ctx, buildTextContext(text));
+      if (machineTranscriptForAgent) {
+        // The approved canonical text may include the user-visible echo. Keep
+        // it in Body/history, while retaining untrusted transcript framing in
+        // the prompt passed to the agent.
+        let agentBaseText = text;
+        const retainedEcho =
+          transcriptEchoForAgent !== undefined &&
+          (text === transcriptEchoForAgent || text.endsWith("\n" + transcriptEchoForAgent));
+        if (retainedEcho && transcriptEchoForAgent) {
+          agentBaseText =
+            text === transcriptEchoForAgent
+              ? ""
+              : text.slice(0, -(transcriptEchoForAgent.length + 1));
+        }
+        const approvedTranscript =
+          retainedEcho || (transcriptEchoForAgent === "" && text === request.inboundMessage.trim())
+            ? machineTranscriptForAgent
+            : undefined;
+        ctx.agentText = [agentBaseText, approvedTranscript].filter(Boolean).join("\n");
+        ctx.BodyForAgent = ctx.agentText;
+
+        // The display echo belongs in canonical history, but the machine
+        // transcript must never become executable command input.
+        ctx.BodyForCommands = commandBody;
+        ctx.CommandBody = commandBody;
+        ctx.RawBody = attachments.parsedMessage;
+      }
       if (ctx.CommandTurn) {
-        ctx.CommandTurn = { ...ctx.CommandTurn, body: text };
+        ctx.CommandTurn = {
+          ...ctx.CommandTurn,
+          body: machineTranscriptForAgent ? commandBody : text,
+        };
       }
     },
     discardUnreferencedMedia: async (approved: PersistedUserTurnMessage | undefined) => {

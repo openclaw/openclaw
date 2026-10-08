@@ -8,6 +8,7 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { applyMediaUnderstanding } from "./apply.js";
 import { transcribeFirstAudio } from "./audio-preflight.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 describe("audio preflight attachment handoff", () => {
   it("preserves prepared text when there is no media enrichment", async () => {
@@ -25,6 +26,44 @@ describe("audio preflight attachment handoff", () => {
     expect(ctx).toMatchObject(before);
     expect(ctx.rawText).toBeUndefined();
     expect(ctx.commandText).toBeUndefined();
+  });
+
+  it("forwards the selected workspace through preflight to the provider request", async () => {
+    await withTestDir({ prefix: "openclaw-audio-preflight-workspace-" }, async (dir) => {
+      const filePath = path.join(dir, "voice.wav");
+      await fs.writeFile(filePath, createSafeAudioFixtureBuffer());
+      let providerWorkspaceDir: string | undefined;
+      const providers: Record<string, MediaUnderstandingProvider> = {
+        fixture: {
+          id: "fixture",
+          capabilities: ["audio"],
+          defaultModels: { audio: "fixture-audio" },
+          transcribeAudioWithContext: async (request) => {
+            providerWorkspaceDir = request.workspaceDir;
+            return { ok: true, value: { text: "The meeting starts at nine." } };
+          },
+        },
+      };
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        tools: { media: { audio: {} } },
+      };
+      const ctx: MsgContext = {
+        Body: "<media:audio>",
+        media: [{ path: filePath, contentType: "audio/wav", workspaceDir: dir }],
+      };
+
+      const transcript = await transcribeFirstAudio({
+        ctx,
+        cfg,
+        agentDir: "/state/agents/support/agent",
+        workspaceDir: "/workspaces/support",
+        providers,
+        activeModel: { provider: "fixture", model: "chat-model" },
+      });
+      expect(providerWorkspaceDir).toBe("/workspaces/support");
+      expect(transcript).toBe("The meeting starts at nine.");
+    });
   });
 
   it.each([

@@ -1,6 +1,8 @@
 import { ok } from "@openclaw/normalization-core/result";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import {
   runtimeMediaModelSecretOwnerId,
@@ -69,6 +71,115 @@ function missingProvider(provider: string) {
     providerRegistry: new Map(),
   });
 }
+
+describe("media-understanding admission guards", () => {
+  it.each(["provider capture prep", "DNS resolution"] as const)(
+    "rechecks host request authority after %s and before audio upload",
+    async (revokeAt) => {
+      await withAudioFixture("openclaw-audio-authority", async ({ ctx, cache }) => {
+        const captureStarted = createDeferred();
+        const releaseCapture = createDeferred();
+        const dnsStarted = createDeferred();
+        const releaseDns = createDeferred();
+        let admitted = true;
+        const assertCurrent = () => {
+          if (!admitted) {
+            throw new Error("admission expired");
+          }
+        };
+        const fetchImpl = vi.fn(async () => new Response("uploaded"));
+        const transcribeAudioWithContext = vi.fn(async () => {
+          captureStarted.resolve();
+          if (revokeAt === "provider capture prep") {
+            await releaseCapture.promise;
+          }
+          await fetchWithSsrFGuard({
+            url: "https://public.example/audio",
+            fetchImpl,
+            lookupFn: async () => {
+              dnsStarted.resolve();
+              await releaseDns.promise;
+              return [{ address: "93.184.216.34", family: 4 }];
+            },
+          });
+          return ok({ text: "must not upload" });
+        });
+        const request = {
+          capability: "audio" as const,
+          entry: { provider: "fixture", model: "fixture-audio" },
+          cfg: {
+            models: {
+              providers: {
+                fixture: {
+                  apiKey: "fixture-key",
+                  baseUrl: "https://fixture.example/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          ctx,
+          attachmentIndex: 0,
+          cache,
+          providerRegistry: new Map<string, MediaUnderstandingProvider>([
+            ["fixture", { id: "fixture", capabilities: ["audio"], transcribeAudioWithContext }],
+          ]),
+          assertCurrent,
+        };
+        const run = runProviderEntry(request);
+
+        await captureStarted.promise;
+        if (revokeAt === "provider capture prep") {
+          admitted = false;
+          releaseCapture.resolve();
+        }
+        await dnsStarted.promise;
+        if (revokeAt === "DNS resolution") {
+          admitted = false;
+        }
+        releaseDns.resolve();
+        await expect(run).rejects.toThrow("admission expired");
+        expect(fetchImpl).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("rechecks admission after attachment preparation and auth before provider I/O", async () => {
+    await withAudioFixture("openclaw-admission-provider", async ({ ctx, cache }) => {
+      const transcribeAudio = vi.fn(async () => ({ text: "must not upload" }));
+      const assertCurrent = vi.fn(() => {
+        throw new Error("admission expired");
+      });
+      const request = {
+        capability: "audio" as const,
+        entry: { provider: "fixture", model: "fixture-audio" },
+        cfg: {
+          models: {
+            providers: {
+              fixture: {
+                apiKey: "fixture-key",
+                baseUrl: "https://fixture.example/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        ctx,
+        attachmentIndex: 0,
+        cache,
+        providerRegistry: new Map<string, MediaUnderstandingProvider>([
+          ["fixture", { id: "fixture", capabilities: ["audio"], transcribeAudio }],
+        ]),
+        assertCurrent,
+      };
+      const result = runProviderEntry(request);
+
+      await expect(result).rejects.toThrow("admission expired");
+      expect(assertCurrent).toHaveBeenCalledOnce();
+      expect(transcribeAudio).not.toHaveBeenCalled();
+    });
+  });
+});
 
 describe("media-understanding missing provider errors", () => {
   it("includes the catalog repair hint for a media provider contract", async () => {
