@@ -8,7 +8,7 @@ import {
   validateModelsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
-import { refreshExpiredPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
@@ -30,7 +30,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 
-// Ordinary reads return saved rows while expired provider inventory refreshes in the background.
+// Ordinary reads retain inventory; explicit refresh and lifecycle changes own discovery.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": createPreparedReadHandler(
     async (options) => {
@@ -104,7 +104,10 @@ export const modelsHandlers: GatewayRequestHandlers = {
         };
         assertCurrent();
         if (params.refresh !== true) {
-          refreshExpiredPreparedModelCatalog({ agentId: resolved.agentId, config: cfg });
+          getPublishedPreparedModelCatalogOwnerSnapshot({
+            agentId: resolved.agentId,
+            config: cfg,
+          })?.recheckNativeLogin?.();
         }
         return {
           assertCurrent,
