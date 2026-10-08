@@ -120,8 +120,8 @@ function assertAgentDatabaseOperationCurrent(
   assertCurrent?.();
 }
 
-function assertAgentDatabaseWriteAllowed(options: OpenClawAgentDatabaseOptions): void {
-  if (isArtifactPreservingStateRead("agent", resolveOpenClawAgentSqlitePath(options))) {
+function assertAgentDatabaseWriteAllowed(pathname: string): void {
+  if (isArtifactPreservingStateRead("agent", pathname)) {
     throw new Error("Programming error: writable agent database open during read-only inspection.");
   }
 }
@@ -151,7 +151,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
     repairAdmission?: OpenClawAgentDatabaseRepairAdmission,
   ): OpenClawAgentDatabase {
-    assertAgentDatabaseWriteAllowed(options);
+    assertAgentDatabaseWriteAllowed(resolveOpenClawAgentSqlitePath(options));
     const run = () => {
       const steps = openSteps(
         options,
@@ -263,7 +263,6 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     signal?: AbortSignal,
     prepared?: "native" | "worker",
   ): Promise<T> {
-    assertAgentDatabaseWriteAllowed(inputOptions);
     signal?.throwIfAborted();
     assertCurrent?.();
     // Admission retains its original path, registration, and permission inputs across awaits.
@@ -273,6 +272,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     };
     const agentId = normalizeAgentId(options.agentId);
     const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+    assertAgentDatabaseWriteAllowed(pathname);
     options.env.OPENCLAW_STATE_DIR = resolveStateDir(options.env);
     options.path = pathname;
     const cached = cache.databases.get(pathname);
@@ -350,13 +350,13 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     withAdmission: OpenClawAgentDatabaseWriteAdmission,
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
   ): Promise<T> {
-    assertAgentDatabaseWriteAllowed(inputOptions);
     const options = {
       ...inputOptions,
       env: cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env),
     };
     const agentId = normalizeAgentId(options.agentId);
     const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+    assertAgentDatabaseWriteAllowed(pathname);
     const existing = cache.pending.get(pathname);
     if (existing) {
       if (existing.agentId !== agentId) {
