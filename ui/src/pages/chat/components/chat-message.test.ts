@@ -2718,12 +2718,10 @@ describe("grouped chat rendering", () => {
     await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
     expect(fetchMock).toHaveBeenCalledWith(thumbnailUrl, expect.anything());
 
-    const imageActions = container.querySelectorAll<HTMLButtonElement>(".chat-image-action");
-    expect([...imageActions].map((action) => action.getAttribute("aria-label"))).toEqual([
-      "Download image",
-      "Copy image",
-    ]);
-    imageActions[0]?.click();
+    expect(container.querySelectorAll(".chat-image-action")).toHaveLength(1);
+    container
+      .querySelector("wa-dropdown")!
+      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "download" } } }));
     await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
     expect(clickedDownloads[0]).toBe("Ticketed image.png");
 

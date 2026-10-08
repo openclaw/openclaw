@@ -496,10 +496,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       const pending = pendingCandidates[0];
       if (hasAssociatedPeer || pendingCandidates.length > 1 || pending?.ambiguous) {
         markCliLoopbackSignatureAmbiguous(admittedCall);
-        if (pending) {
-          bindCliLoopbackCall(pending, event.toolCallId, activeTool);
-        }
-      } else if (pendingCandidates.length === 1 && pending) {
+      }
+      if (pending) {
         bindCliLoopbackCall(pending, event.toolCallId, activeTool);
       }
     }

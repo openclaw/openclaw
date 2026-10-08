@@ -29,8 +29,9 @@ import {
   mergeWorkspaceSetupState,
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
-  WORKSPACE_ATTESTATION_RECENT_MS,
 } from "./workspace-state-store.js";
+
+const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 
 let state: OpenClawTestState;
 beforeEach(async () => {

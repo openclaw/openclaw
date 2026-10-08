@@ -1,4 +1,3 @@
-import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -8,6 +7,7 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceResources,
@@ -278,7 +278,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   };
 
   const known = (pathname: string) =>
-    recordsByPath.get(pathname) ?? recordsByPath.get(path.resolve(pathname));
+    recordsByPath.get(pathname) ?? recordsByPath.get(resolveDatabasePath({ path: pathname }));
   const bindPath = (record: IdentityRecord, pathname: string) => {
     record.paths.add(pathname);
     if (!recordsByPath.has(pathname)) {
@@ -391,7 +391,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     return record;
   };
   const resolveForNative = (pathname: string): IdentityRecord | undefined => {
-    const resolvedPath = path.resolve(pathname);
+    const resolvedPath = resolveDatabasePath({ path: pathname });
     const cached = recordsByPath.get(resolvedPath);
     if (cached) {
       return cached;
@@ -493,14 +493,14 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     integrity(this: void, pathname: string): OpenClawStateIntegrityAdmission | undefined {
       const record = resolveForNative(pathname);
       return record && !isSealed(record)
-        ? captureRecord(record, path.resolve(pathname)).captureIntegrity?.()
+        ? captureRecord(record, resolveDatabasePath({ path: pathname })).captureIntegrity?.()
         : undefined;
     },
     publish(pathname: string): {
       identity: DatabasePathIdentity;
       admission: OpenClawStateDatabaseReadAdmission;
     } {
-      const resolvedPath = path.resolve(pathname);
+      const resolvedPath = resolveDatabasePath({ path: pathname });
       const identity = readDatabasePathIdentitySync(resolvedPath);
       const previous = recordsByPath.get(resolvedPath);
       let record = findPhysicalRecord(identity);
@@ -552,10 +552,10 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         retained.assertCurrent();
         return retained;
       }
-      return captureResolved(path.resolve(pathname));
+      return captureResolved(resolveDatabasePath({ path: pathname }));
     },
     holdExclusion(pathname: string): () => void {
-      const record = resolve(path.resolve(pathname));
+      const record = resolve(resolveDatabasePath({ path: pathname }));
       const held = seal(record);
       return () => {
         seals.delete(held);

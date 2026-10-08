@@ -219,13 +219,16 @@ export async function tryReuseCodexLiveThread(
       ((await options.buildLoadedPluginThreadConfig(binding))?.fingerprint ??
         binding.pluginAppsFingerprint) === binding.pluginAppsFingerprint
     ) {
-      await params.buildFinalConfigPatch?.({
-        action: "resume",
-        binding,
-        ...(options.nativeModelInputTools
-          ? { nativeModelInputTools: options.nativeModelInputTools }
-          : {}),
-      });
+      await params.buildFinalConfigPatch?.(
+        {
+          action: "resume",
+          binding,
+          ...(options.nativeModelInputTools
+            ? { nativeModelInputTools: options.nativeModelInputTools }
+            : {}),
+        },
+        params.client,
+      );
       throwIfAborted();
       params.assertCurrent?.();
       return { kind: "ready", binding: { ...binding, lifecycle: { action: "resumed" } } };

@@ -601,7 +601,7 @@ export function resolveTelegramTransport(
     if (stickySuccessCount >= TELEGRAM_STICKY_FALLBACK_PRIMARY_PROBE_SUCCESS_THRESHOLD) {
       stickySuccessCount = 0;
       primaryProbeDue = true;
-      log.debug("fetch fallback: scheduling primary dispatcher recovery probe");
+      log.debug("fetch fallback: scheduling primary dispatcher recovery check");
     }
   };
 
@@ -636,8 +636,8 @@ export function resolveTelegramTransport(
       primaryProbeDue = false;
       log.debug(
         stickyCooldownError
-          ? "fetch fallback: re-probing primary dispatcher while sticky fallback is cooling down"
-          : "fetch fallback: re-probing primary dispatcher after sticky fallback successes",
+          ? "fetch fallback: rechecking primary dispatcher while sticky fallback is cooling down"
+          : "fetch fallback: rechecking primary dispatcher after sticky fallback successes",
       );
     }
     let err: unknown;

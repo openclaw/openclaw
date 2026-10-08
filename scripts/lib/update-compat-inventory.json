@@ -7985,6 +7985,1553 @@
           ]
         }
       ]
+    },
+    {
+      "version": "2026.10.1-beta.2",
+      "buildId": "2026.10.1-beta.2-release-c58cf3afa079-2026-10-06T22-13-14.441Z",
+      "commit": "c58cf3afa0793257a8127ae868d5e159da6d9d0a",
+      "integrity": "sha512-PUWDnnOWy8pJoaBsmU4GkAQ6ZFqG3Iit7beL60io3kPoLimd66Gah6HKHKgFcgd1Clq/hm+YpzEjEGiXKuVBOQ==",
+      "chunks": [
+        {
+          "path": "call-DvEyVFuK.mjs",
+          "imports": [
+            {
+              "importer": "schtasks-BHxnknKy.mjs",
+              "owner": "src/daemon/schtasks-process.ts",
+              "exports": [
+                "callGatewayCli"
+              ]
+            },
+            {
+              "importer": "status-cVZu3w53.mjs",
+              "owner": "src/cli/update-cli/status.ts",
+              "exports": [
+                "GatewayCredentialsRequiredError",
+                "GatewayExplicitAuthRequiredError",
+                "GatewayLocalBackendSharedAuthUnavailableError",
+                "GatewayStoredDeviceAuthUnavailableError",
+                "GatewayTransportError",
+                "buildGatewayConnectionDetails",
+                "buildGatewayProbeConnectionDetails",
+                "callGateway",
+                "callGatewayCli",
+                "callGatewayLeastPrivilege",
+                "ensureExplicitGatewayAuth",
+                "formatGatewayAuthErrorJson",
+                "formatGatewayClientRequestErrorJson",
+                "formatGatewayTransportErrorJson",
+                "isGatewayClientRequestError",
+                "isGatewayCredentialsRequiredError",
+                "isGatewayExplicitAuthRequiredError",
+                "isGatewayTransportError",
+                "isImplicitLocalGatewayTarget",
+                "randomIdempotencyKey",
+                "resolveExplicitGatewayAuth",
+                "resolveGatewayCredentialsWithSecretInputs"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "buildGatewayConnectionDetails",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "buildGatewayConnectionDetails"
+              }
+            },
+            {
+              "exported": "buildGatewayProbeConnectionDetails",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "buildGatewayProbeConnectionDetails"
+              }
+            },
+            {
+              "exported": "callGateway",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "callGateway"
+              }
+            },
+            {
+              "exported": "callGatewayCli",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "callGatewayCli"
+              }
+            },
+            {
+              "exported": "callGatewayLeastPrivilege",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "callGatewayLeastPrivilege"
+              }
+            },
+            {
+              "exported": "ensureExplicitGatewayAuth",
+              "origin": {
+                "module": "src/gateway/client-bootstrap.ts",
+                "symbol": "ensureExplicitGatewayAuth"
+              }
+            },
+            {
+              "exported": "formatGatewayAuthErrorJson",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "formatGatewayAuthErrorJson"
+              }
+            },
+            {
+              "exported": "formatGatewayClientRequestErrorJson",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "formatGatewayClientRequestErrorJson"
+              }
+            },
+            {
+              "exported": "formatGatewayTransportErrorJson",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "formatGatewayTransportErrorJson"
+              }
+            },
+            {
+              "exported": "GatewayCredentialsRequiredError",
+              "origin": {
+                "module": "src/gateway/call-device-auth.ts",
+                "symbol": "GatewayCredentialsRequiredError"
+              }
+            },
+            {
+              "exported": "GatewayExplicitAuthRequiredError",
+              "origin": {
+                "module": "src/gateway/client-bootstrap.ts",
+                "symbol": "GatewayExplicitAuthRequiredError"
+              }
+            },
+            {
+              "exported": "GatewayLocalBackendSharedAuthUnavailableError",
+              "origin": {
+                "module": "src/gateway/call-device-auth.ts",
+                "symbol": "GatewayLocalBackendSharedAuthUnavailableError"
+              }
+            },
+            {
+              "exported": "GatewayStoredDeviceAuthUnavailableError",
+              "origin": {
+                "module": "src/gateway/call-device-auth.ts",
+                "symbol": "GatewayStoredDeviceAuthUnavailableError"
+              }
+            },
+            {
+              "exported": "GatewayTransportError",
+              "origin": {
+                "module": "src/gateway/transport-error.ts",
+                "symbol": "GatewayTransportError"
+              }
+            },
+            {
+              "exported": "isGatewayClientRequestError",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "isGatewayClientRequestError"
+              }
+            },
+            {
+              "exported": "isGatewayCredentialsRequiredError",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "isGatewayCredentialsRequiredError"
+              }
+            },
+            {
+              "exported": "isGatewayExplicitAuthRequiredError",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "isGatewayExplicitAuthRequiredError"
+              }
+            },
+            {
+              "exported": "isGatewayTransportError",
+              "origin": {
+                "module": "src/gateway/transport-error.ts",
+                "symbol": "isGatewayTransportError"
+              }
+            },
+            {
+              "exported": "isImplicitLocalGatewayTarget",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "isImplicitLocalGatewayTarget"
+              }
+            },
+            {
+              "exported": "randomIdempotencyKey",
+              "origin": {
+                "module": "src/gateway/call.ts",
+                "symbol": "randomIdempotencyKey"
+              }
+            },
+            {
+              "exported": "resolveExplicitGatewayAuth",
+              "origin": {
+                "module": "src/gateway/credentials.ts",
+                "symbol": "resolveExplicitGatewayAuth"
+              }
+            },
+            {
+              "exported": "resolveGatewayCredentialsWithSecretInputs",
+              "origin": {
+                "module": "src/gateway/credentials-secret-inputs.ts",
+                "symbol": "resolveGatewayCredentialsWithSecretInputs"
+              }
+            }
+          ]
+        },
+        {
+          "path": "channels-status-issues-JeULXjPh.mjs",
+          "imports": [
+            {
+              "importer": "status-cVZu3w53.mjs",
+              "owner": "src/cli/update-cli/status.ts",
+              "exports": [
+                "collectChannelStatusIssues"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "collectChannelStatusIssues",
+              "origin": {
+                "module": "src/infra/channels-status-issues.ts",
+                "symbol": "collectChannelStatusIssues"
+              }
+            }
+          ]
+        },
+        {
+          "path": "doctor-maintenance-BBgntIPS.mjs",
+          "imports": [
+            {
+              "importer": "update-command-finalize-BKWpzzZj.mjs",
+              "owner": "src/cli/update-cli/update-command-finalize.ts",
+              "exports": [
+                "beginDoctorMaintenance"
+              ]
+            },
+            {
+              "importer": "update-command-post-update-QIdrTouq.mjs",
+              "owner": "src/cli/update-cli/update-command-resume.ts",
+              "exports": [
+                "beginDoctorMaintenance"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "beginDoctorMaintenance",
+              "origin": {
+                "module": "src/commands/doctor-maintenance.ts",
+                "symbol": "beginDoctorMaintenance"
+              }
+            }
+          ]
+        },
+        {
+          "path": "exec-file-pNl5V54S.mjs",
+          "imports": [
+            {
+              "importer": "systemd-user-transport-DP0nHh3J.mjs",
+              "owner": "src/daemon/systemd-unavailable.ts",
+              "exports": [
+                "execFileUtf8"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "execFileUtf8",
+              "origin": {
+                "module": "src/daemon/exec-file.ts",
+                "symbol": "execFileUtf8"
+              }
+            }
+          ]
+        },
+        {
+          "path": "infra/gateway-scheduler.js",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-scope-Ck-m89lN.mjs",
+              "owner": "src/cli/runtime-cleanup-scope.ts",
+              "exports": [
+                "GatewayScheduler"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "GatewayScheduler",
+              "origin": {
+                "module": "src/infra/gateway-scheduler.ts",
+                "symbol": "GatewayScheduler"
+              }
+            }
+          ]
+        },
+        {
+          "path": "inspect--mjDOF0s.mjs",
+          "imports": [
+            {
+              "importer": "systemd-scope-CpVAi7AC.mjs",
+              "owner": "src/daemon/systemd-scope.ts",
+              "exports": [
+                "findSystemGatewayServices"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "findSystemGatewayServices",
+              "origin": {
+                "module": "src/daemon/inspect.ts",
+                "symbol": "findSystemGatewayServices"
+              }
+            }
+          ]
+        },
+        {
+          "path": "io.runtime.js",
+          "imports": [
+            {
+              "importer": "gateway-service-probe-hosts-yNnj7p7k.mjs",
+              "owner": "src/daemon/gateway-service-probe-hosts.ts",
+              "exports": [
+                "createConfigIO"
+              ]
+            },
+            {
+              "importer": "service-Dsvjey5v.mjs",
+              "owner": "src/daemon/future-config-guard.ts",
+              "exports": [
+                "readConfigFileSnapshot"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "createConfigIO",
+              "origin": {
+                "module": "src/config/io.factory.ts",
+                "symbol": "createConfigIO"
+              }
+            },
+            {
+              "exported": "readConfigFileSnapshot",
+              "origin": {
+                "module": "src/config/io.runtime.ts",
+                "symbol": "readConfigFileSnapshot"
+              }
+            }
+          ]
+        },
+        {
+          "path": "launchd-foreign-jobs-DPtEbBMF.mjs",
+          "imports": [
+            {
+              "importer": "restart-storm-DqE3KICC.mjs",
+              "owner": "src/daemon/restart-storm.ts",
+              "exports": [
+                "findForeignLaunchdJobs"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "findForeignLaunchdJobs",
+              "origin": {
+                "module": "src/daemon/launchd-foreign-jobs.ts",
+                "symbol": "findForeignLaunchdJobs"
+              }
+            }
+          ]
+        },
+        {
+          "path": "launchd-runtime-DIB8y4be.mjs",
+          "imports": [
+            {
+              "importer": "update-command-service-publication-BdZQYDS_.mjs",
+              "owner": "src/daemon/managed-gateway-bindings.ts",
+              "exports": [
+                "readLoadedLaunchAgentState"
+              ]
+            },
+            {
+              "importer": "update-command-service-publication-BdZQYDS_.mjs",
+              "owner": "src/cli/update-cli/update-command-service-revalidation.ts",
+              "exports": [
+                "readCorrespondingLaunchAgentCommand"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "readCorrespondingLaunchAgentCommand",
+              "origin": {
+                "module": "src/daemon/launchd-runtime.ts",
+                "symbol": "readCorrespondingLaunchAgentCommand"
+              }
+            },
+            {
+              "exported": "readLoadedLaunchAgentState",
+              "origin": {
+                "module": "src/daemon/launchd-runtime.ts",
+                "symbol": "readLoadedLaunchAgentState"
+              }
+            }
+          ]
+        },
+        {
+          "path": "legacy-config-repair-CeTUu6hk.mjs",
+          "imports": [
+            {
+              "importer": "schema-preflight-CK2HoKbb.mjs",
+              "owner": "src/cli/update-cli/schema-preflight.ts",
+              "exports": [
+                "planLegacyConfigForUpdateChannel"
+              ]
+            },
+            {
+              "importer": "update-command-config-CLymaM_3.mjs",
+              "owner": "src/cli/update-cli/update-command-config.ts",
+              "exports": [
+                "planLegacyConfigForUpdateChannel"
+              ]
+            },
+            {
+              "importer": "update-command-config-CLymaM_3.mjs",
+              "owner": "src/cli/update-cli/update-command-config.ts",
+              "exports": [
+                "repairLegacyConfigForUpdateChannel"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "planLegacyConfigForUpdateChannel",
+              "origin": {
+                "module": "src/commands/doctor/legacy-config-repair.ts",
+                "symbol": "planLegacyConfigForUpdateChannel"
+              }
+            },
+            {
+              "exported": "repairLegacyConfigForUpdateChannel",
+              "origin": {
+                "module": "src/commands/doctor/legacy-config-repair.ts",
+                "symbol": "repairLegacyConfigForUpdateChannel"
+              }
+            }
+          ]
+        },
+        {
+          "path": "mcp-http-D6fulwFQ.mjs",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-DHPApnh4.mjs",
+              "owner": "src/cli/runtime-cleanup.ts",
+              "exports": [
+                "closeMcpLoopbackServer"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "closeMcpLoopbackServer",
+              "origin": {
+                "module": "src/gateway/mcp-http.ts",
+                "symbol": "closeMcpLoopbackServer"
+              }
+            }
+          ]
+        },
+        {
+          "path": "mcp-http.loopback-runtime-DcPzaK5r.mjs",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-DHPApnh4.mjs",
+              "owner": "src/cli/runtime-cleanup.ts",
+              "exports": [
+                "getActiveMcpLoopbackRuntime"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "getActiveMcpLoopbackRuntime",
+              "origin": {
+                "module": "src/gateway/mcp-http.loopback-runtime.ts",
+                "symbol": "getActiveMcpLoopbackRuntime"
+              }
+            }
+          ]
+        },
+        {
+          "path": "memory-runtime-COeyoy1Y.mjs",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-DHPApnh4.mjs",
+              "owner": "src/cli/runtime-cleanup.ts",
+              "exports": [
+                "closeActiveMemorySearchManagersCore"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "closeActiveMemorySearchManagersCore",
+              "origin": {
+                "module": "src/plugins/memory-runtime.ts",
+                "symbol": "closeActiveMemorySearchManagersCore"
+              }
+            }
+          ]
+        },
+        {
+          "path": "openclaw-agent-db-lifecycle-7r9BIt0-.mjs",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-DHPApnh4.mjs",
+              "owner": "src/cli/runtime-cleanup.ts",
+              "exports": [
+                "closeOpenClawAgentDatabasesAsync"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "closeOpenClawAgentDatabasesAsync",
+              "origin": {
+                "module": "src/state/openclaw-agent-db-lifecycle.ts",
+                "symbol": "closeOpenClawAgentDatabasesAsync"
+              }
+            }
+          ]
+        },
+        {
+          "path": "openclaw-agent-db-resources-4k8R9RPJ.mjs",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-DHPApnh4.mjs",
+              "owner": "src/cli/runtime-cleanup.ts",
+              "exports": [
+                "hasOpenClawAgentDatabaseAsyncResources"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "hasOpenClawAgentDatabaseAsyncResources",
+              "origin": {
+                "module": "src/state/openclaw-agent-db-resources.ts",
+                "symbol": "hasOpenClawAgentDatabaseAsyncResources"
+              }
+            }
+          ]
+        },
+        {
+          "path": "openclaw-state-db-cache-CWsOE_KK.mjs",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-scope-Ck-m89lN.mjs",
+              "owner": "src/cli/runtime-cleanup-scope.ts",
+              "exports": [
+                "closeOpenClawStateDatabaseAsync"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "closeOpenClawStateDatabaseAsync",
+              "origin": {
+                "module": "src/state/openclaw-state-db-cache.ts",
+                "symbol": "closeOpenClawStateDatabaseAsync"
+              }
+            }
+          ]
+        },
+        {
+          "path": "plugins/memory-state.js",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-DHPApnh4.mjs",
+              "owner": "src/cli/runtime-cleanup.ts",
+              "exports": [
+                "hasMemoryRuntime"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "hasMemoryRuntime",
+              "origin": {
+                "module": "src/plugins/memory-state.ts",
+                "symbol": "hasMemoryRuntime"
+              }
+            }
+          ]
+        },
+        {
+          "path": "provider-transport-dispatcher-pool-IjdKs8df.mjs",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-DHPApnh4.mjs",
+              "owner": "src/cli/runtime-cleanup.ts",
+              "exports": [
+                "closeProviderTransportDispatcherPool"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "closeProviderTransportDispatcherPool",
+              "origin": {
+                "module": "src/agents/provider-transport-dispatcher-pool.ts",
+                "symbol": "closeProviderTransportDispatcherPool"
+              }
+            }
+          ]
+        },
+        {
+          "path": "registry-BUtyHqr-.mjs",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-DHPApnh4.mjs",
+              "owner": "src/cli/runtime-cleanup.ts",
+              "exports": [
+                "disposeRegisteredAgentHarnesses",
+                "listRegisteredAgentHarnesses"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "disposeRegisteredAgentHarnesses",
+              "origin": {
+                "module": "src/agents/harness/registry.ts",
+                "symbol": "disposeRegisteredAgentHarnesses"
+              }
+            },
+            {
+              "exported": "listRegisteredAgentHarnesses",
+              "origin": {
+                "module": "src/agents/harness/registry.ts",
+                "symbol": "listRegisteredAgentHarnesses"
+              }
+            }
+          ]
+        },
+        {
+          "path": "registry-lifecycle-CtWps3K3.mjs",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-DHPApnh4.mjs",
+              "owner": "src/cli/runtime-cleanup.ts",
+              "exports": [
+                "markPluginRegistryRetired"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "markPluginRegistryRetired",
+              "origin": {
+                "module": "src/plugins/registry-lifecycle.ts",
+                "symbol": "markPluginRegistryRetired"
+              }
+            }
+          ]
+        },
+        {
+          "path": "runtime-cleanup-DdddP6Xh.mjs",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-scope-Ck-m89lN.mjs",
+              "owner": "src/cli/runtime-cleanup-scope.ts",
+              "exports": [
+                "runCliDisposerAfterPending"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "runCliDisposerAfterPending",
+              "origin": {
+                "module": "src/cli/runtime-cleanup.ts",
+                "symbol": "runCliDisposerAfterPending"
+              }
+            }
+          ]
+        },
+        {
+          "path": "service-B3HfWu8u.mjs",
+          "imports": [
+            {
+              "importer": "update-command-service-publication-BdZQYDS_.mjs",
+              "owner": "src/daemon/managed-gateway-bindings.ts",
+              "exports": [
+                "readGatewayServiceState",
+                "resolveGatewayService"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "readGatewayServiceState",
+              "origin": {
+                "module": "src/daemon/service-state.ts",
+                "symbol": "readGatewayServiceState"
+              }
+            },
+            {
+              "exported": "resolveGatewayService",
+              "origin": {
+                "module": "src/daemon/service.ts",
+                "symbol": "resolveGatewayService"
+              }
+            }
+          ]
+        },
+        {
+          "path": "service-child-windows-job-native-Bu4DFlkW.mjs",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-scope-Ck-m89lN.mjs",
+              "owner": "src/cli/runtime-cleanup-scope.ts",
+              "exports": [
+                "bindWindowsProcessJobToOwner",
+                "createWindowsJobBindings",
+                "retainWindowsProcessJobUntilExit"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "bindWindowsProcessJobToOwner",
+              "origin": {
+                "module": "src/process/supervisor/service-child-windows-job-native.ts",
+                "symbol": "bindWindowsProcessJobToOwner"
+              }
+            },
+            {
+              "exported": "createWindowsJobBindings",
+              "origin": {
+                "module": "src/process/supervisor/service-child-windows-job-native.ts",
+                "symbol": "createWindowsJobBindings"
+              }
+            },
+            {
+              "exported": "retainWindowsProcessJobUntilExit",
+              "origin": {
+                "module": "src/process/supervisor/service-child-windows-job-native.ts",
+                "symbol": "retainWindowsProcessJobUntilExit"
+              }
+            }
+          ]
+        },
+        {
+          "path": "service-operation-lock-CRNut58U.mjs",
+          "imports": [
+            {
+              "importer": "systemd-service-files-CG6jQkqA.mjs",
+              "owner": "src/daemon/systemd-service-files.ts",
+              "exports": [
+                "withGatewayServiceOperationLock",
+                "withSystemdServiceReadBinding"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "withGatewayServiceOperationLock",
+              "origin": {
+                "module": "src/daemon/service-operation-lock.ts",
+                "symbol": "withGatewayServiceOperationLock"
+              }
+            },
+            {
+              "exported": "withSystemdServiceReadBinding",
+              "origin": {
+                "module": "src/daemon/service-operation-lock.ts",
+                "symbol": "withSystemdServiceReadBinding"
+              }
+            }
+          ]
+        },
+        {
+          "path": "systemd-definition-mutation-B_gl_0o1.mjs",
+          "imports": [
+            {
+              "importer": "systemd-scope-CpVAi7AC.mjs",
+              "owner": "src/daemon/systemd-scope.ts",
+              "exports": [
+                "readSystemdDefinitionMutationCapability"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "readSystemdDefinitionMutationCapability",
+              "origin": {
+                "module": "src/daemon/systemd-definition-mutation.ts",
+                "symbol": "readSystemdDefinitionMutationCapability"
+              }
+            }
+          ]
+        },
+        {
+          "path": "systemd-maintenance-BfMbND8l.mjs",
+          "imports": [
+            {
+              "importer": "update-command-service-maintenance-DI5ixVA8.mjs",
+              "owner": "src/cli/update-cli/update-command-service-maintenance.ts",
+              "exports": [
+                "prepareSystemdGatewayMaintenance"
+              ]
+            },
+            {
+              "importer": "update-command-service-maintenance-DI5ixVA8.mjs",
+              "owner": "src/cli/update-cli/update-command-service-maintenance.ts",
+              "exports": [
+                "prepareSystemdGatewayMaintenance"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "prepareSystemdGatewayMaintenance",
+              "origin": {
+                "module": "src/daemon/systemd-maintenance.ts",
+                "symbol": "prepareSystemdGatewayMaintenance"
+              }
+            }
+          ]
+        },
+        {
+          "path": "systemd-peer-Lo02PTuR.mjs",
+          "imports": [
+            {
+              "importer": "systemd-service-files-CG6jQkqA.mjs",
+              "owner": "src/daemon/systemd-service-files.ts",
+              "exports": [
+                "admitSystemdServiceReadBinding"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "admitSystemdServiceReadBinding",
+              "origin": {
+                "module": "src/daemon/systemd-peer.ts",
+                "symbol": "admitSystemdServiceReadBinding"
+              }
+            }
+          ]
+        },
+        {
+          "path": "systemd-scope-BUo0x_gC.mjs",
+          "imports": [
+            {
+              "importer": "systemd-service-files-CG6jQkqA.mjs",
+              "owner": "src/daemon/systemd-service-files.ts",
+              "exports": [
+                "findInstalledSystemdGatewayScope"
+              ]
+            },
+            {
+              "importer": "systemd-service-files-CG6jQkqA.mjs",
+              "owner": "src/daemon/systemd-service-files.ts",
+              "exports": [
+                "findInstalledSystemdGatewayScope"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "findInstalledSystemdGatewayScope",
+              "origin": {
+                "module": "src/daemon/systemd-scope.ts",
+                "symbol": "findInstalledSystemdGatewayScope"
+              }
+            }
+          ]
+        },
+        {
+          "path": "terminal-core/prompt-style.js",
+          "imports": [
+            {
+              "importer": "shared-CQ7H6hkW.mjs",
+              "owner": "src/cli/update-cli/shared.ts",
+              "exports": [
+                "stylePromptMessage"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "stylePromptMessage",
+              "origin": {
+                "module": "packages/terminal-core/src/prompt-style.ts",
+                "symbol": "stylePromptMessage"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-artifact-D-AdkoqD.mjs",
+          "imports": [
+            {
+              "importer": "update-command-initialization-run-Ch2EA1Ja.mjs",
+              "owner": "src/cli/update-cli/update-command-initialization-run.ts",
+              "exports": [
+                "runFreshUpdateArtifact"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "runFreshUpdateArtifact",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-artifact.ts",
+                "symbol": "runFreshUpdateArtifact"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-database-context-D56Y1WZK.mjs",
+          "imports": [
+            {
+              "importer": "update-command-schema-DUJOfvwo.mjs",
+              "owner": "src/cli/update-cli/update-command-schema.ts",
+              "exports": [
+                "inspectUpdateDatabaseContexts"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "inspectUpdateDatabaseContexts",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-database-context.ts",
+                "symbol": "inspectUpdateDatabaseContexts"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-failure-recovery-Cne2WP04.mjs",
+          "imports": [
+            {
+              "importer": "update-command-finalize-BKWpzzZj.mjs",
+              "owner": "src/cli/update-cli/update-finalization-lifecycle.ts",
+              "exports": [
+                "verifyUpdateFailureRecovery"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "verifyUpdateFailureRecovery",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-failure-recovery.ts",
+                "symbol": "verifyUpdateFailureRecovery"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-fresh-doctor-D8v1mP4f.mjs",
+          "imports": [
+            {
+              "importer": "update-command-verification-Bd4mEwwn.mjs",
+              "owner": "src/cli/update-cli/update-command-service-recovery.ts",
+              "exports": [
+                "runUpdateFinalizationDoctorInFreshProcess"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "runUpdateFinalizationDoctorInFreshProcess",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-fresh-doctor.ts",
+                "symbol": "runUpdateFinalizationDoctorInFreshProcess"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-git-RT6v0oMj.mjs",
+          "imports": [
+            {
+              "importer": "update-command-schema-DUJOfvwo.mjs",
+              "owner": "src/cli/update-cli/update-command-schema.ts",
+              "exports": [
+                "inspectGitDryRunTargetSchemaVersions"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "inspectGitDryRunTargetSchemaVersions",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-git.ts",
+                "symbol": "inspectGitDryRunTargetSchemaVersions"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-immutable-Ba1nfVE5.mjs",
+          "imports": [
+            {
+              "importer": "update-command-C5Rq6Di7.mjs",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "tryRunImmutableUpdateCommand"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "tryRunImmutableUpdateCommand",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-immutable.ts",
+                "symbol": "tryRunImmutableUpdateCommand"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-initialization-BTqrUett.mjs",
+          "imports": [
+            {
+              "importer": "update-command-C5Rq6Di7.mjs",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "updateStateNeedsInitialization"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "updateStateNeedsInitialization",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-initialization.ts",
+                "symbol": "updateStateNeedsInitialization"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-initialization-run-Ch2EA1Ja.mjs",
+          "imports": [
+            {
+              "importer": "update-command-C5Rq6Di7.mjs",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "initializeAndRunUpdate"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "initializeAndRunUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-initialization-run.ts",
+                "symbol": "initializeAndRunUpdate"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-node-runtime-resolution-BtbinxbQ.mjs",
+          "imports": [
+            {
+              "importer": "update-command-schema-DUJOfvwo.mjs",
+              "owner": "src/cli/update-cli/update-command-runtime-preflight.ts",
+              "exports": [
+                "resolveTargetNodeRuntime"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "resolveTargetNodeRuntime",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-node-runtime-resolution.ts",
+                "symbol": "resolveTargetNodeRuntime"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-package-BVE4kfpv.mjs",
+          "imports": [
+            {
+              "importer": "update-command-initialization-run-Ch2EA1Ja.mjs",
+              "owner": "src/cli/update-cli/update-command-initialization-run.ts",
+              "exports": [
+                "stagePackageInstallUpdate"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "stagePackageInstallUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-package.ts",
+                "symbol": "stagePackageInstallUpdate"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-package-identity-Bh6fBKSs.mjs",
+          "imports": [
+            {
+              "importer": "update-command-verification-Bd4mEwwn.mjs",
+              "owner": "src/cli/update-cli/update-command-verification.ts",
+              "exports": [
+                "readPackageUpdateIdentity"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "readPackageUpdateIdentity",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-package-identity.ts",
+                "symbol": "readPackageUpdateIdentity"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-plugin-preflight-BICj8jRB.mjs",
+          "imports": [
+            {
+              "importer": "update-command-schema-DUJOfvwo.mjs",
+              "owner": "src/cli/update-cli/update-command-schema.ts",
+              "exports": [
+                "preflightConfiguredNpmPluginTargets"
+              ]
+            },
+            {
+              "importer": "update-execution.runtime-Dlv1MZyH.mjs",
+              "owner": "src/cli/update-cli/update-command-execution.ts",
+              "exports": [
+                "preflightConfiguredNpmPluginTargets"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "preflightConfiguredNpmPluginTargets",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-plugin-preflight.ts",
+                "symbol": "preflightConfiguredNpmPluginTargets"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-command-service-drain-Dfn1-dSV.mjs",
+          "imports": [
+            {
+              "importer": "update-command-service-maintenance-DI5ixVA8.mjs",
+              "owner": "src/cli/update-cli/update-command-service-maintenance.ts",
+              "exports": [
+                "withGatewayMaintenanceDrain"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "withGatewayMaintenanceDrain",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-service-drain.ts",
+                "symbol": "withGatewayMaintenanceDrain"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-execution.runtime.js",
+          "imports": [
+            {
+              "importer": "update-command-C5Rq6Di7.mjs",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "resumePostCoreUpdate"
+              ]
+            },
+            {
+              "importer": "update-command-C5Rq6Di7.mjs",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "finishAlreadyCurrentUpdate"
+              ]
+            },
+            {
+              "importer": "update-command-C5Rq6Di7.mjs",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "continueMigratedUpdateInFreshProcess",
+                "createUpdateCommandExecutionGuards",
+                "createUpdateCommandFinalizationFence",
+                "executeMutableUpdate",
+                "finishAlreadyCurrentUpdate",
+                "finishUpdate",
+                "inspectActivatedUpdateState",
+                "restoreFailedUpdateDatabases"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "continueMigratedUpdateInFreshProcess",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-migrated.ts",
+                "symbol": "continueMigratedUpdateInFreshProcess"
+              }
+            },
+            {
+              "exported": "createUpdateCommandExecutionGuards",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-execution-guards.ts",
+                "symbol": "createUpdateCommandExecutionGuards"
+              }
+            },
+            {
+              "exported": "createUpdateCommandFinalizationFence",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-recovery.ts",
+                "symbol": "createUpdateCommandFinalizationFence"
+              }
+            },
+            {
+              "exported": "executeMutableUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-execution.ts",
+                "symbol": "executeMutableUpdate"
+              }
+            },
+            {
+              "exported": "finishAlreadyCurrentUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-noop.ts",
+                "symbol": "finishAlreadyCurrentUpdate"
+              }
+            },
+            {
+              "exported": "finishUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-post-update.ts",
+                "symbol": "finishUpdate"
+              }
+            },
+            {
+              "exported": "inspectActivatedUpdateState",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-migrated.ts",
+                "symbol": "inspectActivatedUpdateState"
+              }
+            },
+            {
+              "exported": "restoreFailedUpdateDatabases",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-database-backup.ts",
+                "symbol": "restoreFailedUpdateDatabases"
+              }
+            },
+            {
+              "exported": "resumePostCoreUpdate",
+              "origin": {
+                "module": "src/cli/update-cli/update-command-resume.ts",
+                "symbol": "resumePostCoreUpdate"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-immutable-activation-BMql-6Kk.mjs",
+          "imports": [
+            {
+              "importer": "update-command-immutable-DfDi8NOD.mjs",
+              "owner": "src/cli/update-cli/update-command-immutable.ts",
+              "exports": [
+                "activateImmutableUpdate"
+              ]
+            },
+            {
+              "importer": "update-command-immutable-DfDi8NOD.mjs",
+              "owner": "src/cli/update-cli/update-command-immutable.ts",
+              "exports": [
+                "recoverImmutableUpdate"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "activateImmutableUpdate",
+              "origin": {
+                "module": "src/infra/update-immutable-activation.ts",
+                "symbol": "activateImmutableUpdate"
+              }
+            },
+            {
+              "exported": "recoverImmutableUpdate",
+              "origin": {
+                "module": "src/infra/update-immutable-activation.ts",
+                "symbol": "recoverImmutableUpdate"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-managed-service-handoff-3KEB9t9G.mjs",
+          "imports": [
+            {
+              "importer": "update-command-post-update-QIdrTouq.mjs",
+              "owner": "src/cli/update-cli/update-command-resume.ts",
+              "exports": [
+                "assertManagedServiceUpdateHandoffRoot"
+              ]
+            },
+            {
+              "importer": "update-command-terminal-NxgeJHyd.mjs",
+              "owner": "src/cli/update-cli/update-command-run.ts",
+              "exports": [
+                "assertManagedServiceUpdateHandoffRoot"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "assertManagedServiceUpdateHandoffRoot",
+              "origin": {
+                "module": "src/infra/update-managed-service-handoff.ts",
+                "symbol": "assertManagedServiceUpdateHandoffRoot"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-managed-service-handoff-current-AXgfIfIZ.mjs",
+          "imports": [
+            {
+              "importer": "launchd-DH4_kDWe.mjs",
+              "owner": "src/daemon/launchd-stop.ts",
+              "exports": [
+                "isCurrentManagedServiceUpdateHandoffProcess"
+              ]
+            },
+            {
+              "importer": "update-command-executor-u84C0FKu.mjs",
+              "owner": "src/cli/update-cli/update-command-executor.ts",
+              "exports": [
+                "isCurrentManagedServiceUpdateHandoffProcess"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "isCurrentManagedServiceUpdateHandoffProcess",
+              "origin": {
+                "module": "src/infra/update-managed-service-handoff-current.ts",
+                "symbol": "isCurrentManagedServiceUpdateHandoffProcess"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-recovery-backup-status-BLEuP4-S.mjs",
+          "imports": [
+            {
+              "importer": "status-cVZu3w53.mjs",
+              "owner": "src/cli/update-cli/status.ts",
+              "exports": [
+                "inspectUpdateRecoveryBackups"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "inspectUpdateRecoveryBackups",
+              "origin": {
+                "module": "src/infra/update-recovery-backup-status.ts",
+                "symbol": "inspectUpdateRecoveryBackups"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-recovery-baseline-capture-BFHdeStO.mjs",
+          "imports": [
+            {
+              "importer": "update-command-initialization-run-Ch2EA1Ja.mjs",
+              "owner": "src/cli/update-cli/update-command-initialization-run.ts",
+              "exports": [
+                "captureUpdateRecoveryBaseline"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "captureUpdateRecoveryBaseline",
+              "origin": {
+                "module": "src/infra/update-recovery-baseline-capture.ts",
+                "symbol": "captureUpdateRecoveryBaseline"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-retained-runtime-DBM06_JQ.mjs",
+          "imports": [
+            {
+              "importer": "update-command-C5Rq6Di7.mjs",
+              "owner": "src/cli/update-cli/update-command.ts",
+              "exports": [
+                "withRetainedUpdateRuntime"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "withRetainedUpdateRuntime",
+              "origin": {
+                "module": "src/infra/update-retained-runtime.ts",
+                "symbol": "withRetainedUpdateRuntime"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-run-ledger-Dy0ljqGU.mjs",
+          "imports": [
+            {
+              "importer": "shared-CQ7H6hkW.mjs",
+              "owner": "src/cli/update-cli/shared.ts",
+              "exports": [
+                "finishUpdateRun"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "finishUpdateRun",
+              "origin": {
+                "module": "src/infra/update-run-write.ts",
+                "symbol": "finishUpdateRun"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-runner-git-target-Dxjl2jm-.mjs",
+          "imports": [
+            {
+              "importer": "status-cVZu3w53.mjs",
+              "owner": "src/cli/update-cli/status.ts",
+              "exports": [
+                "readGitTargetSchemaVersions",
+                "readPreferredGitChannelTarget"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "readGitTargetSchemaVersions",
+              "origin": {
+                "module": "src/infra/update-runner-git-target.ts",
+                "symbol": "readGitTargetSchemaVersions"
+              }
+            },
+            {
+              "exported": "readPreferredGitChannelTarget",
+              "origin": {
+                "module": "src/infra/update-runner-git-target.ts",
+                "symbol": "readPreferredGitChannelTarget"
+              }
+            }
+          ]
+        },
+        {
+          "path": "update-triage-B6F6g9pP.mjs",
+          "imports": [
+            {
+              "importer": "update-command-triage-DoUdxEJO.mjs",
+              "owner": "src/cli/update-cli/update-command-triage.ts",
+              "exports": [
+                "prepareUpdateFailureTriage"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "prepareUpdateFailureTriage",
+              "origin": {
+                "module": "src/infra/update-triage.ts",
+                "symbol": "prepareUpdateFailureTriage"
+              }
+            }
+          ]
+        },
+        {
+          "path": "windows-powershell-spawn-BsupaPNX.mjs",
+          "imports": [
+            {
+              "importer": "update-command-service-publication-BdZQYDS_.mjs",
+              "owner": "src/daemon/managed-gateway-bindings.ts",
+              "exports": [
+                "WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS",
+              "origin": {
+                "module": "src/infra/windows-powershell-spawn.ts",
+                "symbol": "WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS"
+              }
+            }
+          ]
+        },
+        {
+          "path": "worker-native-lifecycle-kel3eorD.mjs",
+          "imports": [
+            {
+              "importer": "runtime-cleanup-scope-Ck-m89lN.mjs",
+              "owner": "src/cli/runtime-cleanup-scope.ts",
+              "exports": [
+                "closeDefaultRetainedNativeWorkerSource"
+              ]
+            }
+          ],
+          "exports": [
+            {
+              "exported": "closeDefaultRetainedNativeWorkerSource",
+              "origin": {
+                "module": "src/infra/worker-native-lifecycle.ts",
+                "symbol": "closeDefaultRetainedNativeWorkerSource"
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }

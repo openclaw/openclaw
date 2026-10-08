@@ -5,7 +5,6 @@ import {
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
-import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
 import {
   getAdmittedSqliteSchemaFacts,
   getSqliteReadOperationRevision,
@@ -17,7 +16,7 @@ import {
   readSqliteUserVersion,
 } from "../infra/sqlite-user-version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
@@ -90,67 +89,6 @@ function readContentVersion(db: DatabaseSync, published: number): number {
     );
   }
   return Math.max(published, contentVersion);
-}
-
-/** Cold migration planning checks physical content; admission still uses the recorded version. */
-export function readStateSchemaMigrationVersion(db: DatabaseSync): number {
-  const version = readStateSchemaContentVersion(db);
-  if (version !== 16) {
-    return version;
-  }
-  const reviewWorkspace = tableHasColumn(db, "skill_workshop_collection_reviews", "workspace_dir");
-  const proposalWorkspace = tableHasColumn(db, "skill_workshop_proposals", "workspace_dir");
-  const releasedClaim = tableHasColumn(db, "skill_workshop_proposals", "claim_released_time");
-  if (!reviewWorkspace && !proposalWorkspace && !releasedClaim) {
-    return version;
-  }
-  // Review attribution needs the old proposal workspace mapping. Never guess it from a mixed pair.
-  const missingAttribution = reviewWorkspace && !proposalWorkspace;
-  const schema = `
-    CREATE TABLE skill_workshop_collection_reviews (
-      review_id TEXT NOT NULL PRIMARY KEY,
-      ${reviewWorkspace ? "workspace_dir" : "owner_agent_id"} TEXT NOT NULL,
-      backup_id TEXT NOT NULL,
-      create_time INTEGER NOT NULL,
-      kept_names_json TEXT NOT NULL,
-      written_names_json TEXT NOT NULL,
-      dropped_json TEXT NOT NULL
-    ) STRICT;
-    CREATE TABLE skill_workshop_proposals (
-      proposal_id TEXT NOT NULL PRIMARY KEY,
-      record_json TEXT NOT NULL,
-      owner_agent_id TEXT,
-      ${proposalWorkspace ? "workspace_dir TEXT NOT NULL," : ""}
-      kind TEXT NOT NULL CHECK (kind IN ('create', 'update')),
-      status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected', 'quarantined', 'stale')),
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      draft_hash TEXT NOT NULL,
-      origin_agent_id TEXT,
-      origin_session_key TEXT,
-      origin_run_id TEXT,
-      origin_message_id TEXT,
-      applied_at TEXT,
-      rejected_at TEXT,
-      quarantined_at TEXT,
-      stale_at TEXT,
-      status_reason TEXT
-      ${releasedClaim ? ", claim_released_time INTEGER" : ""}
-    ) STRICT;
-  `;
-  const issues = collectSqliteSchemaIssues(db, schema, {
-    allowedMissingTables: ["skill_workshop_collection_reviews"],
-    allowedColumnDefinitions: {
-      "skill_workshop_collection_reviews.workspace_dir": ["workspace_dir TEXT NOT NULL DEFAULT ''"],
-      "skill_workshop_proposals.workspace_dir": ["workspace_dir TEXT NOT NULL DEFAULT ''"],
-    },
-  });
-  if (!missingAttribution && issues.length === 0) {
-    return 15;
-  }
-  throw new SqliteSchemaMismatchError(
-    "Unrecognized Skill Workshop ownership schema; cannot apply the schema 16 migration.",
-  );
 }
 
 export function assertSupportedStateSchemaVersion(db: DatabaseSync, pathname: string): number {

@@ -1,8 +1,10 @@
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import * as skillSelection from "../../skills/library/selection.js";
 import * as skillService from "../../skills/library/service.js";
@@ -106,7 +108,36 @@ it.for([
               await waitForPreparation();
               return presentation(...args);
             });
-    const respond = vi.fn<RespondFn>();
+    const observer = new DatabaseSync(
+      resolveSqliteTargetFromSessionStorePath(fixture.scope.storePath, { agentId: "main" }).path,
+      { readOnly: true },
+    );
+    const readClaim = observer.prepare(
+      `SELECT current_session_id AS sessionId, status,
+        json_extract(entry_json, '$.lifecycleRunId') AS lifecycleRunId,
+        json_extract(entry_json, '$.restartRecoveryDeliveryRunId') AS runId,
+        json_extract(entry_json, '$.restartRecoveryDeliverySourceRunId') AS sourceRunId
+       FROM session_nodes WHERE session_key = ?`,
+    );
+    const readUserTurn = observer.prepare(
+      `SELECT json_extract(event_json, '$.message.content') AS content,
+        json_extract(event_json, '$.message.idempotencyKey') AS idempotencyKey
+       FROM transcript_events WHERE session_id = ?
+       AND json_extract(event_json, '$.type') = 'message'
+       AND json_extract(event_json, '$.message.role') = 'user'
+       AND json_extract(event_json, '$.message.idempotencyKey') = ?`,
+    );
+    let acknowledged: { claim: unknown; userTurns: unknown[] } | undefined;
+    const respond = vi.fn<RespondFn>(() => {
+      // Observe committed state at ACK emission, before any response-delivery await.
+      acknowledged = {
+        claim: readClaim.get(fixture.scope.sessionKey),
+        userTurns: readUserTurn.all(
+          fixture.scope.sessionId,
+          `${fixture.params.idempotencyKey}:user`,
+        ),
+      };
+    });
     const sending = fixture.send(respond);
     try {
       await withinTest(entered.promise, signal);
@@ -120,6 +151,22 @@ it.for([
         undefined,
         expect.anything(),
       );
+      expect(acknowledged).toEqual({
+        claim: {
+          sessionId: fixture.scope.sessionId,
+          // #165733: admission clears the prior outcome; the run registry owns liveness.
+          status: null,
+          lifecycleRunId: fixture.params.idempotencyKey,
+          runId: fixture.params.idempotencyKey,
+          sourceRunId: fixture.params.idempotencyKey,
+        },
+        userTurns: [
+          {
+            content: fixture.params.message,
+            idempotencyKey: `${fixture.params.idempotencyKey}:user`,
+          },
+        ],
+      });
       const admittedTranscript = loadTranscriptEventsSync(fixture.scope);
       expect(admittedTranscript).toHaveLength(fixture.activeTranscript.length + 1);
       expect(admittedTranscript.at(-1)).toMatchObject({
@@ -187,9 +234,13 @@ it.for([
       }
     } finally {
       release.resolve();
-      await sending;
-      await fixture.cleanup();
-      preparationSpy.mockRestore();
+      try {
+        await sending;
+      } finally {
+        observer.close();
+        preparationSpy.mockRestore();
+        await fixture.cleanup();
+      }
     }
   },
 );

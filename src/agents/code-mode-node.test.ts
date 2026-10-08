@@ -1,6 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { BroadcastChannel, getEnvironmentData, setEnvironmentData } from "node:worker_threads";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import * as runtimeProcess from "../infra/runtime-process-url.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -18,6 +25,10 @@ const config = {
   maxSnapshotBytes: 10 * 1024 * 1024,
 };
 const continuations = new Set<CodeModeExecutorContinuation>();
+const timeoutSources = [
+  "await null; while (true) {}",
+  'Object.prototype.toJSON = () => { throw new Error("inherited hook"); }; text("safe"); while (true) {}',
+];
 let host: LegacyPluginSdkResourceHost;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 beforeEach(() => {
@@ -150,37 +161,112 @@ describe("Node Code Mode executor", () => {
     });
   });
 
-  it.each([
-    "await null; while (true) {}",
-    'Object.prototype.toJSON = () => { throw new Error("inherited hook"); }; text("safe"); while (true) {}',
-  ])("interrupts guest execution under the same timeout: %s", async (source) => {
-    const started = performance.now();
-    expect(
-      await execute('text("before"); json({ n: 1 }); console.log("diagnostic"); ' + source, {
-        executionTimeoutMs: 30,
-      }),
-    ).toMatchObject({
-      status: "failed",
-      code: "timeout",
-      error: "code mode timeout exceeded",
-      failurePhase: "guest",
-      output: {
-        count: source.includes("inherited hook") ? 4 : 3,
-        source: {
-          kind: "complete",
-          json:
-            '[{"type":"text","text":"before"},{"type":"json","value":{"n":1}},{"type":"text","text":"diagnostic"}' +
-            (source.includes("inherited hook") ? ',{"type":"text","text":"safe"}]' : "]"),
-        },
-      },
-    });
-    // Includes cold Worker startup, but must not spend the 5 s wall budget.
-    expect(performance.now() - started).toBeLessThan(2_000);
-    expect(await execute("return 42")).toMatchObject({
-      status: "completed",
-      value: { kind: "complete", json: "42" },
-    });
-  });
+  it.each(timeoutSources)(
+    "interrupts guest execution under the same timeout: %s",
+    async (source) => {
+      const started = performance.now();
+      expect(
+        await execute('text("before"); json({ n: 1 }); console.log("diagnostic"); ' + source, {
+          executionTimeoutMs: 30,
+        }),
+      ).toMatchObject({
+        status: "failed",
+        code: "timeout",
+        error: "code mode timeout exceeded",
+        failurePhase: "guest",
+      });
+      // Includes cold Worker startup, but must not spend the 5 s wall budget.
+      expect(performance.now() - started).toBeLessThan(2_000);
+      expect(await execute("return 42")).toMatchObject({
+        status: "completed",
+        value: { kind: "complete", json: "42" },
+      });
+    },
+  );
+
+  it.for(timeoutSources)(
+    "preserves published output when interrupting: %s",
+    async (source, { signal }) => {
+      const worker = new URL(
+        "../../test/helpers/code-mode-node.timeout.test-support.ts",
+        import.meta.url,
+      );
+      const notifications = new BroadcastChannel(randomUUID());
+      const environmentKey = "openclaw.codeModeTimeoutOutputTest";
+      const previousEnvironment = getEnvironmentData(environmentKey);
+      setEnvironmentData(environmentKey, notifications.name);
+      const published = createDeferred();
+      const consumed = createDeferred();
+      const count = source.includes("inherited hook") ? 4 : 3;
+      notifications.addEventListener("message", ({ data }) => {
+        if (data === count) {
+          published.resolve();
+        }
+      });
+      const resolveWorker = runtimeProcess.resolveRuntimeProcessEntrypointUrl;
+      const resolver = vi
+        .spyOn(runtimeProcess, "resolveRuntimeProcessEntrypointUrl")
+        .mockImplementation((name) => (name === "codeModeNode" ? worker : resolveWorker(name)));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const operation = host.run(() =>
+          nodeCodeModeExecutor.execute(
+            {
+              kind: "exec",
+              source: 'text("before"); json({ n: 1 }); console.log("diagnostic"); ' + source,
+              config,
+              catalog: [],
+              namespaces: [],
+              executionTimeoutMs: 30,
+            },
+            {
+              timeoutMs: 7_000,
+              signal,
+              inlineHost: {
+                onInputConsumed: () => consumed.resolve(),
+                onBoundary: async () => {
+                  throw new Error("The infinite loop must not flush its output at a boundary");
+                },
+              },
+            },
+          ),
+        );
+        await withinTest(
+          awaitGateBeforeSettlement(
+            Promise.all([published.promise, consumed.promise]),
+            operation,
+            "Execution ended before output publication",
+          ),
+          signal,
+        );
+        await vi.advanceTimersByTimeAsync(30);
+        expect(await withinTest(operation, signal)).toMatchObject({
+          status: "failed",
+          code: "timeout",
+          error: "code mode timeout exceeded",
+          failurePhase: "guest",
+          output: {
+            count,
+            source: {
+              kind: "complete",
+              json:
+                '[{"type":"text","text":"before"},{"type":"json","value":{"n":1}},{"type":"text","text":"diagnostic"}' +
+                (source.includes("inherited hook") ? ',{"type":"text","text":"safe"}]' : "]"),
+            },
+          },
+        });
+      } finally {
+        vi.useRealTimers();
+        resolver.mockRestore();
+        setEnvironmentData(environmentKey, previousEnvironment);
+        notifications.close();
+      }
+      expect(await execute("return 42")).toMatchObject({
+        status: "completed",
+        value: { kind: "complete", json: "42" },
+      });
+    },
+  );
 
   it("creates fresh globals for a reused worker and preserves pure encoding APIs", async () => {
     expect(

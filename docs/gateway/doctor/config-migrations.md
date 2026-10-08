@@ -567,8 +567,11 @@ decoder's last-value semantics for duplicate properties. Ambiguous ownership and
 payloads remain intact with a warning naming the affected session.
 
 Runtime reads and writes use canonical metadata only. Startup refuses unmigrated
-ACP state with offline repair instructions before handing session stores to
-runtime. Run `openclaw doctor --fix` after restoring older state; the update-time
+ACP state with a current session binding before handing session stores to
+runtime, with offline repair instructions. Historical shared rows whose binding
+is absent or stale remain intact and do not block startup; runtime does not serve
+their metadata. Unreadable candidate stores and unresolved recorded owners still
+block admission. Run `openclaw doctor --fix` after restoring older state; the update-time
 Doctor pass runs the same repair.
 Embedded metadata imports record durable receipts before removing the source
 field, so retrying interrupted cleanup cannot reopen a session after its canonical
@@ -954,6 +957,7 @@ against the current SQLite owners before the import can rename profiles.
     | `session.maintenance.rotateBytes`                                 | removed (deprecated)                                                        |
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
     | `diagnostics.memoryPressureSnapshot`, legacy `diagnostics.memoryPressureBundle`                  | removed (automatic critical-memory snapshots were retired; no replacement automatic capture) |
+    | `skills.workshop.autonomous.mode: "propose"`, `skills.workshop.approvalPolicy`, `skills.workshop.maxPending` | `"off"`; proposal settings removed (Skill Workshop proposals were retired) |
 
     Doctor migrates MCP `type: "http"` to `transport: "streamable-http"` and `type: "sse"` to `transport: "sse"` in both server maps. An existing `transport` wins. For command-based servers, Doctor removes `type: "stdio"`; the command still selects stdio. The update-time Doctor pass uses the same backed-up config repair. Plugin bundle files keep their external `type` format: bundle loading translates recognized types, and CLI exports use the destination's required format. An unknown bundle HTTP transport is rejected instead of being treated as SSE; its original `type` remains available to the destination CLI.
 

@@ -769,9 +769,9 @@ describe("node worker supervisor recovery", () => {
     await second.close();
   });
 
-  it.runIf(process.platform !== "win32").each(cleanupContracts)(
+  it.runIf(process.platform !== "win32").for(cleanupContracts)(
     "%s uses IPC disconnect after external-owner SIGKILL, then reconciles only after exact tree death",
-    async (mode) => {
+    async (mode, { signal }) => {
       const {
         bundleRoot,
         env: fixtureEnv,
@@ -787,14 +787,50 @@ describe("node worker supervisor recovery", () => {
         path.join(bundleRoot, "gateway-1", "bundles", input.expectedBundleHash, "worker.mjs"),
         `\nfs.writeFileSync(${JSON.stringify(workerModePath)}, JSON.stringify({ externalMode: process.env.OPENCLAW_SUPERVISOR_MODE ?? null }));\n`,
       );
-      const owner = spawnSupervisorOwner({ bundleRoot, env, input, root });
-      spawned.add(owner);
-      const owned = JSON.parse(await waitForChildLine(owner)) as NodeWorkerLaunchReceipt;
-      ownedProcessGroups.push(owned.worker!);
       const grandchildPath = path.join(workspaceDir, "grandchild.pid");
-      await vi.waitFor(() =>
-        expect(fs.readFileSync(grandchildPath, "utf8")).toMatch(/^[1-9]\d*$/u),
-      );
+      const grandchildReady = createDeferred();
+      const inspectGrandchild = () => {
+        try {
+          if (
+            fs.existsSync(grandchildPath) &&
+            /^[1-9]\d*$/u.test(fs.readFileSync(grandchildPath, "utf8"))
+          ) {
+            grandchildReady.resolve();
+          }
+        } catch (error) {
+          grandchildReady.reject(error);
+        }
+      };
+      // The launch receipt confirms dispatch; the child creates its descendants afterward.
+      const readinessWatcher = fs.watch(workspaceDir, inspectGrandchild);
+      readinessWatcher.once("error", grandchildReady.reject);
+      let owner: ChildProcess;
+      let owned: NodeWorkerLaunchReceipt;
+      try {
+        owner = spawnSupervisorOwner({ bundleRoot, env, input, root });
+        spawned.add(owner);
+        const ownerExit = waitForChildExit(owner);
+        const receipt = waitForChildLine(owner).then((line) => {
+          const recorded = JSON.parse(line) as NodeWorkerLaunchReceipt;
+          ownedProcessGroups.push(recorded.worker!);
+          inspectGrandchild();
+          return recorded;
+        });
+        [owned] = await withinTest(
+          Promise.all([
+            receipt,
+            awaitGateBeforeSettlement(
+              grandchildReady.promise,
+              ownerExit,
+              "supervisor owner exited before its grandchild was ready",
+            ),
+          ]),
+          signal,
+        );
+      } finally {
+        readinessWatcher.close();
+      }
+      expect(fs.readFileSync(grandchildPath, "utf8")).toMatch(/^[1-9]\d*$/u);
       const grandchild = requireNodeWorkerProcessIdentity(
         Number(fs.readFileSync(grandchildPath, "utf8")),
       );
