@@ -249,7 +249,6 @@ export type SqliteSessionReclamationPlan =
       kind: "lifecycle-projection-commit";
       input: ProjectedLifecycleCommitInput;
     })
-  | (SessionReclamationPlanBase & { kind: "lifecycle-projection-count" })
   | (SessionReclamationPlanBase & {
       kind: "deletion-plan";
       planning: SessionDeletionPlanningOperation;
@@ -303,7 +302,6 @@ export type SqliteArchiveReclamationPlan = Exclude<
 export type SqliteSessionReclamationResult =
   | { kind: "lifecycle-projection-plan"; value: ProjectedLifecycleMutation }
   | { kind: "lifecycle-projection-commit"; value: ProjectedLifecycleCommitResult }
-  | { kind: "lifecycle-projection-count"; value: number }
   | { kind: "deletion-plan"; value: SessionDeletionPlanningResult }
   | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }
   | { kind: "archive-publish-record"; value: true }

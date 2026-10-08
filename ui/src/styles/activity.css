@@ -845,23 +845,35 @@ a.activity-current-work__row:hover {
   font-size: var(--control-ui-text-sm);
 }
 
-.activity-feed__devices {
+.activity-feed__connection-summary,
+.activity-feed__connections {
   display: grid;
-  gap: 2px;
-  margin-top: var(--space-4);
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
 }
 
-.activity-feed__device {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  padding: 5px 0;
+.activity-feed__connection-details {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
 
-.activity-feed__device-name {
+.activity-feed__connection-details summary {
+  padding-block: var(--space-3);
+  min-height: 44px;
+}
+
+.activity-feed__connection {
+  display: grid;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+}
+
+.activity-feed__connection strong {
   color: var(--text);
   font-weight: 600;
 }

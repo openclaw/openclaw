@@ -255,7 +255,7 @@ async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSign
         id: "live-snapshot",
         label: "Live snapshot",
         status: "warn" as const,
-        summary: "No per-tab CDP WebSocket available for the lightweight live snapshot probe",
+        summary: "No per-tab CDP WebSocket available for the lightweight live snapshot check",
       };
     }
     const snap = await snapshotAria({

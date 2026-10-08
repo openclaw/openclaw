@@ -99,7 +99,10 @@ export function encodeOpenClawStateWorkerError(
         ...(typeof errno === "number" && Number.isInteger(errno) ? { errno } : {}),
         ...(nativeOpen ? { nativeOpen: true } : {}),
         ...(stateDatabasePath === undefined ? {} : { stateDatabasePath }),
-        ...("cause" in current ? { cause: encodeValue(current.cause) } : {}),
+        ...("cause" in current &&
+        !(identity.type === "session-transcript-writer-claim-rebound" && identity.refusal)
+          ? { cause: encodeValue(current.cause) }
+          : {}),
         ...(current instanceof AggregateError ? { errors: current.errors.map(encodeValue) } : {}),
       });
     }
@@ -160,6 +163,9 @@ function parseNode(value: unknown, count: number) {
   }
   if (
     Object.keys(value).some((key) => !allowed.has(key)) ||
+    (identity.type === "session-transcript-writer-claim-rebound" &&
+      identity.refusal !== undefined &&
+      "cause" in value) ||
     ("code" in value &&
       typeof value.code !== "string" &&
       !(typeof value.code === "number" && Number.isFinite(value.code))) ||

@@ -813,6 +813,9 @@ effective **Full Access**, including an inherited Full Access default, keeps its
 ordinary tools so it can inspect the outcome and finish the task. Recovery does
 not replay the interrupted call automatically or treat its missing result as
 success. Existing tool restrictions and current permissions still apply.
+Recovery prompts identify interrupted, missing, or aborted tool results as unknown
+outcomes from the Gateway restart. A follow-up to an interrupted native child
+receives the same context so it can verify effects before retrying a tool call.
 Pending reply delivery, ambiguous reply-hook outcomes, and explicitly replay-safe
 Code Mode reconstruction retain their narrower recovery restrictions.
 
@@ -833,7 +836,11 @@ approval handles are not revived.
 
 Subagent runs are persisted in the shared SQLite state database, so the
 subagent registry survives the process. On boot, interrupted child runs settle
-through their normal completion path. They are not automatically relaunched.
+through their normal completion path as soon as startup restores requester ownership,
+without waiting for the periodic registry sweep. The sweep remains a retry backstop.
+The crash-loop breaker pauses this settlement too; the same sweep retries when
+the breaker's recovery window ends.
+They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
 Its recovery input lists current unfinished child session and run identities,
 including children interrupted by the restart. Older runs superseded by a newer

@@ -155,6 +155,8 @@ When the loaded session list contains fewer than two distinct owner identities a
 
 Click or tap a person in the sidebar's **Online** section to open their Activity page. Hover or focus the row to open their information card. **View activity** in the card opens the same page. Unqualified viewers have no profile Activity page, so clicking or tapping their row opens only the card, with connection details and visible watched sessions.
 
+The Activity page shows each distinct app/platform description once, so several matching browser tabs do not repeat the same device metadata. Expand **Connection details** below **Viewing now** for grouped connection counts, reported host/platform, IP address, time zone, and available location or input-recency details. Counts describe connections, not physical devices. Separate tabs keep their own watched-session presence; consolidating the display does not merge those connections.
+
 Under **Group by Person**, the avatar and name in another person's section header open the same card. The chevron still collapses the section. An owner who is not connected gets a card marked **Offline** with only their recent sessions and the Activity link.
 
 The card shows how long the person has been continuously connected, their reported app/device context and time zone, and their last observed activity during that online period. Opening a different session, typing, and sending a new message count as activity. Connection heartbeats and agent responses do not. **Not observed yet** means no qualifying activity has been recorded, not that the person is inactive. These timing facts are ephemeral and reset after the person's final connection closes or the Gateway restarts.
