@@ -62,8 +62,9 @@ export function useIncognitoActorProbe() {
                 operation({
                   execute: async (command, options) => {
                     const result = await scope.execute(command, options);
-                    for (const observer of [...observers]) {
-                      await observer(command.type, command.input);
+                    const pendingObservers = [...observers];
+                    for (const onReply of pendingObservers) {
+                      await onReply(command.type, command.input);
                     }
                     return result;
                   },
