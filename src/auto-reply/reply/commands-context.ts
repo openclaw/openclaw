@@ -37,6 +37,9 @@ export function buildPluginCommandContext(params: HandleCommandsParams) {
         ? ctx.MessageThreadId
         : undefined,
     threadParentId: normalizeOptionalString(ctx.ThreadParentId),
+    messageId:
+      normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid),
+    replyToId: normalizeOptionalString(ctx.ReplyToIdFull) ?? normalizeOptionalString(ctx.ReplyToId),
   };
 }
 

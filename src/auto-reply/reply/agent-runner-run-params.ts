@@ -197,6 +197,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
   return {
     preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
     preparedRunAdmission: params.preparedRunAdmission,
+    assertForkReplaySourceCurrent: turn.followupRun.assertForkReplaySourceCurrent,
     messageActionTurnCapability: params.messageActionTurnCapability,
     trigger: turn.isHeartbeat ? "heartbeat" : "user",
     lane: params.runLane,
@@ -253,6 +254,7 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     bootstrapUserProfileId: run.bootstrapUserProfileId,
     gatewayUiCommandTarget: run.gatewayUiCommandTarget,
     taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
+    inboundTransport: run.inboundTransport,
   };
 }
 

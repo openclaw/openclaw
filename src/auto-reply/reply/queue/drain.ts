@@ -38,7 +38,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { resolveCollectedRun } from "./collected-run.js";
+import { resolveCollectedRun, resolveSyntheticOverflowRun } from "./collected-run.js";
 import {
   assertSingleAdmissionOwner,
   collectRuntimeMetadata,
@@ -48,7 +48,8 @@ import {
   hasPreparedCurrentTurnImages,
   prepareNextDeliveryGroup,
   resolveFollowupReplyAnchor,
-  resolveOverflowSummaryInboundEventKind,
+  resolveOverflowRuntimeAuthority,
+  overflowRuntimeMetadata,
 } from "./delivery-context.js";
 import {
   admitFollowupRunLifecycle,
@@ -774,8 +775,7 @@ async function runSyntheticOverflowSummary(params: {
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     errorContext: "followup overflow summary transcript",
   });
-  const currentInboundEventKind = resolveOverflowSummaryInboundEventKind(params.sources);
-  const runtimeMetadata = collectRuntimeMetadata(params.sources);
+  const { currentInboundEventKind, runtimeMetadata } = overflowRuntimeMetadata(params.sources);
   let admitted = false;
   await params.runFollowup({
     prompt: params.prompt,
@@ -784,13 +784,13 @@ async function runSyntheticOverflowSummary(params: {
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,
     userTurnTranscriptRecorder,
-    run: resolveCollectedRun(params.sources, params.source.run),
+    run: resolveSyntheticOverflowRun(params.sources, params.source.run),
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
     explicitSkillSelections: runtimeMetadata.explicitSkillSelections,
     channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
     gatewayLocalUserIngress: runtimeMetadata.gatewayLocalUserIngress,
-    operatorAuthority: runtimeMetadata.operatorAuthority,
+    ...resolveOverflowRuntimeAuthority(runtimeMetadata),
     personalBootstrapEligible: runtimeMetadata.personalBootstrapEligible,
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,

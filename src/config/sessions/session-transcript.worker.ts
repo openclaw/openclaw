@@ -556,6 +556,11 @@ serveOwnedWorkerTasks(
           loadSessionEntryReadOnlyInScope({ ...request.scope, projection: "list" }) !== undefined
         );
       }
+      if (request.kind === "fork-reply-selection") {
+        const { selectForkReplyInTranscriptWorker } =
+          await import("./session-transcript-worker-queries.js");
+        return await selectForkReplyInTranscriptWorker(request);
+      }
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {

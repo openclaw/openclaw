@@ -4,16 +4,15 @@ import {
   resolveThreadBindingLifecycle,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { runQueuedStoreWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createAccountScopedBindingAdapter } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
-import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   loadBindingsFromStore,
+  openThreadBindingStore,
   persistBindingMutation,
   updateStoredBindingSync,
 } from "./thread-bindings-persistence.js";
@@ -36,7 +35,7 @@ import {
   type TelegramThreadBindingManager,
   type TelegramThreadBindingRecord,
 } from "./thread-bindings-store.js";
-import { resolveTelegramToken } from "./token.js";
+import { createChildForumTopic } from "./thread-bindings-topic.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
@@ -89,7 +88,8 @@ async function initializeThreadBindingManager(
     DEFAULT_THREAD_BINDING_MAX_AGE_MS,
   );
 
-  const loaded = await loadBindingsFromStore(accountId);
+  const bindingStore = persist ? openThreadBindingStore() : undefined;
+  const loaded = await loadBindingsFromStore(accountId, bindingStore);
   for (const entry of loaded) {
     const key = resolveBindingKey({
       accountId,
@@ -104,6 +104,7 @@ async function initializeThreadBindingManager(
   await reconcileTelegramAcpBindingsOnStartup({
     accountId,
     persist,
+    store: bindingStore,
     prepareSession: params.prepareAcpSession,
   });
 
@@ -135,6 +136,7 @@ async function initializeThreadBindingManager(
 
   const manager: TelegramThreadBindingManager = {
     accountId,
+    bindingStore,
     shouldPersistMutations: () => persist,
     getIdleTimeoutMs: () => idleTimeoutMs,
     getMaxAgeMs: () => maxAgeMs,
@@ -180,21 +182,31 @@ async function initializeThreadBindingManager(
         return nextRecord;
       });
     },
-    unbindConversation: ({ conversationId: conversationIdRaw, throwOnPersistError }) =>
+    unbindConversation: ({
+      conversationId: conversationIdRaw,
+      throwOnPersistError,
+      assertCurrent,
+    }) =>
       mutate(async () => {
         const mutation = captureConversationMutation(conversationIdRaw);
         if (!mutation?.previous) {
           return null;
         }
         const removed = mutation.previous;
+        assertCurrent?.();
         await mutation.commit(removed, {
           remove: true,
           reason: "unbind-conversation",
           throwOnError: throwOnPersistError,
+          assertCurrent,
         });
         return removed;
       }),
-    unbindBySessionKey: ({ targetSessionKey: targetSessionKeyRaw, throwOnPersistError }) =>
+    unbindBySessionKey: ({
+      targetSessionKey: targetSessionKeyRaw,
+      throwOnPersistError,
+      assertCurrent,
+    }) =>
       mutate(() =>
         updateTelegramBindingsBySessionKey({
           manager,
@@ -203,6 +215,7 @@ async function initializeThreadBindingManager(
             remove: true,
             reason: "unbind-session",
             throwOnError: throwOnPersistError,
+            assertCurrent,
           },
         }),
       ),
@@ -298,7 +311,6 @@ async function initializeThreadBindingManager(
         const placement = prepared.placement === "child" ? "child" : "current";
         const metadata = { ...prepared.metadata };
         let conversationId: string | undefined;
-        let nativeTopicCreated = false;
 
         if (placement === "child") {
           const rawConversationId = prepared.conversation.conversationId?.trim() ?? "";
@@ -320,26 +332,17 @@ async function initializeThreadBindingManager(
             (normalizeOptionalString(metadata.threadName) ?? "") ||
             (normalizeOptionalString(metadata.label) ?? "") ||
             `Agent: ${targetSessionKey.split(":").pop()}`;
-          try {
-            const tokenResolution = resolveTelegramToken(params.cfg, { accountId });
-            if (!tokenResolution.token) {
-              return null;
-            }
-            const { createForumTopicTelegram } = await loadTelegramSendModule();
-            const result = await createForumTopicTelegram(chatId, threadName, {
-              cfg: params.cfg,
-              token: tokenResolution.token,
-              accountId,
-              ...(assertCurrent ? { assertPlatformSendAuthorized: assertCurrent } : {}),
-            });
-            conversationId = `${result.chatId}:topic:${result.topicId}`;
-            nativeTopicCreated = true;
-          } catch (err) {
-            logVerbose(
-              `telegram: child thread-binding failed for ${chatId}: ${formatErrorMessage(err)}`,
-            );
+          const topic = await createChildForumTopic({
+            cfg: params.cfg,
+            accountId,
+            chatId,
+            threadName,
+            assertCurrent,
+          });
+          if (!topic) {
             return null;
           }
+          conversationId = `${topic.chatId}:topic:${topic.topicId}`;
         } else {
           conversationId = normalizeOptionalString(prepared.conversation.conversationId);
         }
@@ -356,11 +359,11 @@ async function initializeThreadBindingManager(
             targetKind,
             conversationId,
             metadata,
+            expiresAt: prepared.expiresAt,
+            ttlMs: prepared.ttlMs,
           },
         });
-        if (!nativeTopicCreated) {
-          assertCurrent?.();
-        }
+        assertCurrent?.();
         mutation.prepare(record);
         // Memory-only publication must not yield after checking command authority.
         const committed =
@@ -368,14 +371,13 @@ async function initializeThreadBindingManager(
           (await persistBindingMutation({
             accountId,
             persist: true,
+            store: bindingStore,
             binding: record,
             reason: "bind",
             throwOnError: true,
             assertCurrent: () => {
               mutation.assertCurrent();
-              if (!nativeTopicCreated) {
-                assertCurrent?.();
-              }
+              assertCurrent?.();
             },
           }));
         mutation.publish(record, committed);
@@ -399,19 +401,21 @@ async function initializeThreadBindingManager(
       manager.updateConversationSync(conversationId, (current) => ({ ...current, lastActivityAt }));
     },
     touchConversationAsync: manager.touchConversation,
-    unbindConversation: (conversationId, reason) =>
+    unbindConversation: (conversationId, reason, assertCurrent) =>
       manager.unbindConversation({
         conversationId,
         reason,
         sendFarewell: false,
         throwOnPersistError: true,
+        assertCurrent,
       }),
-    unbindBySessionKey: (targetSessionKey, reason) =>
+    unbindBySessionKey: (targetSessionKey, reason, assertCurrent) =>
       manager.unbindBySessionKey({
         targetSessionKey,
         reason,
         sendFarewell: false,
         throwOnPersistError: true,
+        assertCurrent,
       }),
   });
 
@@ -471,7 +475,12 @@ async function updateTelegramBindingsBySessionKey(params: {
   manager: TelegramThreadBindingManager;
   targetSessionKey: string;
   update?: (entry: TelegramThreadBindingRecord, now: number) => TelegramThreadBindingRecord;
-  mutationOptions: { reason: string; remove?: boolean; throwOnError?: boolean };
+  mutationOptions: {
+    reason: string;
+    remove?: boolean;
+    throwOnError?: boolean;
+    assertCurrent?: () => void;
+  };
 }): Promise<TelegramThreadBindingRecord[]> {
   const targetSessionKey = params.targetSessionKey.trim();
   if (!targetSessionKey) {
@@ -492,6 +501,7 @@ async function updateTelegramBindingsBySessionKey(params: {
       continue;
     }
     const next = params.update ? params.update(current, now) : current;
+    params.mutationOptions.assertCurrent?.();
     await mutation.commit(next, params.mutationOptions);
     updated.push(next);
   }

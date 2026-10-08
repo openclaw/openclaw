@@ -110,6 +110,9 @@ export function createThreadBindingSessionAdapter(params: {
         boundBy: normalizeOptionalString(metadata.boundBy),
         introText: normalizeOptionalString(metadata.introText),
         metadata,
+        expiresAt: input.expiresAt,
+        ttlMs: input.ttlMs,
+        requireLiveSourceAtCommit: input.requireLiveSourceAtCommit,
         ...(assertCurrent ? { assertCurrent } : {}),
       });
       return bound ? serializeBinding(bound) : null;
@@ -121,9 +124,10 @@ export function createThreadBindingSessionAdapter(params: {
       params.manager.touchThreadSync({ threadId, at, persist: true }),
     touchConversationAsync: (threadId, at) =>
       params.manager.touchThread({ threadId, at, persist: true }),
-    unbindConversation: (threadId, reason) => params.manager.unbindThread({ threadId, reason }),
-    unbindBySessionKey: (targetSessionKey, reason) =>
-      params.manager.unbindBySessionKey({ targetSessionKey, reason }),
+    unbindConversation: (threadId, reason, assertCurrent) =>
+      params.manager.unbindThread({ threadId, reason, assertCurrent }),
+    unbindBySessionKey: (targetSessionKey, reason, assertCurrent) =>
+      params.manager.unbindBySessionKey({ targetSessionKey, reason, assertCurrent }),
   });
 }
 

@@ -114,16 +114,31 @@ export function captureBindingMutation(
     },
     async commit(
       binding: TelegramThreadBindingRecord,
-      options: { reason: string; remove?: boolean; throwOnError?: boolean },
+      options: {
+        reason: string;
+        remove?: boolean;
+        throwOnError?: boolean;
+        assertCurrent?: () => void;
+      },
     ) {
       const next = options.remove ? null : binding;
       this.prepare(next);
+      const assertMutationCurrent = () => {
+        assertCurrent();
+        options.assertCurrent?.();
+      };
+      assertMutationCurrent();
+      if (!manager.shouldPersistMutations()) {
+        this.publish(next, false);
+        return;
+      }
       const committed = await persistBindingMutation({
         ...options,
         accountId: manager.accountId,
         persist: manager.shouldPersistMutations(),
+        store: manager.bindingStore,
         binding,
-        assertCurrent,
+        assertCurrent: assertMutationCurrent,
       });
       this.publish(next, committed);
     },

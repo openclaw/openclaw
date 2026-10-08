@@ -683,6 +683,22 @@ describe("generic current-conversation bindings", () => {
     ).toBeNull();
   });
 
+  it("keeps a generic binding when Back removal authority is revoked", async () => {
+    const bound = expectSessionBinding(await bindWorkspaceConversation("user:revoked-back"));
+    await expect(
+      unbindGenericCurrentConversationBindings({
+        bindingId: bound.bindingId,
+        reason: "conversation-fork-back",
+        assertCurrent: () => {
+          throw new Error("revoked");
+        },
+      }),
+    ).rejects.toThrow("revoked");
+    expect(resolveGenericCurrentConversationBinding(bound.conversation)?.targetSessionKey).toBe(
+      bound.targetSessionKey,
+    );
+  });
+
   it.each(["touch", "unbind"] as const)(
     "supports %s by the canonical id returned for an unrepaired legacy self-parent row",
     async (operation) => {
@@ -787,6 +803,22 @@ describe("generic current-conversation bindings", () => {
       }),
     ).resolves.toBeNull();
     expect(resolveGenericCurrentConversationBinding(workspaceConversation("user:U123"))).toBeNull();
+  });
+
+  it("uses an absolute restored deadline rather than starting a new TTL", async () => {
+    vi.setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+    const expiresAt = Date.now() + 60_000;
+    const bound = await bindGenericCurrentConversation({
+      targetSessionKey: "agent:codex:acp:workspace-dm",
+      targetKind: "session",
+      conversation: workspaceConversation("user:restored"),
+      expiresAt,
+    });
+    expect(bound?.expiresAt).toBe(expiresAt);
+    vi.setSystemTime(Date.now() + 30_000);
+    expect(resolveWorkspaceConversation("user:restored")?.expiresAt).toBe(expiresAt);
+    closeOpenClawStateDatabaseForTest();
+    expect(resolveWorkspaceConversation("user:restored")?.expiresAt).toBe(expiresAt);
   });
 
   it("persists touched activity after the state database reopens", async () => {

@@ -39,7 +39,6 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
 import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -75,7 +74,10 @@ import {
   resolveRunStartupPhase,
 } from "./agent-runner-turn-timing.js";
 import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
-import { prepareChannelRunAdmission } from "./channel-run-admission.js";
+import {
+  prepareChannelRunAdmission,
+  resolveAgentRunSourceAssertion,
+} from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
@@ -534,10 +536,7 @@ async function executeAgentTurnInternal(
     operatorAuthority: params.followupRun.operatorAuthority,
     evidence: params.followupRun.channelAdmissionEvidence,
     gatewayLocalUserIngress: params.followupRun.gatewayLocalUserIngress,
-    assertSourceCurrent:
-      params.followupRun.run.senderIsOwner === true
-        ? captureCommandOwnerAssertion(params.followupRun.run)
-        : undefined,
+    assertSourceCurrent: resolveAgentRunSourceAssertion(params.followupRun),
     onAdmitted: (context) => {
       bindGatewayContextResolver(context, gatewayContextResolver);
       admittedRunContext.current = context;

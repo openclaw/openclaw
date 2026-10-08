@@ -1,0 +1,86 @@
+import { isDeepStrictEqual } from "node:util";
+import type { ConversationRef } from "../../infra/outbound/session-binding.types.js";
+import { readRecentSessionTranscriptActiveEvents } from "./session-accessor.sqlite-active-events.js";
+import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
+
+export type SessionForkReplySelection =
+  | { status: "found"; entryId: string; text: string }
+  | { status: "media" }
+  | { status: "missing" };
+
+/** Select only from the active transcript path; return no unrelated transcript data. */
+export function readSessionForkReplySelection(input: {
+  target: SessionTranscriptReadScope;
+  replyToId: string;
+  conversation: ConversationRef;
+  replyConversationRef?: string;
+}): SessionForkReplySelection {
+  const events = readRecentSessionTranscriptActiveEvents(input.target, 2_000, {
+    readOnly: true,
+  });
+  for (const candidate of events.toReversed()) {
+    // SAFETY: transcript events are partial untrusted records; every consumed field is checked.
+    const event = candidate as {
+      id?: unknown;
+      message?: {
+        role?: unknown;
+        content?: unknown;
+        media?: unknown;
+        __openclaw?: {
+          transport?: {
+            messageId?: unknown;
+            conversation?: unknown;
+            conversationRef?: unknown;
+            channel?: unknown;
+          };
+          media?: unknown;
+        };
+      };
+    };
+    const message = event.message;
+    const transport = message?.["__openclaw"]?.transport;
+    if (
+      typeof event.id !== "string" ||
+      message?.role !== "user" ||
+      transport?.messageId !== input.replyToId ||
+      (input.replyConversationRef
+        ? transport?.conversationRef !== input.replyConversationRef ||
+          transport?.channel !== input.conversation.channel
+        : !isDeepStrictEqual(transport?.conversation, input.conversation))
+    ) {
+      continue;
+    }
+    const media = message["__openclaw"]?.media ?? message.media;
+    if (Array.isArray(media) && media.length > 0) {
+      return { status: "media" };
+    }
+    const content = message.content;
+    if (
+      Array.isArray(content) &&
+      content.some(
+        (part) =>
+          !part ||
+          typeof part !== "object" ||
+          !("type" in part) ||
+          part.type !== "text" ||
+          !("text" in part) ||
+          typeof part.text !== "string",
+      )
+    ) {
+      return { status: "media" };
+    }
+    const text =
+      typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content
+              .map((part) => {
+                // SAFETY: the preceding array guard verified every part is a text record.
+                return part.text as string;
+              })
+              .join("")
+          : "";
+    return text.trim() ? { status: "found", entryId: event.id, text } : { status: "missing" };
+  }
+  return { status: "missing" };
+}

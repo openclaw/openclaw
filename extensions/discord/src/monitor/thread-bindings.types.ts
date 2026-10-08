@@ -17,6 +17,8 @@ export type ThreadBindingRecord = {
   idleTimeoutMs?: number;
   /** Hard max-age window in milliseconds from bind time (0 disables hard cap). */
   maxAgeMs?: number;
+  /** Absolute cap retained when restoring an earlier route. */
+  expiresAt?: number;
   metadata?: Record<string, unknown>;
 };
 
@@ -40,6 +42,7 @@ export type ThreadBindingManager = {
   ) => ThreadBindingRecord | null;
   bindTarget: (params: {
     assertCurrent?: () => void;
+    requireLiveSourceAtCommit?: boolean;
     threadId?: string | number;
     channelId?: string;
     createThread?: boolean;
@@ -53,6 +56,8 @@ export type ThreadBindingManager = {
     webhookId?: string;
     webhookToken?: string;
     metadata?: Record<string, unknown>;
+    expiresAt?: number;
+    ttlMs?: number;
   }) => Promise<ThreadBindingRecord | null>;
   unbindThread: (params: {
     assertCurrent?: () => void;
@@ -64,6 +69,7 @@ export type ThreadBindingManager = {
     farewellText?: string;
   }) => Promise<ThreadBindingRecord | null>;
   unbindBySessionKey: (params: {
+    assertCurrent?: () => void;
     targetSessionKey: string;
     targetKind?: ThreadBindingTargetKind;
     reason?: string;

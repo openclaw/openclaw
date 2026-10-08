@@ -253,6 +253,7 @@ function createLoadedThreadBindingManager(
     if (!binding || (unbindParams.expected && binding.record !== unbindParams.expected)) {
       return null;
     }
+    unbindParams.assertCurrent?.();
     const { bindingKey, record: existingLocal } = binding;
     await commitBindingRecord({
       bindingKey,
@@ -476,11 +477,22 @@ function createLoadedThreadBindingManager(
               ? existingValue.idleTimeoutMs
               : idleTimeoutMs,
           maxAgeMs: typeof existingValue?.maxAgeMs === "number" ? existingValue.maxAgeMs : maxAgeMs,
-          metadata: { ...previous?.metadata, ...bindParams.metadata },
+          ...(typeof bindParams.expiresAt === "number" && Number.isFinite(bindParams.expiresAt)
+            ? { expiresAt: Math.floor(bindParams.expiresAt) }
+            : typeof bindParams.ttlMs === "number" && Number.isFinite(bindParams.ttlMs)
+              ? { expiresAt: now + Math.max(0, Math.floor(bindParams.ttlMs)) }
+              : previous?.expiresAt !== undefined
+                ? { expiresAt: previous.expiresAt }
+                : {}),
+          metadata: {
+            ...previous?.metadata,
+            ...bindParams.metadata,
+            __threadBindingGeneration: crypto.randomUUID(),
+          },
         };
 
         // A confirmed native create must be published even if its initiator was revoked in flight.
-        if (!nativeBindingCreated) {
+        if (!nativeBindingCreated || bindParams.requireLiveSourceAtCommit) {
           assertCurrent?.();
         }
         await runThreadBindingMutation(() =>
@@ -491,7 +503,7 @@ function createLoadedThreadBindingManager(
             persist,
             assertCurrent: () => {
               assertManagerCurrent();
-              if (!nativeBindingCreated) {
+              if (!nativeBindingCreated || bindParams.requireLiveSourceAtCommit) {
                 assertCurrent?.();
               }
             },
@@ -541,6 +553,7 @@ function createLoadedThreadBindingManager(
           const entry = await unbindThread({
             threadId: binding.threadId,
             reason: unbindParams.reason,
+            assertCurrent: unbindParams.assertCurrent,
             sendFarewell: unbindParams.sendFarewell,
             farewellText: unbindParams.farewellText,
           });

@@ -1639,7 +1639,6 @@
 ["extensions/telegram/src/telegram-ingress-coalescing.e2e.test.ts","./bot-handlers.agent.runtime.js","065986488e28218b8a77c23efc1fa83400f96951f07592710c5e16d04b08e4c8",1]
 ["extensions/telegram/src/telegram-ingress-coalescing.e2e.test.ts","./bot-message-dispatch.agent.runtime.js","2bfeaec3f87b835a7633e35dffa2b3bbc5e86a40abff710fd6ec85dc97e8a7f8",1]
 ["extensions/telegram/src/telegram-ingress-coalescing.e2e.test.ts","./fetch.js","d11e75648056a21bd48f993a419e6efcc5a693e3e471f9ee345d2f919255700b",1]
-["extensions/telegram/src/thread-bindings.test.ts","./send-runtime.js","879263a5208a18f8be3344d1c634ddd9c6a9eec3578aa48de63991db0c10a195",1]
 ["extensions/telegram/src/webhook-routing.test.ts","./bot.js","c4944b0c7fb598f19ae347e3c6985d6325aee5900da8303ecdca74e4a01220a9",1]
 ["extensions/telegram/src/webhook.test.ts","./bot.js","4db3924f3dfe581c5ff29933f0574f3190e1bfc7a0774449cd57febfd072b4f0",1]
 ["extensions/telegram/src/webhook.test.ts","./fetch.js","2b83c71570ec94e6eb72e6c36c898f1739d32e5900a17f7128e4ba66b120fdc9",1]

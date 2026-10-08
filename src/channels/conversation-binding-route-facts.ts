@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { matchesSessionBindingIdentity } from "../infra/outbound/session-binding-identity.js";
 import type {
   ConversationRef,
   SessionBindingRecord,
@@ -50,7 +51,10 @@ export function resolveConversationBindingAgentId(
 }
 
 type BindingIdentity = Readonly<
-  Pick<SessionBindingRecord, "bindingId" | "boundAt" | "targetSessionKey" | "targetKind"> & {
+  Pick<
+    SessionBindingRecord,
+    "bindingId" | "generation" | "boundAt" | "targetSessionKey" | "targetKind"
+  > & {
     bindingConversation: Readonly<ConversationRef>;
   }
 >;
@@ -111,6 +115,7 @@ export function withConversationBindingRouteFacts<
     const identity = {
       ...scope,
       bindingId: binding.bindingId,
+      generation: binding.generation,
       boundAt: binding.boundAt,
       targetSessionKey: binding.targetSessionKey,
       targetKind: binding.targetKind,
@@ -162,15 +167,25 @@ export function matchesConversationBindingRouteFacts(
     return false;
   }
   const binding = selection.binding;
+  // Legacy persisted bindings can omit generation. Their unchanged route remains
+  // usable; mutation and restore still require a generated identity elsewhere.
+  const sameLegacyBinding =
+    expected.generation === undefined &&
+    binding.generation === undefined &&
+    expected.bindingId === binding.bindingId &&
+    expected.boundAt === binding.boundAt &&
+    expected.targetSessionKey === binding.targetSessionKey &&
+    expected.targetKind === binding.targetKind &&
+    expected.bindingConversation.channel === binding.conversation.channel &&
+    expected.bindingConversation.accountId === binding.conversation.accountId &&
+    expected.bindingConversation.conversationId === binding.conversation.conversationId &&
+    expected.bindingConversation.parentConversationId === binding.conversation.parentConversationId;
   if (
-    binding.bindingId !== expected.bindingId ||
-    binding.boundAt !== expected.boundAt ||
-    binding.targetSessionKey !== expected.targetSessionKey ||
-    binding.targetKind !== expected.targetKind ||
-    binding.conversation.channel !== expected.bindingConversation.channel ||
-    binding.conversation.accountId !== expected.bindingConversation.accountId ||
-    binding.conversation.conversationId !== expected.bindingConversation.conversationId ||
-    binding.conversation.parentConversationId !== expected.bindingConversation.parentConversationId
+    !sameLegacyBinding &&
+    !matchesSessionBindingIdentity(
+      { ...expected, conversation: expected.bindingConversation },
+      binding,
+    )
   ) {
     return false;
   }

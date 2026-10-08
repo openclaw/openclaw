@@ -10,11 +10,13 @@ import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-err
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { createSessionTranscriptReadPool } from "./session-transcript-read-pools.js";
 import type {
+  SessionForkReplySelectionWorkerInput,
   SessionEntryWorkerInput,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
 } from "./session-transcript-worker.types.js";
+import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
 // Callers retain writer admission and validate snapshots before consuming parallel reads.
 const modelContextReads = createSessionTranscriptReadPool<
@@ -27,6 +29,23 @@ const modelContextReads = createSessionTranscriptReadPool<
 const sessionEntries = createSessionTranscriptReadPool<
   SessionEntryWorkerInput | SessionResetRecallWorkerInput
 >(resolveWorkerPoolSize("singleton"), true);
+
+const forkReplySelections = createSessionTranscriptReadPool<SessionForkReplySelectionWorkerInput>(
+  resolveWorkerPoolSize("singleton"),
+  true,
+);
+
+export async function readSessionForkReplySelectionInWorker(
+  input: Omit<SessionForkReplySelectionWorkerInput, "kind">,
+) {
+  const captured = { ...input, target: captureSessionTranscriptTargetBinding(input.target) };
+  return unwrapSessionTranscriptWorkerReply<"fork-reply-selection">(
+    await forkReplySelections.run(
+      { kind: "fork-reply-selection", ...captured },
+      { inputBytes: JSON.stringify(captured).length * 2, timeoutMs: 60_000 },
+    ),
+  );
+}
 
 export async function readSessionTranscriptModelContextInWorker(
   target: SessionTranscriptRuntimeTarget,

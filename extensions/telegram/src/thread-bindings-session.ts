@@ -49,6 +49,8 @@ export function fromSessionBindingInput(params: {
     targetKind: BindingTargetKind;
     conversationId: string;
     metadata?: Record<string, unknown>;
+    expiresAt?: number;
+    ttlMs?: number;
   };
 }): TelegramThreadBindingRecord {
   const now = Date.now();
@@ -72,9 +74,17 @@ export function fromSessionBindingInput(params: {
     boundBy: normalizeOptionalString(metadata.boundBy) ?? previous?.boundBy,
     boundAt: now,
     lastActivityAt: now,
+    ...(typeof params.input.expiresAt === "number" && Number.isFinite(params.input.expiresAt)
+      ? { expiresAt: Math.floor(params.input.expiresAt) }
+      : typeof params.input.ttlMs === "number" && Number.isFinite(params.input.ttlMs)
+        ? { expiresAt: now + Math.max(0, Math.floor(params.input.ttlMs)) }
+        : previous?.expiresAt !== undefined
+          ? { expiresAt: previous.expiresAt }
+          : {}),
     metadata: {
       ...previous?.metadata,
       ...metadata,
+      __threadBindingGeneration: crypto.randomUUID(),
     },
   };
 

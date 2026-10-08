@@ -108,6 +108,8 @@ export type FollowupRun = {
   sourceTurnId?: string;
   /** Original operator capability retained by this turn's queue/run lifecycle. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Invocation-owned replay fence; never restored from persisted session metadata. */
+  assertForkReplaySourceCurrent?: () => void;
   /**
    * Source turn's trusted owner status for memory audience resolution only. System-owned
    * maintenance copies keep `run.senderIsOwner: false`, so they never gain owner tool authority.
@@ -196,6 +198,7 @@ export type FollowupRun = {
   run: Pick<
     RunEmbeddedAgentParams,
     | "providerReviewAcknowledgment"
+    | "inboundTransport"
     | "sessionId"
     | "sessionKey"
     | "messageProvider"

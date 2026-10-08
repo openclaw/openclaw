@@ -1,6 +1,6 @@
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
   bindTestThread,
@@ -24,6 +24,56 @@ function expectThreadCreate(channelId: string, context: Record<string, unknown>)
 
 describe("thread binding creation", () => {
   installThreadBindingLifecycleTestHooks();
+
+  it("does not publish a fork child after source revocation during native thread creation", async () => {
+    const manager = await createTestThreadBindingManager();
+    let sourceCurrent = true;
+    hoisted.createThreadDiscord.mockImplementationOnce(async () => {
+      sourceCurrent = false;
+      return { id: "revoked-fork-child" };
+    });
+    await expect(
+      manager.bindTarget({
+        createThread: true,
+        channelId: "parent-fork",
+        targetKind: "subagent",
+        targetSessionKey: "agent:main:fork-child",
+        agentId: "main",
+        requireLiveSourceAtCommit: true,
+        assertCurrent: () => {
+          if (!sourceCurrent) {
+            throw new Error("fork source revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("fork source revoked");
+    expect(manager.getByThreadId("revoked-fork-child")).toBeUndefined();
+  });
+
+  it("projects a non-reusable generation through same-millisecond Discord replacements", async () => {
+    await createTestThreadBindingManager();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    try {
+      const input = {
+        targetSessionKey: "agent:main:source",
+        targetKind: "session" as const,
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:1491611525914558667",
+        },
+        placement: "current" as const,
+      };
+      const first = await service.bind(input);
+      const second = await service.bind(input);
+      expect(first.boundAt).toBe(second.boundAt);
+      expect(typeof first.generation).toBe("string");
+      expect(second.generation).not.toBe(first.generation);
+      expect(service.resolveByConversation(input.conversation)?.generation).toBe(second.generation);
+    } finally {
+      now.mockRestore();
+    }
+  });
 
   it("creates a child of the parent channel without replacing the requesting thread", async () => {
     const manager = await createTestThreadBindingManager();

@@ -156,6 +156,49 @@ afterEach(() => {
 });
 
 describe("follow-up delivery channel boundary", () => {
+  it.each([false, true])(
+    "fences a queued fork replay at origin adapter handoff after revocation=%s",
+    async (revoke) => {
+      const turn = createTurn({ messageProvider: "discord", originatingChannel: "discord" });
+      let authorized = true;
+      let physicalSend = false;
+      const fallbackSend = vi.fn(async (_payload: ReplyPayload) => {});
+      const assertCurrent = vi.fn(() => {
+        if (!authorized) {
+          throw new Error("fork replay source revoked");
+        }
+      });
+      turn.queued.assertForkReplaySourceCurrent = assertCurrent;
+      channelState.deliver.mockImplementationOnce(
+        async (params: { channel: string; assertDirectAdapterHandoff?: () => void }) => {
+          await Promise.resolve();
+          if (revoke) {
+            authorized = false;
+          }
+          params.assertDirectAdapterHandoff?.();
+          physicalSend = true;
+          return [{ channel: params.channel, messageId: "origin-sent" }];
+        },
+      );
+      const delivery = deliverFollowupDecision({
+        decision: { kind: "deliver", payloads: [{ text: "queued fork answer" }] },
+        turn,
+        defaults: createDefaults(fallbackSend),
+        runId: "run-1",
+        runFollowup: vi.fn(async () => {}),
+      });
+      if (revoke) {
+        await expect(delivery).rejects.toThrow("fork replay source revoked");
+      } else {
+        await expect(delivery).resolves.toMatchObject({ kind: "completed" });
+      }
+      expect(channelState.deliver).toHaveBeenCalledOnce();
+      expect(assertCurrent).toHaveBeenCalled();
+      expect(physicalSend).toBe(!revoke);
+      expect(fallbackSend).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       name: "optional group classified guidance",

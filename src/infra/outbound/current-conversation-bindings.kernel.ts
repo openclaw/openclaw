@@ -511,7 +511,16 @@ export function applyCurrentConversationBindingBind(
         (typeof previous?.metadata?.[key] === "string" ? previous.metadata[key] : undefined);
     }
   }
-  return { ...record, metadata };
+  const absoluteExpiresAt = input.accountPolicy
+    ? metadata["__sessionBindingAbsoluteExpiresAt"]
+    : undefined;
+  return {
+    ...record,
+    ...(typeof absoluteExpiresAt === "number" && Number.isFinite(absoluteExpiresAt)
+      ? { expiresAt: Math.min(record.expiresAt ?? absoluteExpiresAt, absoluteExpiresAt) }
+      : {}),
+    metadata,
+  };
 }
 
 export function removeCurrentConversationBindingsInDatabase(

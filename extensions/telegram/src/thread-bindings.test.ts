@@ -7,9 +7,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const createForumTopicMock = vi.hoisted(() =>
   vi.fn<typeof import("./send-forum-topics.js").createForumTopicTelegram>(),
 );
+const deleteForumTopicMock = vi.hoisted(() =>
+  vi.fn<typeof import("./send-forum-topics.js").deleteCreatedForumTopicTelegram>(),
+);
 
+// mock-isolation: Keep Telegram transport and command dispatch effects synthetic for this adapter test.
 vi.mock("./send-runtime.js", () => ({
-  loadTelegramSendModule: async () => ({ createForumTopicTelegram: createForumTopicMock }),
+  loadTelegramSendModule: async () => ({
+    createForumTopicTelegram: createForumTopicMock,
+  }),
+}));
+// mock-isolation: Keep the direct cleanup import synthetic; no real Telegram API is admitted.
+vi.mock("./send-forum-topics.js", () => ({
+  deleteCreatedForumTopicTelegram: deleteForumTopicMock,
 }));
 
 import type {
@@ -39,6 +49,58 @@ describe("telegram thread bindings", () => {
 
   beforeEach(() => {
     createForumTopicMock.mockReset();
+    deleteForumTopicMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("persists a new binding generation even when replacement occurs in the same millisecond", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T16:00:00.000Z"));
+    const accountId = "fork-generation";
+    const manager = await createTelegramThreadBindingManager({ accountId });
+    const conversation = {
+      channel: "telegram" as const,
+      accountId,
+      conversationId: "-100123:topic:42",
+    };
+    const input = {
+      targetSessionKey: "agent:main:source",
+      targetKind: "session" as const,
+      conversation,
+      placement: "current" as const,
+    };
+    const first = await getSessionBindingService().bind(input);
+    const second = await getSessionBindingService().bind(input);
+    expect(second.boundAt).toBe(first.boundAt);
+    expect(second.generation).toBeTruthy();
+    expect(second.generation).not.toBe(first.generation);
+    await manager.stop();
+    await createTelegramThreadBindingManager({ accountId });
+    expect(
+      (await getSessionBindingService().resolveByConversationAsync(conversation))?.generation,
+    ).toBe(second.generation);
+  });
+
+  it("keeps a binding when removal authority is revoked", async () => {
+    const accountId = "fork-back-authority";
+    const manager = await createTelegramThreadBindingManager({ accountId });
+    const bound = await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:dashboard:fork",
+      targetKind: "session",
+      conversation: { channel: "telegram", accountId, conversationId: "revoked-back" },
+    });
+    await expect(
+      getSessionBindingService().unbind({
+        bindingId: bound.bindingId,
+        scope: { channel: "telegram", accountId },
+        reason: "conversation-fork-back",
+        assertCurrent: () => {
+          throw new Error("revoked");
+        },
+      }),
+    ).rejects.toThrow("revoked");
+    expect(manager.getByConversationId("revoked-back")?.targetSessionKey).toBe(
+      "agent:main:dashboard:fork",
+    );
   });
 
   it("joins concurrent startup across module instances before exposing hydrated bindings", async () => {
@@ -421,13 +483,10 @@ describe("telegram thread bindings", () => {
         expect(nativeCreates).toBe(0);
         expect(manager.getByConversationId("-100200300:topic:88")).toBeUndefined();
       } else {
-        await expect(result).resolves.toMatchObject({
-          targetSessionKey: "agent:main:created-topic",
-        });
+        await expect(result).rejects.toThrow("failed to bind");
         expect(nativeCreates).toBe(1);
-        expect(manager.getByConversationId("-100200300:topic:88")).toMatchObject({
-          targetSessionKey: "agent:main:created-topic",
-        });
+        expect(deleteForumTopicMock).toHaveBeenCalledOnce();
+        expect(manager.getByConversationId("-100200300:topic:88")).toBeUndefined();
       }
     },
   );
@@ -703,12 +762,18 @@ describe("telegram thread bindings", () => {
           boundAt: Date.parse("2026-03-06T10:00:00.000Z"),
           lastActivityAt: Date.parse("2026-03-06T12:00:00.000Z"),
         });
-        expect(reloaded.getByConversationId("thread")?.metadata).toStrictEqual({ retained: "yes" });
+        expect(reloaded.getByConversationId("thread")?.metadata).toMatchObject({
+          retained: "yes",
+          __threadBindingGeneration: expect.any(String),
+        });
         const stored = (await storedBindings()).find(
           (binding) => binding.accountId === manager.accountId,
         );
         expect(stored?.idleTimeoutMs).toBe(90_000);
-        expect(stored?.metadata).toStrictEqual({ retained: "yes" });
+        expect(stored?.metadata).toMatchObject({
+          retained: "yes",
+          __threadBindingGeneration: expect.any(String),
+        });
       } else {
         expect(reloaded.getByConversationId("thread")).toBeUndefined();
         expect(
@@ -717,4 +782,62 @@ describe("telegram thread bindings", () => {
       }
     },
   );
+
+  it("refuses a positive ID that could be a bare topic ID instead of a group chat", async () => {
+    await createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: false,
+    });
+    const service = getSessionBindingService();
+    const conversation = {
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "6566057320",
+    };
+    await expect(
+      service.bind({
+        targetSessionKey: "agent:main:ambiguous-fork",
+        targetKind: "session",
+        conversation,
+        placement: "child",
+        metadata: { threadName: "Ambiguous fork" },
+      }),
+    ).rejects.toThrow();
+    expect(await service.resolveByConversationAsync(conversation)).toBeNull();
+  });
+
+  it("persists a restored binding's absolute deadline across activity and restart", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+    const accountId = "fork-deadline";
+    const conversation = {
+      channel: "telegram",
+      accountId,
+      conversationId: "-100123:topic:42",
+    };
+    const expiresAt = Date.now() + 60_000;
+    const manager = await createTelegramThreadBindingManager({ accountId });
+    const service = getSessionBindingService();
+    const bound = await service.bind({
+      targetSessionKey: "agent:main:source",
+      targetKind: "session",
+      conversation,
+      placement: "current",
+      expiresAt,
+    });
+    expect(bound.expiresAt).toBe(expiresAt);
+
+    vi.setSystemTime(Date.now() + 30_000);
+    await manager.touchConversation(conversation.conversationId);
+    expect((await service.resolveByConversationAsync(conversation))?.expiresAt).toBe(expiresAt);
+    await manager.stop();
+    await createTelegramThreadBindingManager({ accountId });
+    expect((await service.resolveByConversationAsync(conversation))?.expiresAt).toBe(expiresAt);
+    expect(
+      (await storedBindings()).find(
+        (entry) =>
+          entry.accountId === accountId && entry.conversationId === conversation.conversationId,
+      )?.expiresAt,
+    ).toBe(expiresAt);
+  });
 });

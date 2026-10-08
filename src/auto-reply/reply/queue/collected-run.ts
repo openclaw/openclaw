@@ -2,6 +2,9 @@ import { compareChannelAdmissionParticipants } from "../../../channels/message-a
 import type { FollowupRun } from "./types.js";
 
 export function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun["run"]) {
+  // A combined prompt represents multiple provider messages, not the source's
+  // single transport message. Never attach one source's ID to the aggregate.
+  const scopedSource = items.length === 1 ? source : { ...source, inboundTransport: undefined };
   const participantComparison = compareChannelAdmissionParticipants(
     items.map((item) => item.channelAdmissionEvidence),
   );
@@ -11,12 +14,12 @@ export function resolveCollectedRun(items: readonly FollowupRun[], source: Follo
       (item) => compareChannelAdmissionParticipants([item.channelAdmissionEvidence]) === "same",
     )
   ) {
-    return source;
+    return scopedSource;
   }
   // Mixed or unverifiable people share no downstream sender authority. The
   // opaque admission aggregate records unknown identity at the run boundary.
   return {
-    ...source,
+    ...scopedSource,
     senderId: undefined,
     senderName: undefined,
     senderUsername: undefined,
@@ -25,4 +28,12 @@ export function resolveCollectedRun(items: readonly FollowupRun[], source: Follo
     traceAuthorized: false,
     ownerNumbers: [],
   };
+}
+
+/** A synthetic overflow summary is never the original provider message. */
+export function resolveSyntheticOverflowRun(
+  items: readonly FollowupRun[],
+  source: FollowupRun["run"],
+) {
+  return { ...resolveCollectedRun(items, source), inboundTransport: undefined };
 }

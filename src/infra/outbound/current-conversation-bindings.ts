@@ -279,11 +279,16 @@ export async function bindGenericCurrentConversation(
       ? Math.max(0, Math.floor(input.ttlMs))
       : undefined;
   const expiresAt =
-    ttlMs === undefined
-      ? undefined
-      : ttlMs === 0
-        ? now
-        : resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+    input.expiresAt !== undefined
+      ? asDateTimestampMs(input.expiresAt)
+      : ttlMs === undefined
+        ? undefined
+        : ttlMs === 0
+          ? now
+          : resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  if (input.expiresAt !== undefined && expiresAt === undefined) {
+    return null;
+  }
   if (ttlMs !== undefined && expiresAt === undefined) {
     return null;
   }
@@ -375,7 +380,10 @@ export async function unbindGenericCurrentConversationBindings(
             bindingId: normalizedBindingId,
             expected: input[expectedCurrentSessionBinding],
           },
-          captured.assertCurrent,
+          () => {
+            captured.assertCurrent();
+            input.assertCurrent?.();
+          },
         )
       : [];
   }
@@ -395,6 +403,7 @@ export async function unbindGenericCurrentConversationBindings(
               "Generic conversation binding owners changed during removal",
             );
           }
+          input.assertCurrent?.();
         },
       )
     : [];

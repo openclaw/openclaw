@@ -40,6 +40,26 @@ compaction with session-store patches and harness calls. The result contains
 `compacted`, optional `reason`, and optional `tokensBefore` and `tokensAfter`
 snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
+### Conversation fork capability
+
+An authorized owner command in a resolved session conversation can receive
+`ctx.runtimeContext.conversationFork` (version `1`). The host owns session creation,
+placement, replay, and return. Plugins call `prepare({ title? })`, then consume its
+opaque ticket once with `execute({ ticket, placement: "current" | "child" })`.
+`back()` restores the saved route when it remains current; `status()` inspects
+that route. The capability is absent for other invocations, and retained copies
+fail after the command closes. A reply-target fork accepts only an exact text
+user turn from the invoking conversation; missing or media-bearing targets fail
+closed.
+
+For admitted native Telegram and Discord user turns, reply selection retains
+the provider message ID and canonical channel, account, and conversation tuple
+under the existing session transcript's private `__openclaw.transport` metadata.
+It is not part of model-visible message content and has no separate fork index
+or expiration. It follows that transcript's ordinary archive, retention, and
+deletion lifecycle. Treat raw transcript reads and copies as containing these
+identifiers; rendered chat views are not a data-erasure boundary.
+
 ## Auth-profile resolution
 
 The experimental `openclaw/plugin-sdk/agent-runtime` entrypoint exports

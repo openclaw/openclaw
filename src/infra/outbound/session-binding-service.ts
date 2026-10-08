@@ -476,6 +476,17 @@ export async function readSessionBindingSelectionCurrent(
 const DEFAULT_SESSION_BINDING_SERVICE: AsyncSessionBindingService = {
   inspectByConversationAsync: inspectSessionBindingByConversationAsync,
   bind: async (input) => {
+    if (
+      input.expiresAt !== undefined &&
+      (!Number.isSafeInteger(input.expiresAt) ||
+        !Number.isFinite(new Date(input.expiresAt).getTime()) ||
+        input.expiresAt <= Date.now())
+    ) {
+      throw new SessionBindingError(
+        "BINDING_CREATE_FAILED",
+        "Session binding absolute deadline must be a future timestamp",
+      );
+    }
     const assertCurrent = input.assertCurrent;
     const normalizedConversation = normalizeConversationRef(input.conversation);
     const scope = {

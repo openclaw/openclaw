@@ -171,6 +171,12 @@ export async function executeTelegramPluginCommand(
     to,
     accountId: dispatch.accountId,
     messageThreadId: dispatch.threadSpec.id,
+    chatType: dispatch.isGroup ? "group" : "direct",
+    messageId: String(dispatch.msg.message_id),
+    replyToId:
+      dispatch.msg.reply_to_message?.message_id == null
+        ? undefined
+        : String(dispatch.msg.reply_to_message.message_id),
   });
   const suppressReply =
     shouldSuppressLocalTelegramExecApprovalPrompt({

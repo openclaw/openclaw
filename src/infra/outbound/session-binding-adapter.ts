@@ -35,15 +35,22 @@ export function projectThreadBindingRecord(
     idleTimeoutMs: params.lifecycle.idleTimeoutMs,
     maxAgeMs: params.lifecycle.maxAgeMs,
   };
+  const projectedMetadata: Record<string, unknown> = params.metadata
+    ? params.metadata(metadata)
+    : metadata;
   return {
     bindingId: params.bindingId ?? `${record.accountId}:${params.conversation.conversationId}`,
+    generation:
+      typeof projectedMetadata["__threadBindingGeneration"] === "string"
+        ? projectedMetadata["__threadBindingGeneration"]
+        : undefined,
     targetSessionKey: record.targetSessionKey,
     targetKind: params.targetKind,
     conversation: { channel, accountId: record.accountId, ...conversation },
     status: "active",
     boundAt: record.boundAt,
     expiresAt: params.lifecycle.expiresAt,
-    metadata: params.metadata ? params.metadata(metadata) : metadata,
+    metadata: projectedMetadata,
   };
 }
 
@@ -58,8 +65,16 @@ export function createAccountScopedBindingAdapter<T>(params: {
   getByConversation: (ref: ConversationRef) => T | null | undefined;
   touchConversation: (conversationId: string, at?: number) => unknown;
   touchConversationAsync?: (conversationId: string, at?: number) => Promise<unknown>;
-  unbindConversation: (conversationId: string, reason: string) => T | null | Promise<T | null>;
-  unbindBySessionKey: (targetSessionKey: string, reason: string) => T[] | Promise<T[]>;
+  unbindConversation: (
+    conversationId: string,
+    reason: string,
+    assertCurrent?: () => void,
+  ) => T | null | Promise<T | null>;
+  unbindBySessionKey: (
+    targetSessionKey: string,
+    reason: string,
+    assertCurrent?: () => void,
+  ) => T[] | Promise<T[]>;
 }): SessionBindingAdapter {
   const touchAsync = params.touchConversationAsync;
   const conversationIdFromBinding = (bindingId?: string) =>
@@ -91,14 +106,15 @@ export function createAccountScopedBindingAdapter<T>(params: {
         }
       : {}),
     unbind: async (input) => {
+      input.assertCurrent?.();
       if (input.targetSessionKey?.trim()) {
-        return (await params.unbindBySessionKey(input.targetSessionKey, input.reason)).map(
-          params.project,
-        );
+        return (
+          await params.unbindBySessionKey(input.targetSessionKey, input.reason, input.assertCurrent)
+        ).map(params.project);
       }
       const conversationId = conversationIdFromBinding(input.bindingId);
       const removed = conversationId
-        ? await params.unbindConversation(conversationId, input.reason)
+        ? await params.unbindConversation(conversationId, input.reason, input.assertCurrent)
         : null;
       return removed ? [params.project(removed)] : [];
     },

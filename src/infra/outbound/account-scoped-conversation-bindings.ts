@@ -123,10 +123,15 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
   ): SessionBindingRecord => {
     const idleExpiresAt = idleTimeoutMs > 0 ? record.lastActivityAt + idleTimeoutMs : undefined;
     const maxAgeExpiresAt = maxAgeMs > 0 ? record.boundAt + maxAgeMs : undefined;
-    const expiresAt =
+    const lifecycleExpiresAt =
       idleExpiresAt != null && maxAgeExpiresAt != null
         ? Math.min(idleExpiresAt, maxAgeExpiresAt)
         : (idleExpiresAt ?? maxAgeExpiresAt);
+    const absoluteExpiresAt = metadata?.["__sessionBindingAbsoluteExpiresAt"];
+    const expiresAt =
+      typeof absoluteExpiresAt === "number" && Number.isFinite(absoluteExpiresAt)
+        ? Math.min(lifecycleExpiresAt ?? absoluteExpiresAt, absoluteExpiresAt)
+        : lifecycleExpiresAt;
     return projectThreadBindingRecord(record, {
       conversation: {
         channel: params.channel,
@@ -159,7 +164,8 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     };
   };
   const prepareBind = (
-    input: Parameters<AccountScopedConversationBindingManager<TKind>["bindConversation"]>[0],
+    input: Parameters<AccountScopedConversationBindingManager<TKind>["bindConversation"]>[0] &
+      Pick<SessionBindingBindInput, "expiresAt" | "ttlMs">,
   ): (CurrentConversationBindingBind & { assertAgentResolved?: () => void }) | null => {
     const conversationId = input.conversationId.trim();
     const targetSessionKey = input.targetSessionKey.trim();
@@ -167,6 +173,16 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       return null;
     }
     const now = Date.now();
+    const absoluteExpiresAt =
+      typeof input.expiresAt === "number" && Number.isFinite(input.expiresAt)
+        ? Math.floor(input.expiresAt)
+        : typeof input.ttlMs === "number" && Number.isFinite(input.ttlMs)
+          ? now + Math.max(0, Math.floor(input.ttlMs))
+          : undefined;
+    const metadata = { ...input.metadata };
+    if (absoluteExpiresAt !== undefined) {
+      metadata["__sessionBindingAbsoluteExpiresAt"] = absoluteExpiresAt;
+    }
     let inferredAgentId: string | undefined;
     let assertAgentResolved: (() => void) | undefined;
     try {
@@ -191,7 +207,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
           boundAt: now,
           lastActivityAt: now,
         },
-        input.metadata,
+        metadata,
       ),
       accountPolicy: { inferredAgentId },
     };
@@ -312,6 +328,8 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         targetKind: input.targetKind,
         targetSessionKey: input.targetSessionKey,
         metadata: input.metadata,
+        expiresAt: input.expiresAt,
+        ttlMs: input.ttlMs,
       });
       return prepared
         ? bindCurrentConversationRecordAsync(
@@ -335,7 +353,10 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
             scope: accountScope,
             genericOnly: false,
           },
-          assertCurrent,
+          () => {
+            assertCurrent();
+            input.assertCurrent?.();
+          },
         );
       }
       const conversationId = conversationIdFromBinding(input.bindingId);
@@ -345,7 +366,10 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
               conversation: conversationRef(conversationId),
               expected: input[expectedCurrentSessionBinding],
             },
-            assertCurrent,
+            () => {
+              assertCurrent();
+              input.assertCurrent?.();
+            },
           )
         : [];
     },

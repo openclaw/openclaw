@@ -103,6 +103,11 @@ export function guardSessionManager(
       recorder: UserTurnTranscriptRecorder | undefined,
       preparedMessage: PersistedUserTurnMessage | undefined,
     ) => void;
+    /** Invoked on the final merged user record, immediately before durable append. */
+    onUserMessagePreparedForPersistence?: (
+      message: Extract<AgentMessage, { role: "user" }>,
+      recorder: UserTurnTranscriptRecorder | undefined,
+    ) => void;
     onUserMessageBlocked?: (message: Extract<AgentMessage, { role: "user" }>) => void;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
     withCompactionPersistence?: CompactionAppendPersistence;
@@ -284,6 +289,9 @@ export function guardSessionManager(
         runtimeMessage: withProvenance,
         ...(prepared ? { preparedMessage: prepared } : {}),
       });
+      if (merged.role === "user") {
+        opts?.onUserMessagePreparedForPersistence?.(merged, recorder);
+      }
       if (merged !== withProvenance) {
         queuedUserTurnTranscriptRecorder = recorder;
         if (!runtimeContext) {
