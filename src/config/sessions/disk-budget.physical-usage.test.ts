@@ -363,14 +363,17 @@ describe("physical session disk usage", () => {
       await fs.writeFile(storePath, Buffer.alloc(321));
       await fs.writeFile(archivePath, Buffer.alloc(100));
       const release = createDeferredCore();
-      const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+      let spy = vi.spyOn(WorkerTaskPool.prototype, "run");
+      spy.mockImplementation(function gateScan(
         this: WorkerTaskPool<unknown, unknown>,
         input,
         options,
       ) {
         spy.mockRestore();
-        // Delay preparation, not the caller's result or the pool's capacity decision.
-        return this.run(async () => {
+        const run = this.run.bind(this);
+        spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(gateScan);
+        // Hold every scan slot so overload does not depend on worker startup timing.
+        return run(async () => {
           await release.promise;
           return input;
         }, options);
