@@ -24,6 +24,7 @@ import {
   selectMessagePayload,
   selectMessageRows,
   type CurrentTranscriptProjection,
+  type MessageRangeSelection,
   type SessionTranscriptMessageEventPage,
   type SessionTranscriptBoundedMessageTailPage,
   type SessionTranscriptBoundedMessageTailOptions,
@@ -31,6 +32,7 @@ import {
 } from "./session-accessor.sqlite-projection-read.js";
 import {
   iterateVisibleMessageMetadata,
+  readLatestActiveResetBoundary,
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
   resolveTranscriptBoundaryWindow,
@@ -41,6 +43,7 @@ import {
   MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   normalizeVisibleDeltaLimits,
   parseVisibleMessageCursor,
+  type VisibleMessageCursor,
 } from "./session-accessor.sqlite-visible-cursor.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
@@ -221,17 +224,28 @@ export function readRecentSessionTranscriptActiveEvents(
   );
 }
 
+type VisibleDeltaResetReason = Extract<
+  SessionTranscriptVisibleMessageDeltaResult,
+  { kind: "reset" }
+>["reason"];
+
+type VisibleDeltaPage = Extract<SessionTranscriptVisibleMessageDeltaResult, { kind: "page" }>;
+
+type LatestResetBoundary = NonNullable<ReturnType<typeof readLatestActiveResetBoundary>>;
+
+/** Unread positions after a validated cursor: a retained reset tail, then a contiguous range. */
+type VisibleDeltaRange = { kept: number[]; start: number };
+
 /** Reads one append-stable forward page from the materialized active-message projection. */
 export function readSessionTranscriptVisibleMessageDeltaCore(
   scope: SessionTranscriptReadScope,
   limits: SessionTranscriptVisibleMessageDeltaLimits = {},
   options?: Parameters<typeof withCurrentProjectionSnapshot>[2],
 ): SessionTranscriptVisibleMessageDeltaResult {
-  const { maxMessages, maxBytes } = normalizeVisibleDeltaLimits(limits);
+  const { maxMessages, maxBytes, start } = normalizeVisibleDeltaLimits(limits);
   return withCurrentProjectionSnapshot(
     scope,
     (projection) => {
-      const db = getActiveTranscriptKysely(projection.database);
       const transcriptFence = resolveSqliteSessionTranscriptReadFence({
         database: projection.database,
         ...projection.resolved,
@@ -241,136 +255,236 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
         return { kind: "missing" };
       }
 
-      const initialCursor = createVisibleMessageCursor({
-        agentId: projection.resolved.agentId,
-        generation,
-        sessionId: projection.resolved.sessionId,
-      });
-      const reset = (
-        reason: Extract<SessionTranscriptVisibleMessageDeltaResult, { kind: "reset" }>["reason"],
-      ) => ({
+      // Read the latest reset row at most once per snapshot, and only for reset-window
+      // cursors. The fence hides resets admitted after the current turn's user entry.
+      let latestReset: LatestResetBoundary | null | undefined;
+      const readLatestReset = () => {
+        if (latestReset === undefined) {
+          latestReset =
+            readLatestActiveResetBoundary(projection, transcriptFence?.beforeRawSeq) ?? null;
+        }
+        return latestReset;
+      };
+      const cursor =
+        limits.cursor !== undefined ? parseVisibleMessageCursor(limits.cursor) : undefined;
+      // Fresh cursors keep the caller's start mode; a reset-window cursor implies it.
+      const freshCursor = (): VisibleMessageCursor => {
+        const initial = createVisibleMessageCursor({
+          agentId: projection.resolved.agentId,
+          generation,
+          sessionId: projection.resolved.sessionId,
+        });
+        return start === "reset-window" || cursor?.resetBoundarySeq !== undefined
+          ? { ...initial, resetBoundarySeq: readLatestReset()?.seq ?? -1 }
+          : initial;
+      };
+      const reset = (reason: VisibleDeltaResetReason) => ({
         kind: "reset" as const,
-        cursor: encodeVisibleMessageCursor(initialCursor),
+        cursor: encodeVisibleMessageCursor(freshCursor()),
         reason,
       });
-      const cursor =
-        limits.cursor !== undefined ? parseVisibleMessageCursor(limits.cursor) : initialCursor;
-      if (!cursor) {
+      const current = limits.cursor !== undefined ? cursor : freshCursor();
+      if (!current) {
         return reset("invalid_cursor");
       }
       if (
-        cursor.agentId !== projection.resolved.agentId ||
-        cursor.sessionId !== projection.resolved.sessionId
+        current.agentId !== projection.resolved.agentId ||
+        current.sessionId !== projection.resolved.sessionId
       ) {
         return reset("scope_mismatch");
       }
-      if (cursor.generation !== generation) {
+      if (current.generation !== generation) {
         return reset("generation_mismatch");
       }
+      // A cursor that returned the admitted entry, or saw a reset after it, was read
+      // outside this turn's fence.
       if (
         transcriptFence !== undefined &&
-        cursor.lastMessagePosition >= transcriptFence.beforeActiveMessagePosition
+        (current.lastMessagePosition >= transcriptFence.beforeActiveMessagePosition ||
+          (current.resetBoundarySeq ?? -1) >= transcriptFence.beforeRawSeq)
       ) {
         throw new SessionTranscriptReadFenceError(
           "Transcript read cursor has crossed the current-turn admission fence",
         );
       }
-
-      let startPosition = 0;
-      if (cursor.lastEventSeq >= 0) {
-        const anchor = executeSqliteQueryTakeFirstSync(
-          projection.database.db,
-          db
-            .selectFrom("session_transcript_active_events")
-            .select("message_position")
-            .where("session_id", "=", projection.resolved.sessionId)
-            .where("event_seq", "=", cursor.lastEventSeq)
-            .where("message_position", "is not", null),
-        );
-        if (anchor?.message_position == null) {
-          return reset("anchor_missing");
-        }
-        if (anchor.message_position !== cursor.lastMessagePosition) {
-          return reset("anchor_moved");
-        }
-        startPosition = anchor.message_position + 1;
+      const range = resolveVisibleDeltaRange(projection, current, {
+        beforeRawSeq: transcriptFence?.beforeRawSeq,
+        readLatestReset,
+      });
+      if ("reason" in range) {
+        return reset(range.reason);
       }
-
-      const metadata = executeSqliteQuerySync(
-        projection.database.db,
-        selectMessageMetadata(
-          selectMessageRows(projection.database, projection.resolved.sessionId, {
-            start: startPosition,
-            endExclusive:
-              transcriptFence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount,
-          }),
-        )
-          .select("active.event_seq")
-          .limit(maxMessages + 1),
-      ).rows;
-
-      let serializedBytes = 0;
-      let selectedCount = 0;
-      for (const row of metadata) {
-        if (selectedCount >= maxMessages || serializedBytes + row.serialized_bytes > maxBytes) {
-          break;
-        }
-        serializedBytes += row.serialized_bytes;
-        selectedCount += 1;
-      }
-      const lastSelected = metadata[selectedCount - 1];
-      const lastEventSeq = lastSelected?.event_seq ?? cursor.lastEventSeq;
-      const lastMessagePosition = lastSelected?.message_position ?? cursor.lastMessagePosition;
-      const rows =
-        selectedCount === 0
-          ? []
-          : executeSqliteQuerySync(
-              projection.database.db,
-              selectMessagePayload(
-                selectMessageRows(projection.database, projection.resolved.sessionId, {
-                  start: startPosition,
-                  endExclusive: lastMessagePosition + 1,
-                }),
-              )
-                .leftJoin("session_transcript_active_events as parent_active", (join) =>
-                  join
-                    .onRef("parent_active.session_id", "=", "active.session_id")
-                    .on((eb) =>
-                      eb(
-                        "parent_active.active_position",
-                        "=",
-                        eb("active.active_position", "-", 1),
-                      ),
-                    ),
-                )
-                .leftJoin("transcript_event_identities as parent_identity", (join) =>
-                  join
-                    .onRef("parent_identity.session_id", "=", "parent_active.session_id")
-                    .onRef("parent_identity.seq", "=", "parent_active.event_seq"),
-                )
-                .select("parent_identity.event_id as parent_id"),
-            ).rows.map((row) => {
-              const { event, eventSeq, seq } = parseActiveTranscriptMessageRow(row);
-              return {
-                event,
-                eventSeq,
-                parentId: row.parent_id,
-                seq,
-              };
-            });
-      const requiredBytes =
-        selectedCount === 0 && metadata[0] ? metadata[0].serialized_bytes : undefined;
-      return {
-        kind: "page",
-        cursor: encodeVisibleMessageCursor({ ...cursor, lastEventSeq, lastMessagePosition }),
-        events: rows,
-        hasMore: selectedCount < metadata.length,
-        ...(requiredBytes !== undefined ? { requiredBytes } : {}),
-        serializedBytes,
-      };
+      return readVisibleDeltaPage(projection, current, range, {
+        endExclusive:
+          transcriptFence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount,
+        maxBytes,
+        maxMessages,
+      });
     },
     options,
   );
+}
+
+/**
+ * Validates a cursor's anchor and reset window, then returns the unread positions.
+ * A reset-window cursor first drains the latest reset's retained tail, then every
+ * message after the reset row; a newer reset invalidates it with `session_reset`.
+ */
+function resolveVisibleDeltaRange(
+  projection: CurrentTranscriptProjection,
+  cursor: VisibleMessageCursor,
+  resets: { beforeRawSeq: number | undefined; readLatestReset: () => LatestResetBoundary | null },
+): VisibleDeltaRange | { reason: VisibleDeltaResetReason } {
+  let anchorActivePosition = -1;
+  if (cursor.lastEventSeq >= 0) {
+    const anchor = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      getActiveTranscriptKysely(projection.database)
+        .selectFrom("session_transcript_active_events")
+        .select(["active_position", "message_position"])
+        .where("session_id", "=", projection.resolved.sessionId)
+        .where("event_seq", "=", cursor.lastEventSeq)
+        .where("message_position", "is not", null),
+    );
+    if (anchor?.message_position == null) {
+      return { reason: "anchor_missing" };
+    }
+    if (anchor.message_position !== cursor.lastMessagePosition) {
+      return { reason: "anchor_moved" };
+    }
+    anchorActivePosition = anchor.active_position;
+  }
+  const next = cursor.lastMessagePosition + 1;
+  if (cursor.resetBoundarySeq === undefined) {
+    return { kept: [], start: next };
+  }
+  const latest = resets.readLatestReset();
+  if ((latest?.seq ?? -1) !== cursor.resetBoundarySeq) {
+    return { reason: "session_reset" };
+  }
+  // Steady-state cursors already past the reset row skip retained-tail resolution.
+  if (!latest || anchorActivePosition > latest.active_position) {
+    return { kept: [], start: next };
+  }
+  const window = resolveTranscriptBoundaryWindow(projection, "reset", resets.beforeRawSeq);
+  if (!window) {
+    return { kept: [], start: next };
+  }
+  // Retained positions precede the reset row, so a cursor past them reads only the suffix.
+  return {
+    kept: window.keptMessagePositions.filter((position) => position >= next),
+    start: Math.max(next, window.postBoundaryMessagePosition),
+  };
+}
+
+/** Selects a byte- and count-bounded page from a validated range and advances the cursor. */
+function readVisibleDeltaPage(
+  projection: CurrentTranscriptProjection,
+  cursor: VisibleMessageCursor,
+  range: VisibleDeltaRange,
+  bounds: { endExclusive: number; maxBytes: number; maxMessages: number },
+): VisibleDeltaPage {
+  // Read one row past the count bound so hasMore needs no second query.
+  const metadata = readVisibleDeltaMetadata(projection, range, bounds);
+  let serializedBytes = 0;
+  let selectedCount = 0;
+  for (const row of metadata) {
+    if (
+      selectedCount >= bounds.maxMessages ||
+      serializedBytes + row.serialized_bytes > bounds.maxBytes
+    ) {
+      break;
+    }
+    serializedBytes += row.serialized_bytes;
+    selectedCount += 1;
+  }
+  const selected = metadata.slice(0, selectedCount);
+  const lastSelected = selected.at(-1);
+  const lastEventSeq = lastSelected?.event_seq ?? cursor.lastEventSeq;
+  const lastMessagePosition = lastSelected?.message_position ?? cursor.lastMessagePosition;
+  const keptSelected = selected.filter((row) => row.message_position < range.start);
+  // Contiguous suffixes keep the range scan; a retained tail selects exact positions.
+  const events =
+    selectedCount === 0
+      ? []
+      : readVisibleDeltaPayload(
+          projection,
+          keptSelected.length === 0
+            ? { start: range.start, endExclusive: lastMessagePosition + 1 }
+            : { positions: selected.map((row) => row.message_position) },
+        );
+  const requiredBytes =
+    selectedCount === 0 && metadata[0] ? metadata[0].serialized_bytes : undefined;
+  return {
+    kind: "page",
+    cursor: encodeVisibleMessageCursor({ ...cursor, lastEventSeq, lastMessagePosition }),
+    events,
+    hasMore: selectedCount < metadata.length,
+    ...(requiredBytes !== undefined ? { requiredBytes } : {}),
+    serializedBytes,
+  };
+}
+
+/** Reads ordered size metadata for at most maxMessages + 1 unread positions. */
+function readVisibleDeltaMetadata(
+  projection: CurrentTranscriptProjection,
+  range: VisibleDeltaRange,
+  bounds: { endExclusive: number; maxMessages: number },
+) {
+  const limit = bounds.maxMessages + 1;
+  const kept =
+    range.kept.length === 0
+      ? []
+      : executeSqliteQuerySync(
+          projection.database.db,
+          selectMessageMetadata(
+            selectMessageRows(projection.database, projection.resolved.sessionId, {
+              positions: range.kept.slice(0, limit),
+            }),
+          ),
+        ).rows;
+  if (kept.length >= limit) {
+    return kept;
+  }
+  const suffix = executeSqliteQuerySync(
+    projection.database.db,
+    selectMessageMetadata(
+      selectMessageRows(projection.database, projection.resolved.sessionId, {
+        start: range.start,
+        endExclusive: bounds.endExclusive,
+      }),
+    ).limit(limit - kept.length),
+  ).rows;
+  return [...kept, ...suffix];
+}
+
+/** Reads selected message payloads with their active-path predecessor ids. */
+function readVisibleDeltaPayload(
+  projection: CurrentTranscriptProjection,
+  selection: MessageRangeSelection,
+): VisibleDeltaPage["events"] {
+  return executeSqliteQuerySync(
+    projection.database.db,
+    selectMessagePayload(
+      selectMessageRows(projection.database, projection.resolved.sessionId, selection),
+    )
+      .leftJoin("session_transcript_active_events as parent_active", (join) =>
+        join
+          .onRef("parent_active.session_id", "=", "active.session_id")
+          .on((eb) =>
+            eb("parent_active.active_position", "=", eb("active.active_position", "-", 1)),
+          ),
+      )
+      .leftJoin("transcript_event_identities as parent_identity", (join) =>
+        join
+          .onRef("parent_identity.session_id", "=", "parent_active.session_id")
+          .onRef("parent_identity.seq", "=", "parent_active.event_seq"),
+      )
+      .select("parent_identity.event_id as parent_id"),
+  ).rows.map((row) => {
+    const { event, eventSeq, seq } = parseActiveTranscriptMessageRow(row);
+    return { event, eventSeq, parentId: row.parent_id, seq };
+  });
 }
 
 /** Reads a bounded active-path tail while preserving transcript line and byte caps. */

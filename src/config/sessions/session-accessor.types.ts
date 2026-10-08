@@ -292,6 +292,12 @@ export type SessionTranscriptVisibleMessageDeltaLimits = {
   maxBytes?: number;
   /** Maximum number of visible messages returned by this page. */
   maxMessages?: number;
+  /**
+   * Where fresh cursors begin: on a cursor-less read and in `reset` results.
+   * `"transcript"` (default) starts at the first active-path message;
+   * `"reset-window"` starts at the latest reset's retained tail.
+   */
+  start?: "transcript" | "reset-window";
 };
 
 /** One active-path message row selected from the materialized projection. */
@@ -305,7 +311,13 @@ export type SessionTranscriptVisibleMessageEventRow = SessionTranscriptEventRow 
 /** Generation-aware outcome for one bounded visible-message read. */
 export type SessionTranscriptVisibleMessageDeltaResult = SessionTranscriptDeltaResult<
   SessionTranscriptVisibleMessageEventRow,
-  "anchor_missing" | "anchor_moved" | "generation_mismatch" | "invalid_cursor" | "scope_mismatch"
+  | "anchor_missing"
+  | "anchor_moved"
+  | "generation_mismatch"
+  | "invalid_cursor"
+  | "scope_mismatch"
+  /** Reset-window cursors only: a newer same-session reset closed the drained window. */
+  | "session_reset"
 >;
 
 export type TranscriptMessageAppendOptions<TMessage> = {

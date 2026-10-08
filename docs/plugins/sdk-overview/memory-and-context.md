@@ -27,8 +27,10 @@ To participate in durable admitted turns, context engines must declare
 `info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic,
 idempotent write keyed by `advancementKey`. OpenClaw supplies only the inclusive
 accepted turn, from its admitted user entry through its terminal entry; use the
-`readSessionTranscriptVisibleMessageDelta(...)` cursor API to bootstrap or
-rebuild earlier history. Without the full contract, OpenClaw uses the legacy
+`readSessionTranscriptVisibleMessageDelta(...)` cursor API from
+`openclaw/plugin-sdk/context-engine-transcript-runtime` to bootstrap or rebuild
+earlier history (see
+[Context engine transcript cursor](/plugins/sdk-runtime/agent#context-engine-transcript-cursor)). Without the full contract, OpenClaw uses the legacy
 context path for the whole logical turn and its retries, leaves the configured
 engine unchanged, and tries that engine again on the next logical turn.
 

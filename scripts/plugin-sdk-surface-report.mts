@@ -201,7 +201,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
       // +1: the shared state-owner boundary for plugin CLIs.
-      152,
+      // +1: maintainer-requested context-engine-transcript-runtime watermark subpath (2026-10-08).
+      153,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -224,7 +225,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +5: approved sync-to-async replacements: inspectConversationBinding,
       // resolveCommandAuthorization, createApproverRestrictedNativeApprovalCapability,
       // createChannelApprovalNativeRuntimeAdapter, and createLazyChannelApprovalNativeRuntimeAdapter.
-      3661,
+      // +5: maintainer-requested context-engine transcript watermark reader, its types, and fence error.
+      3666,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -242,7 +244,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: the same four CLI state-owner and transport functions.
       // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
       // +5: the five awaited inspection, authorization, and approval factory replacements above.
-      2127,
+      // +1: maintainer-requested context-engine transcript watermark reader.
+      2128,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

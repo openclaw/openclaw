@@ -64,7 +64,9 @@ type ResetMessageWindowCacheEntry = {
 // History readers span compactions (their window closes only at a reset). The preflight
 // fuse must measure the transcript the model will actually see, which a compaction rewrites
 // too; measuring it on the history scope keeps the fuse latched after the first compaction.
-type BoundaryWindowScope = "history" | "context";
+// Reset-window cursors close only at a reset, like history, but keep every retained message
+// role, like context, so context engines receive retained tool calls with their results.
+type BoundaryWindowScope = "history" | "context" | "reset";
 
 function isWindowBoundary(eventType: unknown, scope: BoundaryWindowScope): boolean {
   return eventType === "reset" || (scope === "context" && eventType === "compaction");
@@ -226,13 +228,21 @@ function readLatestActiveBoundaryMetadataByType(
     : indexed;
 }
 
+/** Reads the latest active-path reset row without resolving its retained tail. */
+export function readLatestActiveResetBoundary(
+  projection: CurrentTranscriptProjection,
+  beforeRawSeq?: number,
+): { active_position: number; seq: number } | undefined {
+  return readLatestActiveBoundaryMetadataByType(projection, "reset", beforeRawSeq);
+}
+
 function readLatestActiveBoundaryMetadata(
   projection: CurrentTranscriptProjection,
   scope: BoundaryWindowScope,
   beforeRawSeq?: number,
 ) {
   const reset = readLatestActiveBoundaryMetadataByType(projection, "reset", beforeRawSeq);
-  if (scope === "history") {
+  if (scope !== "context") {
     return reset;
   }
   const compaction = readLatestActiveBoundaryMetadataByType(projection, "compaction", beforeRawSeq);
@@ -376,7 +386,7 @@ function findLatestResetMessageWindow(
           continue;
         }
         const role = row.event.message.role;
-        if (scope === "context" || role === "user" || role === "assistant") {
+        if (scope !== "history" || role === "user" || role === "assistant") {
           keptMessagePositions.push(row.message_position);
         }
       }
