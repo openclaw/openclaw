@@ -9,6 +9,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
 import * as userProfileList from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -20,8 +21,6 @@ import {
   setDisplayName,
   setUserProfileRole,
 } from "../state/user-profile-writes.worker.js";
-import * as userProfiles from "../state/user-profiles.js";
-import { getUserProfileListItem } from "../state/user-profiles.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
   captureGitHubPublicationRequester,
@@ -100,13 +99,10 @@ describe("shared GitHub publication requester alias bindings", () => {
         }
         const resume = policy.resume;
         const observed = vi.spyOn(policy, "resume");
-        const protocolProfile = vi.spyOn(userProfiles, "getUserProfileListItem");
         const native = vi.spyOn(f.database.db, "prepare");
         const assertWithoutProfileSql = () => {
-          protocolProfile.mockClear();
           native.mockClear();
           restored.assertCurrent();
-          expect(protocolProfile).not.toHaveBeenCalled();
           expect(
             native.mock.calls.filter(([sql]) =>
               /user_profiles|user_profile_emails|user_profile_identities/u.test(sql),
@@ -268,9 +264,9 @@ describe("shared GitHub publication requester alias bindings", () => {
         expect(queued.status).toBe("requested");
         expect(f.externalWrites).toEqual([]);
         if (backend === "repository") {
-          f.placements.markWorkspaceResultPending(claim);
+          await f.placements.markWorkspaceResultPending(claim);
           await f.coordinator.prepareClaimWorkspace(claim);
-          f.placements.acceptWorkspaceResult(claim);
+          await f.placements.acceptWorkspaceResult(claim);
         }
         const accepted = f.readReceipt(queued.requestId)!;
         if (backend === "repository") {
@@ -294,7 +290,7 @@ describe("shared GitHub publication requester alias bindings", () => {
         onTestFinished(retry.release);
         expect(retry.requester.snapshot.grant?.aliasBindingIds).toHaveLength(2);
         if (backend === "repository") {
-          f.placements.completeWorkspaceResultAndReleaseTurn(claim);
+          await f.placements.completeWorkspaceResultAndReleaseTurn(claim);
         } else {
           await f.placements.releaseTurn(claim);
         }
@@ -353,9 +349,9 @@ describe("shared GitHub publication requester alias bindings", () => {
         );
         expect(queued.status).toBe("requested");
         if (backend === "repository") {
-          f.placements.markWorkspaceResultPending(claim);
+          await f.placements.markWorkspaceResultPending(claim);
           await f.coordinator.prepareClaimWorkspace(claim);
-          f.placements.acceptWorkspaceResult(claim);
+          await f.placements.acceptWorkspaceResult(claim);
         }
         const accepted = f.readReceipt(queued.requestId)!;
         if (backend === "repository") {
@@ -363,7 +359,7 @@ describe("shared GitHub publication requester alias bindings", () => {
             checkpoint_ref: expect.any(String),
             checkpoint_digest: expect.any(String),
           });
-          f.placements.completeWorkspaceResultAndReleaseTurn(claim);
+          await f.placements.completeWorkspaceResultAndReleaseTurn(claim);
         } else {
           await f.placements.releaseTurn(claim);
         }

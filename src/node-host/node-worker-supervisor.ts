@@ -22,6 +22,7 @@ import type {
   NodeWorkerWorkspaceRetainResult,
 } from "../worker/node-workspace-retain-protocol.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
+import type { NodeWorkerProcessInput } from "../worker/worker-process-observation.js";
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { NodeWorkerChildLifecycle } from "./node-worker-child-lifecycle.js";
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
@@ -62,7 +63,6 @@ class NodeWorkerSupervisor {
   private readonly turns: NodeWorkerTurnStore;
   private readonly admissions = new Map<string, NodeWorkerPendingAdmission>();
   private readonly retentions = new Set<Promise<NodeWorkerWorkspaceRetainResult>>();
-  private readonly stoppingEnvironments = new Map<string, number>();
   private readonly workerEnv: NodeJS.ProcessEnv;
   private readonly capacity: NodeWorkerCapacity;
   private readonly workspace: NodeWorkerWorkspaceRuntime;
@@ -75,14 +75,18 @@ class NodeWorkerSupervisor {
 
   constructor(options: NodeWorkerSupervisorOptions = {}) {
     const env = options.env ?? process.env;
+    const startup = {
+      nativeInferenceSnapshot: options.nativeInferenceSnapshot,
+      workerEnv: snapshotNodeWorkerEnv(env),
+      engineEnv: { ...process.env, ...env },
+    };
     const bundleRoot = path.resolve(
       options.bundleRoot ?? path.join(resolveStateDir(env), "node-host"),
     );
     this.journal = new NodeWorkerJournalWorker({ env });
     this.store = new NodeWorkerLaunchStore(this.journal);
     this.turns = new NodeWorkerTurnStore(this.journal);
-    this.workerEnv = snapshotNodeWorkerEnv(env);
-    const engineEnv = { ...process.env, ...env };
+    this.workerEnv = startup.workerEnv;
     const containerEngine = options.containerEngine;
     this.containerLifecycle = options.containerEngine
       ? new NodeWorkerContainerLifecycle(options.containerEngine, bundleRoot, this.store)
@@ -101,7 +105,7 @@ class NodeWorkerSupervisor {
     });
     this.children = new NodeWorkerChildLifecycle({
       bundleRoot,
-      engineEnv,
+      ...startup,
       store: this.store,
       turns: this.turns,
       capacity: this.capacity,
@@ -144,7 +148,6 @@ class NodeWorkerSupervisor {
       this.recoveries.size > 0 ||
       this.retentions.size > 0 ||
       this.children.active.size > this.children.idleChildren().length ||
-      this.stoppingEnvironments.size > 0 ||
       this.workspace.processes.hasActiveWork() ||
       this.workspace.quiescence.hasActiveWork();
     if (hasLocalWork()) {
@@ -180,9 +183,11 @@ class NodeWorkerSupervisor {
     }
     const binding = nodeWorkerEnvironmentBinding(input);
     const key = nodeWorkerEnvironmentKey(binding);
-    if (this.stoppingEnvironments.has(key)) {
-      throw new Error("node worker environment is stopping");
-    }
+    const assertEnvironmentCurrent = this.workspace.processes.captureAdmission(
+      binding,
+      binding.ownerEpoch,
+    );
+    assertEnvironmentCurrent();
     const admission = this.admissions.get(key);
     if (admission) {
       const { launchId, planHash } = admission.identity;
@@ -207,9 +212,10 @@ class NodeWorkerSupervisor {
       });
       try {
         admissionSignal.throwIfAborted();
-        if (this.closed || this.stoppingEnvironments.has(key)) {
-          throw new Error("node worker environment is stopping");
+        if (this.closed) {
+          throw new Error("node worker supervisor is closed");
         }
+        assertEnvironmentCurrent();
         return await this.launchAdmitted(
           input,
           descriptor,
@@ -350,7 +356,6 @@ class NodeWorkerSupervisor {
       workerEnv: homeDir ? snapshotNodeWorkerEnv(this.workerEnv, homeDir) : this.workerEnv,
       input,
       descriptor,
-      planHash: claimInput.planHash,
       supervisor,
       signal,
       claim: claimInput,
@@ -487,20 +492,22 @@ class NodeWorkerSupervisor {
     return this.turns.getMatching(expected);
   }
 
+  observeProcesses(input: NodeWorkerProcessInput, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    this.workspace.processes.captureAdmission(input, input.ownerEpoch)();
+    return this.children.observeProcesses(input, signal);
+  }
+
   async stopEnvironment(expected: NodeWorkerEnvironmentStopInput): Promise<void> {
     const key = nodeWorkerEnvironmentKey(expected);
-    this.stoppingEnvironments.set(key, (this.stoppingEnvironments.get(key) ?? 0) + 1);
-    try {
-      const errors: unknown[] = [];
-      const admission = this.admissions.get(key);
-      const matchingAdmission =
-        admission && nodeWorkerEnvironmentMatches(admission.binding, expected)
-          ? admission
-          : undefined;
-      matchingAdmission?.abort.abort(new Error("node worker environment stopped"));
-      await this.workspace.processes
-        .stopEnvironment(expected)
-        .catch((error: unknown) => errors.push(error));
+    const errors: unknown[] = [];
+    const admission = this.admissions.get(key);
+    const matchingAdmission =
+      admission && nodeWorkerEnvironmentMatches(admission.binding, expected)
+        ? admission
+        : undefined;
+    matchingAdmission?.abort.abort(new Error("node worker environment stopped"));
+    return await this.workspace.processes.stopEnvironment(expected, async () => {
       await this.initialize().catch((error: unknown) => errors.push(error));
       let durableStops: Promise<void>[] = [];
       try {
@@ -558,14 +565,7 @@ class NodeWorkerSupervisor {
           ? errors[0]
           : new AggregateError(errors, "node worker environment cleanup failed");
       }
-    } finally {
-      const remaining = this.stoppingEnvironments.get(key)! - 1;
-      if (remaining === 0) {
-        this.stoppingEnvironments.delete(key);
-      } else {
-        this.stoppingEnvironments.set(key, remaining);
-      }
-    }
+    });
   }
 
   private async cancelTurn(

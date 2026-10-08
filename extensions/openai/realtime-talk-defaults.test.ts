@@ -75,7 +75,7 @@ describe("OpenAI Talk account defaults", () => {
     "starts audio-only browser Talk with the $account default and matching auth",
     async ({ apiProfile, oauth, configuredKey, model }) => {
       const cfg = {
-        agents: { list: [{ id: "voice-agent", agentDir: "/tmp/openclaw-voice-agent" }] },
+        agents: { entries: { "voice-agent": { agentDir: "/tmp/openclaw-voice-agent" } } },
       };
       const oauthToken = createTestJwt({
         "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },

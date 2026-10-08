@@ -39,24 +39,15 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
       }
 
       const result = await runComfyWorkflow({
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        authStore: req.authStore,
-        prompt: req.prompt,
-        model: req.model,
-        timeoutMs: req.timeoutMs,
+        ...req,
         capability: "image",
-        outputKinds: ["images"],
         inputImage: req.inputImages?.[0],
       });
 
       return {
         images: result.assets,
         model: result.model,
-        metadata: {
-          promptId: result.promptId,
-          outputNodeIds: result.outputNodeIds,
-        },
+        metadata: result.metadata,
       };
     },
   };

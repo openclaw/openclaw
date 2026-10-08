@@ -2,19 +2,16 @@ import path from "node:path";
 import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
-import { persistSubagentRunsToDiskOrThrow } from "../../agents/subagents/registry/subagent-registry-state.js";
-import {
-  createCanonicalSubagentRunFixture,
-  settleSubagentRegistryPersistenceWork,
-} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentRunValuesInDatabase } from "../../agents/subagents/registry/subagent-registry.store.kernel.js";
 import {
   addSubagentRunForTests,
-  getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -44,8 +41,8 @@ export function nativeSubagentClient(): AgentHandlerArgs["client"] {
 export function observeAgentSubagentCleanup(params: { runId: string; childSessionKey: string }) {
   const cleanupCompleted = createDeferred();
   const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
-    const entry = getSubagentRunByChildSessionKey(params.childSessionKey);
-    if (entry?.runId === params.runId && entry.cleanupCompletedAt) {
+    const entry = subagentRuns.get(params.runId);
+    if (entry?.childSessionKey === params.childSessionKey && entry.cleanupCompletedAt) {
       cleanupCompleted.resolve();
     }
   });
@@ -73,24 +70,17 @@ export function createPluginSubagentTestLifetime(params: {
     async [Symbol.asyncDispose]() {
       cleanup[Symbol.dispose]();
       await work.drain();
-      resetSubagentRegistryForTests({ persist: false });
+      await resetSubagentRegistryForTests({ persist: false });
       await cleanupSessionStateForTest({ stateDir: params.root });
     },
   };
 }
 
-/** Native replacement compares the complete paused owner with its durable source row. */
-export function seedPersistedSubagentRunForAgentTest(
+/** Seed the paused owner's durable row and published projection together. */
+export async function seedPersistedSubagentRunForAgentTest(
   overrides: Parameters<typeof addSubagentRunForTests>[0],
 ) {
-  const entry = createCanonicalSubagentRunFixture({
-    ...createSubagentRunRecord(overrides),
-    endedAt: overrides.endedAt,
-  });
-  // The registry fixture binds physical requester/controller stores before persistence.
-  addSubagentRunForTests(entry);
-  persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, entry]]), [entry.runId]);
-  return entry;
+  await addSubagentRunForTests(overrides);
 }
 
 // Shared by spawned-child handler fixtures; real transcript reads stay in the fixture root.
@@ -116,15 +106,74 @@ export async function withPluginSubagentTestState(
 ): Promise<void> {
   const state = await createOpenClawTestState({ prefix, layout: "state-only" });
   try {
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await run(state);
   } finally {
     // Stop producers, then join admitted work before deleting storage. A failed join retains it.
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await vi.dynamicImportSettled();
     await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
     await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await state.cleanup();
   }
+}
+
+export function seedReleasedYieldedSubagentRun(params: {
+  previousRunId: string;
+  childSessionKey: string;
+  requesterSessionKey: string;
+  storePath: string;
+  budget: number;
+}): void {
+  const { previousRunId, childSessionKey, requesterSessionKey, storePath, budget } = params;
+  // Frozen v2026.9.6 (eb377ac59e6c) codec/normalizer output after sessions_yield.
+  // Seed the released bytes without passing through the candidate's serializer.
+  runOpenClawStateWriteTransaction((database) =>
+    writeSubagentRunValuesInDatabase(
+      database,
+      [
+        {
+          run_id: previousRunId,
+          child_session_key: childSessionKey,
+          controller_session_key: requesterSessionKey,
+          requester_session_key: requesterSessionKey,
+          requester_store_path: storePath,
+          controller_store_path: storePath,
+          created_at: 1,
+          payload_json: JSON.stringify({
+            runId: previousRunId,
+            taskRunId: previousRunId,
+            childSessionKey,
+            controllerSessionKey: requesterSessionKey,
+            requesterSessionKey,
+            requesterStorePath: storePath,
+            controllerStorePath: storePath,
+            requesterDisplayKey: requesterSessionKey,
+            requesterAgentId: "main",
+            task: "Review the candidate",
+            cleanup: "keep",
+            expectsCompletionMessage: true,
+            spawnMode: "run",
+            runTimeoutSeconds: budget,
+            generation: 1,
+            createdAt: 1,
+            execution: {
+              status: "terminal",
+              startedAt: 1,
+              endedAt: 2,
+              lifecycleGeneration: "released-generation",
+            },
+            completion: { required: true },
+            delivery: { status: "pending" },
+            sessionStartedAt: 1,
+            accumulatedRuntimeMs: 0,
+            cleanupHandled: false,
+            pauseReason: "sessions_yield",
+          }),
+        },
+      ],
+      [],
+    ),
+  );
 }

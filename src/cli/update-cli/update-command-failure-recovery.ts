@@ -72,6 +72,15 @@ export async function verifyUpdateFailureRecovery(params: {
       advisory: { kind: "recoverable-maintenance", message },
     });
   };
+  const assertRecoveryFailureCurrent = (error: unknown) => {
+    if (
+      error instanceof UpdateCommandRecoveryPendingError ||
+      hasCommandProcessCleanupError(error)
+    ) {
+      throw error;
+    }
+    params.assertCurrent?.();
+  };
   let recorded: ReturnType<typeof getUpdateRun> | undefined;
   try {
     recorded = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
@@ -118,13 +127,7 @@ export async function verifyUpdateFailureRecovery(params: {
             channelsReady: false,
           };
         } catch (error) {
-          if (
-            error instanceof UpdateCommandRecoveryPendingError ||
-            hasCommandProcessCleanupError(error)
-          ) {
-            throw error;
-          }
-          params.assertCurrent?.();
+          assertRecoveryFailureCurrent(error);
           warnRecording(
             `Could not save Gateway recovery verification: ${formatErrorMessage(error)}`,
           );
@@ -182,13 +185,7 @@ export async function verifyUpdateFailureRecovery(params: {
               });
     });
   } catch (error) {
-    if (
-      error instanceof UpdateCommandRecoveryPendingError ||
-      hasCommandProcessCleanupError(error)
-    ) {
-      throw error;
-    }
-    params.assertCurrent?.();
+    assertRecoveryFailureCurrent(error);
     const probeFailureStep: UpdateStepResult = {
       name: "gateway recovery verification",
       command: "gateway verification",

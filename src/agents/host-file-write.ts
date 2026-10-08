@@ -5,10 +5,6 @@ import { overwriteFileHandle } from "../infra/file-descriptor.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { expandOsHomePrefix } from "./sessions/tools/path-utils.js";
 
-function resolveHostPath(filePath: string): string {
-  return path.resolve(expandOsHomePrefix(filePath));
-}
-
 async function openHostFileForUpdate(resolved: string) {
   try {
     const existing = await fs.stat(resolved);
@@ -28,7 +24,7 @@ export async function writeHostFile(
   abortSignal?: AbortSignal,
 ) {
   const assertCurrent = captureAgentToolSourceExecutionGuard(abortSignal);
-  const resolved = resolveHostPath(absolutePath);
+  const resolved = path.resolve(expandOsHomePrefix(absolutePath));
   assertCurrent();
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   const handle = await openHostFileForUpdate(resolved);

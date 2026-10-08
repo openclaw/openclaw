@@ -19,6 +19,7 @@ import {
   normalizeOptionalString,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
@@ -76,11 +77,7 @@ function isAbsoluteHttp(url: string): boolean {
 }
 
 function isLoopbackHttpUrl(url: string): boolean {
-  try {
-    return isLoopbackHost(new URL(url).hostname);
-  } catch {
-    return false;
-  }
+  return isLoopbackHost(URL.parse(url)?.hostname ?? "");
 }
 
 function withLoopbackBrowserAuth(
@@ -280,12 +277,10 @@ function resolveBrowserToolModelHint(kind: BrowserFetchFailureKind): string | un
   return kind === "persistent" ? BROWSER_TOOL_PERSISTENT_MODEL_HINT : undefined;
 }
 
-async function discardResponseBody(res: Response): Promise<void> {
-  try {
-    await res.body?.cancel();
-  } catch {
-    // Best effort only; we're already returning a stable error message.
-  }
+function discardResponseBody(res: Response): void {
+  // Do not await cancel: teed/debug streams can leave cancel pending forever
+  // (same invariant as Google Chat fetchOk / CDP probe release).
+  void res.body?.cancel().catch(() => undefined);
 }
 
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
@@ -319,18 +314,14 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   return new Error(message, err instanceof Error ? { cause: err } : undefined);
 }
 
-function createBrowserRequestAbort(upstreamSignal?: AbortSignal | null) {
+function createBrowserRequestAbort(timeoutMs: number, upstreamSignal?: AbortSignal | null) {
   const controller = new AbortController();
-  const abort = () => controller.abort(upstreamSignal?.reason);
-  if (upstreamSignal?.aborted) {
-    abort();
-  } else {
-    upstreamSignal?.addEventListener("abort", abort, { once: true });
-  }
+  const timer = setTimeout(() => controller.abort(new Error("timed out")), timeoutMs);
   return {
-    controller,
-    signal: controller.signal,
-    dispose: () => upstreamSignal?.removeEventListener("abort", abort),
+    signal: upstreamSignal
+      ? AbortSignal.any([upstreamSignal, controller.signal])
+      : controller.signal,
+    dispose: () => clearTimeout(timer),
   };
 }
 
@@ -339,10 +330,8 @@ async function fetchHttpJson<T>(
   init: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
   const timeoutMs = resolveTimerTimeoutMs(init.timeoutMs, 5000);
-  const abort = createBrowserRequestAbort(init.signal);
-  const { controller: ctrl, signal } = abort;
-
-  const t = setTimeout(() => ctrl.abort(new Error("timed out")), timeoutMs);
+  const abort = createBrowserRequestAbort(timeoutMs, init.signal);
+  const { signal } = abort;
   let release: (() => Promise<void>) | undefined;
   try {
     const guarded = await fetchWithSsrFGuard({
@@ -361,7 +350,7 @@ async function fetchHttpJson<T>(
     if (!res.ok) {
       if (res.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
-        await discardResponseBody(res);
+        discardResponseBody(res);
         throw new BrowserServiceError(
           `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_PERSISTENT_MODEL_HINT}`,
         );
@@ -387,9 +376,8 @@ async function fetchHttpJson<T>(
     });
     return JSON.parse(decodeBrowserControlResponseUtf8(body, res.status)) as T;
   } finally {
-    clearTimeout(t);
-    await release?.();
     abort.dispose();
+    await release?.();
   }
 }
 
@@ -428,22 +416,8 @@ export async function fetchBrowserJson<T>(
       }
     }
 
-    const abort = createBrowserRequestAbort(init?.signal);
-    const { controller: abortCtrl, signal } = abort;
-
-    let abortListener: (() => void) | undefined;
-    const abortPromise: Promise<never> = signal.aborted
-      ? Promise.reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"))
-      : new Promise((_, reject) => {
-          abortListener = () =>
-            reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
-          signal.addEventListener("abort", abortListener, { once: true });
-        });
-
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    if (timeoutMs) {
-      timer = setTimeout(() => abortCtrl.abort(new Error("timed out")), timeoutMs);
-    }
+    const abort = createBrowserRequestAbort(timeoutMs, init?.signal);
+    const { signal } = abort;
 
     const dispatchPromise = dispatchBrowserControlRequest({
       method:
@@ -459,15 +433,9 @@ export async function fetchBrowserJson<T>(
       ...(scope ? { assertCurrent: scope.assertCurrent } : {}),
     });
 
-    const result = await Promise.race([dispatchPromise, abortPromise]).finally(() => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (abortListener) {
-        signal.removeEventListener("abort", abortListener);
-      }
-      abort.dispose();
-    });
+    const result = await racePromiseWithAbortSignal(dispatchPromise, signal, ({ reason }) =>
+      toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
+    ).finally(abort.dispose);
 
     if (result.status >= 400) {
       if (result.status === 429) {

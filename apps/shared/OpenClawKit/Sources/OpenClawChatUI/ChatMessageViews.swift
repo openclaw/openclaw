@@ -168,120 +168,67 @@ private struct ChatBubbleShape: InsettableShape {
     func path(in rect: CGRect) -> Path {
         let rect = rect.insetBy(dx: self.insetAmount, dy: self.insetAmount)
         switch self.tail {
-        case .left:
-            return self.leftTailPath(in: rect, radius: self.cornerRadius)
-        case .right:
-            return self.rightTailPath(in: rect, radius: self.cornerRadius)
+        case .left, .right:
+            return self.tailPath(in: rect, radius: self.cornerRadius)
         case .none:
             return Path(roundedRect: rect, cornerRadius: self.cornerRadius)
         }
     }
 
-    private func rightTailPath(in rect: CGRect, radius r: CGFloat) -> Path {
-        var path = Path()
-        let bubbleMinX = rect.minX
-        let bubbleMaxX = rect.maxX - self.tailWidth
+    private func tailPath(in rect: CGRect, radius r: CGFloat) -> Path {
+        let isRight = self.tail == .right
+        let bubbleMinX = rect.minX + (isRight ? 0 : self.tailWidth)
+        let bubbleMaxX = rect.maxX - (isRight ? self.tailWidth : 0)
         let bubbleMinY = rect.minY
         let bubbleMaxY = rect.maxY
-
         let available = max(4, bubbleMaxY - bubbleMinY - 2 * r)
-        let baseH = min(tailBaseHeight, available)
+        let baseH = min(self.tailBaseHeight, available)
         let baseBottomY = bubbleMaxY - max(r * 0.45, 6)
         let baseTopY = baseBottomY - baseH
         let midY = (baseTopY + baseBottomY) / 2
 
-        let baseTop = CGPoint(x: bubbleMaxX, y: baseTopY)
-        let baseBottom = CGPoint(x: bubbleMaxX, y: baseBottomY)
-        let tip = CGPoint(x: bubbleMaxX + self.tailWidth, y: midY)
+        func addTail(to path: inout Path) {
+            let edgeX = isRight ? bubbleMaxX : bubbleMinX
+            let direction: CGFloat = isRight ? 1 : -1
+            let startY = isRight ? baseTopY : baseBottomY
+            let endY = isRight ? baseBottomY : baseTopY
+            path.addLine(to: CGPoint(x: edgeX, y: startY))
+            path.addCurve(
+                to: CGPoint(x: edgeX + direction * self.tailWidth, y: midY),
+                control1: CGPoint(x: edgeX + direction * self.tailWidth * 0.2, y: startY + direction * baseH * 0.05),
+                control2: CGPoint(x: edgeX + direction * self.tailWidth * 0.95, y: midY - direction * baseH * 0.15))
+            path.addCurve(
+                to: CGPoint(x: edgeX, y: endY),
+                control1: CGPoint(x: edgeX + direction * self.tailWidth * 0.95, y: midY + direction * baseH * 0.15),
+                control2: CGPoint(x: edgeX + direction * self.tailWidth * 0.2, y: endY - direction * baseH * 0.05))
+        }
 
+        var path = Path()
         path.move(to: CGPoint(x: bubbleMinX + r, y: bubbleMinY))
         path.addLine(to: CGPoint(x: bubbleMaxX - r, y: bubbleMinY))
         path.addQuadCurve(
             to: CGPoint(x: bubbleMaxX, y: bubbleMinY + r),
             control: CGPoint(x: bubbleMaxX, y: bubbleMinY))
-        path.addLine(to: baseTop)
-        path.addCurve(
-            to: tip,
-            control1: CGPoint(x: bubbleMaxX + self.tailWidth * 0.2, y: baseTopY + baseH * 0.05),
-            control2: CGPoint(x: bubbleMaxX + self.tailWidth * 0.95, y: midY - baseH * 0.15))
-        path.addCurve(
-            to: baseBottom,
-            control1: CGPoint(x: bubbleMaxX + self.tailWidth * 0.95, y: midY + baseH * 0.15),
-            control2: CGPoint(x: bubbleMaxX + self.tailWidth * 0.2, y: baseBottomY - baseH * 0.05))
-        self.addBottomEdge(
-            path: &path,
-            bubbleMinX: bubbleMinX,
-            bubbleMaxX: bubbleMaxX,
-            bubbleMaxY: bubbleMaxY,
-            radius: r)
-        path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
+        if isRight {
+            addTail(to: &path)
+        } else {
+            path.addLine(to: CGPoint(x: bubbleMaxX, y: bubbleMaxY - r))
+        }
         path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
-            control: CGPoint(x: bubbleMinX, y: bubbleMinY))
-
-        return path
-    }
-
-    private func leftTailPath(in rect: CGRect, radius r: CGFloat) -> Path {
-        var path = Path()
-        let bubbleMinX = rect.minX + self.tailWidth
-        let bubbleMaxX = rect.maxX
-        let bubbleMinY = rect.minY
-        let bubbleMaxY = rect.maxY
-
-        let available = max(4, bubbleMaxY - bubbleMinY - 2 * r)
-        let baseH = min(tailBaseHeight, available)
-        let baseBottomY = bubbleMaxY - max(r * 0.45, 6)
-        let baseTopY = baseBottomY - baseH
-        let midY = (baseTopY + baseBottomY) / 2
-
-        let baseTop = CGPoint(x: bubbleMinX, y: baseTopY)
-        let baseBottom = CGPoint(x: bubbleMinX, y: baseBottomY)
-        let tip = CGPoint(x: bubbleMinX - self.tailWidth, y: midY)
-
-        path.move(to: CGPoint(x: bubbleMinX + r, y: bubbleMinY))
-        path.addLine(to: CGPoint(x: bubbleMaxX - r, y: bubbleMinY))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMaxX, y: bubbleMinY + r),
-            control: CGPoint(x: bubbleMaxX, y: bubbleMinY))
-        path.addLine(to: CGPoint(x: bubbleMaxX, y: bubbleMaxY - r))
-        self.addBottomEdge(
-            path: &path,
-            bubbleMinX: bubbleMinX,
-            bubbleMaxX: bubbleMaxX,
-            bubbleMaxY: bubbleMaxY,
-            radius: r)
-        path.addLine(to: baseBottom)
-        path.addCurve(
-            to: tip,
-            control1: CGPoint(x: bubbleMinX - self.tailWidth * 0.2, y: baseBottomY - baseH * 0.05),
-            control2: CGPoint(x: bubbleMinX - self.tailWidth * 0.95, y: midY + baseH * 0.15))
-        path.addCurve(
-            to: baseTop,
-            control1: CGPoint(x: bubbleMinX - self.tailWidth * 0.95, y: midY - baseH * 0.15),
-            control2: CGPoint(x: bubbleMinX - self.tailWidth * 0.2, y: baseTopY + baseH * 0.05))
-        path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
-            control: CGPoint(x: bubbleMinX, y: bubbleMinY))
-
-        return path
-    }
-
-    private func addBottomEdge(
-        path: inout Path,
-        bubbleMinX: CGFloat,
-        bubbleMaxX: CGFloat,
-        bubbleMaxY: CGFloat,
-        radius: CGFloat)
-    {
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMaxX - radius, y: bubbleMaxY),
+            to: CGPoint(x: bubbleMaxX - r, y: bubbleMaxY),
             control: CGPoint(x: bubbleMaxX, y: bubbleMaxY))
-        path.addLine(to: CGPoint(x: bubbleMinX + radius, y: bubbleMaxY))
+        path.addLine(to: CGPoint(x: bubbleMinX + r, y: bubbleMaxY))
         path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - radius),
+            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - r),
             control: CGPoint(x: bubbleMinX, y: bubbleMaxY))
+        if !isRight {
+            addTail(to: &path)
+        }
+        path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
+            control: CGPoint(x: bubbleMinX, y: bubbleMinY))
+        return path
     }
 }
 
@@ -396,6 +343,7 @@ extension ChatMessageBubble {
         let textColor = self.textColor
         let shouldRenderBubble = self.shouldRenderBubble
         let toolActivityItems = self.toolActivityItems
+        let hasOnboardingShadow = self.style == .onboarding && !self.isUser
 
         VStack(alignment: .leading, spacing: 6) {
             if shouldRenderBubble {
@@ -405,11 +353,13 @@ extension ChatMessageBubble {
                         .padding(.horizontal, 12)
                         .background(AnyShapeStyle(self.bubbleFillColor))
                         .clipShape(self.bubbleShape)
-                        .overlay(self.bubbleBorder)
+                        .overlay(self.bubbleShape.strokeBorder(
+                            self.bubbleBorderColor,
+                            lineWidth: self.bubbleBorderWidth))
                         .shadow(
-                            color: self.bubbleShadowColor,
-                            radius: self.bubbleShadowRadius,
-                            y: self.bubbleShadowYOffset)
+                            color: hasOnboardingShadow ? Color.black.opacity(0.28) : .clear,
+                            radius: hasOnboardingShadow ? 6 : 0,
+                            y: hasOnboardingShadow ? 2 : 0)
                         .padding(.leading, self.tailPaddingLeading)
                         .padding(.trailing, self.tailPaddingTrailing)
                 } else {
@@ -600,8 +550,8 @@ extension ChatMessageBubble {
         }
         guard self.message.role.lowercased() == "assistant" else { return [] }
         return ChatToolActivity.items(
-            calls: self.toolCalls,
-            results: self.inlineToolResults,
+            calls: self.message.content.filter(\.isToolCall),
+            results: self.message.content.filter(\.isToolResult),
             activity: self.message.activity,
             liveTools: self.liveToolCalls)
     }
@@ -647,14 +597,6 @@ extension ChatMessageBubble {
             else { return nil }
             return content.preview
         }
-    }
-
-    private var toolCalls: [OpenClawChatMessageContent] {
-        self.message.content.filter(\.isToolCall)
-    }
-
-    private var inlineToolResults: [OpenClawChatMessageContent] {
-        self.message.content.filter(\.isToolResult)
     }
 
     private var usagePresentation: ChatMessageUsagePresentation? {
@@ -703,17 +645,10 @@ extension ChatMessageBubble {
         return 1
     }
 
-    private var bubbleBorder: some View {
-        self.bubbleShape.strokeBorder(self.bubbleBorderColor, lineWidth: self.bubbleBorderWidth)
-    }
-
     private var bubbleShape: ChatBubbleShape {
-        ChatBubbleShape(cornerRadius: ChatUIConstants.bubbleCorner, tail: self.bubbleTail)
-    }
-
-    private var bubbleTail: ChatBubbleShape.Tail {
-        guard self.style == .onboarding else { return .none }
-        return self.isUser ? .right : .left
+        ChatBubbleShape(
+            cornerRadius: ChatUIConstants.bubbleCorner,
+            tail: self.style == .onboarding ? (self.isUser ? .right : .left) : .none)
     }
 
     private var tailPaddingLeading: CGFloat {
@@ -722,18 +657,6 @@ extension ChatMessageBubble {
 
     private var tailPaddingTrailing: CGFloat {
         self.style == .onboarding && self.isUser ? 8 : 0
-    }
-
-    private var bubbleShadowColor: Color {
-        self.style == .onboarding && !self.isUser ? Color.black.opacity(0.28) : .clear
-    }
-
-    private var bubbleShadowRadius: CGFloat {
-        self.style == .onboarding && !self.isUser ? 6 : 0
-    }
-
-    private var bubbleShadowYOffset: CGFloat {
-        self.style == .onboarding && !self.isUser ? 2 : 0
     }
 }
 
@@ -937,61 +860,36 @@ struct ChatOutboxStatusLabel: View {
     let state: OpenClawChatOutboxMessageState
 
     var body: some View {
+        let presentation = self.presentation
         HStack(spacing: 4) {
-            Image(systemName: self.iconName)
+            Image(systemName: presentation.iconName)
                 .font(.system(size: 10, weight: .semibold))
-            Text(self.title)
+            Text(presentation.title)
                 .font(OpenClawChatTypography.caption)
         }
         .foregroundStyle(self.state.isFailed ? AnyShapeStyle(OpenClawChatTheme.danger) : AnyShapeStyle(.secondary))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            Text(self.accessibilityText)
+            Text(presentation.accessibilityText)
                 .font(OpenClawChatTypography.caption))
     }
 
-    private var title: LocalizedStringResource {
+    private var presentation: (
+        title: LocalizedStringResource,
+        iconName: String,
+        accessibilityText: LocalizedStringResource)
+    {
         switch self.state {
         case .queued:
-            "Queued"
+            ("Queued", "clock", "Queued, sends when reconnected")
         case .sending:
-            "Sending…"
+            ("Sending…", "arrow.up.circle", "Sending")
         case .confirming:
-            "Confirming…"
+            ("Confirming…", "checkmark.circle", "Sent, waiting for chat history confirmation")
         case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "Delivery unknown"
+            ("Delivery unknown", "questionmark.circle", "Delivery unconfirmed, touch and hold to retry or delete")
         case .failed:
-            "Not sent"
-        }
-    }
-
-    private var iconName: String {
-        switch self.state {
-        case .queued:
-            "clock"
-        case .sending:
-            "arrow.up.circle"
-        case .confirming:
-            "checkmark.circle"
-        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "questionmark.circle"
-        case .failed:
-            "exclamationmark.circle"
-        }
-    }
-
-    private var accessibilityText: LocalizedStringResource {
-        switch self.state {
-        case .queued:
-            "Queued, sends when reconnected"
-        case .sending:
-            "Sending"
-        case .confirming:
-            "Sent, waiting for chat history confirmation"
-        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "Delivery unconfirmed, touch and hold to retry or delete"
-        case .failed:
-            "Not sent, touch and hold to retry or delete"
+            ("Not sent", "exclamationmark.circle", "Not sent, touch and hold to retry or delete")
         }
     }
 }
@@ -1001,6 +899,7 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
         lhs.style == rhs.style &&
             lhs.assistantName == rhs.assistantName &&
             lhs.assistantAvatarText == rhs.assistantAvatarText &&
+            lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
             lhs.isClean == rhs.isClean &&
             lhs.runIdentity == rhs.runIdentity &&
@@ -1269,17 +1168,12 @@ private struct ChatStreamingAssistantTextBody: View {
         let now = Date.timeIntervalSinceReferenceDate
         let nextSnapshot = self.inputSnapshot
         let nextLocation = nextSnapshot.lastProseLocation
-        let nextRevealState: ChatStreamingRevealState
-        if let nextLocation {
-            let nextText = nextSnapshot.prose(at: nextLocation).plainText
-            if nextLocation == self.revealLocation {
-                nextRevealState = step(state: self.revealState, newText: nextText, now: now)
-            } else {
-                nextRevealState = step(state: ChatStreamingRevealState(), newText: nextText, now: now)
-            }
-        } else {
-            nextRevealState = ChatStreamingRevealState()
-        }
+        let nextRevealState = nextLocation.map { location in
+            step(
+                state: location == self.revealLocation ? self.revealState : ChatStreamingRevealState(),
+                newText: nextSnapshot.prose(at: location).plainText,
+                now: now)
+        } ?? ChatStreamingRevealState()
 
         self.snapshot = nextSnapshot
         self.revealLocation = nextLocation

@@ -146,9 +146,7 @@ describe("dispatchInteraction", () => {
   });
 
   it("does not add a failure follow-up when the handler already replied", async () => {
-    // nextReplyAction() maps `replied` to a follow-up, so an unconditional
-    // report would post a second, contradictory message next to the reply the
-    // user already received.
+    // A failure report must not append a contradictory message after a successful reply.
     const run = vi.fn(async (interaction: CommandInteraction) => {
       await interaction.reply("partial result");
       throw new Error("failed after replying");

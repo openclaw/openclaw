@@ -161,6 +161,8 @@ export const validateWorktreesCreateParams = compile(S.WorktreesCreateParamsSche
 export const validateWorktreesRemoveParams = compile(S.WorktreesRemoveParamsSchema);
 export const validateWorktreesRestoreParams = compile(S.WorktreesRestoreParamsSchema);
 export const validateWorktreesGcParams = compile(S.WorktreesGcParamsSchema);
+export const validateWorktreesRecoverRemovalParams = compile(S.WorktreesRecoverRemovalParamsSchema);
+export const validateWorktreesRetireSnapshotParams = compile(S.WorktreesRetireSnapshotParamsSchema);
 export const validateWorktreesBranchesParams = compile(S.WorktreesBranchesParamsSchema);
 export const validateFsListDirParams = compile(S.FsListDirParamsSchema);
 export const validateFsListDirResult = compile(S.FsListDirResultSchema);
@@ -283,6 +285,7 @@ export const validateSessionsDescribeParams = compile(S.SessionsDescribeParamsSc
 export const validateSessionsResolveParams = compile(S.SessionsResolveParamsSchema);
 export const validateSessionsFilesListParams = compile(S.SessionsFilesListParamsSchema);
 export const validateSessionsFilesGetParams = compile(S.SessionsFilesGetParamsSchema);
+export const validateSessionsFilesAssetsParams = compile(S.SessionsFilesAssetsParamsSchema);
 export const validateSessionsFilesSetParams = compile(S.SessionsFilesSetParamsSchema);
 export const validateSessionsFilesRevealParams = compile(S.SessionsFilesRevealParamsSchema);
 export const validateSessionsDiffParams = compile(S.SessionsDiffParamsSchema);
@@ -470,23 +473,11 @@ export const validateSkillsUploadCommitParams = compile(S.SkillsUploadCommitPara
 export const validateSkillsUpdateParams = compile(S.SkillsUpdateParamsSchema);
 export const validateSkillsSearchParams = compile(S.SkillsSearchParamsSchema);
 export const validateSkillsDetailParams = compile(S.SkillsDetailParamsSchema);
-export const validateSkillsCuratorStatusParams = compile(S.SkillsCuratorStatusParamsSchema);
-export const validateSkillsCuratorActionParams = compile(S.SkillsCuratorActionParamsSchema);
-export const validateSkillsProposalsListParams = compile(S.SkillsProposalsListParamsSchema);
+export const validateSkillsWorkshopListParams = compile(S.SkillsWorkshopListParamsSchema);
+export const validateSkillsWorkshopChangesParams = compile(S.SkillsWorkshopChangesParamsSchema);
 export const validateSkillsWorkshopReadParams = compile(S.SkillsWorkshopReadParamsSchema);
-export const validateSkillsProposalInspectParams = compile(S.SkillsProposalInspectParamsSchema);
-export const validateSkillsProposalCreateParams = compile(S.SkillsProposalCreateParamsSchema);
-export const validateSkillsProposalUpdateParams = compile(S.SkillsProposalUpdateParamsSchema);
-export const validateSkillsProposalReviseParams = compile(S.SkillsProposalReviseParamsSchema);
-export const validateSkillsProposalRequestRevisionParams = compile(
-  S.SkillsProposalRequestRevisionParamsSchema,
-);
-export const validateSkillsProposalDecisionParams = compile(S.SkillsProposalDecisionParamsSchema);
-export const validateSkillsProposalActionParams = compile(S.SkillsProposalActionParamsSchema);
-export const validateSkillsProposalEvaluateParams = compile(S.SkillsProposalEvaluateParamsSchema);
-export const validateSkillsProposalEventsListParams = compile(
-  S.SkillsProposalEventsListParamsSchema,
-);
+export const validateSkillsWorkshopArchiveParams = compile(S.SkillsWorkshopArchiveParamsSchema);
+export const validateSkillsWorkshopRestoreParams = compile(S.SkillsWorkshopRestoreParamsSchema);
 export const validateSkillsSecurityVerdictsParams = compile(S.SkillsSecurityVerdictsParamsSchema);
 export const validateSkillsSkillCardParams = compile(S.SkillsSkillCardParamsSchema);
 export const validateCronListParams = compile(S.CronListParamsSchema);
@@ -592,3 +583,6 @@ export const validateTranscriptsSummarizeParams = compile(S.TranscriptsSummarize
 export const validateTranscriptsGetParams = compile(S.TranscriptsGetParamsSchema);
 export const validateTranscriptsExportParams = compile(S.TranscriptsExportParamsSchema);
 export const validateTranscriptsStatusParams = compile(S.TranscriptsStatusParamsSchema);
+
+export const validateCatalogBrowseParams = compile(S.CatalogBrowseParamsSchema);
+export const validateCatalogSearchKeywordsParams = compile(S.CatalogSearchKeywordsParamsSchema);

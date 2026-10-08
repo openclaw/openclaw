@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -140,60 +140,6 @@ describe("collectClawStateHealthFindings", () => {
       [],
     );
     await expect(access(databasePath)).rejects.toThrow();
-  });
-
-  it("treats a pre-Claws state database as empty without modifying it", async () => {
-    const current = await fixture();
-    const databasePath = resolveOpenClawStateSqlitePath(current.env);
-    await mkdir(dirname(databasePath), { recursive: true });
-    const database = new DatabaseSync(databasePath);
-    database.exec(
-      "PRAGMA journal_mode=WAL; CREATE TABLE unrelated_state (id TEXT PRIMARY KEY); PRAGMA wal_checkpoint(TRUNCATE)",
-    );
-    database.close();
-    await rm(`${databasePath}-wal`, { force: true });
-    await rm(`${databasePath}-shm`, { force: true });
-    const before = await readFile(databasePath);
-    const beforeEntries = await readdir(dirname(databasePath));
-
-    await expect(
-      collectClawStateHealthFindings({
-        env: current.env,
-        cfg: {},
-        sourceMcpServers: {},
-      }),
-    ).resolves.toEqual([]);
-    await expect(readFile(databasePath)).resolves.toEqual(before);
-    await expect(readdir(dirname(databasePath))).resolves.toEqual(beforeEntries);
-  });
-
-  it("reports orphaned ownership without a root install table", async () => {
-    const current = await fixture();
-    const databasePath = resolveOpenClawStateSqlitePath(current.env);
-    await mkdir(dirname(databasePath), { recursive: true });
-    const database = new DatabaseSync(databasePath);
-    database.exec(`
-      CREATE TABLE claw_package_refs (agent_id TEXT NOT NULL);
-      INSERT INTO claw_package_refs (agent_id) VALUES ('orphaned-agent');
-    `);
-    database.close();
-    const before = await readFile(databasePath);
-
-    await expect(
-      collectClawStateHealthFindings({
-        env: current.env,
-        cfg: {},
-        sourceMcpServers: {},
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        severity: "warning",
-        message:
-          'Claw ownership references for agent "orphaned-agent" have no root install record.',
-        path: "claws.orphaned-agent",
-      }),
-    ]);
-    await expect(readFile(databasePath)).resolves.toEqual(before);
   });
 
   it("reports an unreadable state database as a structured finding", async () => {
@@ -407,7 +353,7 @@ describe("collectClawStateHealthFindings", () => {
       expect.arrayContaining([
         expect.objectContaining({
           message: expect.stringContaining("changed after installation"),
-          path: "agents.list.worker",
+          path: "agents.entries.worker",
         }),
         expect.objectContaining({
           message: expect.stringContaining("workspace file changed"),

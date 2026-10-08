@@ -30,20 +30,18 @@ function normalizeCachedStickerForStore(sticker: CachedSticker): CachedSticker {
   };
 }
 
-function openStickerCacheStore(): TelegramStickerCacheStore {
-  return getTelegramRuntime().state.openKeyedStore<CachedSticker>({
-    namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
-    maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
-  });
-}
-
 async function readStickerCacheStore<T>(
   operation: string,
   read: (store: TelegramStickerCacheStore) => Promise<T>,
   fallback: T,
 ): Promise<T> {
   try {
-    return await read(openStickerCacheStore());
+    return await read(
+      getTelegramRuntime().state.openKeyedStore<CachedSticker>({
+        namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+        maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+      }),
+    );
   } catch (err) {
     logVerbose(`telegram sticker cache ${operation} failed: ${String(err)}`);
     return fallback;
@@ -71,11 +69,7 @@ export async function searchStickers(query: string, limit = 10): Promise<CachedS
   const queryWords = queryLower.split(/\s+/).filter(Boolean);
   const results: Array<{ sticker: CachedSticker; score: number }> = [];
 
-  for (const { value: sticker } of await readStickerCacheStore(
-    "entries",
-    (store) => store.entries(),
-    [],
-  )) {
+  for (const sticker of await getAllCachedStickers()) {
     let score = 0;
     const descLower = normalizeLowercaseStringOrEmpty(sticker.description);
 

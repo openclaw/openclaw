@@ -479,13 +479,9 @@ describe("PluginPage", () => {
   });
 
   it("refuses external plugin auth outside a secure browser context", async () => {
+    vi.stubGlobal("isSecureContext", false);
     const refresh = vi.fn(async () => externalPluginConfig());
     const page = createExternalPluginPage(refresh);
-    (
-      page as unknown as {
-        isExternalTabAuthSupported: () => boolean;
-      }
-    ).isExternalTabAuthSupported = () => false;
     document.body.append(page);
     try {
       await page.updateComplete;
@@ -498,13 +494,9 @@ describe("PluginPage", () => {
   });
 
   it("keeps plugin-auth external panels available outside a secure context", async () => {
+    vi.stubGlobal("isSecureContext", false);
     const refresh = vi.fn(async () => externalPluginConfig());
     const page = createExternalPluginPage(refresh, false);
-    (
-      page as unknown as {
-        isExternalTabAuthSupported: () => boolean;
-      }
-    ).isExternalTabAuthSupported = () => false;
     document.body.append(page);
     try {
       await page.updateComplete;
@@ -574,6 +566,12 @@ describe("PluginPage", () => {
     page.tabId = "logbook";
     (page as unknown as { context: ApplicationContext }).context = {
       gateway: { snapshot, subscribe: () => () => undefined },
+      plugins: {
+        errors: [],
+        registrations: () => [],
+        isLoading: () => false,
+        subscribe: () => () => undefined,
+      },
     } as unknown as ApplicationContext;
 
     document.body.append(page);
@@ -718,6 +716,12 @@ describe("PluginPage", () => {
     page.tabId = "logbook";
     (page as unknown as { context: ApplicationContext }).context = {
       gateway: { snapshot, subscribe: () => () => undefined },
+      plugins: {
+        errors: [],
+        registrations: () => [],
+        isLoading: () => false,
+        subscribe: () => () => undefined,
+      },
     } as unknown as ApplicationContext;
 
     document.body.append(page);

@@ -224,6 +224,7 @@ describe("bundled channel legacy config migrations", () => {
     expect(migrationCall?.[1]).toStrictEqual({
       config,
       pluginIds: ["lossless-claw"],
+      historicalWebhookListeners: undefined,
     });
     expect(result.changes).toEqual(["Configured plugins.entries.lossless-claw.llm.allowedModels."]);
   });

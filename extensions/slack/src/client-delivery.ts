@@ -97,11 +97,7 @@ function hasSlackDnsRequestSignal(err: unknown): boolean {
 function resolveSlackUploadTimeoutLogUrl(url: string): string | undefined {
   // Slack puts the upload capability in the URL path. Timeout diagnostics may
   // name the origin, but must not retain that capability-bearing path.
-  try {
-    return new URL(url).origin;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(url)?.origin;
 }
 
 function buildSlackUploadFailureCause(error: unknown): Error {
@@ -123,13 +119,9 @@ function buildSlackUploadFailureCause(error: unknown): Error {
 }
 
 function parseSlackUploadHttpUrl(value: string, label: string): URL {
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-      return parsed;
-    }
-  } catch {
-    // Fall through to the same capability-safe error below.
+  const parsed = URL.parse(value);
+  if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
+    return parsed;
   }
   throw new Error(`${label} must use a valid HTTP or HTTPS URL`);
 }
@@ -138,32 +130,22 @@ function normalizeSlackHostname(hostname: string): string {
   return hostname.trim().toLowerCase().replace(/\.$/, "");
 }
 
-function resolveSlackOwnedUploadPolicy(url: URL): SsrFPolicy | undefined {
-  if (url.protocol !== "https:") {
+function resolveSlackUploadPolicy(url: URL, source: "api" | "upload"): SsrFPolicy | undefined {
+  if (url.protocol !== "https:" || (source === "api" && url.port)) {
     return undefined;
   }
-  switch (normalizeSlackHostname(url.hostname)) {
-    case SLACK_COMMERCIAL_UPLOAD_HOSTNAME:
-      return SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY;
-    case SLACK_GOV_UPLOAD_HOSTNAME:
-      return SLACK_GOV_UPLOAD_SSRF_POLICY;
-    default:
-      return undefined;
+  const hostname = normalizeSlackHostname(url.hostname);
+  const [commercial, government] =
+    source === "api"
+      ? [SLACK_COMMERCIAL_API_HOSTNAME, SLACK_GOV_API_HOSTNAME]
+      : [SLACK_COMMERCIAL_UPLOAD_HOSTNAME, SLACK_GOV_UPLOAD_HOSTNAME];
+  if (hostname === commercial) {
+    return SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY;
   }
-}
-
-function resolveOfficialSlackApiUploadPolicy(url: URL): SsrFPolicy | undefined {
-  if (url.protocol !== "https:" || url.port) {
-    return undefined;
+  if (hostname === government) {
+    return SLACK_GOV_UPLOAD_SSRF_POLICY;
   }
-  switch (normalizeSlackHostname(url.hostname)) {
-    case SLACK_COMMERCIAL_API_HOSTNAME:
-      return SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY;
-    case SLACK_GOV_API_HOSTNAME:
-      return SLACK_GOV_UPLOAD_SSRF_POLICY;
-    default:
-      return undefined;
-  }
+  return undefined;
 }
 
 function normalizeSlackOrigin(url: URL): string {
@@ -179,12 +161,12 @@ function resolveSlackUploadTransportPolicy(params: { uploadUrl: string; slackApi
     return { requireHttps: true, policy: SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY };
   }
   const apiUrl = parseSlackUploadHttpUrl(params.slackApiUrl, "Configured Slack API URL");
-  const officialApiPolicy = resolveOfficialSlackApiUploadPolicy(apiUrl);
+  const officialApiPolicy = resolveSlackUploadPolicy(apiUrl, "api");
   if (officialApiPolicy) {
     return { requireHttps: true, policy: officialApiPolicy };
   }
   const uploadUrl = parseSlackUploadHttpUrl(params.uploadUrl, "Slack external upload URL");
-  const slackOwnedUploadPolicy = resolveSlackOwnedUploadPolicy(uploadUrl);
+  const slackOwnedUploadPolicy = resolveSlackUploadPolicy(uploadUrl, "upload");
   if (slackOwnedUploadPolicy) {
     return { requireHttps: true, policy: slackOwnedUploadPolicy };
   }

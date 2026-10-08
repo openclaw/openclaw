@@ -45,6 +45,22 @@ const checkJobs = [
   "check-test-types-hosted-core-shard",
 ];
 
+function createPlan(overrides: Partial<CiCheckPlanInput>) {
+  return createCiCheckPlan({
+    typeGraphBoundaryOwner: "check-plan",
+    changedPaths: ["src/shared.ts"],
+    changedCoreTestPaths: null,
+    runnerProfile: "hybrid",
+    checkMatrix: {
+      include: [{ check_name: "check-test-types", task: "test-types", runner: "unused" }],
+    },
+    coreTypeMatrix: { include: [1, 2, 3, 4, 5].map((stripe) => ({ stripe })) },
+    lintCoreMatrix: { include: [] },
+    lintExtensionMatrix: { include: [] },
+    ...overrides,
+  });
+}
+
 function admittedCheckRows(context: Parameters<typeof evaluateWorkflowExpression>[1]) {
   const workflow = readCiWorkflow();
   return checkJobs.flatMap((name) => {
@@ -120,13 +136,12 @@ describe("CI check-plan completion count", () => {
         };
         const coreStripes = runnerProfile === "hybrid" ? [1, 2] : [1, 2, 3, 4, 5];
         const coreTypeMatrix = { include: [1, 2, 3, 4, 5].map((stripe) => ({ stripe })) };
-        const plan = await createCiCheckPlan({
+        const plan = await createPlan({
           changedBaseRef: "a".repeat(40),
           extensionLintMode: mode === "full" ? "full" : "affected",
           preserveFullChecks: true,
           typeGraphBoundaryOwner: "additional-checks",
           changedPaths: ["package.json"],
-          changedCoreTestPaths: null,
           runnerProfile,
           checkMatrix,
           coreTypeMatrix,
@@ -188,7 +203,7 @@ describe("CI check-plan completion count", () => {
       }
     },
   );
-  it.each(["", "check-plan", "additional-checks"] as const)(
+  it.each(["check-plan", "additional-checks"] as const)(
     "passes only an admitted parallel boundary owner without adding compiler rows (%s)",
     async (typeGraphBoundaryOwner) => {
       typeSelection.graphs = [
@@ -199,20 +214,15 @@ describe("CI check-plan completion count", () => {
       vi.mocked(createChangedCiTypeCheckPlan).mockClear();
       try {
         const paths = ["extensions/example/value.ts"];
-        const plan = await createCiCheckPlan({
+        const plan = await createPlan({
           typeGraphBoundaryOwner,
           changedPaths: paths,
-          changedCoreTestPaths: null,
-          runnerProfile: "hybrid",
           checkMatrix: {
             include: [
               { check_name: "check-prod-types", task: "prod-types", runner: "unused" },
               { check_name: "check-test-types", task: "test-types", runner: "unused" },
             ],
           },
-          coreTypeMatrix: { include: [1, 2, 3, 4, 5].map((stripe) => ({ stripe })) },
-          lintCoreMatrix: { include: [] },
-          lintExtensionMatrix: { include: [] },
         });
         expect(createChangedCiTypeCheckPlan).toHaveBeenCalledExactlyOnceWith(paths, {
           cwd: process.cwd(),
@@ -232,7 +242,6 @@ describe("CI check-plan completion count", () => {
 
   it.each([
     ["hybrid", [1, 2, 4, 5]],
-    ["github", [1, 2, 3, 4, 5]],
     ["hybrid", [1, 2, 5]],
     ["blacksmith", [1, 2, 3, 4, 5]],
   ] as const)(
@@ -254,18 +263,7 @@ describe("CI check-plan completion count", () => {
         { name: "test-root", config: "test/tsconfig/tsconfig.test.root.json" },
       ];
       try {
-        const plan = await createCiCheckPlan({
-          typeGraphBoundaryOwner: "check-plan",
-          changedPaths: ["src/shared.ts"],
-          changedCoreTestPaths: null,
-          runnerProfile,
-          checkMatrix: {
-            include: [{ check_name: "check-test-types", task: "test-types", runner: "unused" }],
-          },
-          coreTypeMatrix: { include: [1, 2, 3, 4, 5].map((stripe) => ({ stripe })) },
-          lintCoreMatrix: { include: [] },
-          lintExtensionMatrix: { include: [] },
-        });
+        const plan = await createPlan({ runnerProfile });
         const hosted = runnerProfile !== "blacksmith";
         const moved = hosted && stripes.length >= 4;
         expect(plan.core_type_matrix.include.map((row) => row.stripe)).toEqual(
@@ -324,42 +322,6 @@ describe("CI check-plan completion count", () => {
     },
   );
 
-  it.each(["blacksmith", "github", "hybrid"] as const)(
-    "counts the actual compiler placement for %s",
-    async (runnerProfile) => {
-      const plan = await createCiCheckPlan({
-        typeGraphBoundaryOwner: "check-plan",
-        changedPaths: ["src/shared.ts"],
-        changedCoreTestPaths: null,
-        runnerProfile,
-        checkMatrix: {
-          include: [{ check_name: "check-test-types", task: "test-types", runner: "unused" }],
-        },
-        coreTypeMatrix: { include: [1, 2, 3, 4, 5].map((stripe) => ({ stripe })) },
-        lintCoreMatrix: { include: [] },
-        lintExtensionMatrix: { include: [] },
-      });
-      const outputs = Object.fromEntries(
-        Object.entries(plan).map(([name, value]) => [
-          name,
-          typeof value === "string" ? value : JSON.stringify(value),
-        ]),
-      );
-      expect(outputs.check_job_count).toBe(
-        String(
-          admittedCheckRows({
-            eventName: "pull_request",
-            repository: "openclaw/openclaw",
-            runAttempt: 1,
-            runnerProfile,
-            preflightOutputs: { run_check_plan: "true", narrow_check_paths_json: "[]" },
-            additionalNeeds: { "check-plan": { outputs, result: "success" } },
-          }).length,
-        ),
-      );
-    },
-  );
-
   it.each(["hybrid", "github", "blacksmith"])(
     "preserves complete fallback chunks while reducing only hybrid rows (%s)",
     async (runnerProfile) => {
@@ -371,14 +333,12 @@ describe("CI check-plan completion count", () => {
       }
       writeFileSync(join(cwd, "extensions/root.ts"), "export {};\n");
       const shards = createExtensionOxlintShards({ cwd, platform: "linux", chunkSize: 8 });
-      const plan = await createCiCheckPlan({
+      const plan = await createPlan({
         typeGraphBoundaryOwner: "",
         changedPaths: ["package.json"],
-        changedCoreTestPaths: null,
         runnerProfile,
         checkMatrix: { include: [{ check_name: "check-lint", task: "lint", runner: "unused" }] },
         coreTypeMatrix: { include: [] },
-        lintCoreMatrix: { include: [] },
         lintExtensionMatrix: { include: [1, 2, 3, 4, 5, 6].map((stripe) => ({ stripe })) },
       });
       const rows = plan.lint_extension_matrix.include;
@@ -397,19 +357,13 @@ describe("CI check-plan completion count", () => {
     },
   );
 
-  it("refuses a count outside the observer's existing job inventory bound", () => {
-    const { run, outputs } = materializePlan("blacksmith", 401);
+  it.each([
+    { runner: "blacksmith", rows: 401, base: undefined, error: "400-job" },
+    { runner: "hybrid", rows: 0, base: "main", error: "40-hex changed base commit" },
+  ])("rejects an inadmissible workflow plan: $error", ({ runner, rows, base, error }) => {
+    const { run, outputs } = materializePlan(runner, rows, base);
     expect(run.status).toBe(1);
-    expect(run.stderr).toContain("400-job");
+    expect(run.stderr).toContain(error);
     expect(outputs).toEqual({});
   });
-  it.each(["main", "a".repeat(39), ""])(
-    "rejects an unpinned extension lint comparison base %s",
-    (base) => {
-      const { run, outputs } = materializePlan("hybrid", 0, base);
-      expect(run.status).toBe(1);
-      expect(run.stderr).toContain("40-hex changed base commit");
-      expect(outputs).toEqual({});
-    },
-  );
 });

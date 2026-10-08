@@ -137,7 +137,6 @@ test.each([
   { mode: "public", model: "middle", expected: "final" },
   { mode: "in-process", model: "middle", expected: "middle" },
   { mode: "signed", model: "middle", expected: "middle" },
-  { mode: "in-process", model: "custom/model", expected: "custom/model" },
   { mode: "disallowed", model: "middle", expected: undefined },
   { mode: "revoked", model: "middle", expected: undefined },
   { mode: "mismatched", model: "middle", expected: undefined },
@@ -177,11 +176,18 @@ test.each([
   };
   const parentSessionKey = "agent:main:main";
   const childSessionKey = `agent:main:dashboard:resolved-${mode}-${model.replaceAll("/", "-")}`;
-  await writeSessionStore({ entries: { [parentSessionKey]: sessionStoreEntry("model-parent") } });
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: sessionStoreEntry("model-parent", {
+        lifecycleRevision: "parent-generation",
+      }),
+    },
+  });
   const operationalRunInstance = createOperationalRunInstanceRef(`model-parent-${mode}`);
   const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const resolvedModel = { provider: "custom", model };
   const spawnContext = {
+    requesterSenderIsOwner: mode === "in-process",
     inheritedToolPolicy: { version: 1 as const, allow: ["read"], deny: [] },
     resolvedModel,
     spawnModelAutoSelection: { model: `custom/${model}`, hasFallbackOrigin: true },
@@ -302,6 +308,11 @@ test.each([
         modelOverrideSource: mode === "public" ? "user" : "auto",
         ...(mode !== "public"
           ? {
+              spawnedBy: parentSessionKey,
+              parentSessionId: "model-parent",
+              spawnedBySessionId: "model-parent",
+              parentSessionLifecycleRevision: "parent-generation",
+              spawnedBySenderIsOwner: mode === "in-process",
               modelOverrideFallbackOriginProvider: "custom",
               modelOverrideFallbackOriginModel: expected,
             }

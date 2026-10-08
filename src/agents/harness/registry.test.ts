@@ -10,6 +10,8 @@ import {
   withPluginRegistrationContext,
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { AgentHarnessSessionCleanupError } from "./errors.js";
 import {
   clearAgentHarnesses,
   disposeRegisteredAgentHarnesses,
@@ -109,6 +111,46 @@ function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfi
 }
 
 describe("agent harness registry", () => {
+  it("propagates required cleanup failure only after sibling reset hooks settle", async () => {
+    const failure = new AgentHarnessSessionCleanupError("native session still running");
+    const siblingStarted = createDeferredCore();
+    const releaseSibling = createDeferredCore();
+    const events: string[] = [];
+    registerAgentHarness({
+      ...makeHarness("required-cleanup"),
+      reset: async () => {
+        throw failure;
+      },
+    });
+    registerAgentHarness({
+      ...makeHarness("held-cleanup"),
+      reset: async () => {
+        siblingStarted.resolve();
+        await releaseSibling.promise;
+        events.push("sibling settled");
+      },
+    });
+    vi.useFakeTimers();
+    const reset = resetRegisteredAgentHarnessSessions({ reason: "reset" }).catch(
+      (error: unknown) => {
+        events.push("reset rejected");
+        return error;
+      },
+    );
+    try {
+      await siblingStarted.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).toEqual([]);
+      releaseSibling.resolve();
+      expect(await reset).toBe(failure);
+      expect(events).toEqual(["sibling settled", "reset rejected"]);
+    } finally {
+      releaseSibling.resolve();
+      await reset;
+      vi.useRealTimers();
+    }
+  });
+
   it("warns once per harness across reset failures and registry replacement while retrying", async () => {
     const failingReset = vi.fn(async () => {
       throw new Error("reset unavailable");

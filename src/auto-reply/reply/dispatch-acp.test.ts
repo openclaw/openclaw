@@ -175,7 +175,8 @@ vi.mock("../../acp/policy.js", () => ({
     policyMocks.resolveAcpAgentPolicyError(cfg, agent),
 }));
 
-vi.mock("./route-reply.runtime.js", () => ({
+vi.mock("./route-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./route-reply.js")>()),
   routeReply: (params: unknown) => routeMocks.routeReply(params),
 }));
 
@@ -407,8 +408,7 @@ describe("tryDispatchAcpReplyCore", () => {
     policyMocks.resolveAcpDispatchPolicyError.mockReturnValue(null);
     policyMocks.resolveAcpAgentPolicyError.mockReset();
     policyMocks.resolveAcpAgentPolicyError.mockReturnValue(null);
-    routeMocks.routeReply.mockReset();
-    routeMocks.routeReply.mockResolvedValue({
+    routeMocks.routeReply.mockReset().mockResolvedValue({
       ok: true,
       delivered: true,
       messageId: "mock",
@@ -1028,7 +1028,7 @@ describe("tryDispatchAcpReplyCore", () => {
     await runDispatch({
       bodyForAgent: "describe image",
       cfg: createAcpTestConfig({
-        agents: { list: [{ id: "codex-acp", agentDir }] },
+        agents: { entries: { "codex-acp": { agentDir } } },
         channels: { imessage: { attachmentRoots: ["/tmp/acp-inbound"] } },
       }),
       ctxOverrides: {

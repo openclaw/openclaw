@@ -77,12 +77,12 @@ export type AgentsApiToolSurface = {
 };
 
 /** Gateway functions retain host authority; shell and file tools stay in the hosted VM. */
-export function buildAgentsApiToolSurface(
+export async function buildAgentsApiToolSurface(
   params: AgentHarnessAttemptParamsV2,
   signal: AbortSignal,
   assertCurrent: () => void,
   registerCleanup: (cleanup: (reason: string) => Promise<void>) => void,
-): AgentsApiToolSurface {
+): Promise<AgentsApiToolSurface> {
   assertCurrent();
   const agentId = params.agentId;
   if (!agentId) {
@@ -98,13 +98,13 @@ export function buildAgentsApiToolSurface(
     ...params,
     sessionKey: policySessionKey,
   }).channelId;
-  const createToolSurface = params.hostCapabilities.createToolSurface;
-  if (!createToolSurface) {
+  const createToolSurfaceAsync = params.hostCapabilities.createToolSurfaceAsync;
+  if (!createToolSurfaceAsync) {
     throw new Error("Agents API tool construction requires a current host capability");
   }
   const constructed = params.disableTools
     ? []
-    : createToolSurface(
+    : await createToolSurfaceAsync(
         {
           ...runContext,
           agentId,
@@ -168,6 +168,8 @@ export function buildAgentsApiToolSurface(
         },
         { cwd },
       );
+  assertCurrent();
+  signal.throwIfAborted();
   const tools = applyEmbeddedAttemptToolsAllow(
     // Search stays native; requester yields and image generation are outside this prototype.
     constructed.filter(

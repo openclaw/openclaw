@@ -42,6 +42,11 @@ Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
 
+The config-repair module can export `historicalWebhookListener` to describe a
+retired default endpoint. The existing compatibility normalizer reports eligible
+accounts; the host owns the one-shot pin and completion write.
+See [webhook migration contracts](/plugins/sdk-overview/infrastructure#webhook-body-rejection).
+
 When Doctor renames saved credentials, it updates exact `authProfileId` and
 `defaultAuthProfileId` references inside plugin config and channel config. This
 preserves the shipped `authProfileId` migration and also covers defaults such as
@@ -66,7 +71,12 @@ plan its owner and receipt without loading plugin code:
 
 The array must match the migration IDs, order, `doctorOnly` flags, and phases
 exported by the doctor-contract module. The older value `true` still declares
-the dynamic module. Installed external plugin manifests remain outside the
+the dynamic module. During an in-process package update, Doctor loads the replacement
+package's callbacks in its new inventory; earlier inventories retain their original
+callbacks. A changed action list between package versions is allowed, but each
+version's manifest and module must agree.
+
+Installed external plugin manifests remain outside the
 copied-state and candidate content identity, including when they use the
 descriptor array. Candidate validation must bind those artifacts separately.
 Until then, Doctor records an explicit planning refusal instead of treating an
@@ -547,10 +557,9 @@ If a plugin fails to load, invoking its declared `runtime-slash` command in chat
 Use `qaRunners` when a plugin contributes one or more transport runners beneath
 the shared `openclaw qa` root. Keep this metadata cheap and static; the plugin
 runtime still owns actual CLI registration through a lightweight
-`qa-runner-api.ts` surface that exports matching `qaRunnerCliRegistrations`. For
-plugins using the shipped `runtime-api.ts` contract, that legacy surface remains
-accepted through 2026-10-01 while authors migrate. An
-optional `adapterFactory` exposes the transport to shared QA scenarios without
+`qa-runner-api.ts` surface that exports matching `qaRunnerCliRegistrations`.
+The pre-July 2026 `runtime-api.ts` fallback is retired; move runner registrations
+to `qa-runner-api.ts`. An optional `adapterFactory` exposes the transport to shared QA scenarios without
 changing the registered command's runner.
 
 Module-backed flow scenarios are an adapter-owned execution form. Set

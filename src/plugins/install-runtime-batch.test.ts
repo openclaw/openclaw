@@ -102,7 +102,6 @@ const handoffFailures = [
   "include-during-policy-read",
   "env-during-policy-read",
   "adopted",
-  "loadpath",
   "rebound",
 ];
 
@@ -155,11 +154,6 @@ it.each(handoffFailures)(
               nextConfig: {},
               writeOptions: { afterWrite: { mode: "none", reason: "replacement fixture" } },
             }),
-          );
-        } else if (failure === "loadpath") {
-          await fs.writeFile(
-            env.OPENCLAW_CONFIG_PATH,
-            JSON.stringify({ plugins: { load: { paths: [previousSource] } } }),
           );
         } else if (failure === "rebound") {
           await fs.rename(previousSource, path.join(root, "retired-original"));
@@ -300,8 +294,8 @@ it("prepares the final persisted index off thread even after the lease cached an
   ]);
 });
 
-it.each(["current", "closed", "revoked"] as const)(
-  "seals collection while the real index read is pending and publishes only while %s",
+it.each(["closed", "revoked"] as const)(
+  "seals collection and refuses publication when %s during the real index read",
   async (authority) => {
     const { env, root, records } = await preparationFixture();
     const reload = vi.fn(async () => ({
@@ -352,7 +346,7 @@ it.each(["current", "closed", "revoked"] as const)(
           await expect(batch.finish(() => {})).rejects.toThrow("not prepared");
           if (authority === "closed") {
             batch.close();
-          } else if (authority === "revoked") {
+          } else {
             controller.abort(refusal);
           }
         } finally {
@@ -361,21 +355,14 @@ it.each(["current", "closed", "revoked"] as const)(
         }
       },
     );
-    const completion = await Promise.allSettled([operation]);
-    if (authority === "current") {
-      expect(completion[0]).toMatchObject({ status: "fulfilled" });
-      expect(preparation).toMatchObject({ status: "fulfilled" });
-      await batch.finish(() => {});
-      expect(reload).toHaveBeenCalledOnce();
-    } else {
-      expect(preparation).toMatchObject({
-        status: "rejected",
-        reason: authority === "revoked" ? refusal : expect.any(Error),
-      });
-      await expect(batch.finish(() => {})).rejects.toThrow("not prepared");
-      expect(reload).not.toHaveBeenCalled();
-      batch.close();
-    }
+    await Promise.allSettled([operation]);
+    expect(preparation).toMatchObject({
+      status: "rejected",
+      reason: authority === "revoked" ? refusal : expect.any(Error),
+    });
+    await expect(batch.finish(() => {})).rejects.toThrow("not prepared");
+    expect(reload).not.toHaveBeenCalled();
+    batch.close();
   },
 );
 

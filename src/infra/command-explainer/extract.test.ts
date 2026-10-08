@@ -416,6 +416,20 @@ describe("command explainer tree-sitter runtime", () => {
     );
   });
 
+  it.each([
+    ["\\x68", "h"],
+    ["\\u0068", "h"],
+    ["\\U00000068", "h"],
+    ["\\150", "h"],
+    ["\\U0001f980", "🦀"],
+    ["\\U00110000", "\\U00110000"],
+    ["\\xZ", "xZ"],
+    ["\\uZ", "uZ"],
+  ])("decodes ANSI-C numeric escape %s", async (escape, expected) => {
+    const explanation = await explainShellCommand(`printf $'${escape}'`);
+    expect(explanation.topLevelCommands[0]?.argv).toEqual(["printf", expected]);
+  });
+
   it("normalizes static shell words before classifying commands", async () => {
     const quotedCommand = await explainShellCommand("e'c'ho a\\ b \"c d\"");
     expect(quotedCommand.topLevelCommands).toHaveLength(1);

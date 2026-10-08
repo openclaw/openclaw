@@ -25,11 +25,7 @@ export function parseGeneratedAsyncAnswer(
   }
   let offset = 0;
   const answers = new Map<string, QuestionDraft>();
-  for (let index = 0; index < question.questions.length; index += 1) {
-    const current = question.questions[index];
-    if (!current) {
-      return null;
-    }
+  for (const [index, current] of question.questions.entries()) {
     const prefix = `${quoteQuestion(current.title)}\n\n`;
     if (!message.startsWith(prefix, offset)) {
       return null;
@@ -113,7 +109,7 @@ export function renderAsyncQuestionSummary(
               <div>
                 ${
                   answers
-                    ? questionDraftValues(answers.get(String(index))).join(", ")
+                    ? questionDraftValues(answers.get(String(index)), {}).join(", ")
                     : t(
                         reopening
                           ? "chat.asyncQuestions.reopening"

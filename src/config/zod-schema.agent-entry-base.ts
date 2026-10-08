@@ -85,12 +85,6 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
-const AgentEntryEmbeddedAgentConfigSchema = z
-  .strictObject({
-    executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
-  })
-  .optional();
-
 export const AgentEntryBaseSchema = z.strictObject({
   id: z.string(),
   name: z.string().optional(),
@@ -128,7 +122,11 @@ export const AgentEntryBaseSchema = z.strictObject({
       requireAgentId: z.boolean().optional(),
     })
     .optional(),
-  embeddedAgent: AgentEntryEmbeddedAgentConfigSchema,
+  embeddedAgent: z
+    .strictObject({
+      executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+    })
+    .optional(),
   params: z.record(z.string(), z.unknown()).optional(),
   runtime: AgentRuntimeSchema,
 });

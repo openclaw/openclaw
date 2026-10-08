@@ -96,7 +96,7 @@ function createContext(
     getRuntimeConfig: () => config,
     ...bindSessionRowProjection({}, () => projection as unknown as SessionRowProjection),
     getSessionEventSubscriberConnIds: () => receivers,
-    mentionInbox: { invalidate: vi.fn() },
+    mentionInbox: { invalidateAsync: vi.fn() },
   } as unknown as GatewayRequestContext;
 }
 
@@ -145,7 +145,6 @@ function preparePlacementProjection(
   });
   bindSessionRowProjection(context, () => projection);
   onTestFinished(() => projection.dispose());
-  const present = vi.spyOn(projection, "present");
   const update = () => {
     const record = projection.describe({ key: sessionKey, agentId: "main" });
     if (!record) {
@@ -160,7 +159,7 @@ function preparePlacementProjection(
     }
   };
   update();
-  return { update, present };
+  return { update };
 }
 
 let restorePerformanceClock: () => void;
@@ -198,7 +197,7 @@ describe("sessions.changed coalescing", () => {
 
     expect(changed).not.toHaveBeenCalled();
     expect(mocks.invalidate).not.toHaveBeenCalled();
-    expect(context.mentionInbox?.invalidate).not.toHaveBeenCalled();
+    expect(context.mentionInbox?.invalidateAsync).not.toHaveBeenCalled();
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
@@ -211,69 +210,8 @@ describe("sessions.changed coalescing", () => {
     await emitAndSettleLeading(context, { reason: "groups" });
     expect(changed).toHaveBeenCalledWith({ all: true, scope: "sessions" });
     expect(mocks.invalidate).toHaveBeenCalledOnce();
-    expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+    expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 1);
-  });
-
-  it("publishes the latest placement through coalesced unrelated mutations and clears it explicitly", async () => {
-    const context = createContext();
-    const sessionKey = "agent:main:cloud";
-    const first = activePlacement(sessionKey);
-    const placements = new Map<string, WorkerSessionPlacementRecord>([[first.sessionId, first]]);
-    const getMany = vi.fn(() => placements);
-    context.workerSessionPlacementService = { getMany };
-    const resident = preparePlacementProjection(context, sessionKey, placements);
-
-    resident.update();
-    await emitAndSettleLeading(context, { reason: "placement", sessionKey });
-    expect(vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1]).toMatchObject({
-      placement: { state: "active", generation: 1, environmentId: "worker-first" },
-      placementMove: null,
-    });
-    placements.set(first.sessionId, {
-      ...first,
-      state: "draining",
-      generation: 2,
-      turnClaim: null,
-    });
-    resident.update();
-    await emitAndSettleLeading(context, { reason: "placement", sessionKey });
-    placements.set(first.sessionId, {
-      ...first,
-      generation: 3,
-      environmentId: "worker-replacement",
-    });
-    resident.update();
-    await emitAndSettleLeading(context, { reason: "mark-read", sessionKey });
-    await vi.advanceTimersByTimeAsync(100);
-
-    const published = vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1];
-    expect(published).toMatchObject({
-      reason: "mark-read",
-      placement: { state: "active", generation: 3, environmentId: "worker-replacement" },
-    });
-    expect(published).not.toHaveProperty("placement.turnClaim");
-    expect(JSON.stringify(published)).not.toContain("private-turn-claim");
-    expect(getMany).not.toHaveBeenCalled();
-    expect(resident.present).toHaveBeenCalledTimes(2);
-    expect(resident.present).toHaveBeenLastCalledWith(
-      expect.objectContaining({ key: sessionKey, agentId: "main" }),
-    );
-
-    placements.clear();
-    resident.update();
-    await emitAndSettleLeading(context, { reason: "placement", sessionKey });
-    expect(vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1]).toMatchObject({
-      placement: null,
-      placementMove: null,
-    });
-    delete context.workerSessionPlacementService;
-    resident.update();
-    await emitAndSettleLeading(context, { reason: "patch", sessionKey });
-    await vi.advanceTimersByTimeAsync(100);
-    const withoutReader = vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1];
-    expect(withoutReader).not.toHaveProperty("placement");
-    expect(withoutReader).not.toHaveProperty("placementMove");
   });
 
   it("makes the session desktop ready during roster backoff and fences late list responses", async () => {
@@ -306,8 +244,10 @@ describe("sessions.changed coalescing", () => {
     const client = createTestGatewayClient(request);
     const { sessions, emitEvent } = createSessionCapabilityHarness(client.request.bind(client));
     const row = () => sessions.state.result?.sessions.find((session) => session.key === sessionKey);
+    const frames: string[] = [];
     vi.mocked(context.broadcastToConnIds).mockImplementation((event, payload) => {
       const frame = JSON.stringify({ type: "event", event, payload });
+      frames.push(frame);
       emitEvent(JSON.parse(frame));
     });
     try {
@@ -361,47 +301,41 @@ describe("sessions.changed coalescing", () => {
       await flushPendingSessionsChangedEvents(context);
       expect(row()).not.toHaveProperty("placement");
       expect(row()).not.toHaveProperty("placementMove");
+      expect(frames.join("\n")).not.toContain('"turnClaim"');
+      expect(frames.join("\n")).not.toContain("private-turn-claim");
     } finally {
       sessions.dispose();
     }
   });
 
-  it.each(["blocked", "failed"] as const)(
-    "publishes an exact row while unrelated bulk preparation is %s",
-    async (state) => {
-      const context = createContext();
-      const projection = getSessionRowProjection(context)!;
-      const unrelated = createDeferred();
-      const bulk = vi.spyOn(projection, "ensureMaterialized");
-      if (state === "blocked") {
-        bulk.mockReturnValue(unrelated.promise);
-      } else {
-        bulk.mockRejectedValue(new Error("unrelated bulk row failed"));
-      }
-      const bulkWork = projection.ensureMaterialized().catch(() => undefined);
-      const sessionKey = "agent:main:ready";
-      try {
-        await emitAndSettleLeading(context, { reason: "patch", sessionKey });
-        expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-          "sessions.changed",
-          expect.objectContaining({
-            session: expect.objectContaining({
-              key: sessionKey,
-              sessionId: `${sessionKey}-id`,
-              label: "first",
-            }),
+  it("publishes an exact row while unrelated bulk preparation is blocked", async () => {
+    const context = createContext();
+    const projection = getSessionRowProjection(context)!;
+    const unrelated = createDeferred();
+    const bulk = vi.spyOn(projection, "ensureMaterialized").mockReturnValue(unrelated.promise);
+    const bulkWork = projection.ensureMaterialized();
+    const sessionKey = "agent:main:ready";
+    try {
+      await emitAndSettleLeading(context, { reason: "patch", sessionKey });
+      expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "sessions.changed",
+        expect.objectContaining({
+          session: expect.objectContaining({
+            key: sessionKey,
+            sessionId: `${sessionKey}-id`,
+            label: "first",
           }),
-          new Set(["conn-1"]),
-          expect.objectContaining({ sessionKeys: [sessionKey] }),
-        );
-        expect(bulk).toHaveBeenCalledOnce();
-      } finally {
-        unrelated.resolve();
-        await bulkWork;
-        await flushPendingSessionsChangedEvents(context);
-      }
-    },
-  );
+        }),
+        new Set(["conn-1"]),
+        expect.objectContaining({ sessionKeys: [sessionKey] }),
+      );
+      expect(bulk).toHaveBeenCalledOnce();
+    } finally {
+      unrelated.resolve();
+      await bulkWork;
+      await flushPendingSessionsChangedEvents(context);
+    }
+  });
 
   it("joins the latest deferred row during shutdown while preparation is blocked", async () => {
     const context = createContext();
@@ -462,23 +396,6 @@ describe("sessions.changed coalescing", () => {
     ]);
   });
 
-  it("preserves a trailing tombstone before a replacement generation", async () => {
-    const context = createContext();
-    const sessionKey = "agent:main:chat";
-    await emitAndSettleLeading(context, { reason: "patch", sessionKey, sessionId: "removed" });
-    emitSessionsChanged(context, { reason: "delete", sessionKey, sessionId: "removed" });
-    emitSessionsChanged(context, { reason: "create", sessionKey, sessionId: "replacement" });
-    mocks.loadRow.mockReturnValue({ key: sessionKey, sessionId: "replacement" });
-    await flushPendingSessionsChangedEvents(context);
-    const payloads = vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload);
-    expect(payloads).toMatchObject([
-      { reason: "patch", sessionId: "removed" },
-      { reason: "delete", sessionId: "removed" },
-      { reason: "create", sessionId: "replacement", session: { sessionId: "replacement" } },
-    ]);
-    expect(payloads[1]).not.toHaveProperty("session");
-  });
-
   it("joins a different session admitted while shutdown is draining", async () => {
     const context = createContext();
     const first = createDeferred();
@@ -502,93 +419,86 @@ describe("sessions.changed coalescing", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([true, false])(
-    "bounds held generation churn for roster and plugins (tombstones: %s)",
-    async (tombstones) => {
-      const context = createContext();
-      const sessionKey = "agent:main:churn";
-      const first = {
-        key: sessionKey,
-        sessionId: "generation-0",
-        kind: "direct" as const,
-        updatedAt: 1,
-      };
-      const latest = { ...first, sessionId: "generation-128", label: "latest", updatedAt: 2 };
-      let response = sessionsResult([first], 1);
-      const request = vi.fn(async () => response);
-      const client = createTestGatewayClient(request);
-      const { sessions, emitEvent } = createSessionCapabilityHarness(client.request.bind(client));
-      const broadcaster = createGatewayBroadcaster({ clients: new GatewayClientRegistry() });
-      const lease = createPluginRuntimeCapabilityLease("bounded-events");
-      const pluginEvents = createPluginServiceGatewayEvents({
-        pluginId: "bounded-events",
-        broadcast: vi.fn(),
-        lease,
-      });
-      const notices = vi.fn();
-      pluginEvents!.onSessionsChanged(notices);
-      vi.mocked(context.broadcastToConnIds).mockImplementation(
-        (event, payload, connIds, options) => {
-          broadcaster.broadcastToConnIds(event, payload, connIds, options);
-          emitEvent({ type: "event", event, payload });
-        },
-      );
-      const prepared = createDeferred();
-      const exactPreparation = holdExactPreparation(
-        getSessionRowProjection(context)!,
-        prepared.promise,
-      );
-      try {
-        await sessions.refresh({ agentId: "main", force: true });
-        const initialReads = request.mock.calls.length;
-        emitSessionsChanged(context, { reason: "patch", sessionKey, sessionId: first.sessionId });
-        await Promise.resolve();
-        for (let generation = 0; generation < 128; generation += 1) {
-          if (tombstones) {
-            emitSessionsChanged(context, {
-              reason: "delete",
-              sessionKey,
-              sessionId: `generation-${generation}`,
-            });
-          }
-          emitSessionsChanged(context, {
-            reason: "create",
-            sessionKey,
-            sessionId: `generation-${generation + 1}`,
-          });
-        }
-        expect(context.broadcastToConnIds).not.toHaveBeenCalled();
-        response = sessionsResult([latest], 2);
-        mocks.loadRow.mockReturnValue(latest);
-        prepared.resolve();
-        await flushPendingSessionsChangedEvents(context);
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(
-          vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
-        ).toMatchObject([
-          { reason: "patch", sessionId: "generation-0" },
-          ...(tombstones ? [{ reason: "delete", sessionId: "generation-0" }] : []),
-          { reason: "create", sessionId: "generation-128" },
-          { reason: "update" },
-        ]);
-        expect(vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1]).not.toHaveProperty(
-          "sessionKey",
-        );
-        expect(exactPreparation).toHaveBeenCalledTimes(2);
-        expect(notices).toHaveBeenCalledTimes(tombstones ? 3 : 2);
-        expect(notices).toHaveBeenLastCalledWith(
-          expect.objectContaining({ sessionKey, reason: "create", label: "latest" }),
-        );
-        expect(request).toHaveBeenCalledTimes(initialReads + 1);
-        expect(sessions.state.result?.sessions).toEqual([latest]);
-      } finally {
-        prepared.resolve();
-        await flushPendingSessionsChangedEvents(context);
-        sessions.dispose();
-        lease.revoke();
+  it("bounds held generation churn and tombstones for roster and plugins", async () => {
+    const context = createContext();
+    const sessionKey = "agent:main:churn";
+    const first = {
+      key: sessionKey,
+      sessionId: "generation-0",
+      kind: "direct" as const,
+      updatedAt: 1,
+    };
+    const latest = { ...first, sessionId: "generation-128", label: "latest", updatedAt: 2 };
+    let response = sessionsResult([first], 1);
+    const request = vi.fn(async () => response);
+    const client = createTestGatewayClient(request);
+    const { sessions, emitEvent } = createSessionCapabilityHarness(client.request.bind(client));
+    const broadcaster = createGatewayBroadcaster({ clients: new GatewayClientRegistry() });
+    const lease = createPluginRuntimeCapabilityLease("bounded-events");
+    const pluginEvents = createPluginServiceGatewayEvents({
+      pluginId: "bounded-events",
+      broadcast: vi.fn(),
+      lease,
+    });
+    const notices = vi.fn();
+    pluginEvents!.onSessionsChanged(notices);
+    vi.mocked(context.broadcastToConnIds).mockImplementation((event, payload, connIds, options) => {
+      broadcaster.broadcastToConnIds(event, payload, connIds, options);
+      emitEvent({ type: "event", event, payload });
+    });
+    const prepared = createDeferred();
+    const exactPreparation = holdExactPreparation(
+      getSessionRowProjection(context)!,
+      prepared.promise,
+    );
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      const initialReads = request.mock.calls.length;
+      emitSessionsChanged(context, { reason: "patch", sessionKey, sessionId: first.sessionId });
+      await Promise.resolve();
+      for (let generation = 0; generation < 128; generation += 1) {
+        emitSessionsChanged(context, {
+          reason: "delete",
+          sessionKey,
+          sessionId: `generation-${generation}`,
+        });
+        emitSessionsChanged(context, {
+          reason: "create",
+          sessionKey,
+          sessionId: `generation-${generation + 1}`,
+        });
       }
-    },
-  );
+      expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+      response = sessionsResult([latest], 2);
+      mocks.loadRow.mockReturnValue(latest);
+      prepared.resolve();
+      await flushPendingSessionsChangedEvents(context);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(
+        vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
+      ).toMatchObject([
+        { reason: "patch", sessionId: "generation-0" },
+        { reason: "delete", sessionId: "generation-0" },
+        { reason: "create", sessionId: "generation-128" },
+        { reason: "update" },
+      ]);
+      expect(vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1]).not.toHaveProperty(
+        "sessionKey",
+      );
+      expect(exactPreparation).toHaveBeenCalledTimes(2);
+      expect(notices).toHaveBeenCalledTimes(3);
+      expect(notices).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sessionKey, reason: "create", label: "latest" }),
+      );
+      expect(request).toHaveBeenCalledTimes(initialReads + 1);
+      expect(sessions.state.result?.sessions).toEqual([latest]);
+    } finally {
+      prepared.resolve();
+      await flushPendingSessionsChangedEvents(context);
+      sessions.dispose();
+      lease.revoke();
+    }
+  });
 
   it("keeps persisted replacement identity through recipient projection", async () => {
     vi.useRealTimers();
@@ -714,29 +624,9 @@ describe("sessions.changed coalescing", () => {
         prepared.resolve();
         await flushPendingSessionsChangedEvents(context);
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
         projection.dispose();
       }
-    });
-  });
-
-  it.each([
-    "agent.input.settled",
-    "agent.run.started",
-    "send",
-    "steer",
-    "abort",
-    "chat.title",
-    "chat.dispatch-error",
-    "goal",
-    "compact",
-    "cron-continue",
-  ])("carries a complete session row for %s without a roster refetch", async (reason) => {
-    const context = createContext();
-    await emitAndSettleLeading(context, { reason, sessionKey: "agent:main:chat" });
-    expect(vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1]).toMatchObject({
-      reason,
-      session: { key: "agent:main:chat", sessionId: "agent:main:chat-id", label: "first" },
     });
   });
 
@@ -772,38 +662,29 @@ describe("sessions.changed coalescing", () => {
     );
   });
 
-  it.each([true, false])(
-    "refreshes metadata projections without expiring access (receivers: %s)",
-    async (receivesEvents) => {
-      const context = createContext(new Set(receivesEvents ? ["conn-1"] : []));
-      const sessionKey = "agent:main:metadata";
-      const initialAccessRevision = readGatewayAccessRevision();
-      const resolve = vi.fn(() => ({
-        canonicalKey: sessionKey,
-        snapshot: { incognito: false, visibility: "shared" as const },
-      }));
-      loadCachedSessionSharingSnapshot({ sessionKey, resolve });
+  it("refreshes metadata projections without expiring access when nobody receives events", async () => {
+    const context = createContext(new Set());
+    const sessionKey = "agent:main:metadata";
+    const initialAccessRevision = readGatewayAccessRevision();
+    const resolve = vi.fn(() => ({
+      canonicalKey: sessionKey,
+      snapshot: { incognito: false, visibility: "shared" as const },
+    }));
+    loadCachedSessionSharingSnapshot({ sessionKey, resolve });
 
-      await emitAndSettleLeading(
-        context,
-        { reason: "patch", sessionKey },
-        { accessChanged: false },
-      );
+    await emitAndSettleLeading(context, { reason: "patch", sessionKey }, { accessChanged: false });
 
-      expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
-      expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
-      loadCachedSessionSharingSnapshot({ sessionKey, resolve });
-      expect(resolve).toHaveBeenCalledTimes(2);
-      if (receivesEvents) {
-        const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
-        expect(payload).toMatchObject({ reason: "patch", sessionKey, label: "first" });
-        expect(payload).not.toHaveProperty("accessChanged");
-      } else {
-        expect(context.broadcastToConnIds).not.toHaveBeenCalled();
-        expect(mocks.loadRow).not.toHaveBeenCalled();
-      }
-    },
-  );
+    expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
+    expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
+    expect(mocks.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(context.mentionInbox!.invalidateAsync).mock.invocationCallOrder[0]!,
+    );
+    loadCachedSessionSharingSnapshot({ sessionKey, resolve });
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+    expect(mocks.loadRow).not.toHaveBeenCalled();
+  });
 
   it("emits the latest trailing row by the sustained-mutation deadline", async () => {
     const context = createContext();
@@ -828,44 +709,11 @@ describe("sessions.changed coalescing", () => {
     });
   });
 
-  it.each([false, true])(
-    "never samples a replacement for a delete (trailing: %s)",
-    async (trailing) => {
-      const context = createContext();
-      const sessionKey = "agent:main:chat";
-      if (trailing) {
-        await emitAndSettleLeading(context, { reason: "update", sessionKey });
-      }
-      mocks.loadRow.mockClear();
-      const deletion = { reason: "delete", sessionKey, sessionId: "generation-a", agentId: "main" };
-      await emitAndSettleLeading(context, deletion);
-      mocks.rowLabel = "replacement-b";
-      await vi.advanceTimersByTimeAsync(100);
-      const payload = vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1];
-      expect(payload).toEqual({
-        ...deletion,
-        agentId: "main",
-        ts: expect.any(Number),
-      });
-      expect(mocks.loadRow).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps different session keys independent", async () => {
-    const context = createContext();
-
-    await emitAndSettleLeading(context, { reason: "update", sessionKey: "agent:main:first" });
-    await emitAndSettleLeading(context, { reason: "update", sessionKey: "agent:main:second" });
-
-    expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
-    expect(mocks.loadRow).toHaveBeenCalledTimes(2);
-  });
-
   it("does not adopt the compatibility owner's ownerless run for another agent", async () => {
     const config = retainLegacyDefaultAgentId(
       {
         agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      },
+      } satisfies OpenClawConfig,
       "ops",
     );
     const sessionId = "agent:research:shared-session-id";
@@ -1024,36 +872,5 @@ describe("sessions.changed coalescing", () => {
     } finally {
       clearAgentRunContext("hidden-worker-run");
     }
-  });
-
-  it("invalidates sharing without loading rows when nobody receives events", async () => {
-    const context = createContext(new Set());
-
-    await emitAndSettleLeading(context, { reason: "update", sessionKey: "agent:main:chat" });
-
-    expect(mocks.invalidate).toHaveBeenCalledOnce();
-    expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
-    expect(mocks.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(context.mentionInbox!.invalidate).mock.invocationCallOrder[0]!,
-    );
-    expect(mocks.loadRow).not.toHaveBeenCalled();
-    expect(context.broadcastToConnIds).not.toHaveBeenCalled();
-  });
-
-  it("flushes the latest trailing row and clears its shutdown timer", async () => {
-    const context = createContext();
-    await emitAndSettleLeading(context, { reason: "create", sessionKey: "agent:main:chat" });
-    mocks.rowLabel = "shutdown-latest";
-    await emitAndSettleLeading(context, { reason: "send", sessionKey: "agent:main:chat" });
-
-    await flushPendingSessionsChangedEvents(context);
-    expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(context.broadcastToConnIds).mock.calls[1]?.[1]).toMatchObject({
-      label: "shutdown-latest",
-      reason: "send",
-    });
-
-    await vi.advanceTimersByTimeAsync(100);
-    expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
   });
 });

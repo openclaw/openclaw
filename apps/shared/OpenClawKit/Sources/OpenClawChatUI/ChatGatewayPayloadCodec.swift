@@ -56,6 +56,19 @@ public enum OpenClawChatSessionKey {
         let agentID = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
         return agentID.isEmpty ? nil : agentID
     }
+
+    static func catalogSource(_ key: String) -> [Data]? {
+        let parts = key.components(separatedBy: ":")
+        if parts.first == "agent", parts.count < 2 || parts[1].isEmpty { return nil }
+        let source = parts.first == "agent" ? Array(parts.dropFirst(2)) : parts
+        guard source.count == 4, source[0] == "catalog" else { return nil }
+        let decoded = source.dropFirst().compactMap { part -> Data? in
+            guard let value = part.removingPercentEncoding, !value.isEmpty else { return nil }
+            // Opaque IDs use exact bytes, without Swift String's canonical Unicode equivalence.
+            return Data(value.utf8)
+        }
+        return decoded.count == 3 ? decoded : nil
+    }
 }
 
 /// Canonical gateway payload mapping shared by the native Apple chat transports.
@@ -135,7 +148,10 @@ public enum OpenClawChatGatewayPayloadCodec {
                         ?? OpenClawChatAgentChoice.normalizedName($0.identity?["name"]?.value as? String),
                     emoji: OpenClawChatAgentChoice.textAvatar($0.identity?["emoji"]?.value as? String)
                         ?? OpenClawChatAgentChoice.textAvatar($0.identity?["avatar"]?.value as? String),
-                    workspaceGit: $0.workspacegit)
+                    avatar: OpenClawChatAgentChoice.imageAvatar($0.identity?["avatarUrl"]?.value as? String)
+                        ?? OpenClawChatAgentChoice.imageAvatar($0.identity?["avatar"]?.value as? String),
+                    workspaceGit: $0.workspacegit,
+                    workspace: $0.workspace)
             },
             sessionRoutingContract: OpenClawChatSessionRoutingContract.make(
                 scope: result.scope.value as? String,

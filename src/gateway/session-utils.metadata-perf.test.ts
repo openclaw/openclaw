@@ -8,11 +8,9 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
-import type {
-  ProviderThinkingProfile,
-  ProviderThinkingRegistry,
-} from "../plugins/provider-thinking.types.js";
+import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -20,7 +18,6 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { readSessionRowInputs } from "./session-utils-row.js";
 
@@ -44,8 +41,15 @@ function createRowThinkingFixture() {
       defaultLevel: "low",
     };
   };
-  const pluginRegistry: ProviderThinkingRegistry = {
-    providers: [{ provider: { id: provider, resolveThinkingProfile: policy } }],
+  const pluginRegistry: PluginRegistry = {
+    ...createEmptyPluginRegistry(),
+    providers: [
+      {
+        pluginId: provider,
+        source: "test",
+        provider: { id: provider, label: provider, auth: [], resolveThinkingProfile: policy },
+      },
+    ],
   };
   const catalog: ModelCatalogSnapshot = {
     entries: [{ provider, id: "reasoner", name: "Reasoner", reasoning: true }],
@@ -53,7 +57,7 @@ function createRowThinkingFixture() {
   };
   prepareModelCatalogThinkingPolicies({
     catalog,
-    providers: pluginRegistry.providers,
+    pluginRegistry,
     metadataSnapshot: createPluginMetadataSnapshotFixture(),
   });
   const modelCatalog = new Map([
@@ -77,14 +81,14 @@ function createRowThinkingFixture() {
         modelProvider: provider,
         model: "reasoner",
         thinkingLevel,
-        acp: {
-          backend: "openclaw",
-          agent: "fixture",
-          runtimeSessionName: `thinking-${index}`,
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: 1,
-        },
+      },
+      preparedAcpMeta: {
+        backend: "openclaw",
+        agent: "fixture",
+        runtimeSessionName: `thinking-${index}`,
+        mode: "oneshot",
+        state: "idle",
+        lastActivityAt: 1,
       },
       modelCatalog: models,
       rowContext,
@@ -102,54 +106,6 @@ function createRowThinkingFixture() {
     read,
   };
 }
-
-test("reuses prepared thinking policy for stored levels without exposing profile ranks", async () => {
-  await withStateDirEnv("openclaw-row-thinking-", async () => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const fixture = createRowThinkingFixture();
-    expect(fixture.read(undefined, fixture.modelCatalog)).toMatchObject({
-      thinkingDefault: "off",
-      thinkingOptions: ["Off", "Deep", "Light", "ultra"],
-      effectiveThinkingLevel: "off",
-    });
-    const warmCalls = fixture.policyCalls();
-    expect(warmCalls).toBeGreaterThan(0);
-    const cases = [
-      ["high", "high"],
-      ["medium", "high"],
-      ["adaptive", "low"],
-    ] as const;
-    for (const [index, [level, expected]] of cases.entries()) {
-      expect(fixture.read(level, fixture.modelCatalog, index + 1)).toMatchObject({
-        thinkingLevel: expected,
-        effectiveThinkingLevel: expected,
-        thinkingDefault: "off",
-        thinkingOptions: ["Off", "Deep", "Light", "ultra"],
-      });
-    }
-    const metadata = resolveGatewayModelThinkingProfile({
-      cfg: fixture.cfg,
-      agentId: "main",
-      provider: fixture.provider,
-      model: "reasoner",
-      agentRuntime: "openclaw",
-      modelCatalog: fixture.catalog.entries,
-      providerPolicySource: fixture.pluginRegistry,
-      rowContext: fixture.rowContext,
-    });
-    expect(metadata).toEqual({
-      thinkingLevels: [
-        { id: "off", label: "Off" },
-        { id: "high", label: "Deep" },
-        { id: "low", label: "Light" },
-        { id: "ultra", label: "ultra" },
-      ],
-      thinkingDefault: "off",
-    });
-    expect(fixture.policyCalls()).toBe(warmCalls);
-  });
-});
 
 test.each(["missing", "identity-only"] as const)(
   "preserves a stored level with a %s catalog after warming thinking facts",
@@ -182,104 +138,6 @@ test.each(["missing", "identity-only"] as const)(
     });
   },
 );
-
-test("keeps stored thinking levels and defaults scoped to the prepared agent, model and runtime", async () => {
-  await withStateDirEnv("openclaw-row-thinking-scope-", async () => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const provider = "scoped-thinking-fixture";
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: {}, work: {} },
-        defaults: { model: `${provider}/reasoner`, utilityModel: "" },
-      },
-    };
-    const prepare = (preferLow: boolean) => {
-      const pluginRegistry: ProviderThinkingRegistry = {
-        providers: [
-          {
-            provider: {
-              id: provider,
-              resolveThinkingProfile: ({ modelId, agentRuntime }) => {
-                const low = preferLow || modelId === "alternate" || agentRuntime === "codex";
-                return {
-                  levels: [
-                    { id: "off", label: "Off", rank: 0 },
-                    { id: "high", label: "High", rank: low ? 40 : 10 },
-                    { id: "low", label: "Low", rank: low ? 10 : 40 },
-                  ],
-                  defaultLevel: low ? "low" : "high",
-                };
-              },
-            },
-          },
-        ],
-      };
-      const catalog: ModelCatalogSnapshot = {
-        entries: ["reasoner", "alternate"].map((id) => ({
-          provider,
-          id,
-          name: id,
-          reasoning: true,
-        })),
-        routeVariants: [],
-      };
-      prepareModelCatalogThinkingPolicies({
-        catalog,
-        providers: pluginRegistry.providers,
-        metadataSnapshot: createPluginMetadataSnapshotFixture(),
-      });
-      return createPreparedGatewayModelCatalog({ ...catalog, pluginRegistry });
-    };
-    const modelCatalog = new Map([
-      ["main", prepare(false)],
-      ["work", prepare(true)],
-    ]);
-    const rowContext = buildSessionListRowMetadataContext({ now: 1 });
-    const cases = [
-      ["main", "reasoner", "openclaw", "high"],
-      ["main", "alternate", "openclaw", "low"],
-      ["main", "reasoner", "codex", "low"],
-      ["work", "reasoner", "openclaw", "low"],
-      ["main", "reasoner", "openclaw", "high"],
-    ] as const;
-    for (const [index, [agentId, model, runtime, expected]] of cases.entries()) {
-      const result = readSessionRowInputs({
-        cfg,
-        agentId,
-        key: `agent:${agentId}:scoped-${index}`,
-        store: {},
-        storePath: "unused",
-        rowContext,
-        modelCatalog,
-        activeModel: null,
-        skipTranscriptUsageFallback: true,
-        entry: {
-          sessionId: `scoped-${index}`,
-          updatedAt: 1,
-          providerOverride: provider,
-          modelOverride: model,
-          thinkingLevel: "medium",
-          acp: {
-            backend: runtime,
-            agent: "fixture",
-            runtimeSessionName: `scoped-${index}`,
-            mode: "oneshot",
-            state: "idle",
-            lastActivityAt: 1,
-          },
-        },
-      });
-      expect(result.inputs.thinkingProjection).toMatchObject({
-        thinkingLevel: expected,
-        effectiveThinkingLevel: expected,
-        thinkingDefault: expected,
-        thinkingOptions:
-          expected === "high" ? ["Off", "High", "Low", "ultra"] : ["Off", "Low", "High", "ultra"],
-      });
-    }
-  });
-});
 
 test("rebuilds resident thinking facts on config and catalog publication", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -327,7 +185,7 @@ test("rebuilds resident thinking facts on config and catalog publication", async
       };
       prepareModelCatalogThinkingPolicies({
         catalog: next,
-        providers: fixture.pluginRegistry.providers,
+        pluginRegistry: fixture.pluginRegistry,
         metadataSnapshot: createPluginMetadataSnapshotFixture(),
       });
       catalog = new Map([

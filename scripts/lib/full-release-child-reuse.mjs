@@ -264,12 +264,14 @@ async function validateEvidence(selection, request, deps) {
   validateSelectionIdentity(selection, request);
   const run = await deps.github(`actions/runs/${selection.runId}`);
   validateRun(run, selection, request);
-  const lineage = await deps.github(`compare/${selection.workflowSha}...main?per_page=1`);
-  requireEvidence(
-    ["ahead", "identical"].includes(lineage?.status) &&
-      lineage.merge_base_commit?.sha === selection.workflowSha,
-    "workflow SHA is not a main ancestor",
-  );
+  if (selection.workflowSha !== request.targetSha) {
+    const lineage = await deps.github(`compare/${selection.workflowSha}...main?per_page=1`);
+    requireEvidence(
+      ["ahead", "identical"].includes(lineage?.status) &&
+        lineage.merge_base_commit?.sha === selection.workflowSha,
+      "workflow SHA is not a main ancestor or the candidate SHA",
+    );
+  }
   const artifact = await deps.github(`actions/artifacts/${String(selection.artifact.id)}`);
   requireEvidence(
     canonical(artifactIdentity(artifact, request, run, deps.now)) === canonical(selection.artifact),

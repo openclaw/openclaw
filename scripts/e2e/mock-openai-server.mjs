@@ -530,28 +530,37 @@ function writeResponsesEvents(res, stream, events) {
   writeSse(res, events);
 }
 
-function writeChatCompletion(res, stream, text = successMarker) {
-  if (stream) {
-    writeSse(res, [
-      {
-        id: "chatcmpl_e2e",
-        object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: { role: "assistant", content: text } }],
-      },
-      {
-        id: "chatcmpl_e2e",
-        object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-      },
-    ]);
-    return;
-  }
+function writeChatCompletionChunks(res, choices) {
+  writeSse(
+    res,
+    choices.map((choice) => ({
+      id: "chatcmpl_e2e",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, ...choice }],
+    })),
+  );
+}
+
+function writeChatCompletionMessage(res, message, finishReason, promptTokens, completionTokens) {
   writeJson(res, 200, {
     id: "chatcmpl_e2e",
     object: "chat.completion",
-    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
-    usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+    choices: [{ index: 0, message, finish_reason: finishReason }],
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens,
+    },
   });
+}
+
+function writeChatCompletion(res, stream, text = successMarker) {
+  const message = { role: "assistant", content: text };
+  if (stream) {
+    writeChatCompletionChunks(res, [{ delta: message }, { delta: {}, finish_reason: "stop" }]);
+    return;
+  }
+  writeChatCompletionMessage(res, message, "stop", 11, 7);
 }
 
 /** Streams assistant content, then a tool call, in one chat-completions turn. */
@@ -559,56 +568,30 @@ function writeChatCompletionPreambleToolCall(res, stream, preamble, name, args) 
   const serialized = JSON.stringify(args);
   const callId = `call_mock_${name}_${createHash("sha256").update(name).update(serialized).digest("hex").slice(0, 10)}`;
   if (!stream) {
-    writeJson(res, 200, {
-      id: "chatcmpl_e2e",
-      object: "chat.completion",
-      choices: [
-        {
-          index: 0,
-          message: {
-            role: "assistant",
-            content: preamble,
-            tool_calls: [
-              { id: callId, type: "function", function: { name, arguments: serialized } },
-            ],
-          },
-          finish_reason: "tool_calls",
-        },
-      ],
-      usage: { prompt_tokens: 24, completion_tokens: 18, total_tokens: 42 },
-    });
+    writeChatCompletionMessage(
+      res,
+      {
+        role: "assistant",
+        content: preamble,
+        tool_calls: [{ id: callId, type: "function", function: { name, arguments: serialized } }],
+      },
+      "tool_calls",
+      24,
+      18,
+    );
     return;
   }
-  writeSse(res, [
+  writeChatCompletionChunks(res, [
+    { delta: { role: "assistant", content: "" } },
+    ...splitResponseText(preamble).map((content) => ({ delta: { content } })),
     {
-      id: "chatcmpl_e2e",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: { role: "assistant", content: "" } }],
+      delta: {
+        tool_calls: [
+          { index: 0, id: callId, type: "function", function: { name, arguments: serialized } },
+        ],
+      },
     },
-    ...splitResponseText(preamble).map((delta) => ({
-      id: "chatcmpl_e2e",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: { content: delta } }],
-    })),
-    {
-      id: "chatcmpl_e2e",
-      object: "chat.completion.chunk",
-      choices: [
-        {
-          index: 0,
-          delta: {
-            tool_calls: [
-              { index: 0, id: callId, type: "function", function: { name, arguments: serialized } },
-            ],
-          },
-        },
-      ],
-    },
-    {
-      id: "chatcmpl_e2e",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
-    },
+    { delta: {}, finish_reason: "tool_calls" },
   ]);
 }
 
@@ -679,14 +662,7 @@ function collectText(value) {
 }
 
 function stringifyFunctionCallOutput(output) {
-  if (typeof output === "string") {
-    return output;
-  }
-  try {
-    return JSON.stringify(output);
-  } catch {
-    return "";
-  }
+  return typeof output === "string" ? output : JSON.stringify(output);
 }
 
 function collectFunctionCallOutputText(body) {
@@ -714,10 +690,7 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
     if (!hasDeclaredTool(bodyText, "exec")) {
       return null;
     }
-    const catalogExpression =
-      process.env.OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE === "legacy"
-        ? "ALL_TOOLS.some((tool) => tool.source === 'mcp')"
-        : "catalog.all().some((tool) => tool.source === 'mcp')";
+    const catalogExpression = "catalog.all().some((tool) => tool.source === 'mcp')";
     return toolCallEvents("exec", {
       title: "Read the MCP fixture note",
       code: [
@@ -813,7 +786,7 @@ function countAutomaticSelection(events) {
 const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (req.method === "GET" && url.pathname === "/health") {
+    if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/health") {
       writeJson(res, 200, { ok: true, requests });
       return;
     }
@@ -886,6 +859,9 @@ const server = http.createServer((req, res) => {
       })
     ) {
       return;
+    }
+    if (requestLog) {
+      process.send?.({ type: "mock-openai:request-logged", seq: requestLogSeq });
     }
     if (selectedResponse) {
       requests.selections[controlSelection.models ? "model" : "global"] += 1;

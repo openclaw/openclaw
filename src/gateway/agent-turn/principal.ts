@@ -15,10 +15,13 @@ export function captureAgentTurnPrincipal(client: GatewayClient | null): AgentTu
   const principal: AgentTurnPrincipal = {
     authenticatedUserId: client.authenticatedUserId,
     authenticatedUserProfile: client.authenticatedUserProfile,
+    authPolicy: client.authPolicy,
     connId: client.connId,
     connect: client.connect,
     internal: client.internal,
     isDeviceTokenAuth: client.isDeviceTokenAuth,
+    usesSharedGatewayAuth: client.usesSharedGatewayAuth,
+    sharedGatewaySessionGeneration: client.sharedGatewaySessionGeneration,
   };
   transferGatewayLocalUserIngress(client, principal);
   transferGatewayOperatorSourceIdentity(client, principal);

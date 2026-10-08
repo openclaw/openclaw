@@ -8,6 +8,10 @@ import type {
 import { vi } from "vitest";
 import type { AcpRuntime, AcpRuntimeTurn } from "../runtime-api.js";
 import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
+import {
+  mockAcpxProcessSystem,
+  type AcpxProcessSystemFixture,
+} from "./process-reaper.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
 import { resolveAcpxSessionResource } from "./session-owner.js";
 
@@ -20,7 +24,9 @@ export const CODEX_ACP_WRAPPER_COMMAND = 'node "/tmp/openclaw/acpx/codex-acp-wra
 export function makeRuntime(
   baseStore: TestSessionStore,
   options: Partial<ConstructorParameters<typeof AcpxRuntime>[0]> = {},
-  testOptions?: ConstructorParameters<typeof AcpxRuntime>[1],
+  testOptions?: ConstructorParameters<typeof AcpxRuntime>[1] & {
+    openclawProcessCleanup?: AcpxProcessSystemFixture;
+  },
 ): {
   runtime: AcpxRuntime;
   probe: ReturnType<
@@ -41,6 +47,8 @@ export function makeRuntime(
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
   };
 } {
+  const { openclawProcessCleanup, ...delegateTestOptions } = testOptions ?? {};
+  mockAcpxProcessSystem(openclawProcessCleanup);
   const probe = vi.fn(async (_options: AcpRuntimeOptions) => ({ ok: true, message: "ready" }));
   const runtime = new AcpxRuntime(
     {
@@ -53,7 +61,7 @@ export function makeRuntime(
       permissionMode: "approve-reads",
       ...options,
     },
-    { probeRunner: probe, ...testOptions },
+    { probeRunner: probe, ...delegateTestOptions },
   );
 
   return {
@@ -118,25 +126,19 @@ export function makeManagedRuntime() {
     }),
   };
   const sleep = vi.fn(async () => {});
-  const runtime = new AcpxRuntime(
-    {
-      cwd: "/tmp",
-      sessionStore: baseStore,
-      permissionMode: "deny-all",
-      agentRegistry: { resolve: () => CODEX_ACP_WRAPPER_COMMAND, list: () => ["fixture"] },
-      openclawToolsMcpBridgeEnabled: true,
-      openclawWrapperRoot: "/tmp/openclaw/acpx",
-      mcpServers: [{ name: "openclaw-tools", command: "node", args: [], env: [] }],
-    },
-    {
-      openclawProcessCleanup: {
-        platform: "linux",
-        listProcesses: async () => [{ pid, ppid: 1, command: CODEX_ACP_WRAPPER_COMMAND }],
-        killProcess: vi.fn(),
-        sleep,
-      },
-    },
-  );
+  mockAcpxProcessSystem({
+    listProcesses: async () => [{ pid, ppid: 1, command: CODEX_ACP_WRAPPER_COMMAND }],
+    sleep,
+  });
+  const runtime = new AcpxRuntime({
+    cwd: "/tmp",
+    sessionStore: baseStore,
+    permissionMode: "deny-all",
+    agentRegistry: { resolve: () => CODEX_ACP_WRAPPER_COMMAND, list: () => ["fixture"] },
+    openclawToolsMcpBridgeEnabled: true,
+    openclawWrapperRoot: "/tmp/openclaw/acpx",
+    mcpServers: [{ name: "openclaw-tools", command: "node", args: [], env: [] }],
+  });
   return {
     runtime,
     target,

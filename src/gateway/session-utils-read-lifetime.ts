@@ -9,12 +9,13 @@ export function retainGatewaySessionEntryReadOnly(
   sessionKey: string,
   agentId: string,
   allowMetadataChanges?: Parameters<typeof captureSessionEntryRead>[2],
+  cfg?: Parameters<typeof loadGatewaySessionEntryReadOnly>[2],
 ) {
   const options = { agentId, projection: "list" as const };
-  const selected = loadGatewaySessionEntryReadOnly(sessionKey, options);
+  const selected = loadGatewaySessionEntryReadOnly(sessionKey, options, cfg);
   let released = false;
   const sameRoute = () => {
-    const current = loadGatewaySessionEntryReadOnly(sessionKey, options);
+    const current = loadGatewaySessionEntryReadOnly(sessionKey, options, cfg);
     return (
       current.agentId === selected.agentId &&
       current.canonicalKey === selected.canonicalKey &&
@@ -32,7 +33,7 @@ export function retainGatewaySessionEntryReadOnly(
       isCurrentAtResponse: () =>
         !released &&
         sameRoute() &&
-        loadGatewaySessionEntryReadOnly(sessionKey, options).entry === undefined,
+        loadGatewaySessionEntryReadOnly(sessionKey, options, cfg).entry === undefined,
       release: () => {
         released = true;
       },

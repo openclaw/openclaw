@@ -188,6 +188,7 @@ describe("shared state write transaction corruption recovery", () => {
       db: injectedDb,
       path: cached.path,
       walMaintenance: {
+        stop: async () => {},
         checkpoint: () => false,
         reclaimFreePages: createSqliteWalReclamationResult,
         close: () => false,

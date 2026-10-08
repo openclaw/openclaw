@@ -13,6 +13,7 @@ import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-me
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js";
 import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thinking.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -56,7 +57,21 @@ const preparedDirectiveCatalog: ModelCatalogSnapshot = {
 prepareModelCatalogThinkingPolicies({
   catalog: preparedDirectiveCatalog,
   metadataSnapshot: directiveMetadata,
-  providers: [{ provider: { id: "anthropic", resolveThinkingProfile: () => undefined } }],
+  pluginRegistry: {
+    ...createEmptyPluginRegistry(),
+    providers: [
+      {
+        pluginId: "anthropic",
+        source: "test",
+        provider: {
+          id: "anthropic",
+          label: "Anthropic",
+          auth: [],
+          resolveThinkingProfile: () => undefined,
+        },
+      },
+    ],
+  },
 });
 
 vi.mock("./get-reply-directives-apply.js", () => ({
@@ -234,17 +249,24 @@ describe("reply directive resolution", () => {
     prepareModelCatalogThinkingPolicies({
       catalog: preparedModelCatalog,
       metadataSnapshot: directiveMetadata,
-      providers: [
-        {
-          provider: {
-            id: "anthropic",
-            resolveThinkingProfile: () => ({
-              levels: [{ id: "off" }, { id: "high" }],
-              defaultLevel: "high",
-            }),
+      pluginRegistry: {
+        ...createEmptyPluginRegistry(),
+        providers: [
+          {
+            pluginId: "anthropic",
+            source: "test",
+            provider: {
+              id: "anthropic",
+              label: "Anthropic",
+              auth: [],
+              resolveThinkingProfile: () => ({
+                levels: [{ id: "off" }, { id: "high" }],
+                defaultLevel: "high",
+              }),
+            },
           },
-        },
-      ],
+        ],
+      },
     });
     const { result } = await resolveModelDirective({
       body: "Summarize the notes.",

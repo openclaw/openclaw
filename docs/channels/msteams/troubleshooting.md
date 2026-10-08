@@ -27,8 +27,8 @@ the agent turn drains independently and replies proactively. If request
 handling or durable admission misses the transport window, Teams may retry the
 activity, and the ingress tombstone rejects a repeated event ID.
 
-If Teams went silent after setting `legacyWebhook: false`, check whether Azure Bot
-or your reverse proxy still points to port `3978`. Follow the
+If Teams went silent after removing the `legacyWebhook` pin or setting it to
+`false`, check whether Azure Bot or your reverse proxy still points to port `3978`. Follow the
 [endpoint migration instructions](/channels/msteams/configuration#migrating-an-existing-webhook-endpoint)
 to use the Gateway port or finish migrating an explicit legacy listener.
 

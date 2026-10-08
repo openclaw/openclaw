@@ -3,7 +3,6 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
-  advanceCursor,
   isCurrentPlacementTurnClaim,
   normalizeEpoch,
   normalizeIdentity,
@@ -14,12 +13,20 @@ import {
   type WorkerSessionTurnClaim,
   type WorkerSessionTurnOwner,
 } from "./placement-record.js";
-import { ensureLocal, find, getRequired, query } from "./placement-row-codec.js";
+import {
+  ensureLocal,
+  find,
+  fromRow,
+  getRequired,
+  query,
+  turnClaimValues,
+} from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
 } from "./placement-session-tool-operations.kernel.js";
+import { parseWorkerSessionPlacementState } from "./placement-state.js";
 import {
   publishPlacementTurnClaimCleared,
   publishPlacementTurnClaimState,
@@ -30,7 +37,7 @@ import {
   removeTurnClaimReleaseWaiter,
   waitersFor,
 } from "./placement-turn-claim-events.js";
-import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.js";
+import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
 import {
   clearWorkerWorkspacePendingResult,
   hasCurrentWorkspaceResultClaim,
@@ -54,8 +61,34 @@ export class ActiveTurnClaimError extends Error {
   }
 }
 
+function releaseTurnQuery(db: DatabaseSync, nowMs: number) {
+  return query(db)
+    .updateTable("worker_session_placements")
+    .set({
+      ...turnClaimValues(null),
+      updated_at_ms: nowMs,
+    });
+}
+
 export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
   const { instanceId, path, now, read, write } = runtime;
+  const publishTurnRelease = (
+    db: DatabaseSync,
+    current: WorkerSessionPlacementRecord,
+    claim: WorkerSessionTurnClaim,
+    statement: ReturnType<typeof releaseTurnQuery>,
+    error: string,
+  ): WorkerSessionPlacementRecord => {
+    const row = executeSqliteQuerySync(db, statement.returningAll()).rows[0];
+    if (!row) {
+      throw new Error(error);
+    }
+    sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
+    const updated = fromRow(row);
+    publishPlacementTurnClaimState(db, updated, current.state);
+    deferWorkerTurnClaimClosed(db, path, claim);
+    return updated;
+  };
   const claimTurnInDatabase = (
     db: DatabaseSync,
     input: WorkerTurnClaimInput,
@@ -126,19 +159,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     if (result.numAffectedRows !== 1n) {
       throw new Error(`Session ${identity.sessionId} placement changed during turn admission`);
     }
-    publishPlacementTurnClaimState(db, {
-      ...current,
-      turnClaim:
-        owner.kind === "worker"
-          ? {
-              owner: "worker",
-              claimId,
-              runId,
-              generation: current.generation,
-              ownerEpoch: owner.ownerEpoch,
-            }
-          : { owner: "local", claimId, runId, generation: current.generation, ownerEpoch: null },
-    });
+    publishPlacementTurnClaimState(db, getRequired(db, identity.sessionId), current.state);
     sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
     return {
       sessionId: current.sessionId,
@@ -151,7 +172,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
   const claimWorkspaceResult = (
     input: WorkerTurnClaimInput,
     purpose: "reclaim" | "mutation",
-    beforePublish?: (claim: WorkerSessionTurnClaim) => void,
   ): WorkerSessionTurnClaim =>
     write((db) => {
       if (purpose === "mutation" && getRequired(db, input.sessionId).state !== "active") {
@@ -166,8 +186,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       // Mutation admission and its recovery custody must commit together: an
       // interrupted remote operation cannot leave unowned workspace changes.
       insertWorkerWorkspacePendingResult(db, claim, updatedAtMs, instanceId);
-      // Recovery must deny operational use before commit observers can mint credentials.
-      beforePublish?.(claim);
       return claim;
     });
 
@@ -176,14 +194,11 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       return write((db) => claimTurnInDatabase(db, input, now()));
     },
 
-    claimReclaimWorkspaceResult(
-      input: WorkerTurnClaimInput,
-      beforePublish?: (claim: WorkerSessionTurnClaim) => void,
-    ): WorkerSessionTurnClaim {
+    claimReclaimWorkspaceResult(input: WorkerTurnClaimInput): WorkerSessionTurnClaim {
       if (input.claimId !== input.runId || !input.claimId.startsWith("reclaim-")) {
         throw new Error(`Session ${input.sessionId} workspace result is not owned by reclaim`);
       }
-      return claimWorkspaceResult(input, "reclaim", beforePublish);
+      return claimWorkspaceResult(input, "reclaim");
     },
 
     claimWorkspaceMutationResult(
@@ -206,31 +221,17 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         }
         assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
         clearWorkerTurnToolState(db, { sessionId, claimId });
-        const result = executeSqliteQuerySync(
+        return publishTurnRelease(
           db,
-          query(db)
-            .updateTable("worker_session_placements")
-            .set({
-              turn_claim_owner: null,
-              turn_claim_id: null,
-              turn_claim_run_id: null,
-              turn_claim_generation: null,
-              turn_claim_owner_epoch: null,
-              updated_at_ms: now(),
-            })
+          current,
+          claim,
+          releaseTurnQuery(db, now())
             .where("session_id", "=", sessionId)
             .where("turn_claim_id", "=", claimId)
             .where("turn_claim_run_id", "=", runId)
             .where("turn_claim_generation", "=", claim.placementGeneration),
+          `Session ${sessionId} turn claim changed during release`,
         );
-        if (result.numAffectedRows !== 1n) {
-          throw new Error(`Session ${sessionId} turn claim changed during release`);
-        }
-        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
-        const updated = getRequired(db, sessionId);
-        publishPlacementTurnClaimState(db, updated);
-        deferWorkerTurnClaimClosed(db, path, claim);
-        return updated;
       });
     },
 
@@ -254,34 +255,20 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         }
         assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
         clearWorkerTurnToolState(db, { sessionId, claimId });
-        const values = {
-          turn_claim_owner: null,
-          turn_claim_id: null,
-          turn_claim_run_id: null,
-          turn_claim_generation: null,
-          turn_claim_owner_epoch: null,
-          updated_at_ms: now(),
-        };
+        const statement = releaseTurnQuery(db, now());
         clearWorkerWorkspacePendingResult(db, sessionId);
-        const result = executeSqliteQuerySync(
+        return publishTurnRelease(
           db,
-          query(db)
-            .updateTable("worker_session_placements")
-            .set(values)
+          current,
+          claim,
+          statement
             .where("session_id", "=", sessionId)
             .where("state", "=", current.state)
             .where("transition_generation", "=", current.generation)
             .where("turn_claim_id", current.turnClaim ? "=" : "is", current.turnClaim && claimId)
             .where("turn_claim_run_id", current.turnClaim ? "=" : "is", current.turnClaim && runId),
+          `Session ${sessionId} workspace result changed during release`,
         );
-        if (result.numAffectedRows !== 1n) {
-          throw new Error(`Session ${sessionId} workspace result changed during release`);
-        }
-        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
-        const updated = getRequired(db, sessionId);
-        publishPlacementTurnClaimState(db, updated);
-        deferWorkerTurnClaimClosed(db, path, claim);
-        return updated;
       });
     },
 
@@ -338,70 +325,47 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
         clearWorkerTurnToolState(db, { sessionId, claimId });
         clearWorkerWorkspacePendingResult(db, sessionId);
-        const result = executeSqliteQuerySync(
+        return publishTurnRelease(
           db,
-          query(db)
-            .updateTable("worker_session_placements")
-            .set({
-              turn_claim_owner: null,
-              turn_claim_id: null,
-              turn_claim_run_id: null,
-              turn_claim_generation: null,
-              turn_claim_owner_epoch: null,
-              updated_at_ms: now(),
-            })
+          current,
+          claim,
+          releaseTurnQuery(db, now())
             .where("session_id", "=", sessionId)
             .where("state", "=", current.state)
             .where("transition_generation", "=", current.generation)
             .where("turn_claim_id", "=", claimId)
             .where("turn_claim_run_id", "=", runId),
+          `Session ${sessionId} workspace result changed during cancellation`,
         );
-        if (result.numAffectedRows !== 1n) {
-          throw new Error(`Session ${sessionId} workspace result changed during cancellation`);
-        }
-        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
-        const updated = getRequired(db, sessionId);
-        publishPlacementTurnClaimState(db, updated);
-        deferWorkerTurnClaimClosed(db, path, claim);
-        return updated;
       });
     },
 
-    clearLocalTurnClaimsAfterRestart(): number {
+    clearLocalTurnClaimsAfterRestart(this: void): number {
       return write((db) => {
-        const sessionIds = executeSqliteQuerySync(
+        const placements = executeSqliteQuerySync(
           db,
           query(db)
             .selectFrom("worker_session_placements")
-            .select("session_id")
+            .select(["session_id", "state"])
             .where("turn_claim_owner", "=", "local"),
-        ).rows.map((row) => row.session_id);
+        ).rows;
         const result = executeSqliteQuerySync(
           db,
-          query(db)
-            .updateTable("worker_session_placements")
-            .set({
-              turn_claim_owner: null,
-              turn_claim_id: null,
-              turn_claim_run_id: null,
-              turn_claim_generation: null,
-              turn_claim_owner_epoch: null,
-              updated_at_ms: now(),
-            })
-            .where("turn_claim_owner", "=", "local"),
+          releaseTurnQuery(db, now()).where("turn_claim_owner", "=", "local"),
         );
-        if (result.numAffectedRows !== BigInt(sessionIds.length)) {
+        if (result.numAffectedRows !== BigInt(placements.length)) {
           throw new Error("Local turn claims changed during restart recovery");
         }
-        for (const sessionId of sessionIds) {
-          publishPlacementTurnClaimCleared(db, sessionId);
+        for (const { session_id: sessionId, state } of placements) {
+          publishPlacementTurnClaimCleared(db, sessionId, parseWorkerSessionPlacementState(state));
           deferTurnClaimRelease(db, path, sessionId);
         }
-        return sessionIds.length;
+        return placements.length;
       });
     },
 
     async waitForTurnClaimRelease(
+      this: void,
       sessionIdInput: string,
       waitOptions: { timeoutMs?: number; signal?: AbortSignal },
     ): Promise<void> {
@@ -460,90 +424,9 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       });
     },
 
-    validateTurnClaim(claim: WorkerSessionTurnClaim): boolean {
+    validateTurnClaim(this: void, claim: WorkerSessionTurnClaim): boolean {
       const current = find(read(), required(claim.sessionId, "session id"));
       return current ? isCurrentPlacementTurnClaim(current, claim) : false;
-    },
-
-    updateAckCursors(input: {
-      claim: WorkerSessionTurnClaim;
-      transcript?: number;
-      liveEvent?: number;
-    }): WorkerSessionPlacementRecord {
-      const sessionId = required(input.claim.sessionId, "session id");
-      const claimId = required(input.claim.claimId, "turn claim id");
-      const runId = required(input.claim.runId, "turn claim run id");
-      if (
-        !Number.isSafeInteger(input.claim.placementGeneration) ||
-        input.claim.placementGeneration < 0
-      ) {
-        throw new Error("Worker session placement turn claim generation is invalid");
-      }
-      if (input.claim.owner.kind !== "worker") {
-        throw new Error("Only a worker turn claim can acknowledge worker cursors");
-      }
-      const placementGeneration = input.claim.placementGeneration;
-      const environmentId = required(input.claim.owner.environmentId, "environment id");
-      const ownerEpoch = normalizeEpoch(input.claim.owner.ownerEpoch, "active owner epoch");
-      return write((db) => {
-        const current = getRequired(db, sessionId);
-        const persisted = current.turnClaim;
-        const workerMayFinish = current.state === "active" || current.state === "draining";
-        if (
-          !workerMayFinish ||
-          current.environmentId !== environmentId ||
-          current.activeOwnerEpoch !== ownerEpoch ||
-          persisted?.owner !== "worker" ||
-          persisted.claimId !== claimId ||
-          persisted.runId !== runId ||
-          persisted.generation !== placementGeneration ||
-          persisted.ownerEpoch !== ownerEpoch
-        ) {
-          throw new Error(`Cannot ACK stale worker turn for session ${sessionId}`);
-        }
-        // Successful RPC replays can carry an older sequence. Preserve the
-        // durable high-water mark while acknowledging the idempotent replay.
-        const transcript = advanceCursor(
-          current.lastTranscriptAckCursor,
-          input.transcript,
-          "transcript ACK cursor",
-        );
-        const liveEvent = advanceCursor(
-          current.lastLiveEventAckCursor,
-          input.liveEvent,
-          "live ACK cursor",
-        );
-        const result = executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_session_placements")
-            .set({
-              last_transcript_ack_cursor: transcript,
-              last_live_event_ack_cursor: liveEvent,
-              updated_at_ms: now(),
-            })
-            .where("session_id", "=", sessionId)
-            .where("state", "=", current.state)
-            .where("transition_generation", "=", current.generation)
-            .where("environment_id", "=", environmentId)
-            .where("active_owner_epoch", "=", ownerEpoch)
-            .where("turn_claim_owner", "=", "worker")
-            .where("turn_claim_id", "=", claimId)
-            .where("turn_claim_run_id", "=", runId)
-            .where("turn_claim_generation", "=", placementGeneration)
-            .where("turn_claim_owner_epoch", "=", ownerEpoch),
-        );
-        if (result.numAffectedRows !== 1n) {
-          throw new Error(`Worker session placement ${sessionId} changed during ACK`);
-        }
-        if (input.liveEvent !== undefined) {
-          // The terminal event is not ACKed until crash recovery has a durable
-          // fence protecting remote workspace results from stale-claim teardown.
-          insertWorkerWorkspacePendingResult(db, input.claim, now(), instanceId);
-        }
-        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
-        return getRequired(db, sessionId);
-      });
     },
 
     updateWorkspaceBaseManifest(input: {
@@ -593,30 +476,17 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             .where("transition_generation", "=", current.generation)
             .where("environment_id", "=", environmentId)
             .where("active_owner_epoch", "=", ownerEpoch)
-            .where(
-              "turn_claim_owner",
-              current.turnClaim ? "=" : "is",
-              current.turnClaim?.owner ?? null,
-            )
-            .where(
-              "turn_claim_id",
-              current.turnClaim ? "=" : "is",
-              current.turnClaim ? claimId : null,
-            )
-            .where(
-              "turn_claim_run_id",
-              current.turnClaim ? "=" : "is",
-              current.turnClaim ? runId : null,
-            )
-            .where(
-              "turn_claim_generation",
-              current.turnClaim ? "=" : "is",
-              current.turnClaim ? placementGeneration : null,
-            )
-            .where(
-              "turn_claim_owner_epoch",
-              current.turnClaim?.owner === "worker" ? "=" : "is",
-              current.turnClaim?.ownerEpoch ?? null,
+            .where((eb) =>
+              eb.and(
+                turnClaimValues(
+                  current.turnClaim && {
+                    ...current.turnClaim,
+                    claimId,
+                    runId,
+                    generation: placementGeneration,
+                  },
+                ),
+              ),
             ),
         );
         if (result.numAffectedRows !== 1n) {

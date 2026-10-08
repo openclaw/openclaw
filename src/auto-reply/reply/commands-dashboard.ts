@@ -32,13 +32,6 @@ async function loadDashboardSkills(
   };
 }
 
-function buildDashboardRequest(requirements: string): string {
-  const trimmed = requirements.trim();
-  return trimmed
-    ? `${DEFAULT_DASHBOARD_REQUEST}\n\nDashboard requirements:\n${trimmed}`
-    : DEFAULT_DASHBOARD_REQUEST;
-}
-
 /** Built-in command handler that guarantees the dashboard operating skill is selected. */
 export const handleDashboardCommand: CommandHandler = defineAuthorizedTextCommand(
   {
@@ -52,8 +45,12 @@ export const handleDashboardCommand: CommandHandler = defineAuthorizedTextComman
         "Dashboard support is unavailable because the control-ui skill is unavailable for this agent.",
       );
     }
+    const trimmed = requirements.trim();
+    const request = trimmed
+      ? `${DEFAULT_DASHBOARD_REQUEST}\n\nDashboard requirements:\n${trimmed}`
+      : DEFAULT_DASHBOARD_REQUEST;
     const expanded = expandExplicitSkillReferences({
-      text: `$${skills.controlUi.name} ${buildDashboardRequest(requirements)}`,
+      text: `$${skills.controlUi.name} ${request}`,
       skillCommands: skills.available,
     });
     if (expanded.error || expanded.skills.length === 0) {

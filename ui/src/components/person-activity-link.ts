@@ -34,7 +34,6 @@ export function personActivityRouting(
   };
 }
 
-/** Null when the host supplied no routing, or the actor carries no usable person id. */
 export function personActivityLink(
   personId: string | null | undefined,
   routing: PersonActivityRouting | undefined,

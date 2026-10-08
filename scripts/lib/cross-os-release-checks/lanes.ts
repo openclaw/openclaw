@@ -95,34 +95,33 @@ import { formatError, trimForSummary } from "./shared.ts";
 export async function runFreshLane(params: LaneBaseParams & { build: CandidateBuild }) {
   const lane = createLaneState("fresh");
   const cleanup: Cleanup[] = [];
-  const gatewayHolder: { current: GatewayHandle | null } = { current: null };
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
-    await runTimedLanePhase(lane, "install-candidate", async () => {
-      await installTarballPackage({
+    await runTimedLanePhase(lane, "install-candidate", () =>
+      installTarballPackage({
         lane,
         env,
         tgzPath: params.build.candidateTgz,
         logPath: join(params.logsDir, "fresh-install.log"),
         restoreBundledPluginPostinstall: false,
-      });
-    });
+      }),
+    );
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
-    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", async () => {
-      await runBundledPluginPostinstall({
+    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", () =>
+      runBundledPluginPostinstall({
         lane,
         env,
         logPath: join(params.logsDir, "fresh-install.log"),
-      });
-    });
+      }),
+    );
 
     let browserOverrideImportStatus = "skipped";
     if (shouldRunWindowsInstalledBrowserOverrideImportSmoke()) {
       browserOverrideImportStatus = await runTimedLanePhase(
         lane,
         "windows-browser-override-import",
-        async () =>
+        () =>
           runInstalledBrowserOverrideImportSmoke({
             lane,
             env,
@@ -134,84 +133,33 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
 
     await installLaneCompanions({ ...params, lane, env });
 
-    // Own the configured port through setup; release only when the gateway can claim it.
-    const gatewayPortReservation = await reserveGatewayPortForLane(lane);
-    cleanup.push(() => gatewayPortReservation.release());
-    await runTimedLanePhase(lane, "onboard", async () => {
-      await runOnboard({
-        lane,
-        env,
-        providerConfig: params.providerConfig,
-        logPath: join(params.logsDir, "fresh-onboard.log"),
-      });
-    });
-
-    await runTimedLanePhase(lane, "models-set", async () => {
-      await runModelsSet({
-        lane,
-        env,
-        providerConfig: params.providerConfig,
-        logPath: join(params.logsDir, "fresh-models-set.log"),
-      });
-    });
-
     const authoredConfigPath = join(lane.stateDir, "openclaw.json");
     const nestedPluginPath = "~/.openclaw/wiki";
-    await runTimedLanePhase(lane, "seed-nested-plugin-path", async () => {
-      const config = JSON.parse(readFileSync(authoredConfigPath, "utf8"));
-      config.plugins ??= {};
-      config.plugins.entries ??= {};
-      // A disabled entry exercises generic path expansion without changing provider setup.
-      config.plugins.entries.wiki = {
-        enabled: false,
-        config: { store: { path: nestedPluginPath } },
-      };
-      writeFileSync(authoredConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    const agent = await runPackagedGatewaySmoke({
+      ...params,
+      lane,
+      env,
+      cleanup,
+      beforeGatewayStart: () =>
+        runTimedLanePhase(lane, "seed-nested-plugin-path", async () => {
+          const config = JSON.parse(readFileSync(authoredConfigPath, "utf8"));
+          config.plugins ??= {};
+          config.plugins.entries ??= {};
+          // A disabled entry exercises generic path expansion without changing provider setup.
+          config.plugins.entries.wiki = {
+            enabled: false,
+            config: { store: { path: nestedPluginPath } },
+          };
+          writeFileSync(authoredConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+        }),
+      afterGatewayReady: () =>
+        runTimedLanePhase(lane, "verify-nested-plugin-path", async () => {
+          const config = JSON.parse(readFileSync(authoredConfigPath, "utf8"));
+          if (config.plugins?.entries?.wiki?.config?.store?.path !== nestedPluginPath) {
+            throw new Error("Fresh Gateway startup changed the authored nested plugin path.");
+          }
+        }),
     });
-
-    const gateway = await runTimedLanePhase(lane, "start-gateway", async () => {
-      await gatewayPortReservation.release();
-      return startGateway({
-        lane,
-        env,
-        logPath: join(params.logsDir, "fresh-gateway.log"),
-      });
-    });
-    gatewayHolder.current = gateway;
-    cleanup.push(() => stopGateway(gatewayHolder.current));
-
-    await runTimedLanePhase(lane, "wait-gateway", async () => {
-      await waitForGateway({
-        lane,
-        env,
-        gatewayHolder,
-        gatewayLogPath: join(params.logsDir, "fresh-gateway.log"),
-        logPath: join(params.logsDir, "fresh-gateway-status.log"),
-      });
-    });
-
-    await runTimedLanePhase(lane, "verify-nested-plugin-path", async () => {
-      const config = JSON.parse(readFileSync(authoredConfigPath, "utf8"));
-      if (config.plugins?.entries?.wiki?.config?.store?.path !== nestedPluginPath) {
-        throw new Error("Fresh Gateway startup changed the authored nested plugin path.");
-      }
-    });
-
-    await runTimedLanePhase(lane, "dashboard", async () => {
-      await runDashboardSmoke({
-        lane,
-        logPath: join(params.logsDir, "fresh-dashboard.log"),
-      });
-    });
-
-    const agent = await runTimedLanePhase(lane, "agent-turn", async () =>
-      runAgentTurn({
-        lane,
-        env,
-        label: "fresh",
-        logPath: join(params.logsDir, "fresh-agent.log"),
-      }),
-    );
 
     return {
       status: "pass",
@@ -244,7 +192,6 @@ export async function runUpgradeLane(
   }
   const lane = createLaneState("upgrade");
   const cleanup: Cleanup[] = [];
-  const gatewayHolder: { current: GatewayHandle | null } = { current: null };
   const result: LaneResult = {
     status: "pending",
     phaseTimings: lane.phaseTimings,
@@ -272,13 +219,13 @@ export async function runUpgradeLane(
         });
       }
     });
-    await runTimedLanePhase(lane, "run-baseline-bundled-plugin-postinstall", async () => {
-      await runBundledPluginPostinstall({
+    await runTimedLanePhase(lane, "run-baseline-bundled-plugin-postinstall", () =>
+      runBundledPluginPostinstall({
         lane,
         env,
         logPath: join(params.logsDir, "upgrade-install-baseline.log"),
-      });
-    });
+      }),
+    );
 
     const baseline = {
       version: readInstalledVersion(lane.prefixDir),
@@ -409,9 +356,7 @@ export async function runUpgradeLane(
         );
       });
     } else {
-      verifyPackagedUpgradeUpdateResult(updateResult, {
-        candidateVersion: params.build.candidateVersion,
-      });
+      verifyPackagedUpgradeUpdateResult(updateResult);
     }
 
     if (
@@ -420,86 +365,29 @@ export async function runUpgradeLane(
         usedWindowsPackagedUpgradeFallback,
       })
     ) {
-      await runTimedLanePhase(lane, "update-status", async () => {
-        await runOpenClaw({
+      await runTimedLanePhase(lane, "update-status", () =>
+        runOpenClaw({
           lane,
           env: updateEnv,
           args: ["update", "status", "--json"],
           logPath: join(params.logsDir, "upgrade-update-status.log"),
           timeoutMs: 2 * 60 * 1000,
-        });
-      });
+        }),
+      );
     }
-    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", async () => {
-      await runBundledPluginPostinstall({
+    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", () =>
+      runBundledPluginPostinstall({
         lane,
         env,
         logPath: join(params.logsDir, "upgrade-bundled-plugin-postinstall.log"),
-      });
-    });
+      }),
+    );
 
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
 
     await installLaneCompanions({ ...params, lane, env });
-
-    // Own the configured port through setup; release only when the gateway can claim it.
-    const gatewayPortReservation = await reserveGatewayPortForLane(lane);
-    cleanup.push(() => gatewayPortReservation.release());
-    await runTimedLanePhase(lane, "onboard", async () => {
-      await runOnboard({
-        lane,
-        env,
-        providerConfig: params.providerConfig,
-        logPath: join(params.logsDir, "upgrade-onboard.log"),
-      });
-    });
-
-    await runTimedLanePhase(lane, "models-set", async () => {
-      await runModelsSet({
-        lane,
-        env,
-        providerConfig: params.providerConfig,
-        logPath: join(params.logsDir, "upgrade-models-set.log"),
-      });
-    });
-
-    const gateway = await runTimedLanePhase(lane, "start-gateway", async () => {
-      await gatewayPortReservation.release();
-      return startGateway({
-        lane,
-        env,
-        logPath: join(params.logsDir, "upgrade-gateway.log"),
-      });
-    });
-    gatewayHolder.current = gateway;
-    cleanup.push(() => stopGateway(gatewayHolder.current));
-
-    await runTimedLanePhase(lane, "wait-gateway", async () => {
-      await waitForGateway({
-        lane,
-        env,
-        gatewayHolder,
-        gatewayLogPath: join(params.logsDir, "upgrade-gateway.log"),
-        logPath: join(params.logsDir, "upgrade-gateway-status.log"),
-      });
-    });
-
-    await runTimedLanePhase(lane, "dashboard", async () => {
-      await runDashboardSmoke({
-        lane,
-        logPath: join(params.logsDir, "upgrade-dashboard.log"),
-      });
-    });
-
-    const agent = await runTimedLanePhase(lane, "agent-turn", async () =>
-      runAgentTurn({
-        lane,
-        env,
-        label: "upgrade",
-        logPath: join(params.logsDir, "upgrade-agent.log"),
-      }),
-    );
+    const agent = await runPackagedGatewaySmoke({ ...params, lane, env, cleanup });
 
     return {
       ...result,
@@ -520,6 +408,65 @@ export async function runUpgradeLane(
   } finally {
     await runCleanup(cleanup);
   }
+}
+
+async function runPackagedGatewaySmoke(
+  params: Pick<LaneBaseParams, "logsDir" | "providerConfig"> & {
+    lane: LaneState;
+    env: NodeJS.ProcessEnv;
+    cleanup: Cleanup[];
+    beforeGatewayStart?: () => Promise<void>;
+    afterGatewayReady?: () => Promise<void>;
+  },
+) {
+  const { lane, env, cleanup } = params;
+  const gatewayHolder: { current: GatewayHandle | null } = { current: null };
+  const logPath = (phase: string) => join(params.logsDir, `${lane.name}-${phase}.log`);
+  // Own the configured port through setup; release only when the gateway can claim it.
+  const gatewayPortReservation = await reserveGatewayPortForLane(lane);
+  cleanup.push(() => gatewayPortReservation.release());
+  await runTimedLanePhase(lane, "onboard", () =>
+    runOnboard({
+      lane,
+      env,
+      providerConfig: params.providerConfig,
+      logPath: logPath("onboard"),
+    }),
+  );
+  await runTimedLanePhase(lane, "models-set", () =>
+    runModelsSet({
+      lane,
+      env,
+      providerConfig: params.providerConfig,
+      logPath: logPath("models-set"),
+    }),
+  );
+  if (params.beforeGatewayStart) {
+    await params.beforeGatewayStart();
+  }
+  gatewayHolder.current = await runTimedLanePhase(lane, "start-gateway", async () => {
+    await gatewayPortReservation.release();
+    return startGateway({ lane, env, logPath: logPath("gateway") });
+  });
+  cleanup.push(() => stopGateway(gatewayHolder.current));
+  await runTimedLanePhase(lane, "wait-gateway", () =>
+    waitForGateway({
+      lane,
+      env,
+      gatewayHolder,
+      gatewayLogPath: logPath("gateway"),
+      logPath: logPath("gateway-status"),
+    }),
+  );
+  if (params.afterGatewayReady) {
+    await params.afterGatewayReady();
+  }
+  await runTimedLanePhase(lane, "dashboard", () =>
+    runDashboardSmoke({ lane, logPath: logPath("dashboard") }),
+  );
+  return runTimedLanePhase(lane, "agent-turn", () =>
+    runAgentTurn({ lane, env, label: lane.name, logPath: logPath("agent") }),
+  );
 }
 
 export async function runInstallerFreshSuite(
@@ -974,7 +921,9 @@ export async function runDevUpdateSuite(
 }
 
 function createLaneState(name: string): LaneState {
-  const rootDir = mkdtempSync(join(tmpdir(), `openclaw-${name}-`));
+  const createdRootDir = mkdtempSync(join(tmpdir(), `openclaw-${name}-`));
+  const rootDir =
+    process.platform === "darwin" ? realpathSync.native(createdRootDir) : createdRootDir;
   const prefixDir = join(rootDir, "prefix");
   const homeDir = join(rootDir, "home");
   const stateDir = join(homeDir, ".openclaw");
@@ -1024,9 +973,9 @@ function buildLaneEnv(
 
 function inheritLaneEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  if (process.platform === "win32") {
-    // Published updaters cannot be patched: use long paths for their handoff
-    // receipts while keeping the runner's existing physical temp directories.
+  if (process.platform === "win32" || process.platform === "darwin") {
+    // Published updaters cannot be patched: use canonical paths for their
+    // handoff receipts while keeping the runner's physical temp directories.
     for (const key of Object.keys(env)) {
       const value = env[key];
       if (["TEMP", "TMP", "TMPDIR"].includes(key.toUpperCase()) && value) {
@@ -1080,18 +1029,16 @@ export function resolveManagedGatewayInstallerEnv(params: {
     APPDATA: hostEnv.APPDATA,
     LOCALAPPDATA: hostEnv.LOCALAPPDATA,
   };
-  const isolatedIdentityKeys = new Set(
-    [
-      "OPENCLAW_HOME",
-      "OPENCLAW_PROFILE",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_CONFIG_PATH",
-      "OPENCLAW_WINDOWS_TASK_NAME",
-      "OPENCLAW_TASK_SCRIPT_NAME",
-      "OPENCLAW_TASK_SCRIPT",
-      "OPENCLAW_SERVICE_KIND",
-    ].map((key) => key.toUpperCase()),
-  );
+  const isolatedIdentityKeys = new Set([
+    "OPENCLAW_HOME",
+    "OPENCLAW_PROFILE",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_WINDOWS_TASK_NAME",
+    "OPENCLAW_TASK_SCRIPT_NAME",
+    "OPENCLAW_TASK_SCRIPT",
+    "OPENCLAW_SERVICE_KIND",
+  ]);
   // Windows environment keys are case-insensitive. Remove every casing variant
   // so the installed CLI cannot inherit the isolated lane identity.
   for (const key of Object.keys(env)) {

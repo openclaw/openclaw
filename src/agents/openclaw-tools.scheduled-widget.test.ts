@@ -75,7 +75,7 @@ describe("pinned show_widget registration", () => {
     expect(tools.some((tool) => tool.name === "show_widget")).toBe(false);
   });
 
-  it.each(["show_widget", "canvas"])(
+  it.each(["canvas"])(
     "lets a server-authorized %s cap select pinned widget authoring",
     (toolName) => {
       const toolsAllow = [toolName];

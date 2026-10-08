@@ -28,6 +28,7 @@ import {
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
+  withoutReleaseWaivedLiveFiles,
 } from "../../scripts/test-live-shard.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
@@ -36,6 +37,21 @@ import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
+
+  it("drops release-waived single-case live files only for the waived candidate version", () => {
+    const files = [
+      "src/gateway/gateway-progress-refresh.live.test.ts",
+      "src/gateway/gateway-codex-harness.live.test.ts",
+      "test/gateway-subagent-restart.live.test.ts",
+    ];
+    for (const version of ["2026.9.8", "2026.9.9"]) {
+      expect(withoutReleaseWaivedLiveFiles(files, version)).toEqual([
+        "src/gateway/gateway-codex-harness.live.test.ts",
+      ]);
+    }
+    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.10")).toEqual(files);
+    expect(withoutReleaseWaivedLiveFiles(files, undefined)).toEqual(files);
+  });
 
   it("discovers live tests without scanning source roots in-process", () => {
     expectNoReaddirSyncDuring(() => {
@@ -102,7 +118,6 @@ describe("scripts/test-live-shard", () => {
       "native-live-src-agents": [
         "src/agents/zai.live.test.ts",
         "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
-        "src/skills/workshop/experience-review.live.test.ts",
       ],
       "native-live-src-agents-zai-coding": ["src/agents/zai.live.test.ts"],
       "native-live-src-gateway-backends": [
@@ -418,7 +433,6 @@ describe("scripts/test-live-shard", () => {
     ["src/gateway/gateway-cli-backend.live.test.ts", "OPENCLAW_LIVE_CLI_BACKEND"],
     ["src/gateway/gateway-acp-spawn-defaults.live.test.ts", "OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS"],
     ["src/gateway/gateway-openai-long-context.live.test.ts", "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT"],
-    ["src/skills/workshop/experience-review.live.test.ts", "OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"],
     ["src/agents/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
     ["src/agents/subagents/announce/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
     [
@@ -426,7 +440,15 @@ describe("scripts/test-live-shard", () => {
       "OPENCLAW_LIVE_SUBAGENT_E2E",
     ],
     [
+      "src/agents/subagents/announce/subagent-followup-yield.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_E2E",
+    ],
+    [
       "src/agents/subagents/announce/subagent-late-reply.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_STRESS",
+    ],
+    [
+      "src/agents/subagents/announce/subagent-yield-pause.live.test.ts",
       "OPENCLAW_LIVE_SUBAGENT_STRESS",
     ],
     [
