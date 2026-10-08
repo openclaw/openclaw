@@ -230,54 +230,54 @@ describe("Bedrock reasoning replay", () => {
 });
 
 describe("Bedrock prompt cache ownership", () => {
-  it.each([["global.amazon.nova-2-lite-v1:0", true]])(
-    "emits only supported Nova checkpoints for %s",
-    async (id, supported) => {
-      vi.stubEnv("OPENCLAW_CACHE_RETENTION", "long");
-      vi.stubEnv("AWS_BEDROCK_FORCE_CACHE", "1");
-      const tools = [
-        { name: "lookup", description: "Lookup", parameters: { type: "object", properties: {} } },
+  it.each([
+    ["global.amazon.nova-2-lite-v1:0", true],
+    ["amazon.nova-sonic-v1:0", false],
+  ])("emits only supported Nova checkpoints for %s", async (id, supported) => {
+    vi.stubEnv("OPENCLAW_CACHE_RETENTION", supported ? "long" : undefined);
+    vi.stubEnv("AWS_BEDROCK_FORCE_CACHE", supported ? "1" : undefined);
+    const tools = [
+      { name: "lookup", description: "Lookup", parameters: { type: "object", properties: {} } },
+      {
+        name: "calculate",
+        description: "Calculate",
+        parameters: { type: "object", properties: {} },
+      },
+    ];
+    for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
+      const payload = await capturePayload(
+        bedrockModel({ id, name: "Nova Pro" }),
         {
-          name: "calculate",
-          description: "Calculate",
-          parameters: { type: "object", properties: {} },
+          systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Today: Monday`,
+          messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+          tools,
         },
-      ];
-      for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
-        const payload = await capturePayload(
-          bedrockModel({ id, name: "Nova Pro" }),
-          {
-            systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Today: Monday`,
-            messages: [{ role: "user", content: "Hello", timestamp: 0 }],
-            tools,
-          },
-          cacheRetention === undefined ? {} : { cacheRetention },
-        );
-        if (supported && (cacheRetention === "short" || cacheRetention === "long")) {
-          expect(payload.system).toEqual([
-            { text: "Stable workspace" },
-            { cachePoint: { type: "default" } },
-            { text: "Today: Monday" },
-          ]);
-          expect(payload.messages?.[0]?.content).toEqual([
-            { text: "Hello" },
-            { cachePoint: { type: "default" } },
-          ]);
-        } else {
-          expect(JSON.stringify(payload)).not.toContain("cachePoint");
-          if (supported || cacheRetention === "none") {
-            expect(payload.system).toEqual([{ text: "Stable workspace\nToday: Monday" }]);
-          }
-        }
-        expect(payload.toolConfig?.tools?.map((tool) => tool.toolSpec?.name)).toEqual([
-          "calculate",
-          "lookup",
+        cacheRetention === undefined ? {} : { cacheRetention },
+      );
+      if (supported && (cacheRetention === "short" || cacheRetention === "long")) {
+        expect(payload.system).toEqual([
+          { text: "Stable workspace" },
+          { cachePoint: { type: "default" } },
+          { text: "Today: Monday" },
         ]);
-        expect(tools.map((tool) => tool.name)).toEqual(["lookup", "calculate"]);
-        expect(JSON.stringify(payload.toolConfig)).not.toContain("cachePoint");
+        expect(payload.messages?.[0]?.content).toEqual([
+          { text: "Hello" },
+          { cachePoint: { type: "default" } },
+        ]);
+      } else {
+        expect(JSON.stringify(payload)).not.toContain("cachePoint");
+        if (supported || cacheRetention === "none") {
+          expect(payload.system).toEqual([{ text: "Stable workspace\nToday: Monday" }]);
+        }
       }
-    },
-  );
+      expect(payload.toolConfig?.tools?.map((tool) => tool.toolSpec?.name)).toEqual([
+        "calculate",
+        "lookup",
+      ]);
+      expect(tools.map((tool) => tool.name)).toEqual(["lookup", "calculate"]);
+      expect(JSON.stringify(payload.toolConfig)).not.toContain("cachePoint");
+    }
+  });
 
   it.each(["direct"])(
     "advances the retained-carrier checkpoint through a tool loop (%s)",
@@ -867,38 +867,6 @@ function expectDestroyedClient(
     send.mock.invocationCallOrder[0] ?? 0,
   );
 }
-
-describe("Bedrock provider-owned stream lifecycle", () => {
-  it("finalizes the active thinking block at the provider terminal boundary", async () => {
-    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: streamEvents([
-        { messageStart: { role: ConversationRole.ASSISTANT } },
-        {
-          contentBlockDelta: {
-            contentBlockIndex: 0,
-            delta: { reasoningContent: { text: "considered" } },
-          },
-        },
-        { messageStop: { stopReason: BedrockStopReason.END_TURN } },
-      ]),
-    } as never);
-
-    const stream = streamSimpleBedrock(bedrockModel({}), {
-      messages: [{ role: "user", content: "Continue", timestamp: 0 }],
-    });
-    const observed = [];
-    for await (const event of stream) {
-      observed.push(event.type);
-    }
-    const output = await stream.result();
-
-    expect(observed.at(-2)).toBe("thinking_end");
-    expect(observed.at(-1)).toBe("done");
-    expect(output.content[0]).not.toHaveProperty("index");
-    expect(output.content[0]).not.toHaveProperty("partialJson");
-  });
-});
 
 describe("Bedrock stream client lifecycle", () => {
   function streamDefaultBedrock(options: Parameters<typeof streamSimpleBedrock>[2] = {}) {

@@ -907,6 +907,14 @@ describe("registerSlackInteractionEvents", () => {
       name: "a missing current message",
       current: "missing",
     },
+    {
+      name: "a replacement approval card",
+      current: "replacement",
+    },
+    {
+      name: "a card for a different approval kind",
+      current: "different-kind",
+    },
   ] as const)(
     "registered approval handler reads $name after mocked resolution",
     async ({ current }) => {
@@ -931,7 +939,12 @@ describe("registerSlackInteractionEvents", () => {
             : [
                 {
                   ts: "100.200",
-                  blocks: [{ type: "section", text: { type: "mrkdwn", text: "Applied" } }],
+                  blocks:
+                    current === "replacement"
+                      ? approvalButtonBlocks("replacement", "system-agent", "allow-once")
+                      : current === "different-kind"
+                        ? approvalButtonBlocks(approvalId, "exec", "allow-once")
+                        : [{ type: "section", text: { type: "mrkdwn", text: "Applied" } }],
                 },
               ],
         hasMore: false,
@@ -2780,6 +2793,7 @@ describe("registerSlackInteractionEvents", () => {
 
   it.each([
     { name: "current", actionId: "openclaw:reply_link:1:1", value: undefined },
+    { name: "session", actionId: "openclaw:session_link", value: undefined },
     { name: "additional session", actionId: "openclaw:session_link:1", value: undefined },
     {
       name: "legacy",

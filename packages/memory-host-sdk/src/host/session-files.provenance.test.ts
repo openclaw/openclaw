@@ -22,41 +22,44 @@ async function writeTranscript(name: string, records: unknown[]): Promise<string
 }
 
 describe("session transcript provenance", () => {
-  it("discards earlier archive lines after an authoritative tool result identifies a dreaming run", async () => {
-    const records = [
-      { type: "message", message: { role: "user", content: "Private fragment from dreaming." } },
-      {
-        type: "message",
-        message: {
-          role: "toolResult",
-          content: "Internal narrative output.",
-          __openclaw: { runId: "dreaming-narrative-main-light-real" },
+  it.each(["assistant", "toolResult"])(
+    "discards earlier archive lines after an authoritative %s event identifies a dreaming run",
+    async (role) => {
+      const records = [
+        { type: "message", message: { role: "user", content: "Private fragment from dreaming." } },
+        {
+          type: "message",
+          message: {
+            role,
+            content: "Internal narrative output.",
+            __openclaw: { runId: "dreaming-narrative-main-light-real" },
+          },
         },
-      },
-      { type: "message", message: { role: "assistant", content: "Later dreaming output." } },
-    ];
-    const filePath = await writeTranscript(
-      "narrative.jsonl.deleted.2026-08-26T10-00-00.000Z",
-      records,
-    );
-    const observer = vi.fn();
+        { type: "message", message: { role: "assistant", content: "Later dreaming output." } },
+      ];
+      const filePath = await writeTranscript(
+        "narrative.jsonl.deleted.2026-08-26T10-00-00.000Z",
+        records,
+      );
+      const observer = vi.fn();
 
-    const entry = await buildSessionEntry(filePath, {
-      sessionKind: "unknown",
-      onTranscriptMessage: observer,
-    });
+      const entry = await buildSessionEntry(filePath, {
+        sessionKind: "unknown",
+        onTranscriptMessage: observer,
+      });
 
-    expect(entry?.generatedByDreamingNarrative).toBe(true);
-    expect(entry?.content).toBe("");
-    expect(entry?.lineProvenance).toEqual([]);
-    expect(entry?.lineMap).toEqual([]);
-    expect(entry?.messageTimestampsMs).toEqual([]);
-    expect(observer.mock.calls.map(([message]) => message)).toEqual(
-      records
-        .filter((record) => record.message.role !== "toolResult")
-        .map((record) => record.message),
-    );
-  });
+      expect(entry?.generatedByDreamingNarrative).toBe(true);
+      expect(entry?.content).toBe("");
+      expect(entry?.lineProvenance).toEqual([]);
+      expect(entry?.lineMap).toEqual([]);
+      expect(entry?.messageTimestampsMs).toEqual([]);
+      expect(observer.mock.calls.map(([message]) => message)).toEqual(
+        records
+          .filter((record) => record.message.role !== "toolResult")
+          .map((record) => record.message),
+      );
+    },
+  );
 
   it("does not treat run identity on user-authored transcript messages as authoritative", async () => {
     const filePath = await writeTranscript("interactive.jsonl", [

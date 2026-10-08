@@ -8,7 +8,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { getSkillsSnapshotVersion } from "./refresh-state.js";
+import { getSkillsSnapshotVersion, getSkillsSourceVersion } from "./refresh-state.js";
 import { toWatchRoot } from "./refresh-watch-path.js";
 import { pathWatchers } from "./refresh-watch-registry.js";
 import { useSkillsWatcherFixture } from "./refresh.watcher.test-support.js";
@@ -126,6 +126,26 @@ const ensure = (config?: OpenClawConfig) => {
   });
   return ready();
 };
+
+it("discovers a newly created root and keeps observing edits and deletion", async () => {
+  const root = path.join(fixture.workspaceDir, "skills");
+  const write = (description: string) =>
+    writeSkill({ dir: path.join(root, "guide"), name: "guide", description });
+  await fs.rm(root, { recursive: true });
+  await ensure();
+  expect(read()).toEqual([]);
+  await write("Created");
+  await reconcile();
+  expect(read()).toEqual(["Created"]);
+  const version = getSkillsSourceVersion(fixture.workspaceDir);
+  await write("Edited");
+  await reconcile();
+  expect(getSkillsSourceVersion(fixture.workspaceDir)).toBeGreaterThan(version);
+  expect(read()).toEqual(["Edited"]);
+  await fs.rm(root, { recursive: true });
+  await reconcile();
+  expect(read()).toEqual([]);
+});
 
 it("keeps admitted symlink coverage available after unchanged overflow", async () => {
   const root = path.join(fixture.workspaceDir, "skills");

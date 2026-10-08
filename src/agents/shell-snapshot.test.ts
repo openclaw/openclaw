@@ -30,13 +30,39 @@ function resolveBashForTest(): string | null {
   return getBashShellConfig().shell;
 }
 
-function setSnapshotStateForTest(stateDir: string, options: { home?: string } = {}): void {
+function resolveZshForTest(): string | null {
+  if (isWin) {
+    return null;
+  }
+  if (fs.existsSync("/bin/zsh")) {
+    return "/bin/zsh";
+  }
+  for (const entry of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(entry, "zsh");
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep searching the test host PATH.
+    }
+  }
+  return null;
+}
+
+function setSnapshotStateForTest(
+  stateDir: string,
+  options: { home?: string; zdotdir?: string } = {},
+): void {
   // Snapshot tests mutate trusted process env, not per-command untrusted env.
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   if (options.home) {
     setTestEnvValue("HOME", options.home);
   }
-  delete process.env.ZDOTDIR;
+  if (options.zdotdir) {
+    process.env.ZDOTDIR = options.zdotdir;
+  } else {
+    delete process.env.ZDOTDIR;
+  }
 }
 
 describe("exec shell snapshots", () => {
@@ -419,5 +445,96 @@ describe("exec shell snapshots", () => {
       ? fs.readdirSync(snapshotDir).filter((entry) => entry.endsWith(".sh"))
       : [];
     expect(files).toHaveLength(0);
+  });
+
+  it("captures zsh aliases in sourceable form", async () => {
+    const zsh = resolveZshForTest();
+    if (!zsh) {
+      return;
+    }
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zsh-home-"));
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zsh-state-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zsh-cwd-"));
+    tempDirs.push(home, stateDir, cwd);
+    setSnapshotStateForTest(stateDir, { home });
+    fs.writeFileSync(
+      path.join(home, ".zshrc"),
+      [
+        "alias oc_snap_zsh_alias='printf zsh-alias-ok'",
+        "oc_snap_zsh_fn() { printf zsh-fn-ok; }",
+        "",
+      ].join("\n"),
+    );
+
+    const env = {
+      ...process.env,
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const shellArgs = getPosixShellArgs(zsh);
+    const wrapped = await maybeWrapCommandWithShellSnapshot({
+      command: "oc_snap_zsh_fn; printf ' '; oc_snap_zsh_alias",
+      shell: zsh,
+      shellArgs,
+      cwd,
+      env,
+    });
+
+    const result = spawnSync(zsh, [...shellArgs, wrapped], {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("zsh-fn-ok zsh-alias-ok");
+  });
+
+  it("captures zsh startup state from ZDOTDIR", async () => {
+    const zsh = resolveZshForTest();
+    if (!zsh) {
+      return;
+    }
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zdot-home-"));
+    const zdotdir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zdot-dir-"));
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zdot-state-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zdot-cwd-"));
+    tempDirs.push(home, zdotdir, stateDir, cwd);
+    setSnapshotStateForTest(stateDir, { home, zdotdir });
+    fs.writeFileSync(path.join(home, ".zshrc"), "alias oc_snap_zdot_alias='printf wrong-home'\n");
+    fs.writeFileSync(
+      path.join(zdotdir, ".zshrc"),
+      ["[[ -o interactive ]] || return", "alias oc_snap_zdot_alias='printf zdotdir-ok'", ""].join(
+        "\n",
+      ),
+    );
+
+    const env = {
+      ...process.env,
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      ZDOTDIR: zdotdir,
+    };
+    const shellArgs = getPosixShellArgs(zsh);
+    const wrapped = await maybeWrapCommandWithShellSnapshot({
+      command: "oc_snap_zdot_alias",
+      shell: zsh,
+      shellArgs,
+      cwd,
+      env,
+    });
+
+    const result = spawnSync(zsh, [...shellArgs, wrapped], {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("zdotdir-ok");
   });
 });

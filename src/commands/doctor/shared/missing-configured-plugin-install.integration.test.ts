@@ -46,7 +46,7 @@ describe("Doctor same-version required dependency repair", () => {
     }
   });
 
-  it.each(["repaired", "killed-npm", "effect-refused"] as const)(
+  it.each(["repaired", "hollow-replacement", "killed-npm", "effect-refused"] as const)(
     "%s preserves the recorded generation and configuration through the real updater",
     { timeout: 180_000 },
     async (scenario) => {
@@ -207,6 +207,15 @@ describe("Doctor same-version required dependency repair", () => {
                     result.code === 0
                   ) {
                     npmInstalls++;
+                    if (scenario === "hollow-replacement") {
+                      const stageDir = typeof options === "object" ? options.cwd : undefined;
+                      if (!stageDir) {
+                        throw new Error("Missing npm staging directory");
+                      }
+                      await fsPromises.rm(path.join(stageDir, "node_modules", dependency), {
+                        recursive: true,
+                      });
+                    }
                   }
                   return result;
                 },
@@ -267,7 +276,9 @@ describe("Doctor same-version required dependency repair", () => {
                 } else {
                   expect(result.failedPluginIds).toEqual([packageName]);
                   expect(result.records).toEqual(records);
-                  expect(result.warnings.join("\n")).toContain("npm install failed");
+                  expect(result.warnings.join("\n")).toContain(
+                    scenario === "killed-npm" ? "npm install failed" : dependency,
+                  );
                 }
               }
               expect(killedNpm).toBe(scenario === "killed-npm");
@@ -355,11 +366,17 @@ describe("configured plugin install health for explicit load paths", () => {
     );
   }
 
-  async function createMalformedCodexBundleFixture() {
-    const rootDir = tempDirs.make("openclaw-codex-malformed-");
+  async function createConfiguredCodexBundleFixture(manifestState: "valid" | "malformed") {
+    const rootDir = tempDirs.make(`openclaw-codex-${manifestState}-`);
     const pluginDir = path.join(rootDir, "gmail");
     fs.mkdirSync(path.join(pluginDir, ".codex-plugin"), { recursive: true });
-    fs.writeFileSync(path.join(pluginDir, ".codex-plugin", "plugin.json"), "{not-json", "utf8");
+    fs.writeFileSync(
+      path.join(pluginDir, ".codex-plugin", "plugin.json"),
+      manifestState === "valid"
+        ? JSON.stringify({ name: "gmail", apps: "./.app.json" })
+        : "{not-json",
+      "utf8",
+    );
     fs.writeFileSync(
       path.join(pluginDir, ".app.json"),
       JSON.stringify({ apps: { gmail: { id: "connector_test" } } }),
@@ -486,8 +503,30 @@ describe("configured plugin install health for explicit load paths", () => {
     expect(await loadInstalledPluginIndexInstallRecords({ env })).toEqual(records);
   });
 
+  it("keeps a configured Gmail Codex app bundle without package.json", async () => {
+    const { cfg, env, pluginDir } = await createConfiguredCodexBundleFixture("valid");
+
+    const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
+    expect(snapshot.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "gmail",
+          origin: "config",
+          rootDir: pluginDir,
+          bundleFormat: "codex",
+        }),
+      ]),
+    );
+    expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env })).toStrictEqual([]);
+
+    const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
+    expect(repair).toMatchObject({ changes: [], warnings: [] });
+    expect(repair.records.gmail).toMatchObject({ source: "path", installPath: pluginDir });
+    expect(await loadInstalledPluginIndexInstallRecords({ env })).toHaveProperty("gmail");
+  });
+
   it("classifies a malformed Codex bundle manifest as repairable", async () => {
-    const { cfg, env } = await createMalformedCodexBundleFixture();
+    const { cfg, env } = await createConfiguredCodexBundleFixture("malformed");
 
     const issues = await detectConfiguredPluginInstallHealthIssues({ cfg, env });
     expect(issues).toEqual([

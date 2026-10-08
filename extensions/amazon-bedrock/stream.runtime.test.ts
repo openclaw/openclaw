@@ -118,6 +118,64 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("destroys the client after an aborted Bedrock request", async () => {
+  const controller = new AbortController();
+  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(() => {
+    controller.abort();
+    throw new Error("synthetic abort");
+  });
+  const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
+
+  const result = await streamBedrockForTest(
+    bedrockModel({}),
+    { messages: [{ role: "user", content: "Hello", timestamp: 0 }] },
+    { signal: controller.signal },
+  ).result();
+
+  expect(result).toMatchObject({ stopReason: "aborted", errorMessage: "synthetic abort" });
+  expect(send).toHaveBeenCalledOnce();
+  expect(destroy).toHaveBeenCalledOnce();
+  expect(destroy.mock.contexts[0]).toBe(send.mock.contexts[0]);
+  expect(destroy.mock.invocationCallOrder[0]).toBeGreaterThan(
+    send.mock.invocationCallOrder[0] ?? 0,
+  );
+});
+
+it.each([
+  { label: "text", delta: { text: "ready" }, endEvent: "text_end" },
+  {
+    label: "redacted thinking",
+    delta: { reasoningContent: { redactedContent: new Uint8Array([1, 2, 3]) } },
+    endEvent: "thinking_end",
+  },
+])("finalizes the active $label block at the provider terminal boundary", async (scenario) => {
+  vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+    $metadata: { httpStatusCode: 200 },
+    stream: streamEvents([
+      { messageStart: { role: ConversationRole.ASSISTANT } },
+      { contentBlockDelta: { contentBlockIndex: 0, delta: scenario.delta } },
+      { messageStop: { stopReason: BedrockStopReason.END_TURN } },
+    ]),
+  } as never);
+
+  const stream = streamSimpleBedrock(bedrockModel({}), {
+    messages: [{ role: "user", content: "Continue", timestamp: 0 }],
+  });
+  const observed = [];
+  for await (const event of stream) {
+    observed.push(event.type);
+  }
+  const output = await stream.result();
+
+  expect(observed.at(-2)).toBe(scenario.endEvent);
+  expect(observed.at(-1)).toBe("done");
+  expect(output.content[0]).not.toHaveProperty("index");
+  expect(output.content[0]).not.toHaveProperty("partialJson");
+  if (scenario.label === "redacted thinking") {
+    expect(output.content[0]).toMatchObject({ redacted: true, thinkingSignature: "AQID" });
+  }
+});
+
 describe("Bedrock inbound image base64", () => {
   const model = () => bedrockModel({ input: ["text", "image"] });
   const userImage = (data: string) =>
@@ -148,6 +206,36 @@ describe("Bedrock inbound image base64", () => {
 });
 
 describe("Bedrock tool-result replay", () => {
+  it("drops model-bound opaque reasoning when switching between Claude models", async () => {
+    const input = await captureCommandInput(
+      bedrockModel({
+        id: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        name: "Claude Sonnet 4.5",
+      }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: "bedrock-converse-stream",
+            provider: "amazon-bedrock",
+            model: "anthropic.claude-haiku-4-5-20251001-v1:0",
+            content: [
+              {
+                type: "thinking",
+                thinking: "[Reasoning redacted]",
+                thinkingSignature: "3q2+7w==",
+                redacted: true,
+              },
+              { type: "text", text: "Safe visible response" },
+            ],
+          },
+        ],
+      } as never,
+    );
+
+    expect(input.messages).toMatchObject([{ content: [{ text: "Safe visible response" }] }]);
+  });
+
   it("replays unsupported audio attachments as their canonical text placeholder", async () => {
     const input = await captureCommandInput(bedrockModel({ input: ["text", "image"] }), {
       messages: [

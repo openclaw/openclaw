@@ -157,6 +157,27 @@ describe("Node Code Mode executor", () => {
     });
   });
 
+  it("interrupts guest execution after an async yield and recovers the worker", async () => {
+    const started = performance.now();
+    expect(
+      await execute(
+        'text("before"); json({ n: 1 }); console.log("diagnostic"); await null; while (true) {}',
+        { executionTimeoutMs: 30 },
+      ),
+    ).toMatchObject({
+      status: "failed",
+      code: "timeout",
+      error: "code mode timeout exceeded",
+      failurePhase: "guest",
+    });
+    // Includes cold Worker startup, but must not spend the 5 s wall budget.
+    expect(performance.now() - started).toBeLessThan(2_000);
+    expect(await execute("return 42")).toMatchObject({
+      status: "completed",
+      value: { kind: "complete", json: "42" },
+    });
+  });
+
   it("preserves published output when interrupting inherited JSON hooks", async ({ signal }) => {
     const source =
       'Object.prototype.toJSON = () => { throw new Error("inherited hook"); }; text("safe"); while (true) {}';

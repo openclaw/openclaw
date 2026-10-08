@@ -757,6 +757,44 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.warnings).toStrictEqual([]);
   });
 
+  it("adds repair warnings for blocked ClawHub update outcomes", async () => {
+    const records = {
+      demo: {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/plugin-demo@stable",
+        clawhubPackage: "@openclaw/plugin-demo",
+        installPath: "/missing/demo",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.updateNpmInstalledPlugins.mockResolvedValueOnce({
+      changed: false,
+      config: { plugins: { installs: records } },
+      outcomes: [
+        {
+          pluginId: "demo",
+          status: "skipped",
+          code: "clawhub_download_blocked",
+          message:
+            'Skipped demo ClawHub update: ClawHub release "@openclaw/plugin-demo@1.2.4" cannot be installed because ClawHub flagged it as blocked or malicious. Review the security details above or choose a different version. Existing installed plugin left unchanged.',
+        },
+      ],
+    });
+
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: configuredPlugin("demo"),
+      env: testEnv,
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginIds: ["demo"] }),
+    );
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toStrictEqual([
+      'Skipped demo ClawHub update: ClawHub release "@openclaw/plugin-demo@1.2.4" cannot be installed because ClawHub flagged it as blocked or malicious. Review the security details above or choose a different version. Existing installed plugin left unchanged.',
+    ]);
+  });
+
   it("installs a missing channel plugin selected by environment config from npm", async () => {
     installNpm.mockResolvedValueOnce(
       successfulInstall({
