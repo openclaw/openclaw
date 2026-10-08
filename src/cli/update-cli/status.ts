@@ -39,6 +39,7 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
+import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { VERSION } from "../../version.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
@@ -94,6 +95,10 @@ async function readChannelStatusIssues(
 }
 
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
+  return await withArtifactPreservingStateReads(() => inspectUpdateStatus(opts));
+}
+
+async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
 
   const [root, config, runtimeFindings] = await Promise.all([

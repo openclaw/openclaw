@@ -1677,6 +1677,7 @@ src/state/openclaw-agent-transcript-payload-migration.ts
 src/state/openclaw-agent-write-admission.ts
 src/state/openclaw-database-preflight-agent-scheduler.ts
 src/state/openclaw-database-preflight-cleanup.ts
+src/state/openclaw-database-preflight-state-path.ts
 src/state/openclaw-database-preflight-targets.ts
 src/state/openclaw-database-preflight.messages.ts
 src/state/openclaw-database-preflight.ts
