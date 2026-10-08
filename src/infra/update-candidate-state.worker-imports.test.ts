@@ -13,6 +13,7 @@ vi.mock("./worker-task-server.js", async (importOriginal) => ({
 vi.mock("./update-candidate-state.js", () => {
   throw new Error("file workers must not load state snapshot modules");
 });
+// mock-isolation: Loading the real diagnostics module would defeat the forbidden-import regression.
 vi.mock("./update-candidate-state.diagnostics.js", () => {
   throw new Error("file workers must not load subprocess diagnostics");
 });
