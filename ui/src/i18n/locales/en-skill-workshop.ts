@@ -53,6 +53,8 @@ const enSkillWorkshop = {
       restoreBefore: "Restore before",
       compare: "Compare",
       compareTitle: "Show how the skill read before this change",
+      view: "View",
+      savedBefore: "Saved before it was {action}",
       actors: {
         agent: "Agent",
         review: "Background review",
@@ -81,6 +83,7 @@ const enSkillWorkshop = {
       diffCurrent: "Today",
       diffVersion: "Before",
       noDiff: "This version matches today's instructions.",
+      diffTooLarge: "This version is too different from today's to compare line by line.",
       backToCurrent: "Back to current",
       archivedNotice: "Archived. The agent no longer sees this skill until you restore it.",
       archive: "Archive",

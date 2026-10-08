@@ -37,8 +37,13 @@ export function renderDetail(
   const skill = list.skills.find((entry) => entry.name === target.name);
   const versions = list.archived.find((entry) => entry.name === target.name)?.versions ?? [];
   const history = snapshot.changes.filter((change) => change.skillName === target.name);
+  const listedVersions = new Set(history.map((entry) => entry.versionId).filter(Boolean));
+  const olderVersions = versions.filter((version) => !listedVersions.has(version.id)).length;
+  // A saved version keeps its own file set; the live inventory describes today's copy.
   const files =
-    skill?.files ?? (viewer.status === "ready" ? viewer.result.files : [target.filePath]);
+    target.versionId && viewer.status === "ready"
+      ? viewer.result.files
+      : (skill?.files ?? (viewer.status === "ready" ? viewer.result.files : [target.filePath]));
   const supportFiles = files.filter((file) => file !== "SKILL.md");
   const created = history.findLast((entry) => entry.action === "create");
   const change = latestChanges(snapshot.changes).get(target.name);
@@ -106,7 +111,7 @@ export function renderDetail(
         [
           ["instructions", t("skillWorkshop.tabs.instructions"), null],
           ["files", t("skillWorkshop.tabs.files"), supportFiles.length],
-          ["history", t("skillWorkshop.tabs.history"), history.length],
+          ["history", t("skillWorkshop.tabs.history"), history.length + olderVersions],
         ] as const
       ).map(
         ([tab, label, count]) => html`<button
@@ -122,7 +127,7 @@ export function renderDetail(
     <div class="sw-detail__body">
       ${
         props.tab === "history"
-          ? renderHistory(history, snapshot, props)
+          ? renderHistory(target.name, history, versions, snapshot, props)
           : props.tab === "files"
             ? renderFiles(viewer, supportFiles, props)
             : renderInstructions(viewer, props)
@@ -258,15 +263,43 @@ function renderFiles(
   </div>`;
 }
 
+type SavedVersion = { id: string; action: SkillWorkshopChange["action"]; createdAtMs: number };
+
+/** Compare (live skill) or View (archived) for a retained saved version. */
+function renderVersionLink(
+  name: string,
+  versionId: string,
+  live: boolean,
+  props: SkillWorkshopViewProps,
+) {
+  return html`<button
+    type="button"
+    class="sw-link-button"
+    title=${live ? t("skillWorkshop.changes.compareTitle") : nothing}
+    @click=${() => {
+      props.onTab("instructions");
+      props.onOpen({ name, filePath: "SKILL.md", versionId });
+    }}
+  >
+    ${t(live ? "skillWorkshop.changes.compare" : "skillWorkshop.changes.view")}
+  </button>`;
+}
+
 function renderHistory(
+  name: string,
   history: SkillWorkshopChange[],
+  versions: readonly SavedVersion[],
   snapshot: WorkshopSnapshot,
   props: SkillWorkshopViewProps,
 ) {
-  if (history.length === 0) {
+  // The change feed is recent and agent-wide; versions are what the Gateway still retains.
+  const retained = new Set(versions.map((version) => version.id));
+  const listed = new Set(history.map((change) => change.versionId).filter(Boolean));
+  const older = versions.filter((version) => !listed.has(version.id));
+  if (history.length === 0 && older.length === 0) {
     return renderSettingsEmpty(t("skillWorkshop.changes.empty"));
   }
-  const live = snapshot.list.skills.some((skill) => skill.name === history[0]?.skillName);
+  const live = snapshot.list.skills.some((skill) => skill.name === name);
   return html`<ol class="sw-timeline">
     ${history.map((change, index) => {
       const undo = undoMutationFor(change, snapshot.list);
@@ -282,22 +315,8 @@ function renderHistory(
         </div>
         <div class="sw-timeline__actions">
           ${
-            change.versionId && live && change.action !== "archive"
-              ? html`<button
-                  type="button"
-                  class="sw-link-button"
-                  title=${t("skillWorkshop.changes.compareTitle")}
-                  @click=${() => {
-                    props.onTab("instructions");
-                    props.onOpen({
-                      name: change.skillName,
-                      filePath: "SKILL.md",
-                      versionId: change.versionId,
-                    });
-                  }}
-                >
-                  ${t("skillWorkshop.changes.compare")}
-                </button>`
+            change.versionId && retained.has(change.versionId) && change.action !== "archive"
+              ? renderVersionLink(name, change.versionId, live, props)
               : nothing
           }
           ${
@@ -309,7 +328,7 @@ function renderHistory(
                       ? "skillWorkshop.changes.undo"
                       : "skillWorkshop.changes.restoreBefore",
                   ),
-                  title: t("skillWorkshop.changes.undoTitle", { name: change.skillName }),
+                  title: t("skillWorkshop.changes.undoTitle", { name }),
                   mutation: undo,
                   key: `undo:${change.id}`,
                   variant: "link",
@@ -319,39 +338,84 @@ function renderHistory(
         </div>
       </li>`;
     })}
+    ${older.map(
+      (version) => html`<li class="sw-timeline__item">
+        <span class="sw-timeline__dot" aria-hidden="true"></span>
+        <div class="sw-timeline__text">
+          <span class="sw-timeline__who"
+            >${t("skillWorkshop.changes.savedBefore", {
+              action: t(`skillWorkshop.changes.actions.${version.action}`),
+            })}</span
+          >
+          <span class="sw-timeline__when">${formatRelativeTimestamp(version.createdAtMs)}</span>
+        </div>
+        <div class="sw-timeline__actions">
+          ${renderVersionLink(name, version.id, live, props)}
+          ${renderMutationButton(props, {
+            label: t("skillWorkshop.viewer.restore"),
+            mutation: { method: "skills.workshop.restore", name, versionId: version.id },
+            key: `restore:${name}:${version.id}`,
+            variant: "link",
+          })}
+        </div>
+      </li>`,
+    )}
   </ol>`;
 }
 
 type DiffLine = { kind: "same" | "add" | "remove"; text: string };
 
-/** Line diff (LCS); skill bodies are small, so the quadratic table is cheap. */
-function diffLines(before: string, after: string): DiffLine[] {
+// Skills cap at 200 KB, which can mean tens of thousands of lines; the LCS table is quadratic.
+const MAX_DIFF_CELLS = 2_000_000;
+
+/** Line diff (LCS over the lines between the common prefix and suffix); null when too large. */
+function diffLines(before: string, after: string): DiffLine[] | null {
   const a = before.split("\n");
   const b = after.split("\n");
-  const table = Array.from({ length: a.length + 1 }, () =>
-    Array.from({ length: b.length + 1 }, () => 0),
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) {
+    start += 1;
+  }
+  let endA = a.length;
+  let endB = b.length;
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA -= 1;
+    endB -= 1;
+  }
+  const midA = a.slice(start, endA);
+  const midB = b.slice(start, endB);
+  if ((midA.length + 1) * (midB.length + 1) > MAX_DIFF_CELLS) {
+    return null;
+  }
+  const table = Array.from({ length: midA.length + 1 }, () =>
+    Array.from({ length: midB.length + 1 }, () => 0),
   );
-  for (let i = a.length - 1; i >= 0; i -= 1) {
-    for (let j = b.length - 1; j >= 0; j -= 1) {
+  for (let i = midA.length - 1; i >= 0; i -= 1) {
+    for (let j = midB.length - 1; j >= 0; j -= 1) {
       table[i]![j] =
-        a[i] === b[j] ? table[i + 1]![j + 1]! + 1 : Math.max(table[i + 1]![j]!, table[i]![j + 1]!);
+        midA[i] === midB[j]
+          ? table[i + 1]![j + 1]! + 1
+          : Math.max(table[i + 1]![j]!, table[i]![j + 1]!);
     }
   }
-  const lines: DiffLine[] = [];
+  const lines: DiffLine[] = a.slice(0, start).map((text) => ({ kind: "same", text }));
   let i = 0;
   let j = 0;
-  while (i < a.length || j < b.length) {
-    if (i < a.length && j < b.length && a[i] === b[j]) {
-      lines.push({ kind: "same", text: a[i]! });
+  while (i < midA.length || j < midB.length) {
+    if (i < midA.length && j < midB.length && midA[i] === midB[j]) {
+      lines.push({ kind: "same", text: midA[i]! });
       i += 1;
       j += 1;
-    } else if (i < a.length && (j >= b.length || table[i + 1]![j]! >= table[i]![j + 1]!)) {
-      lines.push({ kind: "remove", text: a[i]! });
+    } else if (i < midA.length && (j >= midB.length || table[i + 1]![j]! >= table[i]![j + 1]!)) {
+      lines.push({ kind: "remove", text: midA[i]! });
       i += 1;
     } else {
-      lines.push({ kind: "add", text: b[j]! });
+      lines.push({ kind: "add", text: midB[j]! });
       j += 1;
     }
+  }
+  for (const text of a.slice(endA)) {
+    lines.push({ kind: "same", text });
   }
   return lines;
 }
@@ -359,6 +423,10 @@ function diffLines(before: string, after: string): DiffLine[] {
 /** Reads like the change itself: the saved version's lines in red, today's in green. */
 function renderDiff(current: string, version: string) {
   const lines = diffLines(version, current);
+  if (lines === null) {
+    return html`<p class="sw-diff__same">${t("skillWorkshop.viewer.diffTooLarge")}</p>
+      ${renderMarkdown(version)}`;
+  }
   if (lines.every((line) => line.kind === "same")) {
     return html`<p class="sw-diff__same">${t("skillWorkshop.viewer.noDiff")}</p>
       ${renderMarkdown(version)}`;

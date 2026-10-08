@@ -129,6 +129,13 @@ function buildSkillWorkshopMocks(baseTime: number): SkillWorkshopMockSeed {
       baseTime - 22 * day,
       { useCount: 0 },
     ),
+    skill(
+      "contacts-cleanup",
+      "Use when deduplicating the address book export; merge by phone, then email.",
+      Array.from({ length: 3000 }, (_, index) => `- Rule ${index}: merge by phone`).join("\n"),
+      baseTime - 6 * hour,
+      { useCount: 2, lastUsedAtMs: baseTime - 6 * hour },
+    ),
   ];
   const changes: SkillWorkshopChange[] = [
     {
@@ -149,6 +156,27 @@ function buildSkillWorkshopMocks(baseTime: number): SkillWorkshopMockSeed {
       actor: "agent",
       summary: "packing list from forecast",
       createdAtMs: baseTime - 5 * hour,
+    },
+    {
+      // Its saved version was pruned; the row stays, without Compare or Undo.
+      id: "change-trip-packing-pruned",
+      agentId: "main",
+      skillName: "trip-packing",
+      action: "patch",
+      actor: "review",
+      summary: "added a carry-on checklist",
+      versionId: "20251001T000000000Z-patch",
+      createdAtMs: baseTime - 3 * hour,
+    },
+    {
+      id: "change-contacts-cleanup-patch",
+      agentId: "main",
+      skillName: "contacts-cleanup",
+      action: "patch",
+      actor: "review",
+      summary: "rewrote the merge rules",
+      versionId: "20260102T000000000Z-patch",
+      createdAtMs: baseTime - 6 * hour,
     },
     {
       id: "change-budget-write-file",
@@ -208,6 +236,13 @@ function buildSkillWorkshopMocks(baseTime: number): SkillWorkshopMockSeed {
       createdAtMs: baseTime - 22 * day,
     },
   ];
+  // Large enough on both sides that a line diff would exceed the comparison budget.
+  const largeContactsBefore = skill(
+    "contacts-cleanup",
+    "Use when deduplicating the address book export.",
+    Array.from({ length: 3000 }, (_, index) => `- Old rule ${index}: merge by email`).join("\n"),
+    baseTime - 2 * day,
+  );
   // Each saved version is the copy from before the change with the same version id.
   const releaseNotesBeforePatch = skill(
     "release-notes",
@@ -258,6 +293,26 @@ function buildSkillWorkshopMocks(baseTime: number): SkillWorkshopMockSeed {
         action: "write_file" as const,
         createdAtMs: baseTime - day,
         skill: budgetBeforeScript,
+      },
+      // Retained, but its change row fell out of the agent-wide recent feed.
+      {
+        id: "20251215T000000000Z-patch",
+        action: "patch" as const,
+        createdAtMs: baseTime - 20 * day,
+        skill: skill(
+          "budget-reconciliation",
+          "Use when reconciling the monthly budget.",
+          "1. Import the bank CSV.\n2. Categorize each row.",
+          baseTime - 25 * day,
+        ),
+      },
+    ],
+    "contacts-cleanup": [
+      {
+        id: "20260102T000000000Z-patch",
+        action: "patch" as const,
+        createdAtMs: baseTime - 6 * hour,
+        skill: largeContactsBefore,
       },
     ],
     "standup-summary": [
@@ -359,6 +414,8 @@ function installSkillWorkshopMock(seed: SkillWorkshopMockSeed): void {
       const result: SkillsWorkshopChangesResult = {
         changes: scopeFor(agentId)
           .changes.filter((change) => change.createdAtMs < beforeMs)
+          // Newest first, like the Gateway's feed.
+          .toSorted((a, b) => b.createdAtMs - a.createdAtMs)
           .slice(0, limit),
       };
       respond(result);
