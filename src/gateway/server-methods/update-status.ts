@@ -39,8 +39,8 @@ import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
   getLatestUpdateRestartSentinel,
-  refreshLatestUpdateRestartSentinel,
-} from "../server-restart-sentinel.js";
+  prepareLatestUpdateRestartSentinel,
+} from "../server-update-sentinel.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -75,7 +75,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       }
       let sentinel: RestartSentinelPayload | null;
       try {
-        sentinel = manager ? null : await refreshLatestUpdateRestartSentinel();
+        sentinel = manager ? null : await prepareLatestUpdateRestartSentinel(undefined, lifecycle);
       } catch (err) {
         context?.logGateway?.warn(
           `update.status sentinel refresh failed: ${formatErrorMessage(err)}`,

@@ -8,6 +8,9 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getPluginServiceSchedulerBinding } from "../../plugins/service-scheduler-binding.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import { isRecentOutboundMessageIdentity } from "../message/outbound-echo.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
@@ -138,15 +141,6 @@ function dropPreparedChannelTurn<TDispatchResult>(
   };
 }
 
-function resolveBotLoopProtectionDrop<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): ChannelTurnResult<TDispatchResult> | undefined {
-  return params.botLoopProtection &&
-    recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection).suppressed
-    ? dropPreparedChannelTurn(params, "bot-loop-protection")
-    : undefined;
-}
-
 function resolveOutboundEchoDrop<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
 ): ChannelTurnResult<TDispatchResult> | undefined {
@@ -211,8 +205,11 @@ async function runPreparedChannelTurnCoreInTrace<
     await params.runDispatchLifecycle?.onDispatchSkipped("outboundEcho");
     return outboundEchoDrop;
   }
-  const botLoopDrop = resolveBotLoopProtectionDrop(params);
-  if (botLoopDrop) {
+  if (
+    params.botLoopProtection &&
+    recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection).suppressed
+  ) {
+    const botLoopDrop = dropPreparedChannelTurn(params, "bot-loop-protection");
     clearPendingHistoryAfterTurn(params.history);
     await params.runDispatchLifecycle?.onDispatchSkipped("botLoopProtection");
     return botLoopDrop;
@@ -223,23 +220,30 @@ async function runPreparedChannelTurnCoreInTrace<
   // path before the next group turn can replay stale context.
   try {
     const recordSessionKey = resolveRecordSessionKey(params);
-    if (params.ctxPayload.SessionTranscriptContext) {
-      const { mergeSessionTranscriptContext } =
-        await import("../inbound-event/session-transcript-context.runtime.js");
-      await mergeSessionTranscriptContext({
-        agentId: params.ctxPayload.AgentId,
-        ctx: params.ctxPayload,
-        sessionKey: recordSessionKey,
-        storePath: params.storePath,
-      });
-    }
-    emit(params, {
-      stage: "record",
-      event: "start",
-      sessionKey: recordSessionKey,
-      admission: admission.kind,
-    });
     try {
+      const agentId =
+        params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
+      if (agentId) {
+        await getAgentDatabaseStartupAdmission()?.waitForAgentPreparation(agentId, {
+          signal: getPluginServiceSchedulerBinding()?.().signal,
+        });
+      }
+      if (params.ctxPayload.SessionTranscriptContext) {
+        const { mergeSessionTranscriptContext } =
+          await import("../inbound-event/session-transcript-context.runtime.js");
+        await mergeSessionTranscriptContext({
+          agentId: params.ctxPayload.AgentId,
+          ctx: params.ctxPayload,
+          sessionKey: recordSessionKey,
+          storePath: params.storePath,
+        });
+      }
+      emit(params, {
+        stage: "record",
+        event: "start",
+        sessionKey: recordSessionKey,
+        admission: admission.kind,
+      });
       await params.recordInboundSession({
         storePath: params.storePath,
         sessionKey: recordSessionKey,

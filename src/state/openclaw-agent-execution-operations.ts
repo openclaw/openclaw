@@ -1,7 +1,10 @@
 import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntryReplacementCommit } from "../config/sessions/session-accessor.sqlite-replacement-types.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  takeSqliteWorkerOperationAdmissionAttachment,
+} from "../infra/sqlite-worker-operation-admission.js";
 import type { AgentDatabaseMaintenanceOperations } from "./openclaw-agent-execution-maintenance.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
@@ -183,16 +186,52 @@ export async function prepareAgentNativeBindingOperation(
 
 export async function loadAgentTrajectoryOperations() {
   const kernel = await import("../trajectory/runtime-store.sqlite.js");
+  const retention = await import("../trajectory/runtime-retention.sqlite.js");
   return {
     "trajectory.events.append": (
-      input: Parameters<typeof kernel.appendSqliteTrajectoryRuntimeEventsInTransaction>[1],
+      input: Parameters<typeof kernel.appendSqliteTrajectoryRuntimeEventsWithWriter>[0],
       { writeTransaction, admit },
-    ) =>
-      writeTransaction("trajectory.runtime.append", "Trajectory append", (current) => {
-        kernel.appendSqliteTrajectoryRuntimeEventsInTransaction(current, input);
-        deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
-        admit("commit");
-      }),
+    ) => {
+      kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
+        writeTransaction(label, "Trajectory append", (current) => {
+          const result = write(current);
+          deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
+          admit("commit");
+          return result;
+        }),
+      );
+    },
+    "trajectory.retention.begin": (_input: undefined, { open }) => {
+      const attachment = takeSqliteWorkerOperationAdmissionAttachment();
+      if (
+        typeof attachment !== "object" ||
+        attachment === null ||
+        !("trajectoryRetentionLease" in attachment) ||
+        !(attachment.trajectoryRetentionLease instanceof SharedArrayBuffer) ||
+        attachment.trajectoryRetentionLease.byteLength !== 4
+      ) {
+        throw new Error("Trajectory retention lease is unavailable");
+      }
+      return retention.beginTrajectoryRuntimeRetention(
+        open().db,
+        new Int32Array(attachment.trajectoryRetentionLease),
+      );
+    },
+    "trajectory.retention.delete": (
+      input: Parameters<typeof retention.selectTrajectoryRuntimeRetentionBatch>[1],
+      { open, writeTransaction, admit },
+    ) => {
+      const batch = retention.selectTrajectoryRuntimeRetentionBatch(open().db, input);
+      return writeTransaction(
+        "trajectory.runtime.retention.delete",
+        "Trajectory retention",
+        (current) => {
+          const result = retention.deleteTrajectoryRuntimeRetention(current, batch);
+          admit("commit");
+          return result;
+        },
+      );
+    },
   } satisfies Handlers;
 }
 

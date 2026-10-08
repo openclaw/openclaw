@@ -188,16 +188,20 @@ export async function expectResetCall(expectedMessage: string) {
   return call;
 }
 
+export function mockSuccessfulAgentCommand() {
+  mocks.agentCommand.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: { durationMs: 100 },
+  });
+}
+
 export function primeMainAgentRun(params?: { sessionId?: string; cfg?: Record<string, unknown> }) {
   mockMainSessionEntry(
     { sessionId: params?.sessionId ?? "existing-session-id" },
     params?.cfg ?? {},
   );
   mocks.updateSessionStore.mockResolvedValue(undefined);
-  mocks.agentCommand.mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: { durationMs: 100 },
-  });
+  mockSuccessfulAgentCommand();
 }
 
 export async function runMainAgent(message: string, idempotencyKey: string) {
@@ -227,10 +231,7 @@ export async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
     capturedEntry = structuredClone(store[canonicalKey]) as Record<string, unknown>;
     return result;
   });
-  mocks.agentCommand.mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: { durationMs: 100 },
-  });
+  mockSuccessfulAgentCommand();
   await runMainAgent("hi", idempotencyKey);
   return requireValue(capturedEntry, "updated session entry missing");
 }

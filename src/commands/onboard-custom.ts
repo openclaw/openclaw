@@ -78,8 +78,7 @@ type VerificationResult = {
 };
 
 function isJsonVerificationResponse(res: Response): boolean {
-  const contentType =
-    typeof res.headers?.get === "function" ? (res.headers.get("content-type") ?? "") : "";
+  const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.trim()) {
     return true;
   }
@@ -89,11 +88,9 @@ function isJsonVerificationResponse(res: Response): boolean {
   );
 }
 
-async function requestVerification(params: {
-  endpoint: string;
-  headers: Record<string, string>;
-  body: Record<string, unknown>;
-}): Promise<VerificationResult> {
+async function requestVerification(
+  params: ReturnType<typeof buildOpenAiVerificationProbeRequest>,
+): Promise<VerificationResult> {
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(

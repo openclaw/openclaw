@@ -95,7 +95,7 @@ describe("audit-seams subagent seam classification", () => {
     const source = `
       import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 
-      export function createBoundDeliveryRouter(context) {
+      export function resolveBoundDeliveryDestination(context) {
         return normalizeDeliveryContext(context);
       }
     `;

@@ -8,8 +8,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionStoreKey } from "../gateway/session-store-key.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
-import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
+import {
+  insertLegacySession,
+  repairCanonicalSessionKeys,
+} from "./doctor-session-canonical-keys.test-support.js";
 
 describe("Doctor stored session addresses", () => {
   it.each(["custom-main", "global"])(

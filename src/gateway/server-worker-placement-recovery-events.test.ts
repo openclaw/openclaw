@@ -47,6 +47,8 @@ vi.mock("./server-worker-placement-session-evidence.js", () => ({
 import { getRuntimeConfig } from "../config/config.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./worker-environments/device-provider-identity.js";
+import type { WorkerEnvironmentPlacementFacts } from "./worker-environments/placement-read-projection.types.js";
 
 type RecoveryPlacement = {
   sessionId: string;
@@ -83,6 +85,7 @@ async function withRecoveryRuntime(
     broadcast?: () => void;
     hasContext?: boolean;
     hasSubscribers?: boolean;
+    environmentRows?: Map<string, WorkerEnvironmentPlacementFacts>;
   },
   verify: (runtime: {
     context: {
@@ -149,12 +152,13 @@ async function withRecoveryRuntime(
     }));
     let onMachineShapeChanged: ((profileId: string) => void) | undefined;
     const environments = {
-      get: (environmentId: string) => ({
-        environmentId,
-        providerId: "fake",
-        profileId: "development",
-        ownerEpoch: 1,
-      }),
+      get: (environmentId: string) =>
+        options.environmentRows?.get(environmentId) ?? {
+          environmentId,
+          providerId: "fake",
+          profileId: "development",
+          ownerEpoch: 1,
+        },
       readMachineShape: () => ({ cpu: 4 }),
       subscribeMachineShapeChanged: (listener: (profileId: string) => void) => {
         onMachineShapeChanged = listener;
@@ -184,6 +188,15 @@ async function withRecoveryRuntime(
         get: (sessionId: string) => placements.get(sessionId),
         list: () => [...placements.values()],
         readChangeSnapshot,
+        readProjection: async (sessionIds: readonly string[]) => ({
+          placements: new Map(
+            sessionIds.flatMap((id) => {
+              const placement = placements.get(id);
+              return placement ? [[id, structuredClone(placement)]] : [];
+            }),
+          ),
+          environments: options.environmentRows ?? new Map(),
+        }),
         retireSessionPlacement: ({ sessionId }: { sessionId: string }) => {
           placements.delete(sessionId);
         },
@@ -233,6 +246,64 @@ async function withRecoveryRuntime(
 }
 
 describe("worker placement recovery session events", () => {
+  it("publishes only active device bindings affected by coalesced runner edges", async () => {
+    const placement = recoveryPlacement();
+    const environmentRows = new Map<string, WorkerEnvironmentPlacementFacts>();
+    const environment = (row: RecoveryPlacement, deviceId: string) => {
+      environmentRows.set(row.environmentId!, {
+        environmentId: row.environmentId!,
+        providerId: DEVICE_WORKER_PROVIDER_ID,
+        profileId: `device:${deviceId}`,
+        profileSnapshot: {},
+        state: "attached",
+        leaseId: "device-lease",
+        ownerEpoch: 1,
+        nodeDeviceId: deviceId,
+        attachedSessionIds: [row.sessionId],
+      });
+    };
+    environment(placement, "changed-device");
+    await withRecoveryRuntime(
+      { placement, environmentRows },
+      async ({ context, changes, placements, runtime, start }) => {
+        for (const excluded of ["other-device", "inactive", "stale-epoch", "cloud"] as const) {
+          const row: RecoveryPlacement = {
+            ...placement,
+            sessionId: excluded,
+            sessionKey: `agent:main:${excluded}`,
+            environmentId: `environment-${excluded}`,
+            ...(excluded === "inactive" ? { state: "failed" } : {}),
+            ...(excluded === "stale-epoch" ? { activeOwnerEpoch: 2 } : {}),
+          };
+          placements.set(row.sessionId, row);
+          environment(row, excluded === "other-device" ? "other-device" : "changed-device");
+          if (excluded === "cloud") {
+            environmentRows.get(row.environmentId!)!.providerId = "cloud";
+          }
+        }
+        await start();
+        const published = createDeferredCore();
+        changes.mockImplementationOnce(() => published.resolve());
+        const revision = runtime.runnerAvailability.version();
+        runtime.runnerAvailability.markChanged("changed-device");
+        runtime.runnerAvailability.markChanged("changed-device");
+        expect(runtime.runnerAvailability.version()).toBe(revision + 2);
+        await published.promise;
+        await flushPendingSessionsChangedEvents(context);
+        expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+          "sessions.changed",
+          expect.objectContaining({
+            reason: "placement",
+            sessionKey: placement.sessionKey,
+            sessionId: placement.sessionId,
+          }),
+          new Set(["session-observer"]),
+          expect.objectContaining({ agentId: placement.agentId, dropIfSlow: true }),
+        );
+      },
+    );
+  });
+
   it("joins pending machine metadata reporting on stop without publishing a late reply", async () => {
     const placement = recoveryPlacement();
     await withRecoveryRuntime(

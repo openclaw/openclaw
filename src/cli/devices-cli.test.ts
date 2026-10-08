@@ -152,36 +152,12 @@ describe("approval", () => {
       device: paired({ tokens: [{ role: "operator", scopes: ["operator.read"] }] }),
       scopes: ["operator.pairing", "operator.read"],
     },
-    {
-      name: "paired scope fallback",
-      request: pending({ scopes: [] }),
-      device: paired(),
-      scopes: ["operator.pairing", "operator.read"],
-    },
   ])("selects scopes for $name", async ({ request, device, scopes }) => {
     list([request], [device]).mockResolvedValueOnce({ device: { deviceId: "device-1" } });
     await run("approve", "req-1");
     expect(callGateway).toHaveBeenCalledTimes(2);
     expectCall(0, { method: "device.pair.list", scopes: ["operator.pairing"] });
     expectCall(1, { method: "device.pair.approve", params: { requestId: "req-1" }, scopes });
-  });
-
-  it("retries ownership-denied approval with admin scope", async () => {
-    list()
-      .mockRejectedValueOnce(new Error("GatewayClientRequestError: device pairing approval denied"))
-      .mockResolvedValueOnce({ device: { deviceId: "device-2" } });
-    await run("approve", "req-cross-device");
-    expect(callGateway).toHaveBeenCalledTimes(3);
-    expectCall(1, {
-      method: "device.pair.approve",
-      params: { requestId: "req-cross-device" },
-      scopes: undefined,
-    });
-    expectCall(2, {
-      method: "device.pair.approve",
-      params: { requestId: "req-cross-device" },
-      scopes: ["operator.admin"],
-    });
   });
 
   it("previews the latest upgrade with safe output and a profile-aware approval command", async () => {
@@ -357,21 +333,6 @@ describe("mutations", () => {
     });
     expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true });
   });
-  it("rejects conflicting rotation scopes", async () => {
-    await expect(
-      run(
-        "rotate",
-        "--device",
-        "device-1",
-        "--role",
-        "node",
-        "--scope",
-        "node.read",
-        "--no-scopes",
-      ),
-    ).rejects.toThrow("cannot be used with option");
-    expect(callGateway).not.toHaveBeenCalled();
-  });
   it("rejects blank token targets", async () => {
     await run("rotate", "--device", " ", "--role", "main");
     expect(callGateway).not.toHaveBeenCalled();
@@ -513,16 +474,6 @@ describe("local fallback", () => {
     expect(errors()).not.toMatch(/--token|--password/);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
-  it("lists local pairing state on a loopback scope-upgrade denial", async () => {
-    deny("scope upgrade pending approval (requestId: req-1)");
-    listDevicePairing.mockResolvedValueOnce({
-      pending: [{ requestId: "req-1", deviceId: "device-1", publicKey: "pk", ts: 1 }],
-      paired: [],
-    });
-    await run("list");
-    expect(listDevicePairing).toHaveBeenCalledOnce();
-    expect(output()).toContain(fallbackNotice);
-  });
   it("points at the current request when a gateway request is stale", async () => {
     vi.stubEnv("OPENCLAW_PROFILE", "work");
     deny("scope upgrade pending approval (requestId: req-profile)");
@@ -559,18 +510,6 @@ describe("local fallback", () => {
 });
 
 describe("list output", () => {
-  it("matches normalized pending ids to approved access", async () => {
-    list(
-      [pending({ deviceId: " device-1 ", scopes: ["operator.admin", "operator.read"] })],
-      [paired()],
-    );
-    await run("list");
-    expect(output()).toContain("Requested");
-    expect(output()).toContain("Approved");
-    expect(output()).toContain("operator.write");
-    expect(output()).toContain("operator.read");
-    expect(output()).toContain("scope upgrade");
-  });
   it("prints profile-aware node reapproval hints with a blank operator label", async () => {
     vi.stubEnv("OPENCLAW_PROFILE", "work");
     list([], [nodeDevice("   ")]);

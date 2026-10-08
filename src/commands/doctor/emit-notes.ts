@@ -8,7 +8,6 @@ export function sanitizeDoctorNote(note: string): string {
     .join("\n");
 }
 
-/** Emit grouped doctor change, info, and warning notes with sanitized content. */
 export function emitDoctorNotes(params: {
   note: (message: string, title?: string) => void;
   changeNotes?: string[];

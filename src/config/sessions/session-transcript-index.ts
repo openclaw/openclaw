@@ -479,6 +479,8 @@ export function reconcileSessionTranscriptIndexInTransaction(
   return true;
 }
 
+// Native synchronous SDK callbacks and operator maintenance retain their owning connection.
+// Runtime disk reconciliation consumes the publication worker's maintained facts.
 function selectSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync) {
   const kysely = getIndexKysely(db);
   return (
@@ -535,16 +537,6 @@ function selectSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync) {
   );
 }
 
-/** Search needs only one pending session; the reconcile owner selects its complete work list. */
-export function hasSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): boolean {
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      selectSessionsNeedingTranscriptIndexReconcile(db).limit(1),
-    ) !== undefined
-  );
-}
-
 /**
  * Sessions whose index needs reconcile work: flagged rebuilds, transcripts
  * that gained rows without index state (doctor imports), and watermarks
@@ -561,39 +553,28 @@ const transcriptIndexTables = [
   "session_transcript_index_state",
 ] as const;
 
-/** Orphan-only cleanup is independent of live sessions' projection watermarks. */
-export function hasOrphanedTranscriptIndexRows(db: DatabaseSync): boolean {
+function selectOrphanedTranscriptOwners(
+  db: DatabaseSync,
+  table: (typeof transcriptIndexTables)[number],
+) {
   const kysely = getIndexKysely(db);
-  return transcriptIndexTables.some(
-    (table) =>
-      executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom(table)
-          .select("session_id")
-          .where(
-            "session_id",
-            "not in",
-            kysely.selectFrom("transcript_events").select("session_id").distinct(),
-          )
-          .limit(1),
-      ) !== undefined,
+  return (
+    kysely
+      .selectFrom(table)
+      .select("session_id")
+      .distinct()
+      .except(kysely.selectFrom("transcript_events").select("session_id").distinct())
+      // Older SQLite needs ordering to merge owner sets and skip duplicate keys.
+      .orderBy("session_id")
   );
 }
 
-/** Drops index rows for sessions whose transcript rows are gone. */
 export function deleteOrphanedTranscriptIndexRowsInTransaction(db: DatabaseSync): void {
   const kysely = getIndexKysely(db);
   for (const table of transcriptIndexTables) {
     executeSqliteQuerySync(
       db,
-      kysely
-        .deleteFrom(table)
-        .where(
-          "session_id",
-          "not in",
-          kysely.selectFrom("transcript_events").select("session_id").distinct(),
-        ),
+      kysely.deleteFrom(table).where("session_id", "in", selectOrphanedTranscriptOwners(db, table)),
     );
   }
 }

@@ -1,5 +1,3 @@
-// Gateway managed media attachment store.
-// Validates, stores, serves, and cleans up outgoing media and document attachments.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -108,6 +106,7 @@ import {
   readSessionMessagesMatchingIdAsync,
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
+import { iterateSessionTranscriptSourcePages } from "./session-transcript-source-pages.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 export {
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
@@ -811,26 +810,25 @@ async function recordMatchesTranscriptMessage(
   // Cleanup also owns off-path branches because rewind/switch can expose them again;
   // serving stays limited to visible history.
   const scope = { agentId, sessionEntry: entry, sessionId, sessionKey, storePath };
-  const { messages } = cache
-    ? await readSessionMessagesWithSourceAsync(scope, {
-        mode: "full",
-        reason: "managed outgoing attachment index",
+  const pages = cache
+    ? iterateSessionTranscriptSourcePages(readSessionMessagesWithSourceAsync, scope, {
         allowResetArchiveFallback: true,
         includeOffPathMessages: true,
       })
-    : { messages: await readSessionMessagesMatchingIdAsync(scope, requestedMessageId) };
+    : [{ messages: await readSessionMessagesMatchingIdAsync(scope, requestedMessageId) }];
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
-  for (const message of messages) {
-    const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];
-    const messageId = meta?.id;
-    if (typeof messageId !== "string" || !messageId) {
-      continue;
-    }
-    for (const ref of collectManagedOutgoingAttachmentRefs(
-      readAssistantDisplayContent(message),
-      sessionKey,
-    )) {
-      index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));
+  for await (const { messages } of pages) {
+    for (const message of messages) {
+      const messageId = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;
+      if (typeof messageId !== "string" || !messageId) {
+        continue;
+      }
+      for (const ref of collectManagedOutgoingAttachmentRefs(
+        readAssistantDisplayContent(message),
+        sessionKey,
+      )) {
+        index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));
+      }
     }
   }
 

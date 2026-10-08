@@ -46,6 +46,8 @@ export const SessionsListParamsSchema = closedObject({
   excludeCron: Type.Optional(Type.Boolean()),
   /** Exclude machine-created probe/system sessions using recorded provenance. */
   excludeSystem: Type.Optional(Type.Boolean()),
+  /** Exclude plugin dock conversations before facets and pagination. */
+  excludeDock: Type.Optional(Type.Boolean()),
   /** Limit agent-scoped rows to agents currently present in config. */
   configuredAgentsOnly: Type.Optional(Type.Boolean()),
   /**

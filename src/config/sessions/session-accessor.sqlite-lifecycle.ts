@@ -40,6 +40,7 @@ import {
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
+import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import { publishCommittedSessionEntryRemoval } from "./session-accessor.sqlite-identity.js";
@@ -67,8 +68,11 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import { deleteIncognitoSessionLifecycle } from "./session-incognito-lifecycle-operations.js";
 import { resetSessionEntryInWorker } from "./session-reset.js";
 import { applySessionResetInDatabase } from "./session-reset.kernel.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Single-target lifecycle owner: reset, guarded delete, and trusted rollback.
@@ -102,7 +106,6 @@ async function withCommittedHistoryMaintenance<T>(
   }
 }
 
-/** Resets one persisted session entry using SQLite session rows. */
 export async function resetSessionEntryLifecycle(
   params: ResetSessionEntryLifecycleParams,
 ): Promise<ResetSessionEntryLifecycleResult> {
@@ -433,9 +436,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               const reclaimed = await runSqliteSessionReclamation({
                 diagnostics,
                 assertCommitAllowed: assertDeletionCurrent,
-                forceInProcess:
-                  typeof params.expectedDatabaseIdentity === "symbol" ||
-                  hasPreparedNativeSessionDeletion(),
+                forceInProcess: typeof params.expectedDatabaseIdentity === "symbol",
                 onInProcessCommit: recordCommit,
                 plan: reclamationPlan,
               });
@@ -515,7 +516,9 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               prepared.current.entry.sessionId,
               prepared.targetSnapshot.map((row) => row.sessionKey),
             );
-            await deleteReceipts(execution ? () => execution.assertCurrent() : undefined);
+            await deleteReceipts({
+              assertCurrent: execution ? () => execution.assertCurrent() : undefined,
+            });
           }
           result.archivedTranscripts = await publishSessionStateArchives(
             resolved,
@@ -527,7 +530,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
           result.archivedTranscripts.push(...historicalArchivedTranscripts);
           return result;
         },
-        { additionalIdentities: prepared.historicalGenerationIds },
+        { additionalIdentities: prepared.historicalGenerationIds, callerSettlesReceipts: true },
       );
     });
   } finally {
@@ -535,11 +538,71 @@ async function deleteSqliteSessionEntryLifecycleLocked(
   }
 }
 
-/** Deletes one persisted session entry using SQLite session rows. */
 export async function deleteSessionEntryLifecycle(
-  params: DeleteSessionEntryLifecycleParams,
+  params:
+    | DeleteSessionEntryLifecycleParams
+    | ({ kind: "incognito" } & Parameters<typeof deleteIncognitoSessionLifecycle>[0]),
 ): Promise<DeleteSessionEntryLifecycleResult> {
-  return await deleteSqliteSessionEntryLifecycleInternal(params, false);
+  if ("kind" in params) {
+    return deleteIncognitoSessionLifecycle(params);
+  }
+  return (
+    deleteCapturedIncognitoSession(params) ??
+    deleteSqliteSessionEntryLifecycleInternal(params, false)
+  );
+}
+
+function deleteCapturedIncognitoSession(
+  params: DeleteSessionEntryLifecycleParams,
+  expectedPluginOwnerId?: string,
+): Promise<DeleteSessionEntryLifecycleResult> | undefined {
+  const binding = captureIncognitoSessionOperation({
+    ...params,
+    sessionKey: params.target.canonicalKey,
+  });
+  if (binding) {
+    const captured = {
+      ...params,
+      target: structuredClone(params.target),
+      expectedEntry: params.expectedEntry && structuredClone(params.expectedEntry),
+      env: captureSessionTranscriptStorageEnvironment(params.env ?? process.env),
+    };
+    const authority = {
+      assertCurrent() {
+        binding.authority.assertCurrent();
+        captured.commitGuard?.();
+      },
+    };
+    return binding.actor.sessions.withSharedState(async () => {
+      const { entry } = await binding.actor.sessions.read(authority, {
+        sessionKey: captured.target.canonicalKey,
+      });
+      if (
+        (captured.expectedEntry && !sqliteSessionEntriesEqual(entry, captured.expectedEntry)) ||
+        (captured.expectedSessionId !== undefined &&
+          (entry?.sessionId ?? null) !== captured.expectedSessionId) ||
+        (captured.expectedLifecycleRevision !== undefined &&
+          entry?.lifecycleRevision !== captured.expectedLifecycleRevision) ||
+        (captured.expectedUpdatedAt !== undefined &&
+          entry?.updatedAt !== captured.expectedUpdatedAt)
+      ) {
+        return { deleted: false, archivedTranscripts: [], expectedEntryMismatch: true as const };
+      }
+      if (!entry) {
+        return { deleted: false, archivedTranscripts: [] };
+      }
+      return deleteIncognitoSessionLifecycle({
+        actor: binding.actor,
+        authority,
+        env: captured.env ?? process.env,
+        ownerStorePath: captured.storePath,
+        target: { sessionKey: captured.target.canonicalKey, entry },
+        reason: "deleted",
+        expectedPluginOwnerId,
+      });
+    });
+  }
+  return undefined;
 }
 
 /** Disk-budget owner: delete one exact archived row without recursively scheduling another pass. */
@@ -612,5 +675,8 @@ export async function rollbackPluginOwnedSessionEntryLifecycle(
   ) {
     throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
-  return await deleteSqliteSessionEntryLifecycleInternal(params, true, expectedPluginOwner);
+  return (
+    deleteCapturedIncognitoSession(params, expectedPluginOwner) ??
+    deleteSqliteSessionEntryLifecycleInternal(params, true, expectedPluginOwner)
+  );
 }

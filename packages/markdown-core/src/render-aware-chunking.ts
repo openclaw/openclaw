@@ -5,23 +5,18 @@ import { sliceMarkdownIRRanges } from "./ir-slice.js";
 import { mergeAnnotationSpans, mergeStyleSpans } from "./ir-spans.js";
 import { appendMarkdownIR, sliceMarkdownIR, type MarkdownIR } from "./ir.js";
 
-/** A rendered chunk paired with the Markdown IR slice that produced it. */
 export type RenderedMarkdownChunk<TRendered> = {
   /** Rendered payload for this chunk after caller-specific escaping/link rewriting. */
   rendered: TRendered;
-  /** Source IR slice used to produce the rendered payload. */
   source: MarkdownIR;
 };
 
-/** Inputs for chunking Markdown IR against the final rendered payload size. */
 export type RenderMarkdownIRChunksWithinLimitOptions<TRendered> = {
-  /** Parsed Markdown IR to split. */
   ir: MarkdownIR;
   /** Maximum measured size for each rendered chunk. */
   limit: number;
   /** Returns the size unit enforced by the target transport. */
   measureRendered: (rendered: TRendered) => number;
-  /** Renders a candidate IR slice for measuring and final output. */
   renderChunk: (ir: MarkdownIR) => TRendered;
   /** Re-annotate transcript-role headers promoted by a new message boundary. */
   assistantTranscriptRoleMessageBoundaries?: boolean;
@@ -65,12 +60,7 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
   const pending = splitMarkdownIRPreserveWhitespace(options.ir, normalizedLimit).toReversed();
   const finalized: RenderedCandidate<TRendered>[] = [];
 
-  while (pending.length > 0) {
-    const chunk = pending.pop();
-    if (!chunk) {
-      continue;
-    }
-
+  for (let chunk = pending.pop(); chunk; chunk = pending.pop()) {
     const candidate = renderCandidate(options, chunk);
     if (
       options.measureRendered(candidate.output.rendered) <= normalizedLimit ||
@@ -109,9 +99,6 @@ function splitMarkdownIRByRenderedLimit<TRendered>(
     const candidate = sliceMarkdownIR(chunk, 0, safeCandidateLength);
     const rendered = renderCandidate(options, candidate).output.rendered;
     if (options.measureRendered(rendered) <= renderedLimit) {
-      if (safeCandidateLength <= 0) {
-        return [chunk];
-      }
       const split = splitMarkdownIRPreserveWhitespace(chunk, safeCandidateLength);
       const firstChunk = split[0];
       if (
@@ -186,9 +173,6 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
   }
 
   const resolveWhitespaceBreak = (breakIndex: number, runStart: number): number => {
-    if (breakIndex <= start) {
-      return breakIndex;
-    }
     if (runStart <= start) {
       return breakIndex;
     }

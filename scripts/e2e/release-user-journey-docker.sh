@@ -3,8 +3,6 @@
 if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
   exec /bin/bash "$0" "$@"
 fi
-# Package-installed release journey smoke with provider, plugins, ClickClack,
-# agent turn, and restart survival.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

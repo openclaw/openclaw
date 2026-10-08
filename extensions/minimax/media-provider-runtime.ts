@@ -6,7 +6,6 @@ import {
   type postJsonRequest,
   type ProviderOperationRetryStage,
   type ProviderOperationTimeoutMs,
-  type TransientProviderRetryConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asOptionalRecord,
@@ -70,12 +69,10 @@ export async function fetchMinimaxResponse(params: {
   fetchFn: typeof fetch;
   requestFailedMessage: string;
   policy: MinimaxRequestPolicy;
-  retry?: TransientProviderRetryConfig;
 }) {
   return await executeProviderOperationWithRetry({
     provider: "minimax",
     stage: params.stage,
-    retry: params.retry,
     operation: async () => {
       const timeoutMs =
         typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs;

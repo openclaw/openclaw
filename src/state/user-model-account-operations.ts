@@ -10,8 +10,12 @@ import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-conte
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "./openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
+import { parseUserModelAuthProfileId } from "./user-model-account-id.js";
 import { registerUserModelAuthProfileSecrets } from "./user-model-accounts.js";
-import { fenceUserProfileModelAccountLinks } from "./user-profile-events.js";
+import {
+  captureUserProfileAuthorityRead,
+  fenceUserProfileModelAccountLinks,
+} from "./user-profile-events.js";
 
 type AccountOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
   context?: OpenClawStateWorkerContext;
@@ -135,12 +139,7 @@ export function setUserProfileAuthLinkAsync(
 }
 
 export function clearUserProfileAuthLinkAsync(
-  params: {
-    profileId: string;
-    provider: string;
-    assertCurrent: (roles?: readonly ModelAccountRole[]) => void;
-    authorityProfileIds?: readonly string[];
-  },
+  params: Omit<Parameters<typeof setUserProfileAuthLinkAsync>[0], "authProfileId">,
   options: AccountOptions = {},
 ) {
   const { assertCurrent, ...input } = params;
@@ -176,6 +175,39 @@ export function readUserModelAccountSummaryAsync(
   options: AccountOptions = {},
 ) {
   return read("userProfiles.modelAccount.summary", params, options);
+}
+
+/** Account pins retain the identity writer's authority, independently of default links. */
+export async function prepareUserModelAccountAuthority(
+  params: { profileId: string; authProfileId: string },
+  options: AccountOptions = {},
+) {
+  const { profileId, authProfileId } = params;
+  const locator = parseUserModelAuthProfileId(authProfileId);
+  if (!locator) {
+    return undefined;
+  }
+  const context = options.context ?? captureOpenClawStateWorkerContext(options);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const authority = await captureUserProfileAuthorityRead(
+      context.admission,
+      undefined,
+      "identity",
+    );
+    const account = await readUserModelAccountSummaryAsync(
+      { profileId, authProfileId },
+      { context },
+    );
+    if (!account) {
+      return undefined;
+    }
+    // Merge publishes every changed alias; a link edit or reconnect keeps this pin valid.
+    const isCurrent = authority.bind([profileId, locator.ownerProfileId]);
+    if (isCurrent) {
+      return { provider: account.provider, isCurrent };
+    }
+  }
+  throw new Error("Personal model account ownership changed while preparing the selection");
 }
 
 /** Only provider preparation consumes the private selected credential, never an RPC reply. */

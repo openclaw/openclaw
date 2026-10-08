@@ -589,21 +589,13 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (sessionOwner && !sessionOwner.ok) {
             return { ok: false, error: sessionOwner.error, meta: { channel } };
           }
-          const sessionAgentId = sessionOwner?.agentId;
-          const implicitAgent =
-            !explicitAgentId && !sessionAgentId
-              ? resolveRequestedSessionAgentId(cfg, "main")
-              : undefined;
-          if (implicitAgent && !implicitAgent.ok) {
-            return { ok: false, error: implicitAgent.error, meta: { channel } };
-          }
-          const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? implicitAgent?.agentId;
+          let effectiveAgentId = explicitAgentId ?? sessionOwner?.agentId;
           if (!effectiveAgentId) {
-            return {
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, "agent selection is required"),
-              meta: { channel },
-            };
+            const implicitAgent = resolveRequestedSessionAgentId(cfg, "main");
+            if (!implicitAgent.ok) {
+              return { ok: false, error: implicitAgent.error, meta: { channel } };
+            }
+            effectiveAgentId = implicitAgent.agentId;
           }
           const sendArgs: Record<string, unknown> = {
             mediaUrl,
@@ -855,7 +847,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         const outbound = plugin?.outbound;
         if (
-          typeof request.durationSeconds === "number" &&
+          request.durationSeconds !== undefined &&
           outbound?.supportsPollDurationSeconds !== true
         ) {
           // Duration support is channel-specific; reject before normalizing to avoid silent truncation.
@@ -869,7 +861,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           );
           return undefined;
         }
-        if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
+        if (request.isAnonymous !== undefined && outbound?.supportsAnonymousPolls !== true) {
           respond(
             false,
             undefined,

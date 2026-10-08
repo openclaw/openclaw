@@ -387,7 +387,10 @@ type ImmutableServiceAction = {
   prepareEffect?: () => Promise<void>;
 };
 
-async function controlImmutableService(params: ImmutableServiceAction, action: "start" | "stop") {
+export async function controlImmutableService(
+  action: "start" | "stop",
+  params: ImmutableServiceAction,
+) {
   const { descriptor, expected } = params;
   if (descriptor.version !== 2 || descriptor.activationEnabled !== true) {
     throw new Error("Immutable service activation requires explicitly enabled adoption.");
@@ -513,12 +516,4 @@ async function controlImmutableService(params: ImmutableServiceAction, action: "
       },
     );
   });
-}
-
-export async function stopImmutableService(params: ImmutableServiceAction): Promise<void> {
-  await controlImmutableService(params, "stop");
-}
-
-export async function startImmutableService(params: ImmutableServiceAction): Promise<void> {
-  await controlImmutableService(params, "start");
 }

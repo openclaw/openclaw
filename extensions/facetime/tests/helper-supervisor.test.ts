@@ -1,5 +1,8 @@
+import { existsSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FaceTimeHelperSupervisor } from "../src/helper-supervisor.js";
+
+vi.mock("node:fs", () => ({ existsSync: vi.fn() }));
 
 type SupervisorParams = ConstructorParameters<typeof FaceTimeHelperSupervisor>[0];
 type CommandResult = Awaited<ReturnType<SupervisorParams["runCommandWithTimeout"]>>;
@@ -29,20 +32,19 @@ describe("FaceTime helper supervisor", () => {
       logger,
       runCommandWithTimeout: run,
       connectedBundles: () => [],
-      targetAvailable: () => true,
-      initialGraceMs: 0,
-      retryDelaysMs: [1_000],
-      connectionGraceMs: 0,
       ...overrides,
     });
     return { supervisor: activeSupervisor, run, logger };
   }
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.spyOn(process, "kill").mockReturnValue(true);
   });
   afterEach(async () => {
     await activeSupervisor.stop();
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("cancels reinjection after an authenticated helper reconnects", async () => {
@@ -53,14 +55,13 @@ describe("FaceTime helper supervisor", () => {
     const { supervisor } = createSupervisor({
       runCommandWithTimeout,
       connectedBundles: () => connectedBundles,
-      initialGraceMs: 100,
     });
 
     supervisor.start();
     connectedBundles.push("com.apple.FaceTime", "com.apple.mobilephone");
     supervisor.connected("com.apple.FaceTime");
     supervisor.connected("com.apple.mobilephone");
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(6_000);
 
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
     expect(supervisor.status()).toEqual([
@@ -72,11 +73,10 @@ describe("FaceTime helper supervisor", () => {
   it("backs off and reports the last injection failure", async () => {
     const { supervisor, run } = createSupervisor({
       connectedBundles: () => ["com.apple.mobilephone"],
-      retryDelaysMs: [1_000, 5_000],
     });
     run.mockResolvedValue({ ...completed, code: 1, stderr: "Developer Tools mode is disabled" });
     supervisor.start();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(6_000);
     expect(run).toHaveBeenCalledTimes(1);
     expect(supervisor.status()).toContainEqual(
       expect.objectContaining({
@@ -94,16 +94,18 @@ describe("FaceTime helper supervisor", () => {
   });
 
   it("reports an injection that never authenticates instead of waiting forever", async () => {
+    vi.mocked(existsSync).mockImplementation(
+      (path) => path === "/System/Applications/FaceTime.app",
+    );
     const runCommandWithTimeout = vi
       .fn<SupervisorParams["runCommandWithTimeout"]>()
       .mockResolvedValue(completed);
     const { supervisor } = createSupervisor({
       runCommandWithTimeout,
-      targetAvailable: (target) => target === "FaceTime",
     });
 
     supervisor.start();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(16_000);
 
     expect(supervisor.status()).toContainEqual(
       expect.objectContaining({
@@ -117,11 +119,7 @@ describe("FaceTime helper supervisor", () => {
   });
 
   it("waits for a stale helper process to exit before reinjecting", async () => {
-    let processAlive = true;
-    const { supervisor, run } = createSupervisor({
-      processAlive: () => processAlive,
-      initialGraceMs: 10_000,
-    });
+    const { supervisor, run } = createSupervisor();
     supervisor.start();
     supervisor.stale("com.apple.FaceTime", 1234);
     await vi.advanceTimersByTimeAsync(2_000);
@@ -133,17 +131,18 @@ describe("FaceTime helper supervisor", () => {
         staleProcessId: 1234,
       }),
     );
-    processAlive = false;
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+    });
     await vi.advanceTimersByTimeAsync(2_001);
     expect(run).toHaveBeenCalledWith(injection(), expect.objectContaining(cancellable));
   });
 
   it("warns once while stale helper processes keep reconnecting", () => {
-    const { supervisor, logger } = createSupervisor({
-      targetAvailable: (target) => target === "FaceTime",
-      processAlive: () => true,
-      initialGraceMs: 10_000,
-    });
+    vi.mocked(existsSync).mockImplementation(
+      (path) => path === "/System/Applications/FaceTime.app",
+    );
+    const { supervisor, logger } = createSupervisor();
     supervisor.start();
     supervisor.stale("com.apple.FaceTime", 1234);
     supervisor.stale("com.apple.FaceTime", 1234);
@@ -172,13 +171,16 @@ describe("FaceTime helper supervisor", () => {
 
   it("preserves the stale-process monitor when injection finishes concurrently", async () => {
     const { promise, resolve } = Promise.withResolvers<CommandResult>();
-    const { supervisor, run } = createSupervisor({
-      targetAvailable: (target) => target === "FaceTime",
-      processAlive: () => false,
+    vi.mocked(existsSync).mockImplementation(
+      (path) => path === "/System/Applications/FaceTime.app",
+    );
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("process exited"), { code: "ESRCH" });
     });
+    const { supervisor, run } = createSupervisor();
     run.mockReturnValueOnce(promise);
     supervisor.start();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(6_000);
     expect(run).toHaveBeenCalledTimes(1);
     supervisor.stale("com.apple.FaceTime", 1234);
     resolve(completed);
@@ -204,7 +206,7 @@ describe("FaceTime helper supervisor", () => {
       });
     });
     supervisor.start();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(6_000);
     expect(run).toHaveBeenCalledOnce();
     await supervisor.stop();
     expect(injectionSignal?.aborted).toBe(true);

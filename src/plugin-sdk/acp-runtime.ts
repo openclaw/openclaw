@@ -3,10 +3,20 @@
 import { testing as managerTesting, getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { testing as registryTesting, requireAcpRuntimeBackend } from "../acp/runtime/registry.js";
+import {
+  readAcpSessionEntryAsync as readAcpSessionEntryFromStore,
+  type AcpSessionEntryReadInput,
+} from "../acp/runtime/session-meta-read.js";
+import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export { getAcpSessionManager };
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
+export {
+  IncognitoSessionEndedError,
+  IncognitoSessionSyncAccessError,
+  rethrowIncognitoSessionError,
+} from "../state/incognito-session-error.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
 export { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../acp/runtime/registry.js";
 export type {
@@ -22,9 +32,18 @@ export type {
 } from "@openclaw/acp-core/runtime/types";
 /** @deprecated Shipped in v2026.9.4; use readAcpSessionEntryAsync for runtime reads. */
 export { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
-export { readAcpSessionEntryAsync } from "../acp/runtime/session-meta-read.js";
 export type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
+export { prepareAcpSessionEntryRead } from "../acp/runtime/session-meta-read.js";
+export type {
+  AcpSessionEntryPreparer,
+  PreparedAcpSessionEntryRead,
+} from "../acp/runtime/session-meta-read.js";
 export { tryDispatchAcpReplyHook } from "./acpx.js";
+
+/** Keep internal actor authority outside the released one-argument SDK contract. */
+export const readAcpSessionEntryAsync: (
+  params: AcpSessionEntryReadInput,
+) => Promise<AcpSessionStoreEntry | null> = readAcpSessionEntryFromStore;
 
 export function resolveAcpSessionAvailability(params: {
   config: OpenClawConfig;

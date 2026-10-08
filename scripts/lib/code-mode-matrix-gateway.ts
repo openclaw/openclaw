@@ -56,14 +56,10 @@ type ToolCall = {
   eventIndex: number;
   sessionKey?: string;
 };
-type ToolOutcome = {
-  id: string;
-  name: string;
+type ToolOutcome = Pick<ToolCall, "id" | "name" | "eventIndex" | "sessionKey"> & {
   details: RecordValue;
   content: unknown;
   isError: boolean;
-  eventIndex: number;
-  sessionKey?: string;
 };
 type ToolActivity = {
   name: string;
@@ -82,19 +78,11 @@ const MAX_OUTPUT_BYTES = SHIPPING_CODE_MODE.maxOutputBytes;
 const MAX_MODEL_OUTPUT_TOKENS = 4_000;
 const PERFORMANCE_GRADING_REVISION = "performance-outcome-v4";
 
-export type GatewayMatrixActivationDiagnostic = {
-  runId: string;
-  active: boolean;
-  toolsEnabled: boolean;
-  toolsDisabled: boolean;
-  rawRun: boolean;
-  fallbackActive: boolean;
-  allowlist?: string;
-};
+export type GatewayMatrixActivationDiagnostic = NonNullable<
+  ReturnType<typeof parseGatewayMatrixActivationDiagnostic>
+>;
 
-export function parseGatewayMatrixActivationDiagnostic(
-  line: string,
-): GatewayMatrixActivationDiagnostic | undefined {
+export function parseGatewayMatrixActivationDiagnostic(line: string) {
   const marker = "code-mode diagnostic ";
   const start = line.indexOf(marker);
   if (start < 0) {
@@ -166,38 +154,8 @@ type DeliveredFileEvidence = {
   reason?: string;
 };
 
-export type GatewayMatrixTrace = {
-  calls: ToolCall[];
-  outcomes: ToolOutcome[];
-  activities: ToolActivity[];
-  assistantTurns: number;
-  models: string[];
-  usage?: {
-    input: number;
-    output: number;
-    total?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-  };
-  costUsd?: number;
-};
-
-export type GatewayMatrixWorkload = {
-  promptSha256: string;
-  fixtureSha256: string;
-  performanceGradingRevision?: string;
-  settings: {
-    executor: CodeModeExecutorId;
-    thinking: string;
-    timeoutSeconds: number;
-    execTimeoutMs: number;
-    maxOutputBytes: number;
-    maxModelOutputTokens: number | null;
-    runtime: "openclaw";
-    fast: false;
-    allowedTools: readonly string[];
-  };
-};
+export type GatewayMatrixTrace = ReturnType<typeof collectGatewayMatrixTrace>;
+export type GatewayMatrixWorkload = ReturnType<typeof createGatewayMatrixWorkload>;
 
 export type GatewayMatrixEvidence = GatewayMatrixWorkload & {
   behavior: Record<string, boolean>;
@@ -259,7 +217,7 @@ export function createGatewayMatrixWorkload(
   thinking: string,
   timeoutSeconds: number,
   executor: CodeModeExecutorId = "node",
-): GatewayMatrixWorkload {
+) {
   const fixture = matrixFixture(task, repetition);
   return {
     ...(fixture.performance ? { performanceGradingRevision: PERFORMANCE_GRADING_REVISION } : {}),
@@ -286,8 +244,8 @@ export function createGatewayMatrixWorkload(
       execTimeoutMs: EXEC_TIMEOUT_MS,
       maxOutputBytes: MAX_OUTPUT_BYTES,
       maxModelOutputTokens: fixture.performance ? null : MAX_MODEL_OUTPUT_TOKENS,
-      runtime: "openclaw",
-      fast: false,
+      runtime: "openclaw" as const,
+      fast: false as const,
       allowedTools: gatewayAllowedTools(
         task,
         fixture.requiredTools,
@@ -349,7 +307,7 @@ function addObservedNumber(total: number | undefined, value: unknown): number | 
 }
 
 /** Only actual assistant calls and persisted terminal activity count as execution. */
-export function collectGatewayMatrixTrace(events: readonly unknown[]): GatewayMatrixTrace {
+export function collectGatewayMatrixTrace(events: readonly unknown[]) {
   const calls: ToolCall[] = [];
   const outcomes: ToolOutcome[] = [];
   const activities: ToolActivity[] = [];
@@ -1141,13 +1099,7 @@ async function waitReady(child: ManagedRun, port: number, signal?: AbortSignal):
   throw new Error("Owned benchmark Gateway did not become ready within 90 seconds");
 }
 
-type ResponseResult = {
-  id?: string;
-  status?: string;
-  final: string;
-  error?: string;
-  usage?: unknown;
-};
+type ResponseResult = Awaited<ReturnType<typeof agentRequest>>;
 
 async function agentRequest(
   port: number,
@@ -1158,7 +1110,7 @@ async function agentRequest(
   abortSignal?: AbortSignal,
   sessionKey?: string,
   maxOutputTokens?: number,
-): Promise<ResponseResult> {
+) {
   const url = `http://127.0.0.1:${port}/v1/responses`;
   const timeout = AbortSignal.timeout(timeoutSeconds * 1_000);
   const signal = abortSignal ? AbortSignal.any([timeout, abortSignal]) : timeout;

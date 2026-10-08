@@ -47,11 +47,9 @@ const respawnSignalHardExitGraceMs = RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS;
 export const runRespawnedChild = (command, args, env) => {
   // The serving Gateway owns drain and cleanup. Reap a stuck child only in the
   // supervisor's exit margin, after that owner has had its full shutdown budget.
-  // The shared resolver owns this arithmetic so the serving Gateway derives the very
-  // same deadline from the same expression, which is what lets a Gateway started by
-  // any build of this launcher bound itself correctly without being told.
+  // An already-running older macOS launcher can still enforce its shorter timer;
+  // the serving Gateway retains that cap until it can identify the parent version.
   const launcherStopTimeoutMs = resolveLauncherStopTimeoutMs({
-    env,
     platform: process.platform,
     foreground: isForegroundGatewayRunArgv(process.argv),
   });

@@ -10,7 +10,6 @@ import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as SETUP_STATUS_BY_FAILOVER_REASON } from "../agents/failover/probe-status.js";
-import type { FailoverReason } from "../agents/failover/signal.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
 import type {
   detectInferenceBackends,
@@ -371,12 +370,6 @@ export function resolveSetupInferenceWorkspace(
   );
 }
 
-function mapFailoverReasonToSetupStatus(
-  reason?: FailoverReason | null,
-): SetupInferenceFailureStatus {
-  return reason ? SETUP_STATUS_BY_FAILOVER_REASON[reason] : "unknown";
-}
-
 export function describeSetupInferenceError(
   error: unknown,
   route: SystemAgentConfiguredRoute,
@@ -396,7 +389,10 @@ export function describeSetupInferenceError(
           : undefined;
   return connectionError
     ? { status: "unavailable", error: `${connectionError} No default model was changed.` }
-    : { status: mapFailoverReasonToSetupStatus(described.reason), error: described.message };
+    : {
+        status: described.reason ? SETUP_STATUS_BY_FAILOVER_REASON[described.reason] : "unknown",
+        error: described.message,
+      };
 }
 
 export function validateSetupInferenceOwnerEvidence(params: {

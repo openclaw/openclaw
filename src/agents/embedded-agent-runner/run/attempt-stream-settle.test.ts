@@ -24,6 +24,7 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/index.js";
+import { serializeCacheTtlToolResultProjections } from "../cache-ttl-checkpoint.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
 import {
@@ -31,7 +32,6 @@ import {
   createToolResultPromptProjectionState,
   getEmbeddedSessionPromptState,
   persistToolResultProjections,
-  serializeCacheTtlToolResultProjections,
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";

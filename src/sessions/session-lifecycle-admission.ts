@@ -2,6 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
 import {
   bindGatewayContextResolver,
@@ -162,25 +163,11 @@ async function waitForNormalizedSessionLifecycleMutationIdle(
         }),
     ),
   );
-  if (!signal) {
-    await idle;
-    return;
-  }
-  let rejectAborted = () => {};
-  const aborted = new Promise<never>((_, reject) => {
-    rejectAborted = () =>
-      reject(
-        signal.reason instanceof Error
-          ? signal.reason
-          : new Error("session work admission aborted"),
-      );
-    signal.addEventListener("abort", rejectAborted, { once: true });
-  });
-  try {
-    await Promise.race([idle, aborted]);
-  } finally {
-    signal.removeEventListener("abort", rejectAborted);
-  }
+  await racePromiseWithAbortSignal(idle, signal, (abortedSignal) =>
+    abortedSignal.reason instanceof Error
+      ? abortedSignal.reason
+      : new Error("session work admission aborted"),
+  );
 }
 
 async function runExclusiveSessionLifecycle<T>(params: {
@@ -664,7 +651,7 @@ export async function beginSessionWorkAdmission(params: {
             const revalidate = params.revalidateAllowed ?? (() => params.assertAllowed(signal));
             await lease.run(async () => await revalidate());
           },
-          { reentrant: true, identities: params.storeWriterIdentities },
+          { reentrant: true, identities: params.storeWriterIdentities, signal },
         );
         return lease;
       },

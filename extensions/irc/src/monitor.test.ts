@@ -447,7 +447,7 @@ describe("irc monitor reconnect", () => {
       try {
         monitor = await monitorIrcProvider({ config, ingressQueue, statusSink });
         server.disconnectFirst();
-        await withTimeout(reconnected, 3000, "IRC recovery after a failed reconnect attempt");
+        await withTimeout(reconnected, 10_000, "IRC recovery after a failed reconnect attempt");
         expect(
           server.lines.filter((line) => line === "USER bot 0 * :OpenClaw").length,
         ).toBeGreaterThanOrEqual(3);

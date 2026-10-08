@@ -54,7 +54,6 @@ import {
   isGatewayRequestContextError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
@@ -501,9 +500,6 @@ export async function handleOpenAiHttpRequest(
     ...opts,
     pathname: "/v1/chat/completions",
     requiredOperatorMethod: "chat.send",
-    // Compat HTTP uses a different scope model from generic HTTP helpers:
-    // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes: opts.maxBodyBytes ?? limits.maxBodyBytes,
   });
   if (handled === false) {
@@ -796,7 +792,6 @@ export async function handleOpenAiHttpRequest(
   let finalToolCalls: ReturnType<typeof readOpenAiHttpRunTerminal>["pendingToolCalls"];
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeScheduled = false;
-  let resultResolved = false;
   let closed = false;
   let observedTerminalLifecycle = false;
   let terminalStreamError: { message: string; type: string; code?: string } | undefined;
@@ -806,10 +801,7 @@ export async function handleOpenAiHttpRequest(
     if (closed || finalizeScheduled) {
       return;
     }
-    if (!resultResolved) {
-      return;
-    }
-    if (streamIncludeUsage && !finalUsage) {
+    if (!finalUsage) {
       return;
     }
     // Agent text_end flushes run in a microtask. Keep the stream subscribed
@@ -926,7 +918,6 @@ export async function handleOpenAiHttpRequest(
   void (async () => {
     try {
       const result = await runAgentCommand();
-      resultResolved = true;
 
       if (closed) {
         return;
@@ -964,7 +955,6 @@ export async function handleOpenAiHttpRequest(
         stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       requestFinalize();
     } catch (err) {
-      resultResolved = true;
       if (closed || abortController.signal.aborted) {
         return;
       }

@@ -26,11 +26,7 @@ it("inherits accepted human credit when participant persistence is still queued"
     const childSessionKey = "agent:main:subagent:child";
     const storePath = resolveOpenClawAgentSqlitePath({ agentId });
     const scope = { agentId, sessionKey, storePath };
-    const conversationLink = {
-      url: "https://chat.example.test/thread/123",
-      label: "Source Thread",
-    };
-    await upsertSessionEntryCore(scope, { sessionId: "parent-id", updatedAt: 1, conversationLink });
+    await upsertSessionEntryCore(scope, { sessionId: "parent-id", updatedAt: 1 });
     const releaseWriter = createDeferredCore();
     const writerStarted = createDeferredCore();
     const heldWriter = runOpenClawAgentWriteAdmission({ agentId, path: storePath }, async () => {
@@ -76,7 +72,6 @@ it("inherits accepted human credit when participant persistence is still queued"
       ]);
       const child = loadSessionEntry({ ...scope, sessionKey: childSessionKey });
       expect(child?.inheritedGitContributorProfileIds).toEqual(["human-requester"]);
-      expect(child?.conversationLink).toEqual(conversationLink);
       expect(child?.participants ?? []).toEqual([]);
     } finally {
       releaseWriter.resolve();
@@ -314,48 +309,67 @@ it("rejects replaced parent incarnations and never retains a reused child grant"
   });
 });
 
-it("rechecks the parent on the session read worker, never the Gateway thread", async () => {
-  await withOpenClawTestState({ label: "spawn-parent-recheck" }, async () => {
-    const sessionKey = "agent:main:parent";
-    const childSessionKey = "agent:main:subagent:child";
-    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const scope = { storePath, sessionKey };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "parent-first",
-      lifecycleRevision: "first",
-      updatedAt: 1,
-    });
-    const syncRead = vi.spyOn(spawnRuntime, "loadSessionEntry");
-    const workerRead = vi.spyOn(spawnRuntime, "withSessionEntryReadOnlyInWorker");
-    // The parent's own turn keeps writing its row while the child is prepared.
-    const prepare = writeParentDuringChildPrepare(childSessionKey, () =>
-      upsertSessionEntryCore(scope, { updatedAt: 2, totalTokens: 10 }),
-    );
-    try {
-      expect(
-        await createInitialSubagentSession(
+it.each([false, true])(
+  "checks pinned parent skills off the Gateway thread (changed=%s)",
+  async (changed) => {
+    await withOpenClawTestState({ label: "spawn-parent-recheck" }, async () => {
+      const sessionKey = "agent:main:parent";
+      const childSessionKey = "agent:main:subagent:child";
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      const scope = { storePath, sessionKey };
+      const skillLibrarySelections = [
+        {
+          skillId: "spawn-skill",
+          revision: "revision-one",
+          name: "spawn-skill",
+          ownerProfileId: null,
+        },
+      ];
+      await upsertSessionEntryCore(scope, {
+        sessionId: "parent-first",
+        lifecycleRevision: "first",
+        updatedAt: 1,
+        skillLibrarySelections,
+      });
+      const syncRead = vi.spyOn(spawnRuntime, "loadSessionEntry");
+      // The parent's own turn keeps writing its row while the child is prepared.
+      const prepare = writeParentDuringChildPrepare(childSessionKey, () =>
+        upsertSessionEntryCore(scope, {
+          updatedAt: 2,
+          totalTokens: 10,
+          ...(changed ? { skillLibrarySelections: [] } : {}),
+        }),
+      );
+      try {
+        const result = await createInitialSubagentSession(
           lineageSpawnParams(sessionKey, childSessionKey, {
             expectedParentSessionId: "parent-first",
             senderIsOwner: true,
           }),
-        ),
-      ).toMatchObject({ status: "ok" });
-      expect(syncRead).not.toHaveBeenCalled();
-      // One capture and one recheck after the awaited child-store preparation.
-      expect(workerRead.mock.calls.filter(([read]) => read.sessionKey === sessionKey)).toHaveLength(
-        2,
-      );
-      expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
-        spawnedBySessionId: "parent-first",
-        spawnedBySenderIsOwner: true,
-      });
-    } finally {
-      prepare.mockRestore();
-      workerRead.mockRestore();
-      syncRead.mockRestore();
-    }
-  });
-});
+        );
+        expect(result).toMatchObject(
+          changed
+            ? { status: "error", error: expect.stringContaining("Parent skill selection changed") }
+            : { status: "ok" },
+        );
+        expect(syncRead).not.toHaveBeenCalled();
+        const child = loadSessionEntry({ storePath, sessionKey: childSessionKey });
+        if (changed) {
+          expect(child).toBeUndefined();
+        } else {
+          expect(child).toMatchObject({
+            spawnedBySessionId: "parent-first",
+            spawnedBySenderIsOwner: true,
+            skillLibrarySelections,
+          });
+        }
+      } finally {
+        prepare.mockRestore();
+        syncRead.mockRestore();
+      }
+    });
+  },
+);
 
 it("spawns from a parent without a stored row, as before lineage receipts", async () => {
   await withOpenClawTestState({ label: "spawn-rowless-parent" }, async () => {

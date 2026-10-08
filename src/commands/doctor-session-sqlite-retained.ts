@@ -352,7 +352,6 @@ export async function archiveConflictingRetainedSessionSources(
       const move = planSessionJsonlArchiveMove({
         target,
         sourcePathRaw: source,
-        baseNameRaw: path.basename(source),
         archiveKey: "retained-plugin-conflict",
         kind: source === target.storePath ? "legacy-store" : "transcript",
       });

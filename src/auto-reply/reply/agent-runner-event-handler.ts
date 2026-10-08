@@ -5,6 +5,7 @@ import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
@@ -23,15 +24,11 @@ export type MessageToolDeliveryState = {
   completed: boolean;
 };
 
-function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
-  return value === "turn" || value === "session" ? value : undefined;
-}
-
-/** Bridges embedded-agent events into channel progress and compaction notices. */
 export function createAgentRunEventHandler(params: {
   turn: AgentTurnParams;
   lifecycleBackstop: AgentLifecycleTerminalBackstop;
-  notifyAgentRunStart: () => void;
+  prepareAgentRunStart: () => void | Promise<void>;
+  notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
   sourceRepliesAreToolOnly: boolean;
   provider: string;
   model: string;
@@ -64,7 +61,12 @@ export function createAgentRunEventHandler(params: {
     params.lifecycleBackstop.note(evt);
     const hasLifecyclePhase = evt.stream === "lifecycle" && typeof evt.data.phase === "string";
     if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
-      params.notifyAgentRunStart();
+      const preparation =
+        evt.transcriptStart === undefined ? params.prepareAgentRunStart() : undefined;
+      if (preparation) {
+        await preparation;
+      }
+      params.notifyAgentRunStart(evt.transcriptStart);
     }
     if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
       const phase = readStringValue(evt.data.phase) ?? "";
@@ -162,6 +164,7 @@ export function createAgentRunEventHandler(params: {
       });
     }
     if (evt.stream === "approval" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+      const scope = evt.data.scope;
       await params.turn.opts?.onApprovalEvent?.({
         phase: readStringValue(evt.data.phase),
         kind: readStringValue(evt.data.kind),
@@ -174,7 +177,7 @@ export function createAgentRunEventHandler(params: {
         command: readStringValue(evt.data.command),
         host: readStringValue(evt.data.host),
         reason: readStringValue(evt.data.reason),
-        scope: readApprovalScopeValue(evt.data.scope),
+        scope: scope === "turn" || scope === "session" ? scope : undefined,
         message: readStringValue(evt.data.message),
       });
     }

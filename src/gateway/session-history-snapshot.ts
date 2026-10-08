@@ -1,4 +1,4 @@
-import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 import type {
@@ -8,13 +8,14 @@ import type {
   SessionHistoryReadParams,
   SessionHistorySnapshot,
 } from "../config/sessions/session-history-types.js";
+import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type {
   IncognitoHistoryOperations,
   IncognitoHistoryTarget,
 } from "../config/sessions/session-incognito-history-contract.js";
+import { prepareIncognitoSessionHistoryRead } from "../config/sessions/session-incognito-history-read.js";
 import type { PendingInputHistoryQuery } from "../config/sessions/session-pending-input-history.types.js";
-import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import {
   projectChatDisplayMessagesWithState,
   type ChatDisplayProjectionOptions,
@@ -30,6 +31,7 @@ import type {
   SessionTranscriptReader,
   SubagentCoordinationDisplayResolver,
 } from "./session-transcript-read.types.js";
+import { iterateSessionTranscriptSourcePages } from "./session-transcript-source-pages.js";
 
 type SessionHistorySnapshotOptions = {
   readers: SessionTranscriptReader;
@@ -50,14 +52,18 @@ export async function readSessionHistorySnapshotKernel(
   let transcriptPath: string | undefined;
   let projected: ReturnType<typeof projectChatDisplayMessagesWithState>;
   if (typeof params.limit !== "number") {
-    const snapshot = await options.readers.readSessionMessagesWithSourceAsync(params.target, {
-      mode: "full",
-      reason: "session history cursor pagination",
-      allowResetArchiveFallback: true,
-      readOnly: options.readOnly,
-    });
-    rawMessages = snapshot.messages;
-    transcriptPath = snapshot.transcriptPath;
+    rawMessages = [];
+    for await (const page of iterateSessionTranscriptSourcePages(
+      options.readers.readSessionMessagesWithSourceAsync.bind(options.readers),
+      params.target,
+      {
+        allowResetArchiveFallback: true,
+        readOnly: options.readOnly,
+      },
+    )) {
+      rawMessages.push(...page.messages);
+      transcriptPath = page.transcriptPath;
+    }
     projected = projectChatDisplayMessagesWithState(rawMessages, {
       subagentCoordination: options.readers.subagentCoordination,
       includeCommentaryFallbacks: true,
@@ -211,10 +217,10 @@ export function createIncognitoSessionComputeReader(
 
 /** Inactive composition: callers retain the actor and supply already-prepared display facts. */
 export function createIncognitoSessionHistoryReader(params: {
-  actor: Pick<IncognitoAgentDatabaseExecution, "path" | "sessions" | "assertCurrent">;
+  actor: IncognitoSessionActor;
   authority: IncognitoSessionAuthority;
   target: IncognitoHistoryTarget & { agentId: string; storePath: string };
-  subagentCoordination: SubagentCoordinationDisplayResolver;
+  subagentCoordination?: SubagentCoordinationDisplayResolver;
   resolveCurrentUserProfileDisplay: CurrentUserProfileDisplayResolver;
   resolveCronJobName?: (jobId: string) => string | undefined;
   signal?: AbortSignal;
@@ -222,15 +228,26 @@ export function createIncognitoSessionHistoryReader(params: {
   const { actor, authority, signal, subagentCoordination } = params;
   authority.assertCurrent();
   actor.assertCurrent();
-  const { agentId, storePath, ...target } = structuredClone(params.target);
-  const capturedStorePath = path.resolve(storePath);
+  const { agentId, storePath, ...selected } = structuredClone(params.target);
+  const prepared = prepareIncognitoSessionHistoryRead(
+    { actor, authority, target: selected },
+    {
+      ...selected,
+      agentId,
+      storePath,
+    },
+    signal,
+  );
+  const target = prepared.target;
   const claim = actor.sessions.captureCurrent(target.sessionKey);
   const assertCurrent = () => {
     signal?.throwIfAborted();
     actor.assertCurrent();
     authority.assertCurrent();
+    prepared.authority.assertCurrent();
     claim.assertCurrent();
-    subagentCoordination.assertCurrent?.();
+    subagentCoordination?.assertCurrent?.();
+    actor.assertReadable();
   };
   const assertScope = (scope: Partial<SessionTranscriptReadScope>) => {
     assertCurrent();
@@ -238,12 +255,12 @@ export function createIncognitoSessionHistoryReader(params: {
       scope.sessionId !== target.sessionId ||
       (scope.sessionKey !== undefined && scope.sessionKey !== target.sessionKey) ||
       (scope.agentId !== undefined && scope.agentId !== agentId) ||
-      (scope.storePath !== undefined && path.resolve(scope.storePath) !== capturedStorePath) ||
       (scope.sessionEntry?.sessionId !== undefined &&
         scope.sessionEntry.sessionId !== target.sessionId)
     ) {
       throw new Error("Incognito history request belongs to another session or store");
     }
+    prepareIncognitoSessionHistoryRead(prepared, { ...scope, sessionId: target.sessionId }, signal);
   };
   const disclose = <T>(value: T): T => {
     assertCurrent();
@@ -251,12 +268,23 @@ export function createIncognitoSessionHistoryReader(params: {
     assertCurrent();
     return value;
   };
+  const consumption = new AsyncLocalStorage<{
+    snapshot?: ReturnType<typeof actor.sessions.captureSnapshot>;
+  }>();
   const read = async <Key extends keyof IncognitoHistoryOperations>(
     scope: SessionTranscriptReadScope,
     command: { type: Key; input: IncognitoHistoryOperations[Key]["input"] },
   ): Promise<IncognitoHistoryOperations[Key]["output"]> => {
     assertScope(scope);
-    return disclose(await actor.sessions.history(authority, command, signal));
+    const current = consumption.getStore();
+    return disclose(
+      await actor.sessions.history(prepared.authority, command, signal, () => {
+        if (current) {
+          current.snapshot ??= actor.sessions.captureSnapshot(target.sessionKey);
+          current.snapshot.assertCurrent();
+        }
+      }),
+    );
   };
   const readers: SessionTranscriptReader = {
     subagentCoordination,
@@ -269,33 +297,28 @@ export function createIncognitoSessionHistoryReader(params: {
     readSessionMessagesAroundIdWithStatsAsync: (scope, options) =>
       read(scope, { type: "session.history.around-id", input: { ...target, options } }),
     readSessionMessageByIdAsync: async (scope, messageId, options) => {
-      const { filterSessionMessageHistoryVisibility } =
-        await import("./session-transcript-read-kernel.js");
-      return disclose(
-        await filterSessionMessageHistoryVisibility(
-          await read(scope, {
-            type: "session.history.by-id",
-            input: { ...target, messageId, options },
-          }),
-          scope,
-          messageId,
-          options?.historyVisibility,
-          readers,
-        ),
-      );
+      return consume(scope, async () => {
+        const { filterSessionMessageHistoryVisibility } =
+          await import("./session-transcript-read-kernel.js");
+        return disclose(
+          await filterSessionMessageHistoryVisibility(
+            await read(scope, {
+              type: "session.history.by-id",
+              input: { ...target, messageId, options },
+            }),
+            scope,
+            messageId,
+            options?.historyVisibility,
+            readers,
+          ),
+        );
+      });
     },
     async readSessionMessagesWithSourceAsync(scope, options) {
-      const { messages, offPathMessages, transcriptPath } = await read(scope, {
+      return read(scope, {
         type: "session.history.source",
         input: { ...target, options },
       });
-      return disclose({
-        messages: offPathMessages ? [...messages, ...offPathMessages] : messages,
-        transcriptPath,
-      });
-    },
-    async readSessionMessagesAsync(scope, options) {
-      return disclose((await readers.readSessionMessagesWithSourceAsync(scope, options)).messages);
     },
     async readSessionMessagesMatchingIdAsync(scope, messageId) {
       return disclose(
@@ -320,41 +343,112 @@ export function createIncognitoSessionHistoryReader(params: {
     assertCurrent();
     return createIncognitoPendingInputHistoryReader({ actor, authority, target });
   };
+  const consume = <T>(
+    scope: SessionTranscriptReadScope,
+    operation: (readers: SessionTranscriptReader, assertReadCurrent: () => void) => Promise<T>,
+  ): Promise<T> => {
+    assertScope(scope);
+    const current = consumption.getStore() ?? {};
+    const assertReadCurrent = () => {
+      current.snapshot?.assertCurrent();
+      disclose(undefined);
+    };
+    return actor.sessions
+      .withSharedState(() =>
+        consumption.run(current, async () => {
+          assertReadCurrent();
+          return operation(readers, assertReadCurrent);
+        }),
+      )
+      .then((result) => {
+        assertReadCurrent();
+        return result;
+      });
+  };
   return {
     readers,
+    consume,
+    assertCurrent: () => {
+      disclose(undefined);
+    },
+    visitSessionMessagesAsync(
+      scope: SessionTranscriptReadScope,
+      visit: (message: unknown, seq: number) => void,
+    ) {
+      return consume(scope, async (_readers, assertReadCurrent) => {
+        let count = 0;
+        let offset: number | undefined;
+        do {
+          const page = await read(scope, {
+            type: "session.history.visitor-source",
+            input: { ...target, offset },
+          });
+          for (const { message, seq } of page.messages) {
+            assertReadCurrent();
+            visit(message, seq);
+            count++;
+          }
+          offset = page.nextOffset;
+        } while (offset !== undefined);
+        return count;
+      });
+    },
+    delta<T>(
+      scope: SessionTranscriptReadScope,
+      limits: IncognitoHistoryOperations["session.history.delta"]["input"]["options"],
+      project: (
+        value: IncognitoHistoryOperations["session.history.delta"]["output"],
+        subagents: SubagentCoordinationDisplayResolver | undefined,
+      ) => Promise<T>,
+    ) {
+      const captured = structuredClone(limits);
+      return consume(scope, async () =>
+        project(
+          await read(scope, {
+            type: "session.history.delta",
+            input: { ...target, options: captured },
+          }),
+          subagentCoordination,
+        ),
+      );
+    },
     listPendingInputs(query: Pick<PendingInputHistoryQuery, "limit" | "before"> = {}) {
       const captured = { ...query };
       assertCurrent();
-      return actor.sessions.withSharedState(async () =>
-        disclose(await (await pendingInputs()).list(captured)),
-      );
+      return actor.sessions
+        .withSharedState(async () => (await pendingInputs()).list(captured))
+        .then(disclose);
     },
     readPendingInput(id: string) {
       assertCurrent();
-      return actor.sessions.withSharedState(async () =>
-        disclose(await (await pendingInputs()).read(id)),
-      );
+      return actor.sessions
+        .withSharedState(async () => (await pendingInputs()).read(id))
+        .then(disclose);
     },
     async rpc(request: ChatHistoryPageParams) {
       const captured = structuredClone(request);
-      assertScope({
+      const scope = {
         agentId: captured.sessionAgentId,
-        sessionId: captured.sessionId,
+        sessionId: captured.sessionId ?? "",
         sessionKey: captured.canonicalKey,
         storePath: captured.storePath,
         sessionEntry: captured.entry,
+      };
+      return consume(scope, async () => {
+        const [{ readChatHistoryPageKernel }, { encodeChatHistoryResponsePage }] =
+          await Promise.all([
+            import("./server-methods/chat-history-page-kernel.js"),
+            import("./server-methods/chat-history-response-page.js"),
+          ]);
+        const page = await readChatHistoryPageKernel(captured, options);
+        return disclose(encodeChatHistoryResponsePage(page, captured));
       });
-      const [{ readChatHistoryPageKernel }, { encodeChatHistoryResponsePage }] = await Promise.all([
-        import("./server-methods/chat-history-page-kernel.js"),
-        import("./server-methods/chat-history-response-page.js"),
-      ]);
-      const page = await readChatHistoryPageKernel(captured, options);
-      return disclose(encodeChatHistoryResponsePage(page, captured));
     },
     async http(request: SessionHistoryReadParams) {
       const captured = structuredClone(request);
-      assertScope(captured.target);
-      return disclose(await readSessionHistorySnapshotKernel(captured, options));
+      return consume(captured.target, () => readSessionHistorySnapshotKernel(captured, options));
     },
   };
 }
+
+export type IncognitoSessionHistoryReader = ReturnType<typeof createIncognitoSessionHistoryReader>;

@@ -6,27 +6,19 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseTelegramTarget } from "./targets.js";
 
-function resolveTelegramToolContextThreadId(context: ChannelThreadingContext): string | undefined {
-  if (context.MessageThreadId != null) {
-    return String(context.MessageThreadId);
-  }
-  const currentChannelId = normalizeOptionalString(context.To);
-  if (!currentChannelId) {
-    return undefined;
-  }
-  const parsedTarget = parseTelegramTarget(currentChannelId);
-  return parsedTarget.messageThreadId != null ? String(parsedTarget.messageThreadId) : undefined;
-}
-
 export function buildTelegramThreadingToolContext(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   context: ChannelThreadingContext;
   hasRepliedRef?: { value: boolean };
 }): ChannelThreadingToolContext {
+  const currentChannelId = normalizeOptionalString(params.context.To);
+  const threadId =
+    params.context.MessageThreadId ??
+    (currentChannelId ? parseTelegramTarget(currentChannelId).messageThreadId : undefined);
   return {
-    currentChannelId: normalizeOptionalString(params.context.To),
-    currentThreadTs: resolveTelegramToolContextThreadId(params.context),
+    currentChannelId,
+    currentThreadTs: threadId != null ? String(threadId) : undefined,
     hasRepliedRef: params.hasRepliedRef,
   };
 }

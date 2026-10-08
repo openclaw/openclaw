@@ -69,15 +69,6 @@ import {
   prepareWorkshopWorkspaceRelocation,
 } from "./doctor-skill-workshop-workspaces.js";
 
-type WorkshopRelocationResult = {
-  movedSkills: number;
-  retargetedProposals: number;
-  staleProposals: number;
-  migratedBackupRoots: number;
-  warnings: string[];
-  recoverableWarningCount: number;
-};
-
 export type LegacyWorkshopMigrationInspection = {
   externalProposalCount: number;
   externalProposalCountsByAgent: Record<string, number>;
@@ -143,7 +134,7 @@ async function relocateLegacyWorkshopTargets(
   backupRoots: readonly LegacyCollectionBackupRoot[],
   assertCurrent: () => void,
   unavailableWorkspaceDirs: ReadonlyMap<string, string> = new Map(),
-): Promise<WorkshopRelocationResult> {
+) {
   assertCurrent();
   const database = openOpenClawStateDatabase({ env });
   const kysely = getNodeSqliteKysely<

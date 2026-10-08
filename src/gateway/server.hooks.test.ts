@@ -184,6 +184,19 @@ describe("gateway server hooks", () => {
       expect(wakeEvents.join("\n")).toContain("Ping");
       drainSystemEvents(resolveMainKey());
 
+      for (const sessionKey of [null, 42, false, {}, [], "", "   "]) {
+        const invalidSession = await postHook(
+          port,
+          "agent",
+          { message: "Do not redirect malformed routing", sessionKey },
+          { status: 400 },
+        );
+        await expect(invalidSession.json()).resolves.toMatchObject({
+          error: "sessionKey must be a non-empty string",
+        });
+      }
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+
       setTestPluginRegistry(
         createTestRegistry([
           {
@@ -268,6 +281,37 @@ describe("gateway server hooks", () => {
       await postHook(port, "agent", { message: " " }, { status: 400 });
 
       await postHook(port, "wake", "{", { status: 400 });
+    });
+  });
+
+  test("honors immediate wake overrides from mapped hook transforms", async () => {
+    await writeHookTransformModule(
+      "immediate-wake.mjs",
+      'export default () => ({ mode: "now", wakeMode: "now" });',
+    );
+    configureHooks({
+      mappings: [
+        {
+          match: { path: "immediate-wake" },
+          action: "wake",
+          textTemplate: "Immediate notification",
+          wakeMode: "next-heartbeat",
+          transform: { module: "immediate-wake.mjs" },
+        },
+        agentMapping("immediate-agent", {
+          wakeMode: "next-heartbeat",
+          transform: { module: "immediate-wake.mjs" },
+        }),
+      ],
+    });
+    await withGatewayServer(async ({ port }) => {
+      const wake = await postHook(port, "immediate-wake", {});
+      expect.soft(await wake.json()).toMatchObject({ mode: "now", eventOutcome: "queued" });
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOk();
+      await postHook(port, "immediate-agent", { subject: "Immediate completion" });
+      expect(cronRunCall().job.wakeMode).toBe("now");
     });
   });
 
@@ -379,6 +423,29 @@ describe("gateway server hooks", () => {
       expect(mappedEvents).toHaveLength(1);
       expect(mappedEvents[0]?.text).toBe("Mapped wake: Email");
       drainSystemEvents("agent:hooks:hook:wake:fixed");
+
+      for (const route of ["wake", "mapped-wake"]) {
+        const sessionKey =
+          route === "wake" ? "agent:main:hook:wake:direct" : "agent:hooks:hook:wake:fixed";
+        const payload = (index: number) =>
+          route === "wake"
+            ? { text: `Direct wake ${index}`, sessionKey: "hook:wake:direct" }
+            : { subject: `Email ${index}` };
+        for (let index = 0; index < 20; index++) {
+          const admitted = await postHook(port, route, payload(index));
+          await expect(admitted.json()).resolves.toMatchObject({ eventOutcome: "queued" });
+        }
+        const pending = peekSystemEventEntries(sessionKey);
+        const coalesced = await postHook(port, route, payload(19));
+        await expect(coalesced.json()).resolves.toMatchObject({ eventOutcome: "coalesced" });
+        const refused = await postHook(port, route, payload(20), { status: 503 });
+        await expect(refused.json()).resolves.toMatchObject({
+          ok: false,
+          error: expect.stringContaining("queue is full"),
+        });
+        expect(peekSystemEventEntries(sessionKey)).toEqual(pending);
+        drainSystemEvents(sessionKey);
+      }
     });
 
     testState.sessionConfig = { scope: "global" };

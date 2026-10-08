@@ -1,4 +1,3 @@
-/** Runs capability-aware video generation and persistence. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -40,7 +39,11 @@ import {
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { hasAuthForProvider, coerceToolModelConfig } from "./model-config.helpers.js";
+import {
+  hasAuthForProvider,
+  coerceToolModelConfig,
+  prepareToolAuthProfileStoreSource,
+} from "./model-config.helpers.js";
 import {
   createVideoGenerateDuplicateGuardResult,
   createVideoGenerateListActionResult,
@@ -53,14 +56,11 @@ import {
 } from "./video-generate-tool.execution.js";
 
 const log = createSubsystemLogger("agents/tools/video-generate");
-const MAX_INPUT_IMAGES = 9;
-const MAX_INPUT_VIDEOS = 4;
-const MAX_INPUT_AUDIOS = 3;
+const MAX_REFERENCE_INPUTS = { image: 9, video: 4, audio: 3 } as const;
 
 function readVideoReferenceInputs(
   args: Record<string, unknown>,
   kind: "image" | "video" | "audio",
-  maxCount: number,
 ) {
   const singularKey = kind === "audio" ? "audioRef" : kind;
   const pluralKey = `${singularKey}s`;
@@ -69,7 +69,7 @@ function readVideoReferenceInputs(
     args,
     singularKey,
     pluralKey,
-    maxCount,
+    maxCount: MAX_REFERENCE_INPUTS[kind],
     label: `reference ${pluralKey}`,
     dedupe: false,
   });
@@ -102,7 +102,7 @@ const VideoGenerateToolProperties = {
   ),
   images: Type.Optional(
     Type.Array(Type.String(), {
-      description: `Reference images; max ${MAX_INPUT_IMAGES}.`,
+      description: `Reference images; max ${MAX_REFERENCE_INPUTS.image}.`,
     }),
   ),
   imageRoles: Type.Optional(
@@ -118,7 +118,7 @@ const VideoGenerateToolProperties = {
   ),
   videos: Type.Optional(
     Type.Array(Type.String(), {
-      description: `Reference videos; max ${MAX_INPUT_VIDEOS}.`,
+      description: `Reference videos; max ${MAX_REFERENCE_INPUTS.video}.`,
     }),
   ),
   videoRoles: Type.Optional(
@@ -134,7 +134,7 @@ const VideoGenerateToolProperties = {
   ),
   audioRefs: Type.Optional(
     Type.Array(Type.String(), {
-      description: `Reference audios; max ${MAX_INPUT_AUDIOS}.`,
+      description: `Reference audios; max ${MAX_REFERENCE_INPUTS.audio}.`,
     }),
   ),
   audioRoles: Type.Optional(
@@ -208,6 +208,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   workspaceDir?: string;
 }): boolean {
   const snapshot = loadCapabilityMetadataSnapshot({
@@ -288,6 +289,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
+        authProfileStoreSource: params.authProfileStoreSource,
       })
     ) {
       return true;
@@ -313,6 +315,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
     cfg,
     agentDir: options?.agentDir,
     authStore: options?.authProfileStore,
+    authProfileStoreSource: options?.authProfileStoreSource,
     workspaceDir: options?.workspaceDir,
   });
 
@@ -330,10 +333,13 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
       const action = resolveGenerateAction(args);
 
       if (action === "list") {
+        const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+        signal?.throwIfAborted();
         return createVideoGenerateListActionResult(cfg, {
           workspaceDir: options?.workspaceDir,
           agentDir: options?.agentDir,
           authStore: options?.authProfileStore,
+          authProfileStoreSource,
         });
       }
 
@@ -389,17 +395,14 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
           const { inputs: imageInputs, roles: imageRoles } = readVideoReferenceInputs(
             args,
             "image",
-            MAX_INPUT_IMAGES,
           );
           const { inputs: videoInputs, roles: videoRoles } = readVideoReferenceInputs(
             args,
             "video",
-            MAX_INPUT_VIDEOS,
           );
           const { inputs: audioInputs, roles: audioRoles } = readVideoReferenceInputs(
             args,
             "audio",
-            MAX_INPUT_AUDIOS,
           );
 
           const selectedProvider = resolveSelectedCapabilityProvider({

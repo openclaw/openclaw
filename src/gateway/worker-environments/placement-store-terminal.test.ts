@@ -15,7 +15,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
+import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
@@ -83,7 +83,7 @@ describe("worker placement terminal persistence", () => {
     await store.acceptWorkspaceResult(claim);
 
     expect(
-      await completeReclaimedWorkspaceTeardown({
+      await completeWorkerWorkspaceTeardown({
         placements: store,
         turnClaim: claim,
         environmentId: active.environmentId,

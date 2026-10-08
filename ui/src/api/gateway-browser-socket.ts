@@ -10,31 +10,22 @@ import { formatUiError } from "../lib/format-error.ts";
 const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
 export const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
 
-function getErrorName(err: unknown): string | undefined {
+export function formatBrowserWebSocketConstructorError(err: unknown, url: string): ErrorShape {
   const name = err && typeof err === "object" && "name" in err ? err.name : undefined;
-  return typeof name === "string" && name.trim() ? name : undefined;
-}
-
-function isBrowserWebSocketSecurityError(err: unknown): boolean {
-  const name = getErrorName(err)?.toLowerCase();
-  const message = formatUiError(err).toLowerCase();
-  return (
-    name === "securityerror" ||
+  const browserErrorName = typeof name === "string" && name.trim() ? name : undefined;
+  const browserMessage = formatUiError(err);
+  const message = browserMessage.toLowerCase();
+  const securityError =
+    browserErrorName?.toLowerCase() === "securityerror" ||
     message.includes("security error") ||
     message.includes("mixed content") ||
-    message.includes("insecure websocket")
-  );
-}
-
-export function formatBrowserWebSocketConstructorError(err: unknown, url: string): ErrorShape {
-  const securityError = isBrowserWebSocketSecurityError(err);
-  const browserMessage = formatUiError(err);
+    message.includes("insecure websocket");
   const isPlaintextWs = url.trim().toLowerCase().startsWith("ws://");
   const details = {
     code: securityError
       ? BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
       : BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
-    browserErrorName: getErrorName(err),
+    browserErrorName,
     browserMessage,
   };
   if (securityError) {

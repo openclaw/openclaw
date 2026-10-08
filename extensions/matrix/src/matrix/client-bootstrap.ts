@@ -1,6 +1,5 @@
 import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { CoreConfig } from "../types.js";
 import type { MatrixClientReleaseMode, SharedMatrixClientLease } from "./client/shared.js";
 import type { MatrixClient } from "./sdk.js";
@@ -59,7 +58,7 @@ export async function resolveRuntimeMatrixClientWithReadiness(
       "Matrix runtime client requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
     );
   }
-  const cfg = requireRuntimeConfig(opts.cfg, "Matrix runtime client") as CoreConfig;
+  const cfg = opts.cfg;
   const { acquireSharedMatrixClient, resolveMatrixAuthContext } =
     await loadMatrixSharedClientRuntimeDeps();
   assertCurrent?.();

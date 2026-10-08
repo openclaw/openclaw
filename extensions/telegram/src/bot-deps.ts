@@ -23,7 +23,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
   getSessionEntry,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtAsync,
   readAmbientTranscriptWatermark,
   resolveAmbientTranscriptWatermarkKey,
   resolveStorePath,
@@ -62,7 +62,7 @@ export type TelegramBotDeps = {
   getRuntimeConfig: typeof getRuntimeConfig;
   resolveStorePath: typeof resolveStorePath;
   getSessionEntry?: typeof getSessionEntry;
-  readSessionUpdatedAt?: typeof readSessionUpdatedAt;
+  readSessionUpdatedAtAsync?: typeof readSessionUpdatedAtAsync;
   readAmbientTranscriptWatermark?: typeof readAmbientTranscriptWatermark;
   resolveAmbientTranscriptWatermarkKey?: typeof resolveAmbientTranscriptWatermarkKey;
   recordInboundSession?: typeof recordInboundSession;
@@ -95,7 +95,7 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   resolveStorePath,
   getSessionEntry,
   readChannelAllowFromStore,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtAsync,
   readAmbientTranscriptWatermark,
   resolveAmbientTranscriptWatermarkKey,
   recordInboundSession,

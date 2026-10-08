@@ -24,7 +24,6 @@ import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-packag
 
 type InstallSourceHardlinks = "package-manager" | "reject";
 
-const DEFAULT_INSTALL_SOURCE_HARDLINKS: InstallSourceHardlinks = "reject";
 const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
 const INSTALL_BASE_CHANGED_ABORT_WARNING =
   "Install base directory changed during install; aborting staged publish.";
@@ -211,18 +210,6 @@ function resolvePackageDirInstallTransactionRequest(
   )[PACKAGE_DIR_INSTALL_TRANSACTION_REQUEST];
 }
 
-function attachPackageDirInstallTransaction<T extends object>(
-  result: T,
-  transaction: PackageDirInstallTransaction,
-): T {
-  Object.defineProperty(result, PACKAGE_DIR_INSTALL_TRANSACTION, {
-    configurable: false,
-    enumerable: true,
-    value: transaction,
-  });
-  return result;
-}
-
 export function resolvePackageDirInstallTransaction(
   result: object,
 ): PackageDirInstallTransaction | undefined {
@@ -352,10 +339,7 @@ export async function installPackageDir<
     install: MovePathPublicationReceipt | null;
     restore: MovePathPublicationReceipt | null;
   } = { backup: null, install: null, restore: null };
-  const sourceHardlinks =
-    (params.sourceHardlinks ?? DEFAULT_INSTALL_SOURCE_HARDLINKS) === "package-manager"
-      ? "allow"
-      : "reject";
+  const sourceHardlinks = params.sourceHardlinks === "package-manager" ? "allow" : "reject";
   let quarantine:
     | { directory: string; identity: Awaited<ReturnType<typeof readDirectoryIdentity>> }
     | undefined;
@@ -529,8 +513,6 @@ export async function installPackageDir<
                 // stays quiet on success while preserving the actionable npm failure text.
                 resolveNpmCommand(
                   createSafeNpmInstallArgs({
-                    omitDev: true,
-                    loglevel: "error",
                     ignoreWorkspaces: true,
                   }),
                 ),
@@ -687,25 +669,30 @@ export async function installPackageDir<
       });
     return settlement;
   };
-  return attachPackageDirInstallTransaction(
-    { ok: true },
+  return Object.defineProperty(
+    { ok: true } satisfies InstallPackageDirSuccess,
+    PACKAGE_DIR_INSTALL_TRANSACTION,
     {
-      commit: () =>
-        settle(async () => {
-          if (quarantine) {
-            throw new Error("cannot commit an install after rollback has started");
-          }
-          assertOwned();
-          if (published.backup) {
-            await removeInstallTree({
-              directory: published.backup.path,
-              identity: published.backup,
-              assertOwner: assertRollbackOwned,
-              bestEffort: true,
-            });
-          }
-        }),
-      rollback: () => settle(rollback),
+      configurable: false,
+      enumerable: true,
+      value: {
+        commit: () =>
+          settle(async () => {
+            if (quarantine) {
+              throw new Error("cannot commit an install after rollback has started");
+            }
+            assertOwned();
+            if (published.backup) {
+              await removeInstallTree({
+                directory: published.backup.path,
+                identity: published.backup,
+                assertOwner: assertRollbackOwned,
+                bestEffort: true,
+              });
+            }
+          }),
+        rollback: () => settle(rollback),
+      } satisfies PackageDirInstallTransaction,
     },
   );
 }

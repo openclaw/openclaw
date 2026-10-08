@@ -1,6 +1,10 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import {
+  isMainRestartRecoveryCandidate,
+  normalizeMainSessionRecoveryRunFences,
+} from "../../config/sessions/restart-recovery-state.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -34,6 +38,7 @@ export function prepareCommandSessionRecoveryEntry(
   > & {
     deliveryContext?: DeliveryContext;
     now: number;
+    lifecycleGeneration: string;
     isSessionRollover: boolean;
   },
 ) {
@@ -50,6 +55,16 @@ export function prepareCommandSessionRecoveryEntry(
       ...entry,
       sessionId,
       updatedAt: now,
+      status: undefined,
+      abortedLastRun: false,
+      endedAt: undefined,
+      lastRunError: undefined,
+      restartRecoveryRuns: isMainRestartRecoveryCandidate(entry, params.sessionKey)
+        ? normalizeMainSessionRecoveryRunFences([
+            ...(entry.restartRecoveryRuns ?? []),
+            { runId, lifecycleGeneration: params.lifecycleGeneration },
+          ])
+        : entry.restartRecoveryRuns,
       sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
       lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
       ...buildCurrentRunRestartRecoveryClaim({

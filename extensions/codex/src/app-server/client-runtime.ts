@@ -1,4 +1,3 @@
-/** Client-scoped Codex auth and account observers. */
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";

@@ -42,6 +42,57 @@ function sessionScope(store: TestStore) {
 }
 
 describe("runDoctorSessionSqlite", () => {
+  it.each(["session-1", " session-1 ", "agent:main:main"])(
+    "imports legacy pending delivery state without changing identity %j",
+    async (sessionId) => {
+      const store = createLegacyStore({
+        entryOverrides: {
+          sessionId,
+          initializationPending: true,
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: "saved reply",
+          pendingFinalDeliveryCreatedAt: 1000,
+          pendingFinalDeliveryContext: { channel: "telegram", to: "synthetic-recipient" },
+          pendingFinalDeliveryIntentId: "legacy-intent",
+          pendingFinalDeliveryAttemptCount: 2,
+          pendingFinalDeliveryLastAttemptAt: 1500,
+          pendingFinalDeliveryLastError: "old failure",
+        },
+        transcriptLines: [
+          JSON.stringify({ type: "session", version: 3, id: sessionId }),
+          '{"type":"event","id":"evt-1"}',
+        ],
+      });
+      const originalStore = fs.readFileSync(store.storePath, "utf8");
+
+      const report = await importLegacyStore(store);
+
+      expect(report.totals).toMatchObject({
+        importedEntries: 1,
+        importedTranscriptEvents: 2,
+        issues: 0,
+      });
+      const imported = loadExactSessionEntry(sessionScope(store))?.entry;
+      expect(imported).toMatchObject({
+        sessionId,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "saved reply",
+          createdAt: 1000,
+          context: { channel: "telegram", to: "synthetic-recipient" },
+          intentId: "legacy-intent",
+        },
+      });
+      expect(imported).not.toHaveProperty("pendingFinalDeliveryText");
+      expect(imported).not.toHaveProperty("pendingFinalDeliveryAttemptCount");
+      const archivedStore = expectDefined(
+        report.targets[0]?.archivedLegacyStoreFiles?.[0],
+        "archived legacy store",
+      );
+      expect(fs.readFileSync(archivedStore, "utf8")).toBe(originalStore);
+    },
+  );
+
   it("refuses retired room grouping without changing the source", async () => {
     const store = createLegacyStore({
       entryOverrides: { room: "legacy", groupChannel: undefined },

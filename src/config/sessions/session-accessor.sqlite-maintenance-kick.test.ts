@@ -86,13 +86,13 @@ function createStore(pruneAfterMs = 1_000, key = sessionKey) {
   return { database, request, scope, storePath, updatedAt, archived: archived.promise };
 }
 
-function observeNextPeriodicMaintenance() {
+function observeNextPeriodicMaintenance(delayMs = ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS) {
   // Install after createStore opens the handles and registers their WAL timers.
   const scheduled = createDeferred();
   const setTimer = globalThis.setTimeout;
   const observer = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
     const timer = setTimer(...args);
-    if (args[1] === ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS) {
+    if (args[1] === delayMs) {
       scheduled.resolve();
     }
     return timer;
@@ -256,8 +256,8 @@ it.each([
   }
 });
 
-it("resumes automatic maintenance after Gateway work admission resets", async () => {
-  const { request, storePath } = createStore();
+it("resumes automatic maintenance after Gateway work admission resets", async ({ signal }) => {
+  const { request, storePath, archived } = createStore();
   kickSessionEntryMaintenanceAfterWrite(request);
   await yieldToEventLoop();
   markGatewayRestartDraining("stop (SIGTERM)");
@@ -266,12 +266,14 @@ it("resumes automatic maintenance after Gateway work admission resets", async ()
   resetGatewayWorkAdmission();
   const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
   dispatch.mockClear();
+  const scheduled = observeNextPeriodicMaintenance(1_001);
   kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
+  await scheduled(signal);
   expect(dispatch.mock.calls.filter(([{ plan }]) => plan.kind === "maintenance-plan")).toHaveLength(
     1,
   );
   await vi.advanceTimersByTimeAsync(1_001);
+  await withinTest(archived, signal);
   expect(loadSessionEntry({ sessionKey, storePath })?.archiveReason).toBe("age-retention");
 });
 
@@ -539,7 +541,10 @@ it.each([0, 32 * 24 * 60 * 60 * 1_000])(
         updatedAt: updatedAt - clockRollbackMs - 2_000,
       });
     }, scope);
-    const release = registerSessionMaintenancePreserveKeysProvider(() => [sessionKey]);
+    const release = registerSessionMaintenancePreserveKeysProvider(async () => ({
+      capture: () => [sessionKey],
+      dispose() {},
+    }));
     try {
       kickSessionEntryMaintenanceAfterWrite(request);
       await yieldToEventLoop();

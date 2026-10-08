@@ -53,10 +53,6 @@ export async function prepareAgentRequestRouting(params: {
   const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
     params.request.attachments,
   );
-  const requestedBestEffortDeliver =
-    typeof params.request.bestEffortDeliver === "boolean"
-      ? params.request.bestEffortDeliver
-      : undefined;
   const knownAgents = listAgentIds(params.cfg);
   const agentIdRaw = normalizeOptionalString(params.request.agentId) ?? "";
   let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
@@ -245,7 +241,7 @@ export async function prepareAgentRequestRouting(params: {
   }
   return {
     normalizedAttachments,
-    requestedBestEffortDeliver,
+    requestedBestEffortDeliver: params.request.bestEffortDeliver,
     knownAgents,
     agentId,
     requestedSessionId,

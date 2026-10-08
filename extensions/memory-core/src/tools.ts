@@ -296,12 +296,8 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           }
           let partial: Awaited<ReturnType<typeof executeMemorySearchToolQuery>> | null = null;
           let acceptingPartial = true;
-          const attempted = await attemptMemoryCorpus<Awaited<
-            ReturnType<typeof executeMemorySearchToolQuery>
-          > | null>({
-            corpus: "memory",
+          const attempted = await attemptMemoryCorpus({
             signal,
-            unavailableValue: null,
             getPartialValue: () => (partial?.rawResults.length ? partial : null),
             run: async () => {
               const memory = await acquireMemoryManager();

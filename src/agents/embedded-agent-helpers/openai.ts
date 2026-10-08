@@ -1,6 +1,3 @@
-/**
- * Normalizes OpenAI Responses reasoning/tool-call history for safe replay.
- */
 import {
   normalizeOpenAIResponsesFunctionCallId,
   replaceCompactionReplayOwnerContent,
@@ -52,23 +49,6 @@ function isOpenAIToolCallType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
 
-function createOpenAIResponsesToolCallIdResolver(): (id: string) => string {
-  const rewrittenByOriginalId = new Map<string, string>();
-
-  return (id) => {
-    const rewritten = rewrittenByOriginalId.get(id);
-    if (rewritten) {
-      return rewritten;
-    }
-    if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
-      return id;
-    }
-    const normalized = normalizeOpenAIResponsesFunctionCallId(id);
-    rewrittenByOriginalId.set(id, normalized);
-    return normalized;
-  };
-}
-
 function rewriteReplayMessages(
   messages: AgentMessage[],
   rewrite: (message: AgentMessage) => AgentMessage,
@@ -110,7 +90,19 @@ function rewriteAssistantContent(
  * pairs directly into the provider payload, so OpenClaw must normalize here.
  */
 export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): AgentMessage[] {
-  const resolveId = createOpenAIResponsesToolCallIdResolver();
+  const rewrittenByOriginalId = new Map<string, string>();
+  const resolveId = (id: string): string => {
+    const rewritten = rewrittenByOriginalId.get(id);
+    if (rewritten) {
+      return rewritten;
+    }
+    if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
+      return id;
+    }
+    const normalized = normalizeOpenAIResponsesFunctionCallId(id);
+    rewrittenByOriginalId.set(id, normalized);
+    return normalized;
+  };
   return rewriteReplayMessages(messages, (msg) => {
     if (!msg || typeof msg !== "object") {
       return msg;
@@ -226,7 +218,6 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
 }
 
 /**
- * Extracts the Responses `phase` (commentary/final_answer) from a v1 textSignature, if present.
  * Used when dropping the paired msg_* id so phase metadata can be preserved independently.
  */
 function extractTextSignaturePhase(signature: string): "commentary" | "final_answer" | undefined {

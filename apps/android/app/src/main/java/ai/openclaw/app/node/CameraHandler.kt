@@ -24,7 +24,6 @@ class CameraHandler(
   private val appContext: Context,
   private val camera: CameraCaptureManager,
   private val setCameraAudioCaptureActive: (Boolean) -> Boolean,
-  private val invokeErrorFromThrowable: (err: Throwable) -> Pair<String, String>,
 ) {
   /** Handles camera.list by exposing CameraX devices through gateway metadata. */
   suspend fun handleList(_paramsJson: String?): GatewaySession.InvokeResult =

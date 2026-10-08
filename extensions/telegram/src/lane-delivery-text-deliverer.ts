@@ -55,7 +55,6 @@ export type TelegramSendPayloadOptions = {
   afterAcceptedDraft?: boolean;
   durable?: boolean;
   silent?: boolean;
-  mirrorTranscript?: boolean;
   promptContextSequence?: TelegramPromptContextProjectionSequence;
   textMode?: "html";
   onPlatformSendDispatch?: () => Promise<void>;

@@ -215,6 +215,15 @@ describe("gateway restart benchmark script", () => {
     expect(() => testing.parseOptions(["--entry", " --inspect"])).toThrow(/must be a file path/u);
   });
 
+  it("selects the Gateway runtime and affinity independently of the controller", () => {
+    expect(testing.parseOptions([]).gatewayRuntime).toBe(process.execPath);
+    expect(
+      testing.parseOptions(["--gateway-runtime", "/tmp/bun", "--gateway-cpus", "0,1"]),
+    ).toMatchObject({ gatewayRuntime: "/tmp/bun", gatewayCpus: "0,1" });
+    expect(() => testing.parseOptions(["--gateway-cpus", "0-1"])).toThrow("--gateway-cpus");
+    expect(() => testing.parseOptions(["--gateway-runtime", "bun\0"])).toThrow("--gateway-runtime");
+  });
+
   it("rejects unknown benchmark CLI args before checking platform or running cases", () => {
     expect(unknownArgsResult.status).toBe(1);
     expect(unknownArgsResult.stdout).toBe("");

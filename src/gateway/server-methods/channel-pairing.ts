@@ -43,35 +43,6 @@ type PairingAccount = {
 
 class InvalidPairingTargetError extends Error {}
 
-function resolvePairingPolicy(params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId: string;
-  account: unknown;
-}): string | undefined {
-  const securityPolicy = params.plugin.security?.resolveDmPolicy?.({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    account: params.account,
-  })?.policy;
-  if (securityPolicy) {
-    return securityPolicy;
-  }
-  const account = asRecord(params.account);
-  return resolveChannelDmPolicy({
-    account,
-    parent: asRecord(account?.config),
-    defaultPolicy: "pairing",
-  });
-}
-
-function resolvePairingAccountLabel(plugin: ChannelPlugin, account: unknown, cfg: OpenClawConfig) {
-  const described = plugin.config.describeAccount?.(account, cfg);
-  return (
-    normalizeOptionalString(described?.name) ?? normalizeOptionalString(asRecord(account)?.name)
-  );
-}
-
 async function listPairingAccounts(params: {
   cfg: OpenClawConfig;
   channel?: string;
@@ -97,13 +68,24 @@ async function listPairingAccounts(params: {
       const configured = plugin.config.isConfigured
         ? await plugin.config.isConfigured(account, params.cfg)
         : asRecord(account)?.configured !== false;
-      if (
-        !configured ||
-        resolvePairingPolicy({ plugin, cfg: params.cfg, accountId, account }) !== "pairing"
-      ) {
+      if (!configured) {
         continue;
       }
-      const accountLabel = resolvePairingAccountLabel(plugin, account, params.cfg);
+      const record = asRecord(account);
+      const policy =
+        plugin.security?.resolveDmPolicy?.({ cfg: params.cfg, accountId, account })?.policy ||
+        resolveChannelDmPolicy({
+          account: record,
+          parent: asRecord(record?.config),
+          defaultPolicy: "pairing",
+        });
+      if (policy !== "pairing") {
+        continue;
+      }
+      const described = plugin.config.describeAccount?.(account, params.cfg);
+      const accountLabel =
+        normalizeOptionalString(described?.name) ??
+        normalizeOptionalString(asRecord(account)?.name);
       accounts.push({
         plugin,
         accountId,

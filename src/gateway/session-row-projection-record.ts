@@ -3,7 +3,8 @@ import { resolveSessionParentSessionKey } from "../channels/plugins/session-conv
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { SessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
+import type { SessionTitleFields } from "../config/sessions/session-history-read.types.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type {
   InternalSessionEntry as SessionEntry,
@@ -12,7 +13,6 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import { notifyListeners } from "../shared/listeners.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
@@ -82,8 +82,11 @@ export type Row = {
   /** Exact private reads retain their session claim only for the consuming frame. */
   privateSource?: { identity: string | symbol; assertCurrent(): void };
   preparedPrivate?: {
+    relatedRows: Record<string, Pick<EntryRow, "key" | "agentId" | "storeTarget" | "entry">>;
     entries: Record<string, SessionEntry>;
     databaseFacts: PreparedSessionRowDatabaseFacts;
+    titleFields?: SessionTitleFields;
+    terminalModel?: { modelProvider: string; model: string };
   };
 };
 
@@ -114,68 +117,6 @@ export function selectionRow(row: Row): SelectionRow | undefined {
         generation: row.generation,
       }
     : undefined;
-}
-
-/** Sharing fences every publication; selection holds only unchanged metadata. */
-export function createSessionRowProjectionRevisions() {
-  let sharing: object | undefined;
-  let selection: object | undefined;
-  const selectionListeners = new Set<(change: SelectionChange) => void>();
-  const invalidate = (metadataChanged = false) => {
-    sharing = undefined;
-    if (metadataChanged) {
-      selection = undefined;
-    }
-  };
-  const publishSelection = (row?: Row, removed = false) => {
-    if (!row) {
-      invalidate(true);
-    }
-    const change: SelectionChange = row
-      ? {
-          kind: "row",
-          id: identity(row),
-          key: row.key,
-          agentId: row.agentId,
-          row: removed ? undefined : selectionRow(row),
-        }
-      : { kind: "reset" };
-    // Failed derived updates retire orders without interrupting accepted row maintenance.
-    notifyListeners(selectionListeners, change, () =>
-      notifyListeners(selectionListeners, { kind: "reset" }),
-    );
-  };
-  return {
-    onSelectionChange(this: void, listener: (change: SelectionChange) => void) {
-      selectionListeners.add(listener);
-    },
-    publishSelection,
-    dispose() {
-      publishSelection();
-      selectionListeners.clear();
-    },
-    sharing: () => (sharing ??= {}),
-    selection: () => (selection ??= {}),
-    invalidate,
-    materialized(row: Row, previousBoard: Row["hasBoard"]) {
-      const changed = row.hasBoard !== previousBoard;
-      invalidate(changed);
-      if (changed && !isIncognitoSessionKey(row.key)) {
-        publishSelection(row);
-      }
-    },
-    replace(previous: Row | undefined, row: Row) {
-      const changed =
-        !previous ||
-        previous.generation !== row.generation ||
-        previous.hasBoard !== row.hasBoard ||
-        !isDeepStrictEqual(previous.entry, row.entry);
-      invalidate(changed);
-      if (changed) {
-        publishSelection(row);
-      }
-    },
-  };
 }
 
 export type Query = {
@@ -300,8 +241,10 @@ export function createIncognitoSessionRow(params: {
   membership?: ReadonlySet<string>;
   source: NonNullable<Row["privateSource"]>;
   prepared?: {
-    relatedEntries?: Record<string, NonNullable<Row["storedEntry"]>>;
+    relatedRows: NonNullable<Row["preparedPrivate"]>["relatedRows"];
     databaseFacts: PreparedSessionRowDatabaseFacts;
+    titleFields?: SessionTitleFields;
+    terminalModel?: { modelProvider: string; model: string };
   };
 }): Row {
   const { cfg, key, agentId, storePath, source, entry: storedEntry } = params;
@@ -318,8 +261,19 @@ export function createIncognitoSessionRow(params: {
     ...(params.prepared
       ? {
           preparedPrivate: {
-            entries: { ...params.prepared.relatedEntries, [key]: storedEntry },
+            relatedRows: params.prepared.relatedRows,
+            entries: {
+              ...Object.fromEntries(
+                Object.entries(params.prepared.relatedRows).map(([relatedKey, relatedRow]) => [
+                  relatedKey,
+                  relatedRow.entry,
+                ]),
+              ),
+              [key]: storedEntry,
+            },
             databaseFacts: params.prepared.databaseFacts,
+            titleFields: params.prepared.titleFields,
+            terminalModel: params.prepared.terminalModel,
           },
         }
       : {}),
@@ -479,7 +433,7 @@ export function present(
     sessionId: record.entry.sessionId,
     index: context.projectedAgentRuns!,
   });
-  const active = options.active ?? (live !== undefined || record.entry.status === "running");
+  const active = options.active ?? live !== undefined;
   const row = rowProjection.presentSessionRow(record.materialized, {
     now,
     subagentRuns: options.subagentRuns ?? context.subagentRuns.atTime(now),

@@ -117,21 +117,20 @@ vi.mock("./runtime.js", async () => {
 
 // Keep the real streaming-card behavior (throttle, CardKit sequences, close
 // settings) and inject only a hermetic recording fetch for its HTTP calls.
-vi.mock("./streaming-card.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./streaming-card.js")>();
-  class RecordingFeishuStreamingSession extends actual.FeishuStreamingSession {
-    constructor(
-      client: ConstructorParameters<typeof actual.FeishuStreamingSession>[0],
-      creds: ConstructorParameters<typeof actual.FeishuStreamingSession>[1],
-      log?: ConstructorParameters<typeof actual.FeishuStreamingSession>[2],
-    ) {
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+      if (!params.auditContext?.startsWith("feishu.streaming-card.")) {
+        return actual.fetchWithSsrFGuard(params);
+      }
       if (!traceState.cardKitFetch) {
         throw new Error("trace CardKit fetch not initialized");
       }
-      super(client, creds, log, { fetchImpl: traceState.cardKitFetch });
-    }
-  }
-  return { ...actual, FeishuStreamingSession: RecordingFeishuStreamingSession };
+      return actual.fetchWithSsrFGuard({ ...params, fetchImpl: traceState.cardKitFetch });
+    },
+  };
 });
 
 let createFeishuReplyDispatcher: CreateFeishuReplyDispatcher;
@@ -151,7 +150,7 @@ afterAll(() => {
   vi.doUnmock("./accounts.js");
   vi.doUnmock("./client.js");
   vi.doUnmock("./runtime.js");
-  vi.doUnmock("./streaming-card.js");
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.resetModules();
 });
 

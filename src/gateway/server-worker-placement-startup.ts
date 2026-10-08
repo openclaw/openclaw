@@ -13,7 +13,7 @@ import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import {
   createGatewayWorkerPlacementChangePublisher,
-  subscribeGatewayWorkerMachineShapeChanges,
+  subscribeGatewayWorkerPlacementMetadataChanges,
 } from "./server-worker-placement-change-events.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementLocalDispatchBarrier } from "./server-worker-placement-local-dispatch.js";
@@ -134,6 +134,9 @@ export function createGatewayWorkerPlacementRuntime(
     hasCurrentDeviceRunner: (deviceId) =>
       nodeWorkerSupervisorTransport?.hasCurrentRunner(deviceId) === true,
   });
+  let metadataChanges:
+    | ReturnType<typeof subscribeGatewayWorkerPlacementMetadataChanges>
+    | undefined;
   const diskSpace = createWorkerPlacementDiskSpaceMonitor({
     placements: params.placements,
     environments: params.environments,
@@ -360,11 +363,13 @@ export function createGatewayWorkerPlacementRuntime(
       return null;
     }
     const uninstallPlacementAdmission = installSessionPlacementAdmissionProvider(admissionProvider);
-    const unsubscribeMachineShape = subscribeGatewayWorkerMachineShapeChanges(params);
+    const changes = subscribeGatewayWorkerPlacementMetadataChanges({
+      ...params,
+      runnerAvailability,
+    });
+    metadataChanges = changes;
     const scope = scheduler.scope();
-    const placementReconcile = { current: undefined as Promise<void> | undefined };
-    const diskSpaceSweep = { current: undefined as Promise<void> | undefined };
-    const placementIdleSuspend: { current: Promise<void> | undefined } = { current: undefined };
+    const operations = new Map<"reconcile" | "disk-space" | "auto-suspend", Promise<void>>();
     const uninstallEnvironmentReconcileGuard = installWorkerPlacementReconcileGuard({
       placements: params.placements,
       environments: params.environments,
@@ -383,7 +388,6 @@ export function createGatewayWorkerPlacementRuntime(
           : [placement.sessionKey],
       );
     const uninstallSessionMaintenancePreservation = registerSessionMaintenancePreserveKeysProvider(
-      () => preservationKeys(params.placements.listForReconcile()),
       async () => {
         const prepared = await params.placements.prepareMaintenancePlacements();
         return {
@@ -398,14 +402,14 @@ export function createGatewayWorkerPlacementRuntime(
       },
     );
     const trackOperation = (
-      slot: { current: Promise<void> | undefined },
+      key: "reconcile" | "disk-space" | "auto-suspend",
       current: Promise<void>,
       failureMessage: string,
     ): Promise<void> => {
-      slot.current = current;
+      operations.set(key, current);
       const clearCurrent = () => {
-        if (slot.current === current) {
-          slot.current = undefined;
+        if (operations.get(key) === current) {
+          operations.delete(key);
         }
       };
       void current.then(clearCurrent, (error: unknown) => {
@@ -418,38 +422,38 @@ export function createGatewayWorkerPlacementRuntime(
       if (stopped) {
         return Promise.resolve();
       }
-      if (placementReconcile.current) {
-        return placementReconcile.current;
-      }
-      return trackOperation(
-        placementReconcile,
-        (async () => {
-          await publishPlacementChanges(() => sessionRetirement.reconcile());
-          await dispatchService.reconcileActive();
-          await reconcilePublications();
-          void nodeWorkspaceRetention.schedule();
-        })(),
-        "Worker placement reconcile sweep failed",
+      return (
+        operations.get("reconcile") ??
+        trackOperation(
+          "reconcile",
+          (async () => {
+            await publishPlacementChanges(() => sessionRetirement.reconcile());
+            await dispatchService.reconcileActive();
+            await reconcilePublications();
+            void nodeWorkspaceRetention.schedule();
+          })(),
+          "Worker placement reconcile sweep failed",
+        )
       );
     };
     const sweepDiskSpace = (): Promise<void> => {
       if (stopped) {
         return Promise.resolve();
       }
-      if (diskSpaceSweep.current) {
-        return diskSpaceSweep.current;
-      }
-      return trackOperation(diskSpaceSweep, diskSpace.sweep(), "Worker disk-space sweep failed");
+      return (
+        operations.get("disk-space") ??
+        trackOperation("disk-space", diskSpace.sweep(), "Worker disk-space sweep failed")
+      );
     };
     const sweepActivePlacements = async (): Promise<void> => {
       try {
         await reconcileActivePlacements();
-        if (stopped || placementIdleSuspend.current) {
+        if (stopped || operations.has("auto-suspend")) {
           return;
         }
         // Each reclaim reserves its own session after the recovery pass.
         await trackOperation(
-          placementIdleSuspend,
+          "auto-suspend",
           publishPlacementChanges(() => placementIdleSweep.sweep()),
           "Worker placement auto-suspend sweep failed",
         );
@@ -461,7 +465,7 @@ export function createGatewayWorkerPlacementRuntime(
       const previousSessionId = mutation.previous.sessionId;
       const currentSessionId = "current" in mutation ? mutation.current.sessionId : undefined;
       if (previousSessionId && previousSessionId !== currentSessionId) {
-        const pending = placementReconcile.current;
+        const pending = operations.get("reconcile");
         if (!pending) {
           void reconcileActivePlacements();
           return;
@@ -490,14 +494,7 @@ export function createGatewayWorkerPlacementRuntime(
           uninstallPlacementAdmission();
         }
         const currentStop = (async () => {
-          await Promise.allSettled(
-            [
-              unsubscribeMachineShape(),
-              placementReconcile.current,
-              diskSpaceSweep.current,
-              placementIdleSuspend.current,
-            ].filter((operation): operation is Promise<void> => operation !== undefined),
-          );
+          await Promise.allSettled([changes.stop(), ...operations.values()]);
           await nodeWorkspaceRetention.stop();
           await scope.stop();
           await params.environments.stop();
@@ -534,12 +531,12 @@ export function createGatewayWorkerPlacementRuntime(
         },
       ]) {
         const current = reconcile();
-        placementReconcile.current = current;
+        operations.set("reconcile", current);
         try {
           await current;
         } finally {
-          if (placementReconcile.current === current) {
-            placementReconcile.current = undefined;
+          if (operations.get("reconcile") === current) {
+            operations.delete("reconcile");
           }
         }
         if (hooks.isClosePreludeStarted()) {
@@ -555,7 +552,7 @@ export function createGatewayWorkerPlacementRuntime(
         return await stopBeforeReady();
       }
       void trackOperation(
-        placementReconcile,
+        "reconcile",
         publishPlacementChanges(() => sessionRetirement.reconcile()),
         "Worker placement reconcile sweep failed",
       );
@@ -589,7 +586,13 @@ export function createGatewayWorkerPlacementRuntime(
     dispatchService,
     admissionProvider,
     diskSpace,
-    runnerAvailability,
+    runnerAvailability: {
+      ...runnerAvailability,
+      markChanged(nodeId: string) {
+        runnerAvailability.markChanged();
+        metadataChanges?.runnerChanged(nodeId);
+      },
+    },
     placements: params.placements,
     githubPublication,
     repositoryWorkspaceMutationService: createRepositoryWorkspaceMutationService({

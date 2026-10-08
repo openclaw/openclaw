@@ -17,7 +17,7 @@ import {
   useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixtures,
 } from "./service.test-support.js";
-import { hasTemplates } from "./template-registry.js";
+import { hasTemplatesAsync } from "./template-registry-async.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -29,6 +29,14 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 const initializeRepository = useManagedWorktreeTestRepository();
+
+function isRepositoryMaintenance(args: readonly string[]): boolean {
+  return (
+    args[0] === "maintenance" ||
+    args[0] === "multi-pack-index" ||
+    (args[0] === "rev-parse" && args[1] === "--git-path" && args[2] === "objects/pack")
+  );
+}
 
 it("bounds cold cleanup inventories and retains dispositions across registry reopen", async () => {
   const root = tempDirs.make("openclaw-gc-spawns-");
@@ -46,7 +54,7 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
   });
   const repository = await resolveRepository(repo);
   for (const record of records) {
-    registry.updateRegistryWorktree(env, record.id, {
+    await registry.updateRegistryWorktree(env, record.id, {
       repositoryIdentity: {
         repoRoot: repository.repoRoot,
         repoFingerprint: repository.fingerprint,
@@ -54,7 +62,7 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
     });
   }
   for (const record of records.slice(0, 9)) {
-    registry.updateRegistryWorktree(env, record.id, { lastActiveAt: 1 });
+    await registry.updateRegistryWorktree(env, record.id, { lastActiveAt: 1 });
   }
   for (const record of records.slice(0, 4)) {
     await fs.mkdir(path.join(record.path, "nested", ".git"), { recursive: true });
@@ -66,7 +74,7 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
   const missingRepository = path.join(root, "missing-repository");
   await fs.mkdir(missingRepository);
   await fs.writeFile(path.join(missingRepository, ".git"), "gitdir: missing\n");
-  registry.updateRegistryWorktree(env, records[8]!.id, {
+  await registry.updateRegistryWorktree(env, records[8]!.id, {
     repositoryIdentity: { repoRoot: missingRepository, repoFingerprint: "missing" },
   });
   const text = vi.spyOn(gitExec, "executeGitCommand");
@@ -89,7 +97,7 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
     measurements.push({
       pass,
       gitSpawns:
-        text.mock.calls.filter(([, args]) => args[0] !== "maintenance").length +
+        text.mock.calls.filter(([, args]) => !isRepositoryMaintenance(args)).length +
         bytes.mock.calls.length +
         buffered.mock.calls.length,
       elapsedMs: performance.now() - started,
@@ -109,13 +117,13 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
       .every((record) => registry.getRegistryWorktree(env, record.id)?.gcProtection),
   ).toBe(true);
   // A managed owner revision reopens only that record, even if it is still idle.
-  registry.updateRegistryWorktree(env, records[0]!.id, { lastActiveAt: 2 });
+  await registry.updateRegistryWorktree(env, records[0]!.id, { lastActiveAt: 2 });
   text.mockClear();
   bytes.mockClear();
   buffered.mockClear();
   await new ManagedWorktreeService({ env, now: () => now }).gc();
   const inspectedPaths = [...text.mock.calls, ...bytes.mock.calls, ...buffered.mock.calls]
-    .filter(([, args]) => args[0] !== "maintenance")
+    .filter(([, args]) => !isRepositoryMaintenance(args))
     .map(([cwd]) => cwd);
   expect(inspectedPaths).toContain(records[0]!.path);
   expect(inspectedPaths.every((cwd) => cwd === repo || cwd === records[0]!.path)).toBe(true);
@@ -127,13 +135,13 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
   expect(registry.getRegistryWorktree(env, records[0]!.id)?.gcProtection).toBeUndefined();
   const retried = await new ManagedWorktreeService({ env, now: () => now }).gc();
   expect(retried.removed).toEqual([records[0]!.id]);
-  registry.updateRegistryWorktree(env, records[1]!.id, { lastActiveAt: 3 });
+  await registry.updateRegistryWorktree(env, records[1]!.id, { lastActiveAt: 3 });
   const inspect = checkoutInspection.inspectManagedWorktreeCheckout;
   vi.spyOn(checkoutInspection, "inspectManagedWorktreeCheckout").mockImplementation(
     async (...args) => {
       const result = await inspect(...args);
       if (args[0].id === records[1]!.id && args[1] === "nested-repository") {
-        registry.updateRegistryWorktree(env, records[1]!.id, { lastActiveAt: now });
+        await registry.updateRegistryWorktree(env, records[1]!.id, { lastActiveAt: now });
       }
       return result;
     },
@@ -189,8 +197,8 @@ it("rescans protected checkouts only when their root or HEAD changes", async () 
   expect(inspections.mock.calls.every(([record]) => record.id === moved!.id)).toBe(true);
 });
 
-function addLeasedWorktree(env: NodeJS.ProcessEnv, root: string, id: string) {
-  registry.insertRegistryWorktree(env, {
+async function addLeasedWorktree(env: NodeJS.ProcessEnv, root: string, id: string) {
+  await registry.insertRegistryWorktree(env, {
     id,
     name: id,
     repoFingerprint: "0123456789abcdef",
@@ -222,9 +230,9 @@ it("protects a sweep of live leases without writer admission or checkout inspect
   const count = 16;
   for (let index = 0; index < count; index++) {
     const id = `leased-${index}`;
-    addLeasedWorktree(env, root, id);
+    await addLeasedWorktree(env, root, id);
   }
-  hasTemplates(env);
+  await hasTemplatesAsync(env);
   const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
   const lists = vi.spyOn(registry, "listRegistryWorktrees");
   const reads = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
@@ -268,9 +276,9 @@ it("protects a sweep of live leases without writer admission or checkout inspect
 it("protects a late lease without loading removed history for cleanup limits", async () => {
   const root = tempDirs.make("openclaw-gc-late-lease-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-  addLeasedWorktree(env, root, "initial");
-  addLeasedWorktree(env, root, "second");
-  registry.insertRegistryWorktree(env, {
+  await addLeasedWorktree(env, root, "initial");
+  await addLeasedWorktree(env, root, "second");
+  await registry.insertRegistryWorktree(env, {
     ...registry.getRegistryWorktree(env, "initial")!,
     id: "removed-history",
     removedAt: 0,
@@ -283,7 +291,7 @@ it("protects a late lease without loading removed history for cleanup limits", a
     const state = await readCleanupState(options);
     if (!publishedLateLease) {
       publishedLateLease = true;
-      addLeasedWorktree(env, root, "late");
+      await addLeasedWorktree(env, root, "late");
     }
     return state;
   });

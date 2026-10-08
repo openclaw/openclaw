@@ -1,4 +1,3 @@
-/** Utilities for queued reply runtime config, auth, threading, and embedded run params. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -30,6 +29,7 @@ import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapabilityLifetime,
 } from "../../gateway/message-action-turn-capability.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -52,7 +52,6 @@ type EmbeddedReplyRoute = Pick<
   | "originatingReplyToMode"
 >;
 
-/** Selects the freshest runtime config usable by queued reply execution. */
 export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
   return (
     selectApplicableRuntimeConfig({
@@ -63,7 +62,6 @@ export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenCla
   );
 }
 
-/** Resolves command secrets for queued reply execution, scoped to the origin route. */
 export async function resolveQueuedReplyExecutionConfig(
   config: OpenClawConfig,
   params?: {
@@ -110,7 +108,6 @@ export async function resolveQueuedReplyExecutionConfig(
   return scopedResolved.resolvedConfig ?? baseResolvedConfig;
 }
 
-/** Builds channel threading context for message-tool replies. */
 export function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
   config: OpenClawConfig | undefined;
@@ -120,9 +117,13 @@ export function buildThreadingToolContext(params: {
   const isRestartSentinelContinuation =
     sessionCtx.InputProvenance?.kind === "internal_system" &&
     sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
+  // Gateway chat IDs identify admitted runs, not messages on the inherited channel.
+  // Keep that identity in sessionCtx for recovery, but never use it as a reply target.
   const currentMessageId = isRestartSentinelContinuation
     ? sessionCtx.ReplyToId
-    : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
+    : isInternalMessageChannel(sessionCtx.Provider ?? sessionCtx.Surface)
+      ? undefined
+      : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
   const currentSourceTurnId = readChannelSourceTurnId(sessionCtx);
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
@@ -182,11 +183,9 @@ export function buildThreadingToolContext(params: {
   };
 }
 
-/** Detects Bun socket-close errors that should be formatted more clearly. */
 export const isBunFetchSocketError = (message?: string) =>
   message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
 
-/** Formats Bun socket-close errors for user-facing reply output. */
 export const formatBunFetchSocketError = () =>
   "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
 
@@ -207,7 +206,6 @@ export function resolveRunThinkingLevelForFallbackCandidate(
   });
 }
 
-/** Resolves candidate-scoped fast mode after model fallback changes provider/model. */
 export function resolveRunFastModeForFallbackCandidate(params: {
   run: FollowupRun["run"];
   config: OpenClawConfig;
@@ -295,7 +293,6 @@ function buildEmbeddedContextFromTemplate(params: {
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
     memberRoleIds: normalizeOptionalTrimmedStringList(sessionCtx.MemberRoleIds),
-    // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx,
       config: params.run.config,
@@ -395,7 +392,6 @@ export function mintReplyMessageActionTurnCapability(
   });
 }
 
-/** Builds execution-specific embedded run params for queued reply dispatch. */
 export async function buildEmbeddedRunExecutionParams(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;

@@ -381,6 +381,7 @@ describe("embedded run ownership", () => {
         embeddedRunToolAuthorityBinding: () => ({
           source: "reply",
           project: () => "authority",
+          projectAsync: async () => "authority",
           assertActive: () => {},
         }),
       },

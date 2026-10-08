@@ -9,7 +9,11 @@ import {
 } from "../../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
-import { isMainSessionRestartRecoveryInputProvenance } from "../../../sessions/input-provenance.js";
+import {
+  isMainSessionRestartRecoveryInputProvenance,
+  normalizeInputProvenance,
+  shouldPreserveUserFacingSessionStateForInputProvenance,
+} from "../../../sessions/input-provenance.js";
 import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
 import {
@@ -121,6 +125,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       modelId: attempt.modelId,
       baseUrl: attempt.model.baseUrl ?? undefined,
     }),
+    // The finalizer's result gate rejects any compaction, so never start one.
+    compactionForbidden: attempt.operation === "settled-tool-finalization",
   });
 
   // These factories carry compaction/pruning runtime state into the resource loader.
@@ -349,7 +355,16 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
       durableUserTurnMessage: orphanRepairCandidate?.messageEntry.message,
       userTurnAlreadyPersisted: attempt.userTurnTranscriptRecorder?.hasPersisted() === true,
     });
-  const orphanRepair = reconciledCurrentUser ? undefined : orphanRepairCandidate;
+  const orphanProvenance = normalizeInputProvenance(
+    orphanRepairCandidate?.messageEntry.message.provenance,
+  );
+  // A failed user dispatch can leave the next continuation an unanswered user.
+  // Keep that input in user history instead of reclassifying it as announcement context.
+  const preserveUnansweredUser =
+    shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance) &&
+    (!orphanProvenance || orphanProvenance.kind === "external_user");
+  const orphanRepair =
+    reconciledCurrentUser || preserveUnansweredUser ? undefined : orphanRepairCandidate;
   if (orphanRepair?.removeLeaf) {
     const repairedTarget = await withSessionManagerWrite(sessionManager, async () => {
       input.abortSignal?.throwIfAborted();

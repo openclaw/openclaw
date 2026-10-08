@@ -1,6 +1,3 @@
-/**
- * Registry for native agent harness implementations and lifecycle cleanup.
- */
 import { retainCliRegistryHarnesses } from "../../cli/runtime-cleanup-scope.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runPluginCleanup } from "../../plugins/plugin-instance-scope.js";
@@ -17,6 +14,7 @@ import {
   resolveDirectPluginRegistrationOwner,
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { AgentHarnessSessionCleanupError } from "./errors.js";
 import type {
   AgentHarness,
   AgentHarnessNativeCompaction,
@@ -47,7 +45,6 @@ function getAgentHarnesses() {
   return registry.agentHarnesses;
 }
 
-/** Registers or replaces an agent harness under its trimmed id. */
 export function registerAgentHarness(
   harness: AgentHarness,
   options?: AgentHarnessRegistrationOptions & { ownerPluginId?: string },
@@ -126,7 +123,6 @@ export function resolveCodexAgentHarnessNativeCompaction(
     : undefined;
 }
 
-/** Lists registered harness records for selection and lifecycle fan-out. */
 export function listRegisteredAgentHarnesses(): RegisteredAgentHarness[] {
   return getAgentHarnesses().map((entry) => ({
     harness: entry.harness,
@@ -147,6 +143,7 @@ export async function resetRegisteredAgentHarnessSessions(
   const current = getPluginRegistryForContext();
   const registries = new Set([...executionRegistries, ...(current ? [current] : [])]);
   const visited = new Set<AgentHarness>();
+  let cleanupError: AgentHarnessSessionCleanupError | undefined;
   for (const registry of registries) {
     await withPluginRuntimeRegistryScope(registry, async () => {
       await Promise.all(
@@ -158,6 +155,10 @@ export async function resetRegisteredAgentHarnessSessions(
           try {
             await entry.harness.reset(params);
           } catch (error) {
+            if (error instanceof AgentHarnessSessionCleanupError) {
+              cleanupError ??= error;
+              return;
+            }
             if (!warnedResetHarnessIds.has(entry.harness.id)) {
               warnedResetHarnessIds.add(entry.harness.id);
               log.warn(`${entry.harness.label} session reset hook failed`, {
@@ -170,6 +171,10 @@ export async function resetRegisteredAgentHarnessSessions(
       );
     });
   }
+  // Join every started cleanup before releasing the caller's mutation admission.
+  if (cleanupError) {
+    throw cleanupError;
+  }
 }
 
 async function disposeAgentHarness(harness: AgentHarness): Promise<void> {
@@ -180,7 +185,6 @@ async function disposeAgentHarness(harness: AgentHarness): Promise<void> {
   }
 }
 
-/** Calls each registered harness dispose hook during registry shutdown or reload. */
 export async function disposeRegisteredAgentHarnesses(): Promise<void> {
   await Promise.all(
     listRegisteredAgentHarnesses().map(({ harness }) => disposeAgentHarness(harness)),

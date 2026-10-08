@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { FsSafeError, root, type Root } from "../../infra/fs-safe.js";
+import { FsSafeError, root } from "../../infra/fs-safe.js";
 import { retainMutationAuthority } from "../../infra/mutation-authority.js";
 import { logWarn } from "../../logger.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
@@ -436,30 +436,6 @@ async function reconcileInterruptedApply(
   });
 }
 
-async function readProposalSupportFiles(
-  record: SkillProposalRecord,
-  stateRoot: Root,
-): Promise<PreparedSkillProposalSupportFile[]> {
-  const out: PreparedSkillProposalSupportFile[] = [];
-  for (const file of record.supportFiles ?? []) {
-    const filePath = normalizeWorkspaceSkillSupportPath(file.path);
-    const read = await stateRoot.read(proposalBundleRelativePath(record, filePath), {
-      hardlinks: "reject",
-      maxBytes: MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
-      symlinks: "reject",
-    });
-    const content = read.buffer.toString("utf8");
-    const sizeBytes = Buffer.byteLength(content, "utf8");
-    const hash = hashSkillProposalContent(content);
-    if (file.sizeBytes !== sizeBytes || file.hash !== hash) {
-      throw new Error(`Proposal support file changed without updating metadata: ${filePath}`);
-    }
-    out.push({ path: filePath, sizeBytes, hash, content });
-  }
-  assertWorkspaceSkillSupportPathSetIsFileOnly(out.map((file) => file.path));
-  return out;
-}
-
 export async function readSkillProposalDraft(
   record: SkillProposalRecord,
   options: SkillWorkshopStoreOptions,
@@ -484,15 +460,29 @@ export async function readSkillProposalBundle(
   record: SkillProposalRecord,
   options: SkillWorkshopStoreOptions,
 ): Promise<SkillProposalReadResult> {
-  const content = await readSkillProposalDraft(record, options);
-  const supportFiles = await readProposalSupportFiles(
-    record,
-    await root(resolveSkillWorkshopStateDir(options)),
-  );
+  const draftContent = await readSkillProposalDraft(record, options);
+  const stateRoot = await root(resolveSkillWorkshopStateDir(options));
+  const supportFiles: PreparedSkillProposalSupportFile[] = [];
+  for (const file of record.supportFiles ?? []) {
+    const filePath = normalizeWorkspaceSkillSupportPath(file.path);
+    const read = await stateRoot.read(proposalBundleRelativePath(record, filePath), {
+      hardlinks: "reject",
+      maxBytes: MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
+      symlinks: "reject",
+    });
+    const content = read.buffer.toString("utf8");
+    const sizeBytes = Buffer.byteLength(content, "utf8");
+    const hash = hashSkillProposalContent(content);
+    if (file.sizeBytes !== sizeBytes || file.hash !== hash) {
+      throw new Error(`Proposal support file changed without updating metadata: ${filePath}`);
+    }
+    supportFiles.push({ path: filePath, sizeBytes, hash, content });
+  }
+  assertWorkspaceSkillSupportPathSetIsFileOnly(supportFiles.map((file) => file.path));
   return {
     record,
     revisionHash: hashSkillProposalRevision(record),
-    content,
+    content: draftContent,
     ...(supportFiles.length > 0 ? { supportFiles } : {}),
   };
 }

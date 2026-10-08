@@ -15,8 +15,8 @@ function resolveMatrixGroupScope(params: ChannelGroupContext) {
     accountId: params.accountId,
   });
   const tree = buildMatrixRoomScopeTree(matrixConfig.groups ?? matrixConfig.rooms);
-  const roomId = normalizeMatrixResolvableTarget(params.groupId?.trim() ?? "");
-  const groupChannel = normalizeMatrixResolvableTarget(params.groupChannel?.trim() ?? "");
+  const roomId = normalizeMatrixResolvableTarget(params.groupId ?? "");
+  const groupChannel = normalizeMatrixResolvableTarget(params.groupChannel ?? "");
   return {
     tree,
     path: resolveMatrixRoomScopePath({ tree, roomId, aliases: groupChannel ? [groupChannel] : [] }),

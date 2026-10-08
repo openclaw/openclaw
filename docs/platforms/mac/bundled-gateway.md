@@ -230,7 +230,7 @@ Doctor removes a foreign job only when its literal, straight-line script or
 direct arguments invoke an absolute OpenClaw path with a Gateway lifecycle
 subcommand. Shell jobs must also have no launchd environment entries that alter
 shell execution. Everything outside this contract is reported and left unchanged.
-This is command-metadata verification; it does not probe binary executability,
+This is command-metadata verification; it does not check binary executability,
 interpreter availability, or quarantine state.
 
 Doctor preserves managed LaunchAgents, unrelated labels,
@@ -288,7 +288,7 @@ It verifies health before removing old builds. A paused Gateway stays paused.
 Seeded installations never run npm self-update; update OpenClaw.app to update
 their Gateway. A paused legacy app-managed Node installation keeps background-service
 hosting even when the old app removed its LaunchAgent. While paused, the app records
-that preference without probing or changing the runtime. On resume it recovers the
+that preference without checking or changing the runtime. On resume it recovers the
 managed Node CLI before updating; this also applies to named profiles. Existing
 app-managed Node services continue through their installed CLI's update and repair flow, including health verification, and keep their runtime
 pin. A seed left on disk does not adopt an attached Node service. If that legacy
@@ -327,15 +327,16 @@ It passes the observed revision and service definition to the installer after it
 final local custody checks. Failed or unknown inspection stops the install. If an
 operator changes the service or runtime pin before installation begins, the CLI
 preserves that selection and the app reports it without retrying or rolling it
-back. Older installed CLIs keep their existing invocation contract.
+back.
 
-Node rollback and restoration of a prior bundled build still run the retained
-CLI, which cannot be assumed to accept this expectation. An operator change
-between the app's final custody check and that CLI's initial snapshot is not yet
-fenced. The app cannot substitute its current bundled CLI: the installer derives
-the service entrypoint from its own package, which would change what recovery
-restores. A narrow core installer capability for selecting the retained service
-entrypoint is the follow-up needed to close this recovery window.
+Node rollback and prior-build restoration use this app's bundled CLI with the
+same runtime-intent observation. The installer restores the retained package's
+runtime and entrypoint, and its SQLite library for Bun, rather than its own.
+Recovery does not require the failed replacement service to be running. An
+operator change is preserved and reported without retry. If the app's bundled
+runtime is missing or incompatible, recovery stops; reinstall OpenClaw.app.
+The core updater step still runs the installed CLI and is not covered by this
+installation fence.
 
 Channel-policy installs, independently managed services, and services with
 saved operator runtime pins are not migrated. This includes a saved pin pointing
@@ -405,7 +406,7 @@ The app's CLI installer links `openclaw-mac` beside its profile-managed
 [remote control](/platforms/mac/remote#macos-app-setup) for `primary set`,
 saved-Gateway commands, profiles, and credential input.
 
-For standalone Gateway WebSocket handshake and discovery probes from a source
+For standalone Gateway WebSocket handshake and discovery checks from a source
 checkout, the existing debug commands remain available:
 
 ```bash

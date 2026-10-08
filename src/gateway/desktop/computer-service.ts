@@ -33,17 +33,7 @@ type ComputerInvokeRequest = ComputerInvokeParams & {
   ownerSignal?: AbortSignal;
   assertCurrent(): void;
 };
-export type GatewayComputerService = {
-  status(): Promise<GatewayComputerStatus>;
-  invoke(request: ComputerInvokeRequest): Promise<unknown>;
-  reconcileRuntimePolicy(): Promise<void>;
-  close(): Promise<void>;
-  revokeRunAuthority(authority: AgentRunDelegatedAuthority): void;
-  preparePluginReload: (params: { changedPluginIds: ReadonlySet<string> }) => {
-    drain: () => Promise<void>;
-    resume: () => void;
-  };
-};
+export type GatewayComputerService = ReturnType<typeof createGatewayComputerService>;
 
 type HostRuntime = {
   provider: PluginNodeHostCommandRegistration;
@@ -69,7 +59,7 @@ export function createGatewayComputerService(options: {
   getConfig(): OpenClawConfig;
   getPluginRegistry(): PluginRegistry;
   hostDesktopService?: HostDesktopService;
-}): GatewayComputerService {
+}) {
   let current: HostRuntime | undefined;
   let stopped = false;
   let paused = false;
@@ -243,7 +233,10 @@ export function createGatewayComputerService(options: {
         await retireForShutdown(runtime);
       }
     },
-    preparePluginReload({ changedPluginIds }) {
+    preparePluginReload(
+      this: void,
+      { changedPluginIds }: { changedPluginIds: ReadonlySet<string> },
+    ) {
       const provider = current?.provider ?? configuredProvider();
       const affected = provider !== undefined && changedPluginIds.has(provider.pluginId);
       if (affected) {
@@ -263,7 +256,7 @@ export function createGatewayComputerService(options: {
         },
       };
     },
-    async status() {
+    async status(): Promise<GatewayComputerStatus> {
       const configured = configuredProvider() !== undefined;
       try {
         const runtime = await prepare();
@@ -278,7 +271,7 @@ export function createGatewayComputerService(options: {
         };
       }
     },
-    async invoke(request) {
+    async invoke(request: ComputerInvokeRequest): Promise<unknown> {
       const isClose =
         request.command === "computer.act" && request.params.action === "__close_execution";
       const input = parseNodeWorkerComputerInput(
@@ -392,7 +385,7 @@ export function createGatewayComputerService(options: {
         await retireForShutdown(current);
       }
     },
-    revokeRunAuthority(authority) {
+    revokeRunAuthority(authority: AgentRunDelegatedAuthority) {
       const runtime = current;
       if (runtime?.execution?.owner === computerRunOwner(authority)) {
         retireInBackground(runtime);

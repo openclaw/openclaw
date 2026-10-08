@@ -4,8 +4,6 @@ import type {
   SystemAgentWizardCancel,
   WizardAnswer,
 } from "../../../packages/gateway-protocol/src/index.js";
-// Shared server-method types define the client, context, response, and handler
-// contracts used by every gateway RPC method module.
 import type {
   ConnectParams,
   RequestFrame,
@@ -451,7 +449,6 @@ type GatewayResidentBridgeContext = {
   ) => void;
 };
 
-/** Complete runtime context available to gateway request handlers. */
 export type GatewayContextResolver = () => GatewayRequestContext | undefined;
 export type GatewayRequestContext = GatewayKernelContext &
   GatewayTransportContext &
@@ -514,6 +511,8 @@ export type SessionMutationAuthorization = {
   assertCurrent: () => void;
   /** Original host/session authority for committed input custody, without the selection precondition. */
   assertAdmittedInputCurrent?: () => void;
+  /** Fresh sharing facts for runtime custody; synchronous methods retain the released SDK contract. */
+  admittedInputAuthority?: import("../../config/sessions/session-pending-input-authority.js").SessionPendingInputAuthority;
   /** Creation-owner notification after COMMIT; binds only this request's previously absent row. */
   recordCreatedSession?: (target: {
     agentId: string;
@@ -549,8 +548,11 @@ export type GatewayRequestHandlerOptions = Omit<
   sessionAccessAuthority?: import("../session-access-authority.js").GatewaySessionAccessAuthority;
 };
 
-/** Single gateway method implementation. */
-export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<void> | void;
+export type GatewayRequestHandler = ((
+  opts: GatewayRequestHandlerOptions,
+) => Promise<void> | void) & {
+  prepareRead?: import("./prepared-read.js").GatewayReadPreparation;
+  onReadError?: import("./prepared-read.js").GatewayReadErrorHandler;
+};
 
-/** Registry fragment keyed by gateway protocol method name. */
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;

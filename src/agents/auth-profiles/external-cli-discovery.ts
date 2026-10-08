@@ -1,13 +1,7 @@
-/**
- * External CLI auth discovery mode helpers.
- * Converts provider/config lookup contexts into scoped discovery options for
- * auth profile store loading.
- */
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveExternalCliAuthScopeFromConfig } from "./external-cli-scope.js";
 
-/** External CLI auth discovery mode used while loading auth profile stores. */
 export type ExternalCliAuthDiscovery =
   | {
       mode: "none";
@@ -54,13 +48,9 @@ function externalCliDiscoveryNone(params?: { config?: OpenClawConfig }): Externa
   };
 }
 
-/** Allows external CLI auth discovery for specific providers and/or profiles. */
-export function externalCliDiscoveryScoped(params: {
-  config?: OpenClawConfig;
-  providerIds?: Iterable<string>;
-  profileIds?: Iterable<string>;
-  allowKeychainPrompt?: boolean;
-}): ExternalCliAuthDiscovery {
+export function externalCliDiscoveryScoped(
+  params: Omit<Extract<ExternalCliAuthDiscovery, { mode: "scoped" }>, "mode">,
+): ExternalCliAuthDiscovery {
   return {
     mode: "scoped",
     ...(params.allowKeychainPrompt !== undefined
@@ -72,7 +62,6 @@ export function externalCliDiscoveryScoped(params: {
   };
 }
 
-/** Builds external CLI discovery options for a provider auth lookup. */
 export function externalCliDiscoveryForProviderAuth(
   params: ProviderAuthDiscoveryParams,
 ): ExternalCliAuthDiscovery {
@@ -85,7 +74,6 @@ export function externalCliDiscoveryForProviderAuth(
   });
 }
 
-/** Builds external CLI discovery options for config status checks. */
 export function externalCliDiscoveryForConfigStatus(
   params: ConfigStatusDiscoveryParams,
 ): ExternalCliAuthDiscovery {
@@ -100,7 +88,6 @@ export function externalCliDiscoveryForConfigStatus(
     : externalCliDiscoveryNone({ config: params.cfg });
 }
 
-/** Builds external CLI discovery options for a provider set. */
 export function externalCliDiscoveryForProviders(
   params: ProviderSetDiscoveryParams,
 ): ExternalCliAuthDiscovery {

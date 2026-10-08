@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -15,6 +15,7 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -464,7 +465,7 @@ describe("memory manager reindex recovery", () => {
     },
   );
 
-  it.each(["purge", "replace"] as const)(
+  it.each(["purge", "revoke"] as const)(
     "revalidates generated cache writes after published writer admission (%s)",
     async (scenario) => {
       const cfg = createCfg({ sources: ["memory"], cacheEnabled: true });
@@ -483,7 +484,7 @@ describe("memory manager reindex recovery", () => {
         throw new Error("fixture provider missing");
       }
       await fs.writeFile(path.join(memoryDir, "alpha.md"), "New reusable alpha memory.");
-      let replacementDb: DatabaseSync | undefined;
+      let reopenedDb: DatabaseSync | undefined;
       vi.spyOn(harness.provider, "embedBatch").mockImplementationOnce(async (inputs) => {
         reservation = await reservePublishedWriter(() => {
           if (scenario === "purge") {
@@ -491,9 +492,8 @@ describe("memory manager reindex recovery", () => {
               agentId: "main",
               sessionIds: ["forgotten-during-embedding"],
             });
-          } else if (scenario === "replace") {
+          } else if (scenario === "revoke") {
             closeOpenClawAgentDatabasesForTest();
-            replacementDb = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
           }
         });
         return inputs.map(() => [0, 1, 0]);
@@ -506,12 +506,17 @@ describe("memory manager reindex recovery", () => {
         reservation?.release();
         await reservation?.done;
         await expect(sync).rejects.toThrow(
-          scenario === "replace"
+          scenario === "revoke"
             ? /^Agent database execution admission is closed$/
             : /Memory index changed/,
         );
+        if (scenario === "revoke") {
+          // Readmission waits until the revoked write and its native owner settle.
+          await closeOpenClawAgentDatabasesAsync();
+          reopenedDb = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
+        }
         expect(
-          (replacementDb ?? publishedDb).prepare("SELECT hash FROM memory_embedding_cache").all(),
+          (reopenedDb ?? publishedDb).prepare("SELECT hash FROM memory_embedding_cache").all(),
         ).toEqual([]);
       } finally {
         reservation?.release();
@@ -1010,24 +1015,31 @@ describe("memory manager reindex recovery", () => {
     await memoryManager.sync({ reason: "test", force: true });
 
     const harness = memoryManager as unknown as ReindexHarness;
-
-    harness.db
-      .prepare(
-        `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+    const databasePath = harness.db.location();
+    if (!databasePath) {
+      throw new Error("Expected the fixture's file-backed memory index");
+    }
+    {
+      // Observe the worker-published schema before injecting an orphan through a fixture writer.
+      using writer = new DatabaseSync(databasePath);
+      writer
+        .prepare(
+          `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        "sessions-retry-chunk",
-        "sessions/retry.jsonl",
-        "sessions",
-        1,
-        1,
-        "sessions-retry-hash",
-        "fts-only",
-        "sessions retry marker",
-        encodeMemoryEmbedding([]),
-        Date.now(),
-      );
+        )
+        .run(
+          "sessions-retry-chunk",
+          "sessions/retry.jsonl",
+          "sessions",
+          1,
+          1,
+          "sessions-retry-hash",
+          "fts-only",
+          "sessions retry marker",
+          encodeMemoryEmbedding([]),
+          Date.now(),
+        );
+    }
     harness.writeMeta({
       model: "fts-only",
       provider: "none",

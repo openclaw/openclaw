@@ -22,10 +22,7 @@ function resolveChannelDebounce(
 export function resolveQueueSettingsCore(params: ResolveQueueSettingsParams): QueueSettings {
   const channelKey = normalizeOptionalLowercaseString(params.channel);
   const queueCfg = params.cfg.messages?.queue;
-  const providerModeRaw =
-    channelKey && queueCfg?.byChannel
-      ? (queueCfg.byChannel as Record<string, string | undefined>)[channelKey]
-      : undefined;
+  const providerModeRaw = channelKey ? queueCfg?.byChannel?.[channelKey] : undefined;
   const resolvedMode =
     params.inlineMode ??
     normalizePersistedQueueMode(params.sessionEntry?.queueMode) ??

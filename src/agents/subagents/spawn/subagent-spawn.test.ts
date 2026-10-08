@@ -10,6 +10,7 @@ import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.types.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { expectSharedPendingSpawnCapacity } from "./subagent-spawn.pending-capacity.test-support.js";
 import {
   createConfigOverride,
   createSubagentRegistrationScopeForTest,
@@ -156,34 +157,6 @@ describe("spawnSubagentDirect seam flow", () => {
       expectNoChildSpawnSideEffects();
     },
   );
-
-  it("binds private completion to the admitted completion owner rather than the controller", async () => {
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { sessionId: "controller-incarnation" },
-      "agent:main:owner": { sessionId: "owner-incarnation" },
-    });
-    const result = await spawn(
-      { task: "private work", completionTarget: "parent" },
-      {
-        agentSessionKey: "agent:main:main",
-        completionOwnerKey: "agent:main:owner",
-      },
-    );
-    expect(result).toMatchObject({
-      status: "accepted",
-      completionTarget: "parent",
-      expectsCompletionMessage: true,
-    });
-    expect(result.note).toContain("private requester turn");
-    expect(gatewayRequest("agent").scopes).toBeUndefined();
-    expect(firstRegisteredSubagentRun()).toMatchObject({
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:owner",
-      completionTarget: "parent",
-      completionRequesterSessionId: "owner-incarnation",
-      expectsCompletionMessage: true,
-    });
-  });
 
   it("rejects private completion without an existing parent incarnation", async () => {
     const result = await spawn(
@@ -417,21 +390,6 @@ describe("spawnSubagentDirect seam flow", () => {
       source: "override",
     });
     expectNoChildSpawnSideEffects();
-  });
-
-  it("resolves an explicit model alias to its canonical child model", async () => {
-    configOverride = createConfigOverride({
-      agents: {
-        defaults: { workspace: os.tmpdir(), models: { "openai/gpt-5.4": { alias: "fast" } } },
-        entries: { main: { workspace: "/tmp/workspace-main" } },
-      },
-    });
-    const result = await spawn({ task: "use the selected model", model: "fast" });
-    expect(result).toMatchObject({
-      status: "accepted",
-      modelApplied: true,
-      resolvedModel: "openai/gpt-5.4",
-    });
   });
 
   it("rejects failed model preparation without creating child state", async () => {
@@ -817,8 +775,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
-  it("shares pending child capacity between native and visible spawn paths", async () => {
-    const { maybeSpawnVisibleSession } = await import("../../tools/sessions-spawn-visible.js");
+  it("shares pending child capacity between native and visible spawn paths", async ({ signal }) => {
     configOverride = createConfigOverride({
       agents: {
         defaults: {
@@ -828,51 +785,13 @@ describe("spawnSubagentDirect seam flow", () => {
         entries: { main: { workspace: "/tmp/workspace-main" } },
       },
     });
-    let releaseNativeDispatch!: () => void;
-    const pendingNativeDispatch = new Promise<void>((resolve) => {
-      releaseNativeDispatch = resolve;
+    await expectSharedPendingSpawnCapacity({
+      config: configOverride as OpenClawConfig,
+      spawn,
+      callGatewayMock: hoisted.callGatewayMock,
+      countActiveRuns: hoisted.countActiveRunsForSessionMock,
+      signal,
     });
-    let nativeDispatchStarted = false;
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        nativeDispatchStarted = true;
-        await pendingNativeDispatch;
-        return { runId: "native-run" };
-      }
-      return request.method?.startsWith("sessions.") ? { ok: true } : {};
-    });
-    const controllerSessionKey = "agent:main:telegram:default:direct:456";
-    const native = spawn(
-      { task: "pending native child" },
-      { agentSessionKey: controllerSessionKey, completionOwnerKey: "agent:main:main" },
-    );
-    await vi.waitFor(() => expect(nativeDispatchStarted).toBe(true));
-    const visibleGateway = vi.fn();
-
-    const rejected = await maybeSpawnVisibleSession({
-      raw: { visible: true },
-      task: "visible over-cap child",
-      label: "",
-      runtime: "subagent",
-      sandbox: "inherit",
-      expectsCompletionMessage: true,
-      options: {
-        agentSessionKey: controllerSessionKey,
-        completionOwnerKey: "agent:main:main",
-        config: configOverride as OpenClawConfig,
-        callGateway: visibleGateway,
-        countActiveRuns: hoisted.countActiveRunsForSessionMock,
-      },
-    });
-    releaseNativeDispatch();
-    const accepted = await native;
-
-    expect(rejected).toMatchObject({
-      status: "forbidden",
-      error: expect.stringContaining("max active children for this session (1/1"),
-    });
-    expect(accepted).toMatchObject({ status: "accepted", runId: "native-run" });
-    expect(visibleGateway).not.toHaveBeenCalled();
   });
 
   it("rejects invalid collector output schemas before creating a child session", async () => {

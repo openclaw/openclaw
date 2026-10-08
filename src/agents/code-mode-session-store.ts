@@ -237,8 +237,7 @@ export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, sig
     assertCell();
     return current;
   };
-  const write = async (key: unknown, value: StoredValue | null) => {
-    const name = readKey(key);
+  const write = async (name: string, value: StoredValue | null) => {
     const current = await projection();
     if (committing) {
       throw new Error("Code Mode store/load is unavailable while the cell is committing.");
@@ -249,11 +248,10 @@ export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, sig
   };
   return {
     async save(key: unknown, value: unknown, networkContent: boolean): Promise<void> {
-      readKey(key);
-      await write(key, value === undefined ? null : encode(value, networkContent));
+      await write(readKey(key), value === undefined ? null : encode(value, networkContent));
     },
     async delete(key: unknown): Promise<void> {
-      await write(key, null);
+      await write(readKey(key), null);
     },
     async load(key: unknown): Promise<{ value?: unknown; networkContent: boolean }> {
       const name = readKey(key);

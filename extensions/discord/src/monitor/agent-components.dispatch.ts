@@ -12,7 +12,10 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  readSessionUpdatedAtAsync,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
@@ -60,16 +63,6 @@ function buildDiscordComponentConversationLabel(params: {
   });
 }
 
-function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionContext) {
-  if (interactionCtx.isDirectMessage) {
-    return "direct";
-  }
-  if (interactionCtx.isGroupDm) {
-    return "group";
-  }
-  return "channel";
-}
-
 export async function dispatchDiscordComponentEvent(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -100,7 +93,11 @@ export async function dispatchDiscordComponentEvent(params: {
     interaction,
     channelCtx,
   });
-  const chatType = resolveDiscordComponentChatType(interactionCtx);
+  const chatType = interactionCtx.isDirectMessage
+    ? "direct"
+    : interactionCtx.isGroupDm
+      ? "group"
+      : "channel";
   const senderName = interactionCtx.user.globalName ?? interactionCtx.user.username;
   const senderUsername = interactionCtx.user.username;
   const senderTag = formatDiscordUserTag(interactionCtx.user);
@@ -148,7 +145,7 @@ export async function dispatchDiscordComponentEvent(params: {
   });
   const storePath = resolveStorePath(ctx.cfg.session?.store, { agentId });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
-  const previousTimestamp = readSessionUpdatedAt({
+  const previousTimestamp = await readSessionUpdatedAtAsync({
     storePath,
     sessionKey,
   });

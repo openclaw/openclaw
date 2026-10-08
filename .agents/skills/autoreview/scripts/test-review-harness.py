@@ -190,21 +190,25 @@ def fixture_git_env(home: str, roots: set[Path]) -> dict[str, str]:
     return env
 
 
+def fixture_git_path(roots: set[Path], binary: str, child_path: str) -> str:
+    paths = [Path(binary).parent]
+    for entry in child_path.split(os.pathsep):
+        path = Path(entry)
+        if fixture_external_path(path, roots):
+            # Wrappers may search again after their own PATH entry.
+            candidate = shutil.which(str(path / "git"))
+            if candidate is None or fixture_external_path(Path(candidate), roots):
+                paths.append(path)
+    return os.pathsep.join(str(path) for path in dict.fromkeys(paths))
+
+
 def fixture_git(repo: Path, *args: str, **kwargs) -> subprocess.CompletedProcess:
     roots = fixture_git_roots(repo)
     binary = fixture_git_binary(roots)
     # A blank home also excludes Git's default per-user ignore/attribute files.
     with tempfile.TemporaryDirectory(prefix="autoreview-fixture-git.") as home:
         env = fixture_git_env(home, roots)
-        paths = [Path(binary).parent]
-        for entry in env.get("PATH", "").split(os.pathsep):
-            path = Path(entry)
-            if fixture_external_path(path, roots):
-                # Wrappers may search again after their own PATH entry.
-                candidate = shutil.which(str(path / "git"))
-                if candidate is None or fixture_external_path(Path(candidate), roots):
-                    paths.append(path)
-        env["PATH"] = os.pathsep.join(str(path) for path in dict.fromkeys(paths))
+        env["PATH"] = fixture_git_path(roots, binary, env.get("PATH", ""))
         return subprocess.run([binary, *args], cwd=repo, env=env, **kwargs)
 
 

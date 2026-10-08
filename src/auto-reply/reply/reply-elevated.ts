@@ -16,7 +16,6 @@ import {
 } from "./elevated-allowlist-matcher.js";
 export { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 
-/** Resolves provider-specific elevated allowlist entries with fallback defaults. */
 function resolveElevatedAllowList(
   allowFrom: AgentElevatedAllowFromConfig | undefined,
   provider: string,
@@ -29,7 +28,6 @@ function resolveElevatedAllowList(
   return Array.isArray(value) ? value : fallbackAllowFrom;
 }
 
-/** Resolves the channel formatter used before matching allowFrom entries. */
 function resolveAllowFromFormatter(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -52,7 +50,6 @@ function resolveAllowFromFormatter(params: {
       .filter(Boolean);
 }
 
-/** Checks whether the inbound sender matches configured elevated allowFrom gates. */
 function isApprovedElevatedSender(params: {
   provider: string;
   ctx: MsgContext;
@@ -139,7 +136,6 @@ function isApprovedElevatedSender(params: {
   return false;
 }
 
-/** Resolves whether elevated tools are enabled and allowed for the inbound sender. */
 export function resolveElevatedPermissions(params: {
   cfg: OpenClawConfig;
   agentId: string;

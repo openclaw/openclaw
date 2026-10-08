@@ -331,7 +331,7 @@ export async function runConfigureWizard(
             hint: localProbe.ok
               ? `Gateway reachable (${localUrl})`
               : "authUnavailable" in localProbe
-                ? `Gateway auth unavailable; probe skipped (${localUrl})`
+                ? `Gateway auth unavailable; check skipped (${localUrl})`
                 : `No gateway detected (${localUrl})`,
           },
           {
@@ -699,7 +699,7 @@ export async function runConfigureWizard(
     const probe =
       daemonSetupOutcome === "succeeded" ? waitForGatewayReachable : probeGatewayReachable;
     let gatewayProbe = probeAuth.warning
-      ? { ok: false, detail: "auth unavailable; probe skipped" }
+      ? { ok: false, detail: "auth unavailable; check skipped" }
       : await probe({
           ...(daemonSetupOutcome === "succeeded" ? resolveGatewayStartupTiming() : {}),
           url: probeLinks.wsUrl,
@@ -726,7 +726,7 @@ export async function runConfigureWizard(
       }
     }
     const gatewayStatusLine = probeAuth.warning
-      ? "Gateway: auth unavailable (probe skipped)"
+      ? "Gateway: auth unavailable (check skipped)"
       : gatewayProbe.ok
         ? "Gateway: reachable"
         : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;

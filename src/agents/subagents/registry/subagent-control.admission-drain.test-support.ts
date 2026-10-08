@@ -99,8 +99,12 @@ export function registerAdmissionDrainControlTests({
           error:
             "hold admission during kill: Subagent is still active; try the kill again in a moment.",
         });
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.killIntent).toBeUndefined();
+        expect(
+          (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
+        ).toBeUndefined();
+        expect(
+          (await getSubagentRunByChildSessionKey(childSessionKey))?.killIntent,
+        ).toBeUndefined();
         if (queued) {
           await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
         }

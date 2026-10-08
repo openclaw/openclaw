@@ -101,10 +101,8 @@ type MarketplaceInstallResult =
   | ({
       ok: true;
       marketplaceName?: string;
-      marketplaceVersion?: string;
       marketplacePlugin: string;
       marketplaceSource: string;
-      marketplaceEntryVersion?: string;
     } & Extract<InstallPluginResult, { ok: true }>)
   | Extract<InstallPluginResult, { ok: false }>;
 
@@ -112,7 +110,6 @@ type MarketplaceShortcutResolution =
   | {
       ok: true;
       plugin: string;
-      marketplaceName: string;
       marketplaceSource: string;
     }
   | {
@@ -1006,10 +1003,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
   if (params.source.kind === "url") {
     return { ok: true, path: cloned.rootDir, cleanup: cloned.cleanup };
   }
-  const subPath =
-    params.source.kind === "git-subdir"
-      ? params.source.path.trim()
-      : normalizeOptionalString(params.source.path) || ".";
+  const subPath = params.source.path ?? ".";
   const canonicalRootDir = await fs.realpath(cloned.rootDir);
   const target = await ensureInsideMarketplaceRoot(cloned.rootDir, subPath, {
     canonicalRootDir,
@@ -1083,7 +1077,6 @@ export async function resolveMarketplaceInstallShortcut(
   return {
     ok: true,
     plugin,
-    marketplaceName,
     marketplaceSource: marketplaceName,
   };
 }
@@ -1171,10 +1164,8 @@ export async function installPluginFromMarketplace(
     return {
       ...result,
       marketplaceName: loaded.marketplace.manifest.name,
-      marketplaceVersion: loaded.marketplace.manifest.version,
       marketplacePlugin: entry.name,
       marketplaceSource: params.marketplace,
-      marketplaceEntryVersion: entry.version,
     };
   } finally {
     await installCleanup?.();

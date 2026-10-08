@@ -2,9 +2,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMeta } from "../../../acp/runtime/session-meta.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import { listSessionEntriesReadOnly } from "../../../config/sessions/session-accessor.js";
+import { readAcpResumeSessionOwner } from "../../../acp/runtime/session-meta-resume.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
@@ -146,13 +144,14 @@ export function shouldStreamAcpSpawnToParent(params: {
   return params.streamToParentRequested || implicitStreamToParent;
 }
 
-export function validateAcpResumeSessionOwnership(params: {
+export async function validateAcpResumeSessionOwnership(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
   backendId?: string;
   requesterSessionKey?: string;
   resumeSessionId?: string;
-}): { ok: true } | { ok: false; error: string } {
+  assertCurrent?: () => void;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
   const resumeSessionId = normalizeOptionalString(params.resumeSessionId);
   if (!resumeSessionId) {
     return { ok: true };
@@ -165,28 +164,21 @@ export function validateAcpResumeSessionOwnership(params: {
     };
   }
 
-  const configuredBackend = normalizeOptionalLowercaseString(params.backendId);
-  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+  const owner = await readAcpResumeSessionOwner({
+    cfg: params.cfg,
     agentId: params.targetAgentId,
+    backendId: normalizeOptionalLowercaseString(params.backendId),
+    resumeSessionId,
+    assertCurrent: params.assertCurrent,
   });
-  for (const { sessionKey, entry } of listSessionEntriesReadOnly({ storePath, clone: false })) {
-    const acp = readAcpSessionMeta({ sessionKey, cfg: params.cfg });
-    // Resume identifiers are backend-local; requester ownership cannot authorize another backend.
-    if (
-      (configuredBackend && normalizeOptionalLowercaseString(acp?.backend) !== configuredBackend) ||
-      (normalizeOptionalString(acp?.identity?.agentSessionId) !== resumeSessionId &&
-        normalizeOptionalString(acp?.identity?.acpxSessionId) !== resumeSessionId)
-    ) {
-      continue;
-    }
-    if (
-      sessionKey === requesterSessionKey ||
-      normalizeOptionalString(entry?.spawnedBy) === requesterSessionKey ||
-      normalizeOptionalString(entry?.parentSessionKey) === requesterSessionKey
-    ) {
-      return { ok: true };
-    }
-    break;
+  params.assertCurrent?.();
+  if (
+    owner &&
+    (owner.sessionKey === requesterSessionKey ||
+      normalizeOptionalString(owner.entry.spawnedBy) === requesterSessionKey ||
+      normalizeOptionalString(owner.entry.parentSessionKey) === requesterSessionKey)
+  ) {
+    return { ok: true };
   }
 
   return {

@@ -319,11 +319,6 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
   }
 }
 
-type OpenClawStreamableHttpOptions = StreamableHTTPClientTransportOptions & {
-  fetch?: FetchLike;
-  requestInit?: RequestInit;
-};
-
 /** Owns Streamable HTTP notification recovery and stateful cleanup around SDK 1.30.0. */
 export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransport {
   protected readonly transport: StreamableHTTPClientTransport;
@@ -333,7 +328,7 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
   private pendingExpiredNotificationGet = false;
   private terminatedSessionId?: string;
 
-  constructor(url: URL, options: OpenClawStreamableHttpOptions = {}) {
+  constructor(url: URL, options: StreamableHTTPClientTransportOptions = {}) {
     super();
     this.url = url;
     this.cleanupFetch = options.fetch ?? fetch;

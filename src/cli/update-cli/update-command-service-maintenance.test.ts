@@ -390,7 +390,7 @@ it.each(nativeOfflineCases)(
         }
         return scenario.enabled;
       });
-      const command = mockRegisteredWindowsLauncher(home);
+      const command = mockRegisteredWindowsLauncher(home, scenario.state === 4);
       const service = createMockGatewayService({
         readCommand: async () => command,
         readRuntime:
@@ -451,7 +451,7 @@ it.each([
         }),
       });
     }
-    const command = mockRegisteredWindowsLauncher(home);
+    const command = mockRegisteredWindowsLauncher(home, true);
     const service = createMockGatewayService({
       readCommand: vi.fn(async () => command),
       readRuntime: readScheduledTaskRuntime,
@@ -479,13 +479,14 @@ it.each([
     });
 
     if (scenario.admitted) {
-      await expect(inspection).rejects.toThrow("Scheduled Task probe timed out after 30000 ms");
+      await expect(inspection).rejects.toThrow("Scheduled Task check timed out after 30000 ms");
     } else {
       const inspected = await inspection;
       expect(inspected.blockMessage).toBeUndefined();
       if (scenario.recovered) {
         expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
         expect(inspected.running).toBe(true);
+        expect(inspected.servicePid).toBe(fixtureGatewayPid);
       } else {
         expect(inspected.serviceUpdateVerdict?.kind).toBe("unavailable");
         expect(inspected.serviceMutationSkipMessage).toContain(
@@ -493,17 +494,16 @@ it.each([
         );
         if (scenario.code === "ETIMEDOUT") {
           expect(inspected.serviceMutationSkipMessage).toContain(
-            "Scheduled Task probe timed out after 30000 ms",
+            "Scheduled Task check timed out after 30000 ms",
           );
           expect(inspected.serviceMutationSkipMessage).toContain("ETIMEDOUT");
         }
       }
     }
-    const attempts = scenario.code === "ETIMEDOUT" ? 2 : 1;
-    expect(spawnSync).toHaveBeenCalledTimes(attempts + (scenario.recovered ? 2 : 0));
-    expect(service.readCommand).toHaveBeenCalledTimes(attempts);
     for (const call of vi.mocked(spawnSync).mock.calls) {
-      expect(call[2]?.timeout).toBe(30_000);
+      expect(call[2]?.timeout).toBe(
+        call[1]?.some((arg) => arg.includes("Get-CimInstance Win32_Process")) ? 5_000 : 30_000,
+      );
     }
     expect(service.stop).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();
@@ -543,7 +543,7 @@ it("preserves a silent Scheduled Task probe failure through update and Doctor wa
       serviceMutationAllowed: false,
       serviceUpdateVerdict: { kind: "unavailable" },
     });
-    const detail = "Scheduled Task probe failed (exit 2): no output from PowerShell.";
+    const detail = "Scheduled Task check failed (exit 2): no output from PowerShell.";
     expect(inspection.blockMessage).toBeUndefined();
     expect(inspection.serviceMutationSkipMessage).toContain(detail);
     const maintenance = await beginDoctorMaintenance({

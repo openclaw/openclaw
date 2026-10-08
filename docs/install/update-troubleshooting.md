@@ -282,7 +282,7 @@ lint JSON report is needed to establish that lint finished before termination.
 
 Published OpenClaw 2026.9.4 can spend many minutes preparing model catalogs and
 chat metadata after its HTTP listener binds. In an instrumented 480-agent
-control with no update, HTTP probes remained unanswered during 944 seconds of
+control with no update, HTTP checks remained unanswered during 944 seconds of
 observation; the Gateway then logged `ready` at 947.5 seconds. Stopping that
 instance eventually required systemd's existing 5-minute-30-second stop limit.
 These are measurements of one synthetic fixture, not expected startup budgets.

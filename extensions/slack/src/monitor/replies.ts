@@ -330,19 +330,13 @@ type SlackRespondFn = (payload: {
 
 type SlackResponseUrlBudget = ResponseUrlBudget<Parameters<SlackRespondFn>[0]>;
 
-type SlackReplyDeliveryPlan = {
-  peekThreadTs: () => string | undefined;
-  nextThreadTs: () => string | undefined;
-  markSent: () => void;
-};
-
 export function createSlackReplyDeliveryPlan(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasRepliedRef: { value: boolean };
   isThreadReply?: boolean;
-}): SlackReplyDeliveryPlan {
+}) {
   // Older/internal callers may not pass explicit thread classification. Keep
   // genuine thread replies sticky, but do not let Slack's auto-populated
   // top-level thread_ts override the configured replyToMode.
@@ -582,7 +576,7 @@ export async function deliverSlackSlashReplies(params: {
     throw failure;
   };
   const initialRemaining = responseBudget.remaining();
-  const initialMinimumCalls = minimumCalls.reduce((total, calls) => total + calls, 0);
+  const initialMinimumCalls = minimumRemainingCalls[0] ?? 0;
   if (initialRemaining !== undefined && initialMinimumCalls > initialRemaining) {
     await failOversizedDelivery();
   }

@@ -46,12 +46,6 @@ type PresenceTarget = {
 type SlackPresenceClient = Pick<WebClient["users"], "getPresence">;
 type PresenceSubject = { teamId?: string; userId: string };
 
-type SlackPresenceMonitor = {
-  observe: (prepared: PreparedSlackMessage) => void;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
 function resolveMode(
   channelConfig: SlackPresenceEventsConfig | undefined,
   accountConfig: SlackPresenceEventsConfig | undefined,
@@ -170,7 +164,7 @@ export function createSlackPresenceMonitor(params: {
   error?: (message: string) => void;
   enqueue?: typeof enqueueRoutedSystemEvent;
   wake?: typeof requestHeartbeat;
-}): SlackPresenceMonitor {
+}) {
   const resolveClient = params.resolveClient ?? (() => params.client);
   if (!params.client && !params.resolveClient) {
     throw new Error("Slack presence monitor requires a client or client resolver");

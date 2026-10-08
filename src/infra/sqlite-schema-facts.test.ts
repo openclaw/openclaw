@@ -17,8 +17,11 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import {
   admitSqliteSchema,
+  adoptSqliteSchemaFacts,
+  getAdmittedSqliteSchemaFacts,
   readSqliteCacheDataVersion,
   readSqliteDataVersion,
+  registerSqliteSchemaMutationListener,
   runSqliteReadOperationSync,
 } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -53,8 +56,10 @@ describe("admitted SQLite schema facts", () => {
   it("serves admitted runtime schema checks without executing SQL", () => {
     const database = openDatabase(
       `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
+      false,
     );
     assertCanonicalSessionValidationSchema(database);
+    admitSqliteSchema(database);
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
       for (let index = 0; index < 10; index += 1) {
@@ -142,6 +147,8 @@ describe("admitted SQLite schema facts", () => {
     reader.exec("PRAGMA journal_mode=WAL");
     const writer = new DatabaseSync(filename);
     databases.push(writer);
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(reader, schemaMutation);
     const read = () =>
       runSqliteReadOperationSync(reader, () => {
         expect(tableExists(reader, "session_nodes")).toBe(true);
@@ -162,9 +169,41 @@ describe("admitted SQLite schema facts", () => {
       expect(
         observation.queries.filter((sql) => /PRAGMA schema_version/iu.test(sql)).length,
       ).toBeLessThanOrEqual(100);
+      expect(schemaMutation).not.toHaveBeenCalled();
     } finally {
       observation.restore();
     }
+  });
+
+  it("does not retain an expired snapshot's identity when adopting matching facts", () => {
+    const database = openDatabase(undefined, false);
+    const facts = runSqlitePinnedReadSnapshotSync(database, () => {
+      admitSqliteSchema(database);
+      return getAdmittedSqliteSchemaFacts(database)!;
+    });
+    expect(adoptSqliteSchemaFacts(database, structuredClone(facts))).toBe(true);
+    expect(getAdmittedSqliteSchemaFacts(database)).not.toBe(facts);
+    expect(tableExists(database, "original")).toBe(true);
+  });
+
+  it("invalidates derived column facts when adopting a foreign schema publication", () => {
+    const filename = path.join(tempDirs.make("openclaw-schema-adoption-"), "state.sqlite");
+    const reader = openDatabase("CREATE TABLE session_nodes (id INTEGER)", true, filename);
+    expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
+    const writer = new DatabaseSync(filename);
+    databases.push(writer);
+    writer.exec(`
+      ALTER TABLE session_nodes ADD COLUMN owner_actor_type TEXT;
+      ALTER TABLE session_nodes ADD COLUMN owner_actor_id TEXT;
+      ALTER TABLE session_nodes ADD COLUMN owner_assigned_by_type TEXT;
+      ALTER TABLE session_nodes ADD COLUMN owner_assigned_by_id TEXT;
+      ALTER TABLE session_nodes ADD COLUMN owner_assigned_at INTEGER;
+    `);
+    const publisher = openDatabase("", true, filename);
+    const facts = getAdmittedSqliteSchemaFacts(publisher);
+    expect(facts).toBeDefined();
+    expect(adoptSqliteSchemaFacts(reader, facts!)).toBe(true);
+    expect(hasSqliteSessionOwnerColumns(reader)).toBe(true);
   });
 
   it.each(["transaction", "implicit snapshot"])(
@@ -176,18 +215,28 @@ describe("admitted SQLite schema facts", () => {
       // Bypass local schema publications, as a worker or another process does.
       const writer = new DatabaseSync(filename);
       databases.push(writer);
+      const schemaMutation = vi.fn();
+      registerSqliteSchemaMutationListener(reader, schemaMutation);
       const hasTable = (name: string) =>
         runSqliteReadOperationSync(reader, () => tableExists(reader, name));
       expect(hasTable("committed")).toBe(false);
-      writer.exec("BEGIN; CREATE TABLE committed (id); PRAGMA user_version = 2; COMMIT;");
+      writer.exec(
+        "BEGIN; CREATE TABLE committed (id); CREATE INDEX committed_index ON committed(id); PRAGMA user_version = 2; COMMIT;",
+      );
       expect(hasTable("committed")).toBe(true);
+      expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(true);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
+      expect(schemaMutation).toHaveBeenCalledTimes(1);
 
       const readSnapshot = () => {
         expect(hasTable("later")).toBe(false);
-        writer.exec("BEGIN; CREATE TABLE later (id); PRAGMA user_version = 3; COMMIT;");
+        writer.exec(
+          "BEGIN; CREATE TABLE later (id); DROP INDEX committed_index; PRAGMA user_version = 3; COMMIT;",
+        );
         expect(hasTable("later")).toBe(false);
+        expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(true);
         expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
+        expect(schemaMutation).toHaveBeenCalledTimes(1);
       };
       if (pin === "transaction") {
         reader.exec("BEGIN");
@@ -201,7 +250,9 @@ describe("admitted SQLite schema facts", () => {
         runSqlitePinnedReadSnapshotSync(reader, readSnapshot);
       }
       expect(hasTable("later")).toBe(true);
+      expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(false);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(3);
+      expect(schemaMutation).toHaveBeenCalledTimes(2);
       writer.exec("PRAGMA user_version = 2147483647");
       expect(() =>
         runSqliteReadOperationSync(reader, () =>
@@ -213,17 +264,21 @@ describe("admitted SQLite schema facts", () => {
 
   it("ends nested read scopes on exceptions and before async continuations", async () => {
     const filename = path.join(tempDirs.make("openclaw-schema-read-scope-"), "state.sqlite");
-    const reader = openDatabase(undefined, true, filename);
+    const reader = openDatabase(undefined, false, filename);
     const writer = new DatabaseSync(filename);
     databases.push(writer);
     const hasTable = (name: string) =>
       runSqliteReadOperationSync(reader, () => tableExists(reader, name));
+    const admission = observeSqliteReadSql(StatementSync.prototype);
     expect(() =>
       runSqliteReadOperationSync(reader, () => {
+        admitSqliteSchema(reader);
         expect(hasTable("committed")).toBe(false);
         throw new Error("read failed");
       }),
     ).toThrow("read failed");
+    admission.restore();
+    expect(admission.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql))).toHaveLength(1);
     writer.exec("CREATE TABLE committed (id)");
     expect(hasTable("committed")).toBe(true);
 
@@ -282,7 +337,9 @@ describe("admitted SQLite schema facts", () => {
     reader.exec("BEGIN");
     reader.prepare("SELECT id FROM original").all();
     writer.exec("CREATE TABLE later (id)");
-    expect(tableExists(reader, "later")).toBe(false);
+    runSqliteReadOperationSync(reader, () => {
+      expect(tableExists(reader, "later")).toBe(false);
+    });
     reader.exec("COMMIT");
     expect(tableExists(reader, "later")).toBe(true);
 
@@ -476,12 +533,16 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it("does not serve retained facts after close or reopening the handle", () => {
-    const database = openDatabase();
+    const database = openDatabase(
+      "CREATE TABLE original (id); CREATE INDEX original_index ON original(id)",
+    );
     expect(tableExists(database, "original")).toBe(true);
+    expect(getAdmittedSqliteSchemaFacts(database)?.indexes.has("original_index")).toBe(true);
     database.close();
     expect(() => tableExists(database, "original")).toThrow();
     database.open();
     expect(tableExists(database, "original")).toBe(false);
+    expect(getAdmittedSqliteSchemaFacts(database)?.indexes.has("original_index")).toBe(false);
     expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(0);
   });
 

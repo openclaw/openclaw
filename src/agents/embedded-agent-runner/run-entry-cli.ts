@@ -1,7 +1,7 @@
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import {
   readSessionEntryInWorker,
-  withSessionEntryReadOnlyInWorker,
+  readSessionEntryReadOnlyInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { persistCliSessionBindingResult } from "../cli-session-store.js";
@@ -49,16 +49,7 @@ export function withAdmittedCliCandidate(
               { ...target, readConsistency: "latest" },
               assertSettlementCurrent,
             )
-          : await withSessionEntryReadOnlyInWorker(
-              target,
-              assertSettlementCurrent,
-              async (read) => {
-                if (!read.ok) {
-                  throw read.error;
-                }
-                return read.value;
-              },
-            )
+          : await readSessionEntryReadOnlyInWorker(target, assertSettlementCurrent)
         : params.getSessionEntry();
       assertSettlementCurrent();
       if (

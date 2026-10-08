@@ -15,7 +15,6 @@ import { levenshteinDistance } from "../../shared/levenshtein-distance.js";
 export { modelKey };
 export type { ModelAliasIndex };
 
-/** Resolved model choice from a `/model` directive. */
 export type ModelDirectiveSelection = {
   provider: string;
   model: string;
@@ -66,16 +65,12 @@ function scoreFuzzyMatch(params: {
 }) {
   const provider = normalizeProviderId(params.provider);
   const model = params.model;
-  const fragment = normalizeLowercaseStringOrEmpty(params.fragment);
-  const providerLower = normalizeLowercaseStringOrEmpty(provider);
+  const fragment = params.fragment;
   const modelLower = normalizeLowercaseStringOrEmpty(model);
-  const haystack = `${providerLower}/${modelLower}`;
+  const haystack = `${provider}/${modelLower}`;
   const key = modelKey(provider, model);
 
   const scoreFragment = (value: string, exact: number, starts: number, includes: number) => {
-    if (!fragment) {
-      return 0;
-    }
     if (value === fragment) {
       return exact;
     }
@@ -87,7 +82,7 @@ function scoreFuzzyMatch(params: {
 
   let score =
     scoreFragment(haystack, 220, 140, 110) +
-    scoreFragment(providerLower, 180, 120, 90) +
+    scoreFragment(provider, 180, 120, 90) +
     scoreFragment(modelLower, 160, 110, 80);
 
   // Best-effort typo tolerance for common near-misses like "claud" vs "claude".
@@ -102,7 +97,7 @@ function scoreFuzzyMatch(params: {
     score += scoreFragment(normalizeLowercaseStringOrEmpty(alias), 140, 90, 60);
   }
 
-  if (modelLower.startsWith(providerLower)) {
+  if (modelLower.startsWith(provider)) {
     score += 30;
   }
 
@@ -134,7 +129,6 @@ function scoreFuzzyMatch(params: {
   };
 }
 
-/** Resolves a `/model` directive under the effective model policy. */
 export function resolveModelDirectiveSelection(params: {
   raw: string;
   defaultProvider: string;
@@ -159,7 +153,7 @@ export function resolveModelDirectiveSelection(params: {
     });
 
   const rawTrimmed = raw.trim();
-  const rawLower = normalizeLowercaseStringOrEmpty(rawTrimmed);
+  const rawLower = rawTrimmed.toLowerCase();
   const allows = (ref: { provider: string; model: string }) =>
     policy.allows(ref) && (params.operatorModelPolicy?.allows(ref) ?? true);
 
@@ -203,7 +197,6 @@ export function resolveModelDirectiveSelection(params: {
       candidates.push({ provider, model });
     }
 
-    // Also allow partial alias matches when the user didn't specify a provider.
     if (!paramsLocal.provider) {
       for (const [aliasKey, entry] of aliasIndex.byAlias.entries()) {
         if (!aliasKey.includes(fragment) || !allows(entry.ref)) {
@@ -286,8 +279,6 @@ export function resolveModelDirectiveSelection(params: {
     return explicitSelection;
   }
 
-  // If the user specified a provider/model but the exact model isn't allowed,
-  // attempt a fuzzy match within that provider.
   if (rawLower.includes("/")) {
     const slash = rawTrimmed.indexOf("/");
     const provider = normalizeProviderId(rawTrimmed.slice(0, slash).trim());
@@ -298,7 +289,6 @@ export function resolveModelDirectiveSelection(params: {
     }
   }
 
-  // Otherwise, try fuzzy matching across allowlisted models.
   const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
   if (fuzzy) {
     return { selection: fuzzy };

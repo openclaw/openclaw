@@ -40,7 +40,7 @@ export {
 } from "../agents/runtime/internal-hooks.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
-  Parameters<typeof import("./agent-harness.js").createOpenClawCodingTools>[0]
+  Parameters<typeof import("./agent-harness.js").createOpenClawCodingToolsAsync>[0]
 >;
 
 type CoreCompactTools = ReturnType<typeof createAgentHarnessToolSurfaceRuntimeCore>["compactTools"];

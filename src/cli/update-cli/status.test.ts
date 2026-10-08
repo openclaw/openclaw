@@ -415,7 +415,7 @@ describe("update status Node runtime findings", () => {
         sqliteVersion: state === "unsupported" ? "3.50.2" : "3.53.0",
         nodeSharedSqlite: false,
         ...(state === "admitted"
-          ? { note: "Node 24.15.0: unsupported version, capability probe passed." }
+          ? { note: "Node 24.15.0: unsupported version, capability check passed." }
           : {}),
       });
     }
@@ -441,7 +441,7 @@ describe("update status Node runtime findings", () => {
     }
     await updateStatusCommand({});
     if (state === "admitted") {
-      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("capability probe passed"));
+      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("capability check passed"));
       expect(runtime.log).not.toHaveBeenCalledWith(undefined);
     } else {
       const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
@@ -759,7 +759,18 @@ describe("update status abandoned-run reporting", () => {
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
 
-      await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
+      await recordDeferredPluginMigrations({
+        pending: [],
+        settlements: [
+          {
+            pluginId: pending.pluginId,
+            status: json ? "superseded" : "completed",
+            reason: json
+              ? "Superseded by the verified successor migration."
+              : "No protected config remains.",
+          },
+        ],
+      });
       runtime.log.mockClear();
       runtime.writeJson.mockClear();
       await updateStatusCommand({ json });

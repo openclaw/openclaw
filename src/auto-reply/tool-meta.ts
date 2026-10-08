@@ -22,9 +22,8 @@ export function formatToolAggregateParts(
   const filtered = (metas ?? []).filter(Boolean).map(shortenHomeInString);
   const display = resolveToolDisplay({ name: toolName });
   const compactCommandSummary = filtered.length > 0 && isShellToolDisplayName(toolName);
-  const prefix = compactCommandSummary ? display.emoji : `${display.emoji} ${display.label}`;
   if (!filtered.length) {
-    return { text: `${display.emoji} ${display.label}` };
+    return { text: display.label };
   }
 
   const rawSegments: string[] = [];
@@ -53,7 +52,7 @@ export function formatToolAggregateParts(
   const meta = allSegments.join("; ");
   const detail = formatMetaForDisplay(toolName, meta, options?.markdown);
   return {
-    text: compactCommandSummary ? `${prefix} ${detail}` : `${prefix}: ${detail}`,
+    text: compactCommandSummary ? detail : `${display.label}: ${detail}`,
     detail,
   };
 }

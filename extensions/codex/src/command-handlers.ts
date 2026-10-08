@@ -294,13 +294,7 @@ export async function handleCodexSubcommand(
     return { text: await startThreadAction(deps, ctx, options.pluginConfig, normalized, rest) };
   }
   if (normalized === "diagnostics") {
-    return await handleCodexDiagnosticsFeedback(
-      deps,
-      ctx,
-      options.pluginConfig,
-      rest.join(" "),
-      "/codex diagnostics",
-    );
+    return await handleCodexDiagnosticsFeedback(deps, ctx, options.pluginConfig, rest.join(" "));
   }
   if (normalized === "computer-use" || normalized === "computeruse") {
     if (isMenuVerb(rest)) {

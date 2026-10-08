@@ -12,6 +12,7 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
@@ -222,6 +223,17 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,
           skillOverrides: opts?.skillOverrides,
+          assertCurrent: composeSessionSourceAssertion(
+            [opts?.operatorAuthority?.assertCurrent],
+            (assertOperatorCurrent) => {
+              opts?.abortSignal?.throwIfAborted();
+              opts?.replyOperation?.abortSignal.throwIfAborted();
+              assertOperatorCurrent();
+              if (opts?.replyOperation?.result) {
+                throw new Error("Reply operation ended while preparing skills");
+              }
+            },
+          ),
         });
       });
   sessionEntry = skillResult.sessionEntry;
@@ -337,7 +349,12 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
     rebindProvidedReplyOperation(latestSessionId);
-    opts?.onSessionPrepared?.({ sessionKey, sessionId: latestSessionId, storePath });
+    opts?.onSessionPrepared?.({
+      sessionKey,
+      sessionId: latestSessionId,
+      lifecycleRevision: latestSessionEntry?.lifecycleRevision,
+      storePath,
+    });
     // Queued admission uses the scoped key too. A legacy marker for the same
     // transcript would make unchanged tool authority fail the steering check.
     const sessionFile =

@@ -44,6 +44,7 @@ export async function captureManagedWorktreeSnapshot(params: {
   assertCurrent?: () => void;
   workerAuthority?: WorktreeWorkerAuthority;
   requireDiskSpace: WorktreeAllocationGuard["requireDiskSpace"];
+  onInventory?: (counts: { tracked: number; untracked: number }) => void;
 }) {
   return withWorktreeRunEnd(params.env, async () => {
     const { record, env, provisionedPaths } = params;
@@ -88,6 +89,9 @@ export async function captureManagedWorktreeSnapshot(params: {
           };
           assertCurrent();
           switch (effect.type) {
+            case "worktree.snapshot-inventory":
+              params.onInventory?.(effect.input);
+              return undefined;
             case "worktree.assert-current":
               return undefined;
             case "worktree.snapshot-capacity":
@@ -368,30 +372,27 @@ async function retireManagedWorktreeSnapshot(params: {
 }) {
   const { record, env, signal } = params;
   if (params.expected) {
-    const { localWorkspaceStore } =
+    const { withLocalWorkspaceStore } =
       await import("../../gateway/worker-environments/local-workspace-store.js");
-    const projectionStore = localWorkspaceStore(env);
-    const assertCurrent = () => {
-      params.assertCurrent();
-      assertRegistrySnapshotRetirement(env, record);
-      if (projectionStore.get(record.id)) {
-        throw new Error(
-          "Snapshot retains local workspace projection custody; preserve its recovery data",
-        );
-      }
-    };
-    assertCurrent();
-    const retireSnapshot = await prepareExactSnapshotRetirement({
-      record,
-      expected: params.expected,
-      signal,
-      assertCurrent,
-    });
-    const { expireLocalWorkspaceProjection } =
-      await import("../../gateway/worker-environments/local-workspace-projection.js");
-    await expireLocalWorkspaceProjection({ worktree: record, env, assertCurrent, retireSnapshot });
-    assertCurrent();
-    deleteRegistryWorktree(env, record.id, { assertCurrent, expectedRetired: record });
+    await withLocalWorkspaceStore(
+      { ...params, worktreeId: record.id, requireAbsent: true },
+      async (store) => {
+        const assertCurrent = () => {
+          store.assertCurrent();
+          assertRegistrySnapshotRetirement(env, record);
+        };
+        assertCurrent();
+        const retireSnapshot = await prepareExactSnapshotRetirement({
+          record,
+          expected: params.expected!,
+          signal,
+          assertCurrent,
+        });
+        await retireSnapshot(assertCurrent);
+        assertCurrent();
+        deleteRegistryWorktree(env, record.id, { assertCurrent, expectedRetired: record });
+      },
+    );
     // Retained source refs remain owned, including an otherwise empty source repository.
     return;
   }
@@ -439,6 +440,7 @@ async function retireManagedWorktreeSnapshot(params: {
       worktree: record,
       env,
       assertCurrent,
+      workerAuthority: params.workerAuthority,
       retireSnapshot: async (assertProjectionCurrent) => {
         const beforeRun = () => {
           assertCurrent();

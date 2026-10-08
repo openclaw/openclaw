@@ -240,6 +240,9 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { setWhatsAppRuntime } from "./src/runtime.js";',
       'export { startWebLoginWithQr, waitForWebLogin } from "./login-qr-runtime.js";',
     ],
+  [contractPluginPath({ rootDir: ROOT_DIR, pluginId: "x", relativePath: "runtime-api.ts" })]: [
+    'export { setXRuntime } from "./src/runtime.js";',
+  ],
 } as const;
 
 function collectRuntimeApiFiles(): string[] {

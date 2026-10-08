@@ -40,6 +40,7 @@ import {
 } from "./exec-policy-diagnostics.js";
 import { addGatewayClientOptions, resolveGatewayRpcOptionsWithLocalPort } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
 
 type ExecPolicyPresetName = "yolo" | "cautious" | "deny-all";
 
@@ -83,23 +84,7 @@ type ExecPolicyShowPayload = {
   };
 };
 
-type ExecPolicyShowScope = Omit<
-  ExecPolicyScopeSnapshot,
-  "security" | "ask" | "askFallback" | "allowedDecisions"
-> & {
-  runtimeApprovalsSource: "local-file" | "node-runtime";
-  security: Omit<ExecPolicyScopeSnapshot["security"], "host" | "effective"> & {
-    host: ExecSecurity | "unknown";
-    effective: ExecSecurity | "unknown";
-  };
-  ask: Omit<ExecPolicyScopeSnapshot["ask"], "host" | "effective"> & {
-    host: ExecAsk | "unknown";
-    effective: ExecAsk | "unknown";
-  };
-  askFallback: Omit<ExecPolicyScopeSnapshot["askFallback"], "effective"> & {
-    effective: ExecSecurity | "unknown";
-  };
-};
+type ExecPolicyShowScope = ReturnType<typeof buildExecPolicyShowScope>;
 
 function formatExecPolicyError(err: unknown): string {
   return sanitizeExecPolicyMessage(err instanceof Error ? err.message : String(err));
@@ -286,35 +271,35 @@ async function buildLocalExecPolicyShowPayload(
   return payload;
 }
 
-function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot): ExecPolicyShowScope {
+function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot) {
   const { allowedDecisions: _allowedDecisions, ...baseScope } = snapshot;
   if (snapshot.host.requested !== "node") {
     return {
       ...baseScope,
-      runtimeApprovalsSource: "local-file",
+      runtimeApprovalsSource: "local-file" as const,
     };
   }
   return {
     ...baseScope,
-    runtimeApprovalsSource: "node-runtime",
+    runtimeApprovalsSource: "node-runtime" as const,
     security: {
       requested: snapshot.security.requested,
       requestedSource: snapshot.security.requestedSource,
-      host: "unknown",
+      host: "unknown" as const,
       hostSource: "node runtime approvals",
-      effective: "unknown",
+      effective: "unknown" as const,
       note: "runtime policy resolved by node approvals",
     },
     ask: {
       requested: snapshot.ask.requested,
       requestedSource: snapshot.ask.requestedSource,
-      host: "unknown",
+      host: "unknown" as const,
       hostSource: "node runtime approvals",
-      effective: "unknown",
+      effective: "unknown" as const,
       note: "runtime policy resolved by node approvals",
     },
     askFallback: {
-      effective: "unknown",
+      effective: "unknown" as const,
       source: "node runtime approvals",
     },
   };
@@ -374,8 +359,23 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
   defaultRuntime.log(theme.muted(payload.effectivePolicy.note));
 }
 
-async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicyShowPayload> {
+function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicyShowPayload> {
+  return runWithLocalStateOwner({
+    method: "exec-policy.set",
+    params: { ...policy },
+    target: "local exec policy and approvals",
+    onForeignOwner: "refuse",
+    runLocal: ({ assertCurrent }) => applyOwnedExecPolicy(policy, assertCurrent),
+  });
+}
+
+async function applyOwnedExecPolicy(
+  policy: ExecPolicyResolved,
+  assertCurrent: () => void,
+): Promise<ExecPolicyShowPayload> {
+  assertCurrent();
   const configSnapshot = await readConfigFileSnapshot();
+  assertCurrent();
   const nextConfig = structuredClone(configSnapshot.config ?? {});
   applyConfigExecPolicy(nextConfig, policy);
   if (nextConfig.tools?.exec?.host === "node") {
@@ -387,20 +387,25 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
   const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
   const writtenApprovals = await updateExecApprovals({
     baseHash: approvalsSnapshot.hash,
+    assertCurrent,
     update: () => nextApprovals,
   });
   if (!writtenApprovals) {
     throw new Error("Exec approvals changed; reload and retry.");
   }
   try {
+    assertCurrent();
     await replaceConfigFile({
       baseHash: configSnapshot.hash,
       nextConfig,
+      writeOptions: { assertCurrent },
     });
   } catch (err) {
     try {
+      assertCurrent();
       if (!(await restoreExecApprovalsSnapshotLocked(approvalsSnapshot, writtenApprovals.hash))) {
         await updateExecApprovals({
+          assertCurrent,
           update: (current) =>
             buildExecPolicyApprovalsRollback({
               current,

@@ -30,6 +30,13 @@ const accessMocks = vi.hoisted(() => ({
   applyGoogleChatInboundAccessPolicy: vi.fn(),
 }));
 
+const runtimeMocks = vi.hoisted(() => ({ openChannelIngressQueue: vi.fn() }));
+
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  getGoogleChatRuntime: () => ({ state: runtimeMocks }),
+}));
+
 const routingMocks = vi.hoisted(() => ({
   processEvent: undefined as
     | ((
@@ -42,7 +49,7 @@ const routingMocks = vi.hoisted(() => ({
 
 const inboundMocks = vi.hoisted(() => ({
   buildEnvelope: vi.fn(({ body }: { body: string }) => body),
-  resolveChannelInboundRouteEnvelope: vi.fn(),
+  resolveAgentRoute: vi.fn(),
   toInboundMediaFactsWithMetadata: vi.fn(),
 }));
 
@@ -53,10 +60,15 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   );
   return {
     ...actual,
-    resolveChannelInboundRouteEnvelope: inboundMocks.resolveChannelInboundRouteEnvelope,
+    createChannelInboundEnvelopeBuilderAsync: async () => inboundMocks.buildEnvelope,
     toInboundMediaFactsWithMetadata: inboundMocks.toInboundMediaFactsWithMetadata,
   };
 });
+
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/routing")>()),
+  resolveAgentRoute: inboundMocks.resolveAgentRoute,
+}));
 
 vi.mock("./api.js", () => ({
   deleteGoogleChatMessage: apiMocks.deleteGoogleChatMessage,
@@ -91,15 +103,12 @@ beforeEach(() => {
   apiMocks.updateGoogleChatMessage.mockReset().mockResolvedValue({});
   accessMocks.applyGoogleChatInboundAccessPolicy.mockReset();
   inboundMocks.buildEnvelope.mockReset().mockImplementation(({ body }: { body: string }) => body);
-  inboundMocks.resolveChannelInboundRouteEnvelope
+  inboundMocks.resolveAgentRoute
     .mockReset()
     .mockImplementation(({ accountId }: { accountId: string }) => ({
-      route: {
-        agentId: "agent-1",
-        accountId,
-        sessionKey: "session-1",
-      },
-      buildEnvelope: inboundMocks.buildEnvelope,
+      agentId: "agent-1",
+      accountId,
+      sessionKey: "session-1",
     }));
   inboundMocks.toInboundMediaFactsWithMetadata.mockClear();
 });
@@ -289,7 +298,7 @@ describe("googlechat monitor inbound space classification", () => {
     expect(accessMocks.applyGoogleChatInboundAccessPolicy).toHaveBeenCalledWith(
       expect.objectContaining({ isGroup }),
     );
-    expect(inboundMocks.resolveChannelInboundRouteEnvelope).toHaveBeenCalledWith({
+    expect(inboundMocks.resolveAgentRoute).toHaveBeenCalledWith({
       cfg: {},
       channel: "googlechat",
       accountId: "work",
@@ -559,11 +568,10 @@ describe("googlechat monitor inbound space classification", () => {
         await params.turnAdoptionLifecycle?.onAdopted();
       },
     );
+    runtimeMocks.openChannelIngressQueue.mockReturnValue(queue);
     const ingress = createGoogleChatIngressMonitor({
       accountId: account.accountId,
-      queue,
       runtime,
-      pollIntervalMs: 10,
       dispatch: async (event, turnAdoptionLifecycle) => {
         await processGoogleChatTestEvent({
           event,

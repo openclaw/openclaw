@@ -1,4 +1,3 @@
-/** Private command reply routing for sensitive owner-only command output. */
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -16,7 +15,6 @@ import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { routeReply } from "./route-reply.js";
 
-/** Resolved private delivery target for command replies and approvals. */
 export type PrivateCommandRouteTarget = {
   channel: string;
   to: string;
@@ -158,7 +156,6 @@ export async function deliverPrivateCommandReply(params: {
   return "failed";
 }
 
-/** Reads the command message thread id from command context. */
 function readCommandMessageThreadId(params: HandleCommandsParams): string | undefined {
   return typeof params.ctx.MessageThreadId === "string" ||
     typeof params.ctx.MessageThreadId === "number"
@@ -166,7 +163,6 @@ function readCommandMessageThreadId(params: HandleCommandsParams): string | unde
     : undefined;
 }
 
-/** Reads the best delivery target for command route resolution. */
 function readCommandDeliveryTarget(params: HandleCommandsParams): string | undefined {
   return (
     normalizeOptionalString(params.ctx.OriginatingTo) ??

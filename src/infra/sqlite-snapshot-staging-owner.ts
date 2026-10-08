@@ -645,7 +645,10 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     return { ...retained.operation, service: serviceRequests, startClose };
   };
 
-  const owner = { start, retainDirectory };
+  const owner = {
+    start,
+    retainDirectory,
+  };
   nativeSource.retain(owner, async () => {
     admissionClosed = true;
     for (const preparation of preparations.values()) {

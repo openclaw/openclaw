@@ -142,7 +142,6 @@ describe("offerLiveModelVerification", () => {
       opts: { nonInteractive: true },
       prompter: createPrompter(),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      workspaceDir: stateDir,
       stateDir,
       agentDir,
       writeConfig,
@@ -230,7 +229,6 @@ describe("offerLiveModelVerification", () => {
       opts: { nonInteractive: true },
       prompter: createPrompter(),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      workspaceDir: root,
       agentDir,
       stateDir: root,
       writeConfig,
@@ -269,7 +267,6 @@ describe("offerLiveModelVerification", () => {
         opts: { nonInteractive: true },
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
-        workspaceDir: "/tmp/openclaw-test-workspace",
         writeConfig: async (config) => config,
         required: true,
       }),
@@ -311,7 +308,6 @@ describe("offerLiveModelVerification", () => {
         opts: {},
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
-        workspaceDir: "/tmp/openclaw-test-workspace",
         writeConfig,
       }),
     ).resolves.toEqual({
@@ -353,7 +349,6 @@ describe("offerLiveModelVerification", () => {
         opts: {},
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        workspaceDir: "/tmp/openclaw-test-workspace",
         writeConfig,
       }),
     ).rejects.toThrow("repair cancelled");
@@ -385,7 +380,6 @@ describe("offerLiveModelVerification", () => {
         opts: {},
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        workspaceDir: "/tmp/openclaw-test-workspace",
         writeConfig,
       }),
     ).toMatchObject({ attempted: false, verified: false, persisted: false });

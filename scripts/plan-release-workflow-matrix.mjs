@@ -1,4 +1,3 @@
-// Plans release workflow matrix entries from profile and suite inputs.
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parseLaneSelection } from "./lib/docker-e2e-plan.mts";
 import { allReleasePathLanes } from "./lib/docker-e2e-scenarios.mts";
@@ -17,10 +16,14 @@ const DOCKER_E2E_CHUNKS = [
   },
   {
     chunk_id: "package-update-openai",
-    label: "package/update OpenAI and recovery",
-    // Five weight-3 npm lanes serialize at limit 5: 30m + 30m + 20m + 25m + 43m.
-    // The 10m chat lane overlaps; add 10m for setup/artifacts => 158m, round to 160m.
-    timeout_minutes: 160,
+    label: "package/update OpenAI",
+    timeout_minutes: 60,
+    profiles: "beta minimum stable full",
+  },
+  {
+    chunk_id: "package-update-restart-auth",
+    label: "package/update restart auth",
+    timeout_minutes: 55,
     profiles: "beta minimum stable full",
   },
   {
@@ -47,54 +50,12 @@ const DOCKER_E2E_CHUNKS = [
     timeout_minutes: 60,
     profiles: "stable full",
   },
-  {
-    chunk_id: "plugins-runtime-install-a",
-    label: "plugins/runtime install A",
+  ...["a", "b", "c", "d", "e", "f", "g", "h"].map((shard) => ({
+    chunk_id: `plugins-runtime-install-${shard}`,
+    label: `plugins/runtime install ${shard.toUpperCase()}`,
     timeout_minutes: 60,
     profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-b",
-    label: "plugins/runtime install B",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-c",
-    label: "plugins/runtime install C",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-d",
-    label: "plugins/runtime install D",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-e",
-    label: "plugins/runtime install E",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-f",
-    label: "plugins/runtime install F",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-g",
-    label: "plugins/runtime install G",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
-  {
-    chunk_id: "plugins-runtime-install-h",
-    label: "plugins/runtime install H",
-    timeout_minutes: 60,
-    profiles: "stable full",
-  },
+  })),
 ];
 
 const LIVE_MODEL_PROVIDERS = [
@@ -523,9 +484,6 @@ function planProfileMatrix(entries, profile, enabled, disabledReason, labelForEn
   };
 }
 
-/**
- * Creates the Docker E2E/live model matrix plan for a release profile.
- */
 export function createReleaseWorkflowMatrixPlan(options = {}) {
   const releaseProfile = options.releaseProfile ?? "stable";
   if (!["beta", "minimum", "stable", "full"].includes(releaseProfile)) {

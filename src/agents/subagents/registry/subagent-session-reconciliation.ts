@@ -8,8 +8,7 @@ import {
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { getAgentRunContext, listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
-import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../../state/openclaw-state-db-readonly.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
@@ -19,8 +18,6 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { hasSubagentSessionOwnerInDatabase } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 
@@ -143,19 +140,18 @@ export function resolveCompletionFromSessionEntry(
   opts?: { notBeforeMs?: number },
 ): SubagentSessionCompletion | null {
   const status = sessionEntry?.status;
-  // Startup interruption has no terminal event timestamp and cannot settle the registry.
-  if (
-    status === "running" ||
-    status === "interrupted" ||
-    !isFreshForRun(sessionEntry, opts?.notBeforeMs)
-  ) {
+  // Interruption leaves registry settlement with the recovery owner.
+  if (status === "interrupted" || !isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
     return null;
   }
   let outcome: SubagentRunOutcome;
   let reason: SubagentLifecycleEndedReason = SUBAGENT_ENDED_REASON_COMPLETE;
   switch (status) {
     case "failed":
-      outcome = { status: "error", error: "session completed before registry settled" };
+      outcome = {
+        status: "error",
+        error: sessionEntry?.lastRunError || "session completed before registry settled",
+      };
       reason = SUBAGENT_ENDED_REASON_ERROR;
       break;
     case "killed":
@@ -163,7 +159,7 @@ export function resolveCompletionFromSessionEntry(
       reason = SUBAGENT_ENDED_REASON_KILLED;
       break;
     case "timeout":
-      outcome = { status: "timeout" };
+      outcome = { status: "timeout", error: sessionEntry?.lastRunError };
       break;
     default:
       if (status !== "done" && typeof sessionEntry?.endedAt !== "number") {
@@ -228,33 +224,5 @@ export async function resolveSubagentSessionStartedAt(params: {
     isFreshForRun(entry, params.notBeforeMs)
       ? freshSessionStartedAt(entry, params.notBeforeMs)
       : undefined,
-  );
-}
-
-/** Startup may only settle session-only rows; any run/task generation retains ownership. */
-export function hasSubagentSessionRecoveryOwner(params: {
-  sessionKey: string;
-  sessionId: string;
-  env: NodeJS.ProcessEnv;
-}): boolean {
-  const key = params.sessionKey;
-  if (listAgentRunsForSession(params).length > 0) {
-    return true;
-  }
-  for (const run of subagentRuns.values()) {
-    if (
-      run.childSessionKey === key ||
-      run.requesterSessionKey === key ||
-      run.controllerSessionKey === key
-    ) {
-      return true;
-    }
-  }
-  // Failed or incompatible reads propagate: unknown ownership never authorizes mutation.
-  return (
-    withExistingOpenClawStateDatabaseCurrentReadOnly(
-      (database) => hasSubagentSessionOwnerInDatabase(database, key),
-      { env: params.env },
-    ) ?? false
   );
 }

@@ -184,10 +184,10 @@ function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]):
 }
 
 async function runQueueEntryTask(
-  lane: string,
   entry: QueueEntry,
   marker: CommandLaneTaskMarker,
 ): Promise<unknown> {
+  const { lane } = marker;
   const taskPromise = Promise.resolve().then(() => entry.task(marker));
   const taskTimeoutMs = entry.taskTimeoutMs;
   if (taskTimeoutMs === undefined) {
@@ -383,7 +383,7 @@ function drainLane(
       void (async () => {
         const startTime = Date.now();
         try {
-          const result = await runQueueEntryTask(lane, entry, {
+          const result = await runQueueEntryTask(entry, {
             lane,
             taskId,
             generation: taskGeneration,
@@ -628,11 +628,7 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
 }
 
 /** Per-lane work totals for every live lane; diagnostics composition lives in command-lane-diagnostics.ts. */
-export function listCommandLaneTotals(): Array<{
-  lane: string;
-  activeCount: number;
-  queuedCount: number;
-}> {
+export function listCommandLaneTotals() {
   return [...getQueueState().lanes.values()].map((state) => ({
     lane: state.lane,
     activeCount: state.activeTaskIds.size,

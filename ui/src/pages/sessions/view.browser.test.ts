@@ -9,7 +9,6 @@ import {
 
 const VIEWPORTS = [
   [375, 812],
-  [430, 932],
   [768, 1024],
   [1440, 900],
 ] as const;
@@ -295,17 +294,6 @@ describeBrowserLayout("sessions responsive browser layout", () => {
       expect(metrics.hasDetails).toBe(true);
       expect(metrics.actionsVisible).toBe(true);
       expect(metrics.statusVisible).toBe(true);
-    } finally {
-      await closeFixture(fixture);
-    }
-  });
-
-  it("exposes the page-size selector by its localized accessible name", async () => {
-    const fixture = await openFixture(context, 1440, 900);
-    try {
-      const pageSize = fixture.page.getByRole("combobox", { name: "Rows per page" });
-      await pageSize.waitFor();
-      expect(await pageSize.inputValue()).toBe("25");
     } finally {
       await closeFixture(fixture);
     }

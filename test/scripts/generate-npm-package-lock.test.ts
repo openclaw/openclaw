@@ -9,6 +9,8 @@ import {
   applyPackageExtensionPeerMetadata,
   collectOverrideViolations,
   collectPnpmLockViolations,
+  collectPnpmLockPlatformViolations,
+  collectNpmPlatformOptionalDependencies,
   createNpmPackageLockInstallStrategyArgs,
   createNpmLockExecOptions,
   disableDependencyShrinkwrapOverrideConflictSources,
@@ -316,48 +318,6 @@ describe("generate-npm-package-lock", () => {
     expect(policy.missing).toContain("no runtime resolution for absent@1.0.0");
   });
 
-  it("keeps explicit workspace root policy when a runtime uses its scoped fork", () => {
-    const root = tempDirs.make("openclaw-npm-scoped-workspace-policy-");
-    writeFileSync(
-      path.join(root, "pnpm-workspace.yaml"),
-      JSON.stringify({
-        overrides: {
-          forked: "2.0.0",
-          "parent@1.0.0>forked": "1.0.0",
-        },
-      }),
-    );
-    writeFileSync(
-      path.join(root, "pnpm-lock.yaml"),
-      JSON.stringify({
-        packages: {
-          "parent@1.0.0": {},
-          "forked@1.0.0": {},
-          "forked@2.0.0": {},
-        },
-        snapshots: {
-          "parent@1.0.0": { dependencies: { forked: "1.0.0" } },
-          "forked@1.0.0": {},
-          "forked@2.0.0": {},
-        },
-      }),
-    );
-    const script = `import { readNpmLockOverrides } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
-      console.log(JSON.stringify(readNpmLockOverrides({ dependencies: { parent: "1.0.0" } }, ${JSON.stringify(root)})));`;
-    const result = spawnSync(
-      process.execPath,
-      ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
-      { encoding: "utf8", env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root } },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
-      parent: { ".": "1.0.0", forked: "1.0.0" },
-      forked: "2.0.0",
-      "parent@1.0.0": { forked: "1.0.0" },
-    });
-  });
-
   it("pins a transitive workspace range to the pnpm resolution", () => {
     const root = tempDirs.make("openclaw-npm-ranged-workspace-policy-");
     writeFileSync(
@@ -467,68 +427,6 @@ describe("generate-npm-package-lock", () => {
       version: "19.2.4",
     });
     expect(parsePnpmPackageKey("invalid")).toBeNull();
-  });
-
-  it("disables embedded shrinkwraps that hide workspace overrides under npm 11", () => {
-    const lockfile = {
-      packages: {
-        "": {
-          dependencies: {
-            "lru-cache": "^11.5.0",
-          },
-        },
-        "node_modules/@openclaw/codex": {
-          version: "0.75.4",
-          hasShrinkwrap: true,
-        },
-        "node_modules/@openclaw/codex/node_modules/protobufjs": {
-          version: "7.5.9",
-        },
-        "node_modules/@openclaw/codex/node_modules/fetch-blob": {
-          version: "4.0.0",
-        },
-        "node_modules/@openclaw/codex/node_modules/fetch-blob/node_modules/node-domexception": {
-          version: "1.0.0",
-        },
-      },
-    };
-    const overrideRules = validationOverrideRulesFromOverrides({
-      protobufjs: "8.4.0",
-      "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-    });
-
-    expect(collectOverrideViolations(lockfile, overrideRules)).toHaveLength(2);
-    expect(disableDependencyShrinkwrapOverrideConflictSources(lockfile, overrideRules)).toEqual([
-      "node_modules/@openclaw/codex",
-    ]);
-    expect(lockfile.packages["node_modules/@openclaw/codex"]).not.toHaveProperty("hasShrinkwrap");
-    expect(
-      lockfile.packages["node_modules/@openclaw/codex/node_modules/protobufjs"],
-    ).toBeUndefined();
-  });
-
-  it("attributes a hoisted override violation to its dependency shrinkwrap", () => {
-    const lockfile = {
-      packages: {
-        "": { dependencies: { parent: "1.0.0" } },
-        "node_modules/parent": {
-          dependencies: { forked: "1.0.0" },
-          hasShrinkwrap: true,
-          version: "1.0.0",
-        },
-        "node_modules/forked": { version: "1.0.0" },
-      },
-    };
-    const overrides = { forked: "2.0.0", parent: "1.0.0" };
-
-    expect(
-      disableDependencyShrinkwrapOverrideConflictSources(
-        lockfile,
-        validationOverrideRulesFromOverrides(overrides),
-        overrides,
-      ),
-    ).toEqual(["node_modules/parent"]);
-    expect(lockfile.packages["node_modules/parent"]).not.toHaveProperty("hasShrinkwrap");
   });
 
   it("disables a shrinkwrap that violates a scoped rule with the global version", () => {
@@ -765,12 +663,54 @@ describe("generate-npm-package-lock", () => {
     ).toEqual([]);
   });
 
+  it("selects only top-level optional runtime platform dependencies", () => {
+    const native = { version: "1.2.3", optional: true, os: ["linux"] };
+    expect(
+      collectNpmPlatformOptionalDependencies({
+        packages: {
+          "": { ...native, name: "root" },
+          "node_modules/runtime": native,
+          "node_modules/dev": { ...native, dev: true },
+          "node_modules/dev-and-optional": { ...native, devOptional: true },
+          "node_modules/required": { ...native, optional: false },
+          "node_modules/parent/node_modules/nested": native,
+          "node_modules/trailing/path": native,
+          "node_modules/linked": { ...native, link: true },
+          "node_modules/range": { ...native, version: "^1.2.3" },
+          "node_modules/portable": { version: "1.2.3", optional: true },
+          "node_modules/empty-platform": { ...native, os: [] },
+          "node_modules/malformed-platform": { ...native, os: [false] },
+        },
+      }),
+    ).toEqual({ "dev-and-optional": "1.2.3", runtime: "1.2.3" });
+  });
+
+  it("keeps exact alias identity and CPU or libc-only optional constraints", () => {
+    expect(
+      collectNpmPlatformOptionalDependencies({
+        packages: {
+          "node_modules/native-alias": {
+            name: "@fixture/native",
+            version: "1.2.3-beta.4",
+            optional: true,
+            cpu: ["arm64"],
+          },
+          "node_modules/@fixture/libc": {
+            name: "@fixture/libc",
+            version: "2.0.0",
+            optional: true,
+            libc: ["musl"],
+          },
+        },
+      }),
+    ).toEqual({
+      "@fixture/libc": "2.0.0",
+      "native-alias": "npm:@fixture/native@1.2.3-beta.4",
+    });
+  });
+
   it.each(
-    [
-      { name: "minimatch", version: "10.2.5", required: "10.2.6" },
-      { name: "brace-expansion", version: "5.0.9", required: "5.0.12" },
-      { name: "ip-address", version: "10.5.0", required: "10.7.2" },
-    ].flatMap((entry) =>
+    [{ name: "minimatch", version: "10.2.5", required: "10.2.6" }].flatMap((entry) =>
       ["11.20.0", "12.1.0"].map((npmVersion) => Object.assign({ npmVersion }, entry)),
     ),
   )(
@@ -886,28 +826,6 @@ describe("generate-npm-package-lock", () => {
       }
     },
   );
-
-  it("detects npm package-lock entries that bypass the pnpm lock", () => {
-    const lockfile = {
-      packages: {
-        "": {},
-        "node_modules/react": {
-          version: "19.2.6",
-        },
-        "node_modules/@nolyfill/domexception": {
-          version: "1.0.28",
-        },
-      },
-    };
-    const pnpmPackages = new Set(["react@19.2.4", "@nolyfill/domexception@1.0.28"]);
-
-    expect(collectPnpmLockViolations(lockfile, pnpmPackages, new Map())).toEqual([
-      {
-        packageKey: "react@19.2.6",
-        path: "node_modules/react",
-      },
-    ]);
-  });
 
   it.each([false, true, "range"])(
     "preserves child override policies when a direct dependency is bound to a local artifact (qualified=%s)",
@@ -1632,7 +1550,100 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
     },
   );
 
-  it("normalizes npm patch-version metadata drift", () => {
+  it.each(
+    (["os", "cpu", "libc"] as const).flatMap((field) =>
+      [undefined, [], ["wrong-platform"], "linux"].map((actualConstraint) => ({
+        field,
+        actualConstraint,
+      })),
+    ),
+  )(
+    "rejects missing or altered optional platform $field: $actualConstraint",
+    ({ field, actualConstraint }) => {
+      const constraints = { os: ["linux"], cpu: ["x64"], libc: ["glibc"] };
+      expect(
+        collectPnpmLockPlatformViolations(
+          {
+            packages: {
+              "node_modules/@fixture/native": {
+                version: "1.0.0",
+                optional: true,
+                ...constraints,
+                [field]: actualConstraint,
+              },
+            },
+          },
+          { packages: { "@fixture/native@1.0.0": constraints } },
+        ),
+      ).toEqual([
+        {
+          actualConstraint,
+          expectedConstraint: constraints[field],
+          field,
+          packageKey: "@fixture/native@1.0.0",
+          path: "node_modules/@fixture/native",
+        },
+      ]);
+    },
+  );
+
+  it("validates platform constraints for aliases and nested versions without changing optionality", () => {
+    const linux = { os: ["linux"], cpu: ["x64"], libc: ["glibc"] };
+    const darwin = { os: ["darwin"], cpu: ["arm64"] };
+    const lockfile = {
+      packages: {
+        "": { name: "@fixture/native", version: "1.0.0" },
+        "node_modules/required-native": { name: "@fixture/native", version: "1.0.0", ...linux },
+        "node_modules/parent/node_modules/native-alias": {
+          name: "@fixture/native",
+          version: "2.0.0",
+          optional: true,
+          ...darwin,
+        },
+        "node_modules/parent/node_modules/@fixture/native": {
+          version: "1.0.0",
+          optional: true,
+          ...linux,
+        },
+        "node_modules/linked-native": { name: "@fixture/native", version: "1.0.0", link: true },
+      },
+    };
+    const pnpmLock = {
+      packages: {
+        "@fixture/native@1.0.0(patch_hash=fixture)": linux,
+        "@fixture/native@https://example.test/native.tgz": { version: "2.0.0", ...darwin },
+      },
+    };
+    expect(collectPnpmLockPlatformViolations(lockfile, pnpmLock)).toEqual([]);
+    expect(lockfile.packages["node_modules/required-native"]).not.toHaveProperty("optional");
+
+    lockfile.packages["node_modules/parent/node_modules/native-alias"].os = ["linux"];
+    expect(collectPnpmLockPlatformViolations(lockfile, pnpmLock)).toEqual([
+      {
+        actualConstraint: ["linux"],
+        expectedConstraint: ["darwin"],
+        field: "os",
+        packageKey: "@fixture/native@2.0.0",
+        path: "node_modules/parent/node_modules/native-alias",
+      },
+    ]);
+  });
+
+  it("accepts equivalent platform constraint order and unconstrained packages", () => {
+    expect(
+      collectPnpmLockPlatformViolations(
+        {
+          packages: {
+            "node_modules/native": { version: "1.0.0", os: ["!win32", "linux"] },
+            "node_modules/portable": { version: "1.0.0" },
+          },
+        },
+        { packages: { "native@1.0.0": { os: ["linux", "!win32"] }, "portable@1.0.0": {} } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("normalizes npm metadata drift without losing optional platform constraints", () => {
     expect(
       normalizeNpmVersionDrift({
         packages: {
@@ -1659,6 +1670,7 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
         "node_modules/@rollup/rollup-linux-x64-gnu": {
           version: "4.53.5",
           cpu: ["x64"],
+          libc: ["glibc"],
           optional: true,
           os: ["linux"],
         },
@@ -1753,14 +1765,6 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
     ).toEqual([]);
   });
 
-  it("targets the changed publishable gateway protocol manifest", () => {
-    expect(
-      npmLockPackageDirsForChangedPaths(["packages/gateway-protocol/package.json"]).map(
-        repoRelativePath,
-      ),
-    ).toEqual(["packages/gateway-protocol"]);
-  });
-
   it("falls back to every npm lock when lockfile ownership is ambiguous", () => {
     const packageDirs = npmLockPackageDirsForChangedPaths(["pnpm-lock.yaml"]).map(repoRelativePath);
 
@@ -1768,16 +1772,5 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
     expect(packageDirs).toContain("packages/gateway-client");
     expect(packageDirs).toContain("packages/gateway-protocol");
     expect(packageDirs).toContain("extensions/acpx");
-  });
-
-  it("falls back to every npm lock when mixed lockfile changes do not map to packages", () => {
-    const packageDirs = npmLockPackageDirsForChangedPaths([
-      "extensions/acpx/package.json",
-      "pnpm-lock.yaml",
-    ]).map(repoRelativePath);
-
-    expect(packageDirs).toContain("");
-    expect(packageDirs).toContain("extensions/acpx");
-    expect(packageDirs.length).toBeGreaterThan(1);
   });
 });

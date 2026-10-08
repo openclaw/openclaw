@@ -21,10 +21,13 @@ import {
   getLatestSubagentRunByChildSessionKeyFromRuns,
 } from "./subagent-registry-queries.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { listUnsettledRequesterChildrenInRuns } from "./subagent-registry-requester-yield.js";
 import { claimSubagentYieldInRuns } from "./subagent-registry-run-pause.js";
 import {
   getSubagentRunsSnapshotForRead,
+  getSubagentSessionListRunsSnapshotForRead,
+  withSubagentRunReadSnapshot,
   prepareSubagentRunsSnapshotForRunIds,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
@@ -33,7 +36,7 @@ import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
   restoreOnce: (context?: OpenClawStateWorkerContext) => Promise<void>;
-  startAnnounceCleanup: (runId: string, entry: SubagentRunRecord) => boolean;
+  startAnnounceCleanup: (entry: SubagentRunRecord) => boolean;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
   markRequesterYielded: SubagentLifecycleController["markRequesterTurnYielded"];
 }) {
@@ -94,9 +97,9 @@ export function createSubagentRegistryPublicApi(config: {
       {
         runs,
         onPublished: (postimages) => {
-          for (const [runId, entry] of postimages) {
+          for (const entry of postimages.values()) {
             if (entry && typeof entry.cleanupCompletedAt !== "number") {
-              startAnnounceCleanup(runId, entry);
+              startAnnounceCleanup(entry);
             }
           }
         },
@@ -240,9 +243,9 @@ export function createSubagentRegistryPublicApi(config: {
     groupId: string,
     requesterSessionKey?: string,
     requesterAgentId?: string,
-  ): SubagentRunRecord[] {
+  ): SubagentRunReadRecord[] {
     return listSwarmRunsForGroupFromRuns(
-      readRuns(),
+      getSubagentSessionListRunsSnapshotForRead(runs),
       groupId,
       requesterSessionKey,
       requesterAgentId,
@@ -250,23 +253,33 @@ export function createSubagentRegistryPublicApi(config: {
   }
 
   /** Resolve a collector reserved by a replay-safe host bridge request. */
-  function getSwarmRunByLaunchReplayKey(
+  async function getSwarmRunByLaunchReplayKey(
     replayKey: string,
     requesterSessionKey?: string,
     requesterAgentId?: string,
-  ): SubagentRunRecord | undefined {
+  ): Promise<SubagentRunRecord | undefined> {
     const key = replayKey.trim();
     const requesterKey = requesterSessionKey?.trim();
     if (!key) {
       return undefined;
     }
-    return [...readRuns().values()].find(
-      (entry) =>
-        entry.collect === true &&
-        entry.swarmLaunchReplayKey === key &&
-        (!requesterKey ||
-          (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
-        (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
+    return withSubagentRunReadSnapshot(
+      runs,
+      (snapshot) => ({
+        runIds: [...snapshot.values()]
+          .filter(
+            (entry) =>
+              entry.collect === true &&
+              entry.swarmLaunchReplayKey === key &&
+              (!requesterKey ||
+                (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
+              (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
+          )
+          .map((entry) => entry.runId),
+        sessionKeys: [],
+      }),
+      (_selection, selected) => selected.values().next().value,
+      "all",
     );
   }
 
@@ -274,7 +287,11 @@ export function createSubagentRegistryPublicApi(config: {
     requesterSessionKey: string,
     options?: { collect?: boolean; requesterAgentId?: string },
   ): number {
-    return countActiveRunsForSessionFromRuns(readRuns(), requesterSessionKey, options);
+    return countActiveRunsForSessionFromRuns(
+      new Map([...getSubagentSessionListRunsSnapshotForRead(runs), ...runs]),
+      requesterSessionKey,
+      options,
+    );
   }
 
   /** Records sessions_yield before the active requester run is aborted. */

@@ -22,11 +22,6 @@ export type MatrixResolvedAllowlistEntry = {
   id: string;
 };
 
-type MatrixResolvedUserAllowlist = {
-  entries: string[];
-  resolvedEntries: MatrixResolvedAllowlistEntry[];
-};
-
 function normalizeMatrixUserLookupEntry(raw: string): string {
   return raw
     .replace(/^matrix:/i, "")
@@ -186,7 +181,7 @@ async function resolveMatrixMonitorUserAllowlist(params: {
   failClosedOnUnresolved?: boolean;
   runtime: RuntimeEnv;
   resolveTargets: ResolveMatrixTargetsFn;
-}): Promise<MatrixResolvedUserAllowlist> {
+}) {
   const allowList = (params.list ?? []).map(String);
   if (allowList.length === 0) {
     return { entries: allowList, resolvedEntries: [] };
@@ -432,13 +427,7 @@ export async function resolveMatrixMonitorConfig(params: {
   roomsConfig?: MatrixRoomsConfig;
   runtime: RuntimeEnv;
   resolveTargets?: ResolveMatrixTargetsFn;
-}): Promise<{
-  allowFrom: string[];
-  allowFromResolvedEntries: MatrixResolvedAllowlistEntry[];
-  groupAllowFrom: string[];
-  groupAllowFromResolvedEntries: MatrixResolvedAllowlistEntry[];
-  roomsConfig?: MatrixRoomsConfig;
-}> {
+}) {
   const resolveTargets = params.resolveTargets ?? resolveMatrixTargets;
 
   const [allowFrom, groupAllowFrom, roomsConfig] = await Promise.all([

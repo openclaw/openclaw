@@ -181,9 +181,13 @@ export type TurnLatencyStats = {
 export type AcpSessionManagerDeps = {
   listAcpSessions: typeof listAcpSessionEntries;
   loadSessionEntry: typeof readAcpSessionEntry;
-  loadSessionEntryAsync: typeof readAcpSessionEntryAsync;
+  loadSessionEntryAsync: (
+    params: Parameters<typeof readAcpSessionEntryAsync>[0],
+  ) => ReturnType<typeof readAcpSessionEntryAsync>;
   prepareSessionControlRead: typeof prepareAcpSessionControlRead;
-  upsertSessionMeta: typeof upsertAcpSessionMeta;
+  upsertSessionMeta: (
+    params: Parameters<typeof upsertAcpSessionMeta>[0],
+  ) => ReturnType<typeof upsertAcpSessionMeta>;
   upsertSessionMetaForControl: typeof upsertAcpSessionMetaForControl;
   getRuntimeBackend: typeof getAcpRuntimeBackend;
   requireRuntimeBackend: typeof requireAcpRuntimeBackend;

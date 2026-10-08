@@ -23,7 +23,6 @@ export function getSubagentSessionStartedAt(
   return asFiniteNumber(entry?.sessionStartedAt) ?? asFiniteNumber(entry?.execution.startedAt);
 }
 
-/** Computes accumulated runtime including the current live run when still active. */
 export function getSubagentSessionRuntimeMs(
   entry: SubagentSessionRuntimeRecord | null | undefined,
   now = Date.now(),
@@ -44,7 +43,6 @@ export function getSubagentSessionRuntimeMs(
   return Math.max(0, accumulatedRuntimeMs + Math.max(0, currentRunEndedAt - startedAt));
 }
 
-/** Maps persisted run outcome fields to the compact session status shown in tools/UI. */
 export function resolveSubagentSessionStatus(
   entry: SubagentSessionStatusRecord | null | undefined,
 ): "queued" | "running" | "interrupted" | "killed" | "failed" | "timeout" | "done" | undefined {

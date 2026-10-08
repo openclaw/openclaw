@@ -3,6 +3,7 @@ import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
+import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
@@ -43,20 +44,24 @@ import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 // PR provisioning retains allocation and template owners without the application runtime.
 const provisionRegistry = createWorkerOperationRegistry<
   WorktreeTemplateWorkerOperations &
-    Pick<OpenClawStateWorkerOperations, "worktrees.reserveCapacity">
+    Pick<OpenClawStateWorkerOperations, "worktrees.reserveCapacity" | "worktrees.recoverPending">
 >({
   worktrees: async () => {
-    const [templates, reserveCapacity] = await Promise.all([
+    const [templates, reserveCapacity, recoverPending] = await Promise.all([
       import("../agents/worktrees/template-registry.worker.js").then(
         (loaded) => loaded.worktreeTemplateOperations,
       ),
       import("../agents/worktrees/capacity.worker.js").then(
         (loaded) => loaded.reserveWorktreeCapacityInWorker,
       ),
+      import("../agents/worktrees/registry-run-end.worker.js").then(
+        (loaded) => loaded.recoverPendingWorktreesInWorker,
+      ),
     ]);
     return {
       ...templates,
       "worktrees.reserveCapacity": reserveCapacity,
+      "worktrees.recoverPending": recoverPending,
     };
   },
 });
@@ -144,7 +149,8 @@ function createSharedStateWorkerBackend(
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (
         commandType.startsWith("worktrees.templates.") ||
-        commandType === "worktrees.reserveCapacity"
+        commandType === "worktrees.reserveCapacity" ||
+        commandType === "worktrees.recoverPending"
       ) {
         return provisionRegistry.prepare(commandType);
       }
@@ -282,10 +288,22 @@ function createSharedStateWorkerBackend(
         );
       }
       if (command.type === "database.walMaintenance") {
+        const database = open();
+        const admit = (stage: "transaction" | "commit") => {
+          requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+        };
         return (
-          open().walMaintenance.maintainPeriodic?.(command.input, (stage) => {
-            requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
-          }) ?? { reclaimedPages: 0 }
+          database.walMaintenance.maintainPeriodic?.(command.input, admit, () =>
+            runOpenClawStateWriteTransaction(
+              ({ db }) => {
+                admit("transaction");
+                refreshSqlitePlannerStatistics(db);
+                admit("commit");
+              },
+              { database },
+              { busyTimeoutMs: 0, operationLabel: "state.planner-statistics" },
+            ),
+          ) ?? { reclaimedPages: 0 }
         );
       }
       if (command.type === "database.inspectIdle") {

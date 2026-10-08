@@ -10,6 +10,7 @@ import type {
   SessionsPatchManyResult,
   SessionsRecoverResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import type { SchemaContract } from "../../../../packages/gateway-protocol/src/schema-contract.js";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
@@ -64,31 +65,30 @@ type SessionDeletionFact = {
 export type SessionGroupMutationResult = "completed" | "stale";
 export type SessionGroupDefaultsStatus = "idle" | "loading" | "ready" | "unavailable";
 
-export type SessionListOptions = {
+export type SessionListOptions = SchemaContract<
+  Omit<
+    SessionsListParams,
+    | "source"
+    | "activityPulseBoundaries"
+    | "activeOnly"
+    | "requireLastInteraction"
+    | "sortBy"
+    | "includeActivitySummary"
+    | "label"
+    | "projectId"
+    | "workspaceDir"
+    | "group"
+    | "pinned"
+    | "creatorId"
+    | "profileRelation"
+    | "involvingProfileId"
+    | "includePeople"
+    | "archived"
+  >
+> & {
   source?: SessionsListParams["source"];
-  rowMode?: "compact";
-  agentId?: string;
-  spawnedBy?: string;
-  boardFace?: "chat" | "dashboard";
-  hasBoard?: boolean;
-  activeMinutes?: number;
-  search?: string;
-  ownerId?: string;
-  ownerFirst?: boolean;
-  involvingMe?: boolean;
-  offset?: number;
-  limit?: number;
   /** Physical read size for a managed window that needs every page enriched. */
   pageSize?: number;
-  includeGlobal?: boolean;
-  includeUnknown?: boolean;
-  configuredAgentsOnly?: boolean;
-  excludeSubagents?: boolean;
-  excludeCron?: boolean;
-  excludeSystem?: boolean;
-  includeDerivedTitles?: boolean;
-  includeLastMessage?: boolean;
-  includeOwnerSessionCounts?: boolean;
   archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };
@@ -108,7 +108,10 @@ export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "app
 export type SessionListSnapshot = Pick<
   SessionState,
   "result" | "agentId" | "loading" | "error" | "startupPending"
->;
+> & {
+  /** Outcome of the latest settled managed-list read, including suppressed availability errors. */
+  readSucceeded?: boolean;
+};
 
 export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
 

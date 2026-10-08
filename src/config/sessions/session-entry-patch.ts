@@ -19,6 +19,7 @@ import type {
   AgentDatabaseExecutionScope,
   OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution-contract.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
@@ -33,6 +34,10 @@ import type {
   SessionEntryPatchGuard,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
+import {
+  prepareSessionSourceAuthority,
+  type PreparedSessionSourceAuthority,
+} from "./session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export async function patchSessionEntryInWorker(params: {
@@ -42,36 +47,74 @@ export async function patchSessionEntryInWorker(params: {
   selection: SessionEntryPatchSelection;
   assertCurrent: () => void;
   guard?: SessionEntryPatchGuard;
+  preparedSource?: PreparedSessionSourceAuthority;
   prepare(snapshot: SqliteLifecycleTargetSnapshot): Promise<SessionEntryPatchCommit | undefined>;
   onCommitted?: (entry: SessionEntry) => void;
 }): Promise<{ entry: SessionEntry | null; wrote: boolean }> {
-  return runSessionEntryWorkerOperation<
+  let source = params.preparedSource;
+  const sourceChecks = source?.checks ?? [];
+  const releaseSource = () => {
+    const held = source;
+    source = undefined;
+    return held?.release?.();
+  };
+  let input: SessionEntryPatchCommit | undefined;
+  return await runSessionEntryWorkerOperation<
     SessionEntryPatchCommitted,
     { entry: SessionEntry | null; wrote: boolean }
   >({
     ...params,
+    releaseSource,
     candidateKind: "session-entry-patch",
-    assertPrepared: () => params.guard?.assertCurrent?.(),
+    assertPrepared: () => {
+      params.guard?.assertCurrent?.();
+      source?.assertCurrent();
+    },
     assertCandidate: (candidate) => {
+      if (candidate.refusedSource) {
+        sourceChecks[candidate.refusedSource.index]?.refuse(candidate.refusedSource.facts);
+        throw new Error("Session source refusal omitted its prepared assertion");
+      }
       if (candidate.entry !== null) {
         params.guard?.assertCurrent?.();
+        source?.assertCurrent();
       }
     },
+    prepareWorker: (execution, executionSource) => ({
+      async prepare() {
+        params.assertCurrent();
+        params.guard?.assertCurrent?.();
+        source?.assertCurrent();
+        const snapshot = await runOpenClawAgentWorkerWrite(params.database, () =>
+          execution.runExisting(executionSource, (worker) =>
+            worker.execute({ type: "session.entry.patch.prepare", input: params.selection }),
+          ),
+        );
+        if (!snapshot) {
+          throw new Error("Session database disappeared before patching");
+        }
+        params.assertCurrent();
+        params.guard?.assertCurrent?.();
+        // The foreground FIFO stays held; async planners may read through it before commit.
+        input = await params.prepare(snapshot);
+        params.assertCurrent();
+        params.guard?.assertCurrent?.();
+      },
+      beforeWrite() {},
+      async release() {},
+    }),
     async run(worker, commit) {
-      const snapshot = await worker.execute({
-        type: "session.entry.patch.prepare",
-        input: params.selection,
-      });
-      params.assertCurrent();
-      params.guard?.assertCurrent?.();
-      const input = await params.prepare(snapshot);
-      params.assertCurrent();
-      params.guard?.assertCurrent?.();
-      return input
-        ? commit(() => worker.execute({ type: "session.entry.patch.commit", input }))
-        : { entry: null, wrote: false };
+      const prepared = input;
+      if (!prepared) {
+        return { entry: null, wrote: false };
+      }
+      if (source) {
+        prepared.sources = sourceChecks.map((check) => check.predicate);
+        source.assertCurrent();
+      }
+      return commit(() => worker.execute({ type: "session.entry.patch.commit", input: prepared }));
     },
-    onCommitted(committed, published, identity) {
+    async onCommitted(committed, published, identity) {
       try {
         if (committed.publication && committed.entry) {
           params.onCommitted?.(structuredClone(committed.entry));
@@ -86,6 +129,11 @@ export async function patchSessionEntryInWorker(params: {
             published.prepared,
           );
         }
+      }
+      await releaseSource();
+      if (committed.entry !== null && params.guard?.source) {
+        source = await prepareSessionSourceAuthority(params.guard.source);
+        source.assertCurrent();
       }
       return { entry: committed.entry, wrote: Boolean(committed.publication) };
     },
@@ -102,6 +150,7 @@ export async function runSessionEntryWorkerOperation<
   assertCurrent: () => void;
   assertPrepared?: () => void;
   assertCandidate?: (candidate: Candidate) => void;
+  releaseSource?: () => void | Promise<void>;
   candidateKind: Candidate["kind"];
   retainedExecution?: OpenClawAgentDatabaseExecution;
   prepareWorker?: SessionEntryWorkerPreparation;
@@ -134,13 +183,16 @@ export async function runSessionEntryWorkerOperation<
 }): Promise<Result> {
   let publication: ReturnType<typeof retainSessionEntryWorkerPublication> | undefined;
   let committing = false;
-  let candidate: Candidate | undefined;
   let transferId: number | undefined;
   let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
   let transferred = false;
-  let admitted:
-    | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
-    | undefined;
+  let settlement: {
+    candidate?: Candidate;
+    admitted?: {
+      admission: SqliteWorkerOperationAdmission;
+      retained: RetainedWorkerTransactionAdmission;
+    };
+  } = {};
   const matchesReceipt = (raw: unknown) => {
     const receipt = params.nativeSettlement ? params.nativeSettlement.readCommitReceipt(raw) : raw;
     return (
@@ -169,6 +221,11 @@ export async function runSessionEntryWorkerOperation<
       });
       const result = await execution.runExisting(source, (worker) =>
         params.run(worker, async (send) => {
+          // One locked callback may settle several independent commits in this FIFO turn.
+          settlement = {};
+          transferId = undefined;
+          receiver = undefined;
+          transferred = false;
           committing = true;
           const outcome = await send().then(
             (value) => ({ ok: true as const, value }),
@@ -176,16 +233,16 @@ export async function runSessionEntryWorkerOperation<
           );
           let acknowledged = outcome.ok && matchesReceipt(outcome.value);
           let unknown = !outcome.ok && hasSqliteWorkerOutcomeUnknown(outcome.error);
-          if (admitted) {
-            await admitted.retained.settled;
-            acknowledged ||= matchesReceipt(admitted.admission.committed?.facts);
-            unknown = admitted.admission.settlement?.kind !== "completed";
+          if (settlement.admitted) {
+            await settlement.admitted.retained.settled;
+            acknowledged ||= matchesReceipt(settlement.admitted.admission.committed?.facts);
+            unknown = settlement.admitted.admission.settlement?.kind !== "completed";
           }
           const nativeOutcome = await params.nativeSettlement?.settle(outcome, acknowledged);
           unknown ||=
             nativeOutcome === "unknown" ||
-            Boolean(admitted && !acknowledged && nativeOutcome !== "rolled-back");
-          const committed = acknowledged ? candidate : undefined;
+            Boolean(settlement.admitted && !acknowledged && nativeOutcome !== "rolled-back");
+          const committed = acknowledged ? settlement.candidate : undefined;
           let publicationError: unknown;
           let publishedResult: { value: Result } | undefined;
           try {
@@ -247,12 +304,12 @@ export async function runSessionEntryWorkerOperation<
       if (!committing) {
         return;
       }
-      if (!isRecord(facts) || !matchesReceipt(facts.publication) || !candidate) {
+      if (!isRecord(facts) || !matchesReceipt(facts.publication) || !settlement.candidate) {
         throw new Error("Session patch commit omitted its exact candidate");
       }
-      params.assertCandidate?.(candidate);
-      admitted = { admission, retained };
-      const receipt = candidate.publication;
+      params.assertCandidate?.(settlement.candidate);
+      settlement.admitted = { admission, retained };
+      const receipt = settlement.candidate.publication;
       if (receipt) {
         publication?.begin(
           receipt.changedKeys,
@@ -296,7 +353,7 @@ export async function runSessionEntryWorkerOperation<
         transferId = handle.id;
         receiver = createSqliteWorkerTransferReceiver(handle, (record) => {
           if (
-            candidate ||
+            settlement.candidate ||
             record.kind !== "patch" ||
             !isRecord(record.value) ||
             record.value.kind !== params.candidateKind
@@ -304,7 +361,7 @@ export async function runSessionEntryWorkerOperation<
             throw new Error("Session patch returned an invalid publication candidate");
           }
           // SAFETY: This command's paired kernel supplies the complete candidate through its transfer.
-          candidate = record.value as Candidate;
+          settlement.candidate = record.value as Candidate;
         });
       } else if (isRecord(value) && value.kind === "session-entry-patch-frame" && receiver) {
         // SAFETY: The receiver validates framing, byte bounds, ordering and record completeness.
@@ -314,5 +371,6 @@ export async function runSessionEntryWorkerOperation<
       }
     },
     params.nativeSettlement?.onAdmission,
+    params.releaseSource,
   );
 }

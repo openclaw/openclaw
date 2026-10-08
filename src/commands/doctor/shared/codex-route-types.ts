@@ -17,8 +17,6 @@ export type UnsupportedCodexCompactionOverride = {
 };
 
 export type LegacyLosslessCompactionConfig = {
-  path: string;
-  compactionPath: string;
   providerPath: string;
   providerValue: string;
   modelPath?: string;
@@ -50,11 +48,6 @@ export type ConfigRouteRepairResult = {
   changes: CodexRouteHit[];
   runtimePolicyChanges: string[];
   unsupportedCompactionChanges: string[];
-};
-
-export type SessionRouteRepairResult = {
-  changed: boolean;
-  sessionKeys: string[];
 };
 
 export type CodexSessionRouteRepairSummary = {

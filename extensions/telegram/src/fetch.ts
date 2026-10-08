@@ -133,12 +133,7 @@ const FALLBACK_RETRY_ERROR_CODES = [
   "UND_ERR_SOCKET",
 ] as const;
 
-function createDnsResultOrderLookup(
-  order: TelegramDnsResultOrder | null,
-): LookupFunction | undefined {
-  if (!order) {
-    return undefined;
-  }
+function createDnsResultOrderLookup(order: TelegramDnsResultOrder): LookupFunction {
   const lookup = dns.lookup as unknown as (
     hostname: string,
     options: LookupOptions,
@@ -163,41 +158,26 @@ function createDnsResultOrderLookup(
 const TELEGRAM_KEEPALIVE_INITIAL_DELAY_MS = 30_000;
 
 function buildTelegramConnectOptions(params: {
-  autoSelectFamily: boolean | null;
-  dnsResultOrder: TelegramDnsResultOrder | null;
+  autoSelectFamily: boolean;
+  dnsResultOrder: TelegramDnsResultOrder;
   forceIpv4: boolean;
 }) {
-  const connect: {
-    autoSelectFamily?: boolean;
-    autoSelectFamilyAttemptTimeout?: number;
-    family?: number;
-    keepAlive?: boolean;
-    keepAliveInitialDelay?: number;
-    lookup?: LookupFunction;
-  } = {
+  return {
     keepAlive: true,
     keepAliveInitialDelay: TELEGRAM_KEEPALIVE_INITIAL_DELAY_MS,
+    ...(params.forceIpv4
+      ? { family: 4, autoSelectFamily: false }
+      : {
+          autoSelectFamily: params.autoSelectFamily,
+          autoSelectFamilyAttemptTimeout: TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS,
+        }),
+    lookup: createDnsResultOrderLookup(params.dnsResultOrder),
   };
-
-  if (params.forceIpv4) {
-    connect.family = 4;
-    connect.autoSelectFamily = false;
-  } else if (typeof params.autoSelectFamily === "boolean") {
-    connect.autoSelectFamily = params.autoSelectFamily;
-    connect.autoSelectFamilyAttemptTimeout = TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS;
-  }
-
-  const lookup = createDnsResultOrderLookup(params.dnsResultOrder);
-  if (lookup) {
-    connect.lookup = lookup;
-  }
-
-  return connect;
 }
 
 function resolveTelegramDispatcherPolicy(params: {
-  autoSelectFamily: boolean | null;
-  dnsResultOrder: TelegramDnsResultOrder | null;
+  autoSelectFamily: boolean;
+  dnsResultOrder: TelegramDnsResultOrder;
   useEnvProxy: boolean;
   forceIpv4: boolean;
   proxyUrl?: string;
@@ -420,7 +400,6 @@ export type TelegramTransport = {
 
 function createTelegramTransportAttempts(params: {
   defaultDispatcher: ReturnType<typeof createTelegramDispatcher>;
-  allowFallback: boolean;
   fallbackPolicy?: PinnedDispatcherPolicy;
   ownedDispatchers: Set<TelegramDispatcher>;
 }): TelegramTransportAttempt[] {
@@ -451,7 +430,7 @@ function createTelegramTransportAttempts(params: {
   const attempts = [
     createAttempt(params.defaultDispatcher.effectivePolicy, params.defaultDispatcher.dispatcher),
   ];
-  if (!params.allowFallback || !params.fallbackPolicy) {
+  if (!params.fallbackPolicy) {
     return attempts;
   }
   attempts.push({
@@ -459,17 +438,15 @@ function createTelegramTransportAttempts(params: {
     logLevel: "debug",
     logMessage: "fetch fallback: enabling sticky IPv4-only dispatcher",
   });
-  if (TELEGRAM_FALLBACK_IPS.length > 0) {
-    attempts.push({
-      ...createAttempt({
-        ...params.fallbackPolicy,
-        pinnedHostname: { hostname: TELEGRAM_API_HOSTNAME, addresses: [...TELEGRAM_FALLBACK_IPS] },
-      }),
-      logLevel: "warn",
-      logMessage:
-        "fetch fallback: primary connection path failed; trying alternative Telegram API IP",
-    });
-  }
+  attempts.push({
+    ...createAttempt({
+      ...params.fallbackPolicy,
+      pinnedHostname: { hostname: TELEGRAM_API_HOSTNAME, addresses: [...TELEGRAM_FALLBACK_IPS] },
+    }),
+    logLevel: "warn",
+    logMessage:
+      "fetch fallback: primary connection path failed; trying alternative Telegram API IP",
+  });
   return attempts;
 }
 
@@ -492,9 +469,7 @@ export function resolveTelegramTransport(
     ["autoSelectFamily", autoSelectDecision],
     ["dnsResultOrder", dnsDecision],
   ] as const) {
-    if (decision.value !== null) {
-      log.debug(`${name}=${decision.value}${decision.source ? ` (${decision.source})` : ""}`);
-    }
+    log.debug(`${name}=${decision.value} (${decision.source})`);
   }
 
   const effectiveProxyFetch =
@@ -553,7 +528,6 @@ export function resolveTelegramTransport(
   const ownedDispatchers = new Set<TelegramDispatcher>();
   const transportAttempts = createTelegramTransportAttempts({
     defaultDispatcher,
-    allowFallback: allowStickyFallback,
     fallbackPolicy: fallbackDispatcherPolicy,
     ownedDispatchers,
   });
@@ -807,5 +781,3 @@ export function resolveTelegramFetch(
 ): typeof fetch {
   return resolveTelegramTransport(proxyFetch, options).fetch;
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

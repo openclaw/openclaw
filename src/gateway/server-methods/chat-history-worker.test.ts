@@ -361,13 +361,17 @@ it("forwards worker history as text JSON while preserving object callers and tin
     try {
       const tiny = await request(true, 1024);
       expect(tiny.messages).toBeInstanceOf(SerializedJsonArray);
-      expect(
-        JSON.parse(serializeGatewayFrame({ type: "res", payload: tiny }).toString()).payload
-          .messages,
-      ).toHaveLength(1);
+      const messages = JSON.parse(serializeGatewayFrame({ type: "res", payload: tiny }).toString())
+        .payload.messages;
+      expect(messages).toMatchObject(
+        Array.from({ length: 3 }, (_, index) => ({
+          __openclaw: { id: `large-${index}`, truncated: true, reason: "oversized" },
+        })),
+      );
+      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(1024);
       expect(tiny).not.toHaveProperty("omission");
       expect(omissions).toHaveLength(1);
-      expect(omissions[0]).toMatchObject({ action: "truncated", count: 2, limitBytes: 1024 });
+      expect(omissions[0]).toMatchObject({ action: "truncated", count: 3, limitBytes: 1024 });
     } finally {
       stop();
     }

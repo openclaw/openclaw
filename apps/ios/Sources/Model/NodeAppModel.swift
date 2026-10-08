@@ -221,18 +221,16 @@ final class NodeAppModel {
     }
 
     private enum ExecApprovalTerminalVerdict {
-        case allowOnce
-        case allowAlways
-        case deny
+        case decided(ApprovalDecision)
         case expired
         case cancelled
         case resolvedUnknown
 
         var status: String {
             switch self {
-            case .allowOnce, .allowAlways:
+            case .decided(.allowOnce), .decided(.allowAlways):
                 "allowed"
-            case .deny:
+            case .decided(.deny):
                 "denied"
             case .expired:
                 "expired"
@@ -245,12 +243,8 @@ final class NodeAppModel {
 
         var decision: String? {
             switch self {
-            case .allowOnce:
-                ApprovalDecision.allowOnce.rawValue
-            case .allowAlways:
-                ApprovalDecision.allowAlways.rawValue
-            case .deny:
-                ApprovalDecision.deny.rawValue
+            case let .decided(decision):
+                decision.rawValue
             case .expired, .cancelled, .resolvedUnknown:
                 nil
             }
@@ -466,9 +460,6 @@ final class NodeAppModel {
     private var voiceWakeSyncTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDOwnerID: String?
-    private typealias CapabilityHandler = @MainActor @Sendable (NodeAppModel, BridgeInvokeRequest) async throws
-        -> BridgeInvokeResponse
-    private static let capabilityHandlers = NodeAppModel.buildCapabilityHandlers()
     private let gatewayHealthMonitor = GatewayHealthMonitor()
     private var gatewayHealthMonitorDisabled = false
     private let notificationCenter: NotificationCentering
@@ -1591,12 +1582,10 @@ final class NodeAppModel {
             guard shouldApply(),
                   GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
             else { return }
-            await MainActor.run {
-                self.mainSessionBaseKey = mainKey
-                self.gatewaySessionScope = scope
-                self.gatewayAccentColorHex = profileAccentHex ?? accentHex
-                self.synchronizeTalkSessionKey()
-            }
+            self.mainSessionBaseKey = mainKey
+            self.gatewaySessionScope = scope
+            self.gatewayAccentColorHex = profileAccentHex ?? accentHex
+            self.synchronizeTalkSessionKey()
         } catch {
             // Best-effort only.
         }
@@ -1638,21 +1627,19 @@ final class NodeAppModel {
             guard shouldApply(),
                   GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
             else { return }
-            await MainActor.run {
-                self.gatewayDefaultAgentId = decoded.defaultid
-                self.gatewayAgents = decoded.agents
-                self.gatewaySessionScope = decoded.scope.value as? String
-                self.applyMainSessionKey(decoded.mainkey)
+            self.gatewayDefaultAgentId = decoded.defaultid
+            self.gatewayAgents = decoded.agents
+            self.gatewaySessionScope = decoded.scope.value as? String
+            self.applyMainSessionKey(decoded.mainkey)
 
-                let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !selected.isEmpty,
-                   !decoded.agents.contains(where: { $0.id == selected && $0.isSelectableAgent })
-                {
-                    self.selectedAgentId = nil
-                    self.focusedChatSessionKey = nil
-                }
-                self.synchronizeTalkSessionKey()
+            let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !selected.isEmpty,
+               !decoded.agents.contains(where: { $0.id == selected && $0.isSelectableAgent })
+            {
+                self.selectedAgentId = nil
+                self.focusedChatSessionKey = nil
             }
+            self.synchronizeTalkSessionKey()
             if let routingIdentity {
                 await sourceStore.storeSessionRoutingIdentity(routingIdentity)
             }
@@ -1888,10 +1875,9 @@ final class NodeAppModel {
     }
 
     private func markExecApprovalResolutionWriteSettled(
-        _ attempt: ExecApprovalResolutionAttempt?)
+        _ attempt: ExecApprovalResolutionAttempt)
     {
-        guard let attempt,
-              var state = self.activeExecApprovalResolutionAttempts[attempt.key],
+        guard var state = self.activeExecApprovalResolutionAttempts[attempt.key],
               state.token == attempt.token
         else { return }
         state.writeInFlight = false
@@ -2168,13 +2154,8 @@ final class NodeAppModel {
                 message: "CAMERA_DISABLED: enable Camera in iOS Settings → Camera → Allow Camera")
         }
 
-        guard let handler = Self.capabilityHandlers[command] else {
-            return Self.unknownInvokeResponse(req)
-        }
         do {
-            return try await handler(
-                self,
-                Self.scopedWatchNotificationRequest(req, gatewayStableID: gatewayStableID))
+            return try await self.performServiceInvoke(req, gatewayStableID: gatewayStableID)
         } catch is CancellationError {
             if command.hasPrefix("camera.") {
                 self.clearCameraHUD(ownerID: req.id)
@@ -2186,6 +2167,82 @@ final class NodeAppModel {
                 self.updateCameraHUD(ownerID: req.id, text: text, kind: .error, autoHideSeconds: 2.2)
             }
             return Self.failedInvokeResponse(req, code: .unavailable, message: error.localizedDescription)
+        }
+    }
+
+    private func performServiceInvoke(
+        _ req: BridgeInvokeRequest,
+        gatewayStableID: String?) async throws -> BridgeInvokeResponse
+    {
+        switch req.command {
+        case OpenClawLocationCommand.get.rawValue:
+            return try await self.handleLocationInvoke(req)
+        case OpenClawCameraCommand.list.rawValue,
+             OpenClawCameraCommand.snap.rawValue,
+             OpenClawCameraCommand.clip.rawValue:
+            return try await self.handleCameraInvoke(req)
+        case OpenClawScreenCommand.record.rawValue:
+            return try await self.handleScreenRecordInvoke(req)
+        case OpenClawSystemCommand.notify.rawValue:
+            return try await self.handleSystemNotify(req)
+        case OpenClawChatCommand.push.rawValue:
+            return try await self.handleChatPushInvoke(req)
+        case OpenClawDeviceCommand.status.rawValue:
+            return try await Self.successfulInvokeResponse(req, payload: self.deviceStatusService.status())
+        case OpenClawDeviceCommand.info.rawValue:
+            return try Self.successfulInvokeResponse(req, payload: self.deviceStatusService.info())
+        case OpenClawWatchCommand.status.rawValue, OpenClawWatchCommand.notify.rawValue:
+            return try await self.handleWatchInvoke(req, gatewayStableID: gatewayStableID)
+        case OpenClawPhotosCommand.latest.rawValue:
+            let params = (try? Self.decodeParams(OpenClawPhotosLatestParams.self, from: req.paramsJSON)) ??
+                OpenClawPhotosLatestParams()
+            return try await Self.successfulInvokeResponse(req, payload: self.photosService.latest(params: params))
+        case OpenClawContactsCommand.search.rawValue:
+            let params = (try? Self.decodeParams(OpenClawContactsSearchParams.self, from: req.paramsJSON)) ??
+                OpenClawContactsSearchParams()
+            return try await Self.successfulInvokeResponse(
+                req,
+                payload: self.contactsService.search(params: params))
+        case OpenClawContactsCommand.add.rawValue:
+            let params = try Self.decodeParams(OpenClawContactsAddParams.self, from: req.paramsJSON)
+            return try await Self.successfulInvokeResponse(req, payload: self.contactsService.add(params: params))
+        case OpenClawCalendarCommand.events.rawValue:
+            let params = (try? Self.decodeParams(OpenClawCalendarEventsParams.self, from: req.paramsJSON)) ??
+                OpenClawCalendarEventsParams()
+            return try await Self.successfulInvokeResponse(
+                req,
+                payload: self.calendarService.events(params: params))
+        case OpenClawCalendarCommand.add.rawValue:
+            let params = try Self.decodeParams(OpenClawCalendarAddParams.self, from: req.paramsJSON)
+            return try await Self.successfulInvokeResponse(req, payload: self.calendarService.add(params: params))
+        case OpenClawRemindersCommand.list.rawValue:
+            let params = (try? Self.decodeParams(OpenClawRemindersListParams.self, from: req.paramsJSON)) ??
+                OpenClawRemindersListParams()
+            return try await Self.successfulInvokeResponse(req, payload: self.remindersService.list(params: params))
+        case OpenClawRemindersCommand.add.rawValue:
+            let params = try Self.decodeParams(OpenClawRemindersAddParams.self, from: req.paramsJSON)
+            return try await Self.successfulInvokeResponse(req, payload: self.remindersService.add(params: params))
+        case OpenClawMotionCommand.activity.rawValue:
+            let params = (try? Self.decodeParams(OpenClawMotionActivityParams.self, from: req.paramsJSON)) ??
+                OpenClawMotionActivityParams()
+            return try await Self.successfulInvokeResponse(
+                req,
+                payload: self.motionService.activities(params: params))
+        case OpenClawMotionCommand.pedometer.rawValue:
+            let params = (try? Self.decodeParams(OpenClawPedometerParams.self, from: req.paramsJSON)) ??
+                OpenClawPedometerParams()
+            return try await Self.successfulInvokeResponse(
+                req,
+                payload: self.motionService.pedometer(params: params))
+        case OpenClawHealthCommand.summary.rawValue:
+            return try await self.handleHealthInvoke(req)
+        case OpenClawTalkCommand.pttStart.rawValue,
+             OpenClawTalkCommand.pttStop.rawValue,
+             OpenClawTalkCommand.pttCancel.rawValue,
+             OpenClawTalkCommand.pttOnce.rawValue:
+            return try await self.handleTalkInvoke(req)
+        default:
+            return Self.unknownInvokeResponse(req)
         }
     }
 
@@ -2212,24 +2269,6 @@ final class NodeAppModel {
             id: request.id,
             ok: false,
             error: OpenClawNodeError(code: code, message: message))
-    }
-
-    private static func scopedWatchNotificationRequest(
-        _ req: BridgeInvokeRequest,
-        gatewayStableID: String?) -> BridgeInvokeRequest
-    {
-        guard req.command == OpenClawWatchCommand.notify.rawValue,
-              var params = try? decodeParams(OpenClawWatchNotifyParams.self, from: req.paramsJSON)
-        else { return req }
-        // Gateway identity comes from the installed node route, never the request payload.
-        params.gatewayStableID = GatewayStableIdentifier.exact(gatewayStableID)
-        guard let paramsJSON = try? encodePayload(params) else { return req }
-        return BridgeInvokeRequest(
-            type: req.type,
-            id: req.id,
-            command: req.command,
-            paramsJSON: paramsJSON,
-            nodeId: req.nodeId)
     }
 
     private func isBackgroundRestricted(_ command: String) -> Bool {
@@ -2614,12 +2653,7 @@ final class NodeAppModel {
                 }
                 throw error
             }
-            let payload: OpenClawTalkPTTStopPayload = switch start {
-            case let .busy(busyPayload):
-                busyPayload
-            case .started:
-                await self.talkMode.awaitPushToTalkOnce(start)
-            }
+            let payload = await self.talkMode.awaitPushToTalkOnce(start)
             return try Self.successfulInvokeResponse(req, payload: payload)
         case OpenClawTalkCommand.pttStop.rawValue:
             // Interrupt commands invalidate suspended preparation before touching
@@ -2905,114 +2939,17 @@ final class NodeAppModel {
 }
 
 extension NodeAppModel {
-    private static func buildCapabilityHandlers() -> [String: CapabilityHandler] {
-        var handlers: [String: CapabilityHandler] = [:]
-
-        func register(
-            _ commands: [String],
-            handler: @escaping CapabilityHandler)
-        {
-            for command in commands {
-                handlers[command] = handler
-            }
-        }
-
-        func register<Params: Decodable & Sendable>(
-            _ command: String,
-            params: Params.Type = Params.self,
-            fallback: Params? = nil,
-            handler: @escaping @MainActor @Sendable (NodeAppModel, Params) async throws -> some Encodable & Sendable)
-        {
-            register([command]) { model, request in
-                let decoded: Params = if let fallback {
-                    (try? Self.decodeParams(params, from: request.paramsJSON)) ?? fallback
-                } else {
-                    try Self.decodeParams(params, from: request.paramsJSON)
-                }
-                return try await Self.successfulInvokeResponse(request, payload: handler(model, decoded))
-            }
-        }
-
-        register([OpenClawLocationCommand.get.rawValue]) { try await $0.handleLocationInvoke($1) }
-
-        register([
-            OpenClawCameraCommand.list.rawValue,
-            OpenClawCameraCommand.snap.rawValue,
-            OpenClawCameraCommand.clip.rawValue,
-        ]) { try await $0.handleCameraInvoke($1) }
-
-        register([OpenClawScreenCommand.record.rawValue]) { try await $0.handleScreenRecordInvoke($1) }
-
-        register([OpenClawSystemCommand.notify.rawValue]) { try await $0.handleSystemNotify($1) }
-
-        register([OpenClawChatCommand.push.rawValue]) { try await $0.handleChatPushInvoke($1) }
-
-        register([OpenClawDeviceCommand.status.rawValue]) { model, request in
-            try await Self.successfulInvokeResponse(request, payload: model.deviceStatusService.status())
-        }
-        register([OpenClawDeviceCommand.info.rawValue]) { model, request in
-            try Self.successfulInvokeResponse(request, payload: model.deviceStatusService.info())
-        }
-
-        register([
-            OpenClawWatchCommand.status.rawValue,
-            OpenClawWatchCommand.notify.rawValue,
-        ]) { try await $0.handleWatchInvoke($1) }
-
-        register(OpenClawPhotosCommand.latest.rawValue, fallback: OpenClawPhotosLatestParams()) {
-            try await $0.photosService.latest(params: $1)
-        }
-        register(OpenClawContactsCommand.search.rawValue, fallback: OpenClawContactsSearchParams()) {
-            try await $0.contactsService.search(params: $1)
-        }
-        register(OpenClawContactsCommand.add.rawValue, params: OpenClawContactsAddParams.self) {
-            try await $0.contactsService.add(params: $1)
-        }
-        register(OpenClawCalendarCommand.events.rawValue, fallback: OpenClawCalendarEventsParams()) {
-            try await $0.calendarService.events(params: $1)
-        }
-        register(OpenClawCalendarCommand.add.rawValue, params: OpenClawCalendarAddParams.self) {
-            try await $0.calendarService.add(params: $1)
-        }
-        register(OpenClawRemindersCommand.list.rawValue, fallback: OpenClawRemindersListParams()) {
-            try await $0.remindersService.list(params: $1)
-        }
-        register(OpenClawRemindersCommand.add.rawValue, params: OpenClawRemindersAddParams.self) {
-            try await $0.remindersService.add(params: $1)
-        }
-        register(OpenClawMotionCommand.activity.rawValue, fallback: OpenClawMotionActivityParams()) {
-            try await $0.motionService.activities(params: $1)
-        }
-        register(OpenClawMotionCommand.pedometer.rawValue, fallback: OpenClawPedometerParams()) {
-            try await $0.motionService.pedometer(params: $1)
-        }
-
-        register([OpenClawHealthCommand.summary.rawValue]) { try await $0.handleHealthInvoke($1) }
-
-        register([
-            OpenClawTalkCommand.pttStart.rawValue,
-            OpenClawTalkCommand.pttStop.rawValue,
-            OpenClawTalkCommand.pttCancel.rawValue,
-            OpenClawTalkCommand.pttOnce.rawValue,
-        ]) { try await $0.handleTalkInvoke($1) }
-
-        return handlers
-    }
-
-    private func handleWatchInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+    private func handleWatchInvoke(
+        _ req: BridgeInvokeRequest,
+        gatewayStableID: String?) async throws -> BridgeInvokeResponse
+    {
         switch req.command {
         case OpenClawWatchCommand.status.rawValue:
-            let status = await watchMessagingService.status()
-            let payload = OpenClawWatchStatusPayload(
-                supported: status.supported,
-                paired: status.paired,
-                appInstalled: status.appInstalled,
-                reachable: status.reachable,
-                activationState: status.activationState)
-            return try Self.successfulInvokeResponse(req, payload: payload)
+            return try await Self.successfulInvokeResponse(req, payload: self.watchMessagingService.status())
         case OpenClawWatchCommand.notify.rawValue:
             let params = try Self.decodeParams(OpenClawWatchNotifyParams.self, from: req.paramsJSON)
-            let gatewayStableID = GatewayStableIdentifier.exact(params.gatewayStableID)
+            // Gateway identity comes from the installed node route, never the request payload.
+            let gatewayStableID = GatewayStableIdentifier.exact(gatewayStableID)
             var normalizedParams = Self.normalizeWatchNotifyParams(params)
             normalizedParams.gatewayStableID = gatewayStableID
             let title = normalizedParams.title
@@ -3061,11 +2998,7 @@ extension NodeAppModel {
                         notificationCenter: notificationCenter)
                 }
             }
-            let payload = OpenClawWatchNotifyPayload(
-                deliveredImmediately: result.deliveredImmediately,
-                queuedForDelivery: result.queuedForDelivery,
-                transport: result.transport)
-            return try Self.successfulInvokeResponse(req, payload: payload)
+            return try Self.successfulInvokeResponse(req, payload: result)
         default:
             return Self.unknownInvokeResponse(req)
         }
@@ -3124,12 +3057,12 @@ extension NodeAppModel {
     }
 
     fileprivate static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
-        guard let json, let data = json.data(using: .utf8) else {
+        guard let json else {
             throw NSError(domain: "Gateway", code: 20, userInfo: [
                 NSLocalizedDescriptionKey: "INVALID_REQUEST: paramsJSON required",
             ])
         }
-        return try JSONDecoder().decode(type, from: data)
+        return try JSONDecoder().decode(type, from: Data(json.utf8))
     }
 
     fileprivate static func encodePayload(_ obj: some Encodable) throws -> String {
@@ -3835,17 +3768,9 @@ extension NodeAppModel {
         guard let operatorGatewayProblem else { return }
         self.operatorGatewayProblem = nil
         guard self.lastGatewayProblem == operatorGatewayProblem else { return }
-        if let nodeGatewayProblem {
-            self.lastGatewayProblem = nodeGatewayProblem
-            self.gatewayPairingPaused = nodeGatewayProblem.needsPairingApproval
-            self.gatewayPairingRequestId = nodeGatewayProblem.needsPairingApproval
-                ? nodeGatewayProblem.requestId
-                : nil
-        } else {
-            self.lastGatewayProblem = nil
-            self.gatewayPairingPaused = false
-            self.gatewayPairingRequestId = nil
-        }
+        self.lastGatewayProblem = self.nodeGatewayProblem
+        self.gatewayPairingPaused = self.nodeGatewayProblem?.needsPairingApproval == true
+        self.gatewayPairingRequestId = self.gatewayPairingPaused ? self.nodeGatewayProblem?.requestId : nil
         if self.gatewayServerName != nil {
             self.gatewayStatusText = "Connected"
         }
@@ -3907,15 +3832,12 @@ extension NodeAppModel {
             password?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
-    private func currentGatewayReconnectAuth(
-        fallbackToken: String?,
-        fallbackBootstrapToken: String?,
-        fallbackPassword: String?) -> (token: String?, bootstrapToken: String?, password: String?)
-    {
-        if let cfg = activeGatewayConnectConfig {
-            return (cfg.token, cfg.bootstrapToken, cfg.password)
-        }
-        return (fallbackToken, fallbackBootstrapToken, fallbackPassword)
+    private func currentGatewayReconnectAuth(fallback: GatewayConnectConfig) -> GatewayNodeSessionCredentials {
+        let config = self.activeGatewayConnectConfig ?? fallback
+        return GatewayNodeSessionCredentials(
+            token: config.token,
+            bootstrapToken: config.bootstrapToken,
+            password: config.password)
     }
 
     func currentGatewayReconnectOptions(
@@ -4018,7 +3940,7 @@ extension NodeAppModel {
         _ nodeOptions: GatewayConnectOptions,
         stableID: String,
         routeGeneration: UInt64,
-        auth: (token: String?, bootstrapToken: String?, password: String?)) async -> GatewayConnectOptions?
+        auth: GatewayNodeSessionCredentials) async -> GatewayConnectOptions?
     {
         guard !nodeOptions.allowStoredDeviceAuth else { return nodeOptions }
         guard Self.usesBootstrapCredential(
@@ -4218,7 +4140,7 @@ extension NodeAppModel {
         stableID: String,
         routeGeneration: UInt64,
         nodeOptions: GatewayConnectOptions,
-        auth: (token: String?, bootstrapToken: String?, password: String?)) async
+        auth: GatewayNodeSessionCredentials) async
     {
         guard !self.isLocalGatewayFixtureEnabled,
               self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
@@ -4305,10 +4227,7 @@ extension NodeAppModel {
                     continue
                 }
 
-                let reconnectAuth = self.currentGatewayReconnectAuth(
-                    fallbackToken: config.token,
-                    fallbackBootstrapToken: config.bootstrapToken,
-                    fallbackPassword: config.password)
+                let reconnectAuth = self.currentGatewayReconnectAuth(fallback: config)
                 // Bootstrap handoff enables stored auth in the active config. Reconnects must
                 // consume that current ownership state instead of the loop's one-shot bootstrap options.
                 let reconnectOptions = self.currentGatewayReconnectOptions(
@@ -4336,10 +4255,7 @@ extension NodeAppModel {
                 do {
                     try await self.operatorGateway.connect(
                         url: config.url,
-                        credentials: GatewayNodeSessionCredentials(
-                            token: reconnectAuth.token,
-                            bootstrapToken: reconnectAuth.bootstrapToken,
-                            password: reconnectAuth.password),
+                        credentials: reconnectAuth,
                         connectOptions: operatorOptions,
                         sessionBox: sessionBox,
                         extraHeadersProvider: {
@@ -4530,19 +4446,13 @@ extension NodeAppModel {
                         sessionKey: self.mainSessionKey)
                 }
                 let epochMs = Int(Date().timeIntervalSince1970 * 1000)
-                let reconnectAuth = self.currentGatewayReconnectAuth(
-                    fallbackToken: config.token,
-                    fallbackBootstrapToken: config.bootstrapToken,
-                    fallbackPassword: config.password)
+                let reconnectAuth = self.currentGatewayReconnectAuth(fallback: config)
                 let connectedOptions = options
                 GatewayDiagnostics.log("connect attempt epochMs=\(epochMs) url=\(config.url.absoluteString)")
                 do {
                     try await self.nodeGateway.connect(
                         url: config.url,
-                        credentials: GatewayNodeSessionCredentials(
-                            token: reconnectAuth.token,
-                            bootstrapToken: reconnectAuth.bootstrapToken,
-                            password: reconnectAuth.password),
+                        credentials: reconnectAuth,
                         connectOptions: connectedOptions,
                         sessionBox: sessionBox,
                         extraHeadersProvider: {
@@ -4966,11 +4876,9 @@ extension NodeAppModel {
                   self.chatDeliveryAgentId == sourceAgentID,
                   self.mainSessionKey == sourceMainSessionKey
             else { return }
-            await MainActor.run {
-                self.shareDeliveryChannel = channel
-                self.shareDeliveryTo = to
-                self.updateShareRelayRouteIfConfigured()
-            }
+            self.shareDeliveryChannel = channel
+            self.shareDeliveryTo = to
+            self.updateShareRelayRouteIfConfigured()
         } catch {
             // Best-effort only.
         }
@@ -5514,8 +5422,8 @@ extension NodeAppModel {
         UserDefaults.standard.set(data, forKey: Self.watchExecApprovalBridgeStateKey)
     }
 
-    private func pruneExpiredWatchExecApprovalPrompts(nowMs: Int64? = nil) {
-        let currentNowMs = nowMs ?? Int64(Date().timeIntervalSince1970 * 1000)
+    private func pruneExpiredWatchExecApprovalPrompts() {
+        let currentNowMs = Int64(Date().timeIntervalSince1970 * 1000)
         self.watchExecApprovalPromptsByID = self.watchExecApprovalPromptsByID.filter { _, prompt in
             guard let expiresAtMs = prompt.expiresAtMs else { return true }
             return expiresAtMs > currentNowMs
@@ -5782,7 +5690,7 @@ extension NodeAppModel {
         decision: OpenClawWatchExecApprovalDecision?,
         outcome: OpenClawWatchExecApprovalOutcome,
         outcomeText: String,
-        resolvedAtMs: Int64? = nil,
+        resolvedAtMs: Int64,
         source: String,
         syncSnapshots: Bool = true) async
     {
@@ -5795,7 +5703,7 @@ extension NodeAppModel {
             gatewayStableID: gatewayStableID,
             decision: decision,
             outcome: outcome,
-            resolvedAtMs: resolvedAtMs ?? Int64(Date().timeIntervalSince1970 * 1000),
+            resolvedAtMs: resolvedAtMs,
             source: source,
             outcomeText: outcomeText)
         do {
@@ -5825,11 +5733,18 @@ extension NodeAppModel {
                 gatewayStableID: gatewayStableID)
             return
         }
-        if let outcome = Self.watchExecApprovalOutcome(for: terminal.verdict) {
+        let reason: OpenClawWatchExecApprovalCloseReason
+        switch terminal.verdict {
+        case let .decided(decision):
+            let outcome: OpenClawWatchExecApprovalOutcome = switch decision {
+            case .allowOnce: .allowedOnce
+            case .allowAlways: .allowedAlways
+            case .deny: .denied
+            }
             await self.publishWatchExecApprovalResolved(
                 approvalId: terminal.id,
                 gatewayStableID: gatewayStableID,
-                decision: terminal.verdict.decision.flatMap(OpenClawWatchExecApprovalDecision.init(rawValue:)),
+                decision: OpenClawWatchExecApprovalDecision(rawValue: decision.rawValue),
                 outcome: outcome,
                 outcomeText: Self.execApprovalTerminalText(
                     terminal,
@@ -5838,37 +5753,18 @@ extension NodeAppModel {
                 source: source,
                 syncSnapshots: syncSnapshots)
             return
-        }
-        let reason: OpenClawWatchExecApprovalCloseReason = switch terminal.verdict {
-        case .allowOnce, .allowAlways, .deny:
-            preconditionFailure("terminal decision outcome must be mapped")
         case .expired:
-            .expired
+            reason = .expired
         case .cancelled:
-            .unavailable
+            reason = .unavailable
         case .resolvedUnknown:
-            .resolved
+            reason = .resolved
         }
         await self.publishWatchExecApprovalExpired(
             approvalId: terminal.id,
             gatewayStableID: gatewayStableID,
             reason: reason,
             syncSnapshots: syncSnapshots)
-    }
-
-    private static func watchExecApprovalOutcome(
-        for verdict: ExecApprovalTerminalVerdict) -> OpenClawWatchExecApprovalOutcome?
-    {
-        switch verdict {
-        case .allowOnce:
-            .allowedOnce
-        case .allowAlways:
-            .allowedAlways
-        case .deny:
-            .denied
-        case .expired, .cancelled, .resolvedUnknown:
-            nil
-        }
     }
 
     private func publishWatchExecApprovalExpired(
@@ -6981,21 +6877,17 @@ extension NodeAppModel {
         self.persistWatchExecApprovalBridgeState()
     }
 
-    private func flushPendingWatchExecApprovalResolutions(
-        shouldContinue: @MainActor @Sendable () -> Bool = { true }) async
-    {
-        guard shouldContinue(),
-              !self.pendingWatchExecApprovalResolutions.isEmpty,
+    private func flushPendingWatchExecApprovalResolutions() async {
+        guard !self.pendingWatchExecApprovalResolutions.isEmpty,
               !self.pendingWatchExecApprovalResolutionFlushInFlight
         else { return }
         self.pendingWatchExecApprovalResolutionFlushInFlight = true
         defer { self.pendingWatchExecApprovalResolutionFlushInFlight = false }
         await self.hydrateWatchExecApprovalCacheIfNeeded(reason: "queued_watch_resolve")
-        guard shouldContinue(), let currentGatewayStableID = currentExecApprovalGatewayStableID() else { return }
+        guard let currentGatewayStableID = currentExecApprovalGatewayStableID() else { return }
         let pending = self.pendingWatchExecApprovalResolutions
         var discardedMismatchedOwner = false
         for event in pending {
-            guard shouldContinue() else { return }
             guard GatewayStableIdentifier.matches(
                 event.gatewayStableID,
                 currentGatewayStableID)
@@ -7009,7 +6901,7 @@ extension NodeAppModel {
                 self.removePendingWatchExecApprovalResolution(replyID: event.replyId)
             }
         }
-        if discardedMismatchedOwner, shouldContinue() {
+        if discardedMismatchedOwner {
             await self.syncWatchExecApprovalSnapshot(reason: "queued_stale_gateway_reply")
         }
     }
@@ -7279,16 +7171,12 @@ extension NodeAppModel {
         return true
     }
 
-    private func flushPendingExecApprovalResolvedPushes(
-        shouldContinue: @MainActor @Sendable () -> Bool = { true }) async
-    {
-        guard shouldContinue(), !self.pendingExecApprovalResolvedPushes.isEmpty else { return }
+    private func flushPendingExecApprovalResolvedPushes() async {
+        guard !self.pendingExecApprovalResolvedPushes.isEmpty else { return }
         for push in self.pendingExecApprovalResolvedPushes {
-            guard shouldContinue() else { return }
             switch await self.validateExecApprovalPushRoute(
                 push,
-                sourceReason: "push_resolved",
-                shouldContinue: shouldContinue)
+                sourceReason: "push_resolved")
             {
             case let .validated(context):
                 guard await self.applyValidatedExecApprovalResolvedPush(push, context: context) else {
@@ -7958,7 +7846,6 @@ extension NodeAppModel {
         let decisions = presentation.alloweddecisions.map(\.rawValue)
         guard presentation.kind == ApprovalKind.exec.rawValue,
               !presentation.commandtext.isEmpty,
-              (1...3).contains(decisions.count),
               decisions.count == Set(decisions).count,
               decisions.contains(ApprovalDecision.deny.rawValue),
               self.isValidOptionalApprovalPresentationString(presentation.commandpreview),
@@ -7983,7 +7870,6 @@ extension NodeAppModel {
         guard presentation.kind == ApprovalKind.plugin.rawValue,
               self.trimmedOrNil(presentation.title) != nil,
               self.trimmedOrNil(presentation.description) != nil,
-              (1...3).contains(decisions.count),
               decisions.count == Set(decisions).count,
               decisions.contains(ApprovalDecision.deny.rawValue),
               self.isValidOptionalApprovalPresentationString(
@@ -8059,8 +7945,8 @@ extension NodeAppModel {
         switch snapshot {
         case let .allowed(value):
             let verdict: ExecApprovalTerminalVerdict = switch value.decision {
-            case .allowOnce: .allowOnce
-            case .allowAlways: .allowAlways
+            case .allowOnce: .decided(.allowOnce)
+            case .allowAlways: .decided(.allowAlways)
             }
             return self.makeExecApprovalTerminalResult(
                 fields: ExecApprovalTerminalSnapshotFields(
@@ -8083,7 +7969,7 @@ extension NodeAppModel {
                     presentation: value.presentation,
                     resolvedAtMs: value.resolvedatms),
                 expectedApprovalID: expectedApprovalID,
-                verdict: .deny)
+                verdict: .decided(.deny))
         case let .expired(value):
             return self.makeExecApprovalTerminalResult(
                 fields: ExecApprovalTerminalSnapshotFields(
@@ -8141,13 +8027,13 @@ extension NodeAppModel {
     {
         let prefix = alreadyResolved ? "This approval was already" : "Approval"
         switch terminal.verdict {
-        case .allowOnce:
+        case .decided(.allowOnce):
             return "\(prefix) allowed once."
-        case .allowAlways:
+        case .decided(.allowAlways):
             return alreadyResolved
                 ? "This approval was already set to Always Allow."
                 : "Approval set to Always Allow."
-        case .deny:
+        case .decided(.deny):
             return "\(prefix) denied."
         case .expired:
             return "Approval expired before this decision was applied."
@@ -8487,7 +8373,7 @@ extension NodeAppModel {
         decision: String,
         expectedGatewayStableID: String,
         sourceReason: String? = nil,
-        resolutionAttempt: ExecApprovalResolutionAttempt? = nil) async -> ExecApprovalResolutionOutcome
+        resolutionAttempt: ExecApprovalResolutionAttempt) async -> ExecApprovalResolutionOutcome
     {
         guard let approvalID = ExecApprovalIdentifier.exact(approvalId) else {
             return .failed(message: "Invalid approval request.")
@@ -8570,7 +8456,7 @@ extension NodeAppModel {
                     let terminal = ExecApprovalTerminalResult(
                         id: approvalID,
                         kind: .exec,
-                        verdict: Self.execApprovalVerdict(for: approvalDecision),
+                        verdict: .decided(approvalDecision),
                         resolvedAtMs: Int64(Date().timeIntervalSince1970 * 1000))
                     return await self.applyCanonicalExecApprovalTerminal(
                         terminal,
@@ -8646,7 +8532,7 @@ extension NodeAppModel {
         approvalKind: ApprovalKind,
         decision: String,
         expectedGatewayStableID: String,
-        resolutionAttempt: ExecApprovalResolutionAttempt?) async -> ExecApprovalResolutionOutcome?
+        resolutionAttempt: ExecApprovalResolutionAttempt) async -> ExecApprovalResolutionOutcome?
     {
         guard let testExecApprovalResolutionHandler else { return nil }
         let outcome = await testExecApprovalResolutionHandler(
@@ -8797,9 +8683,9 @@ extension NodeAppModel {
         alreadyResolved: Bool)
     {
         let tone: ExecApprovalOutcomeTone = switch terminal.verdict {
-        case .allowOnce, .allowAlways:
+        case .decided(.allowOnce), .decided(.allowAlways):
             .success
-        case .deny:
+        case .decided(.deny):
             .danger
         case .expired, .cancelled:
             .warning
@@ -8825,17 +8711,6 @@ extension NodeAppModel {
         self.pendingExecApprovalPromptResolving = false
         self.pendingExecApprovalPromptErrorText = nil
         self.pendingExecApprovalPromptOutcome = outcome
-    }
-
-    private static func execApprovalVerdict(for decision: ApprovalDecision) -> ExecApprovalTerminalVerdict {
-        switch decision {
-        case .allowOnce:
-            .allowOnce
-        case .allowAlways:
-            .allowAlways
-        case .deny:
-            .deny
-        }
     }
 
     private static func isValidUnifiedExecApprovalResolveAck(
@@ -8968,10 +8843,6 @@ extension NodeAppModel {
         else { return false }
         let reconnectReason = Self.trimmedOrNil(reason) ?? "watch_request"
         if self.operatorConnected {
-            guard self.isCurrentGatewayRoute(
-                generation: routeGeneration,
-                stableID: gatewayStableID)
-            else { return false }
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_connected "
                     + "reason=\(reconnectReason) phase=already_connected")
@@ -9366,12 +9237,6 @@ extension NodeAppModel {
     }
 
     private func sendAgentRequest(link: AgentDeepLink) async throws {
-        if link.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            throw NSError(domain: "DeepLink", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "invalid agent message",
-            ])
-        }
-
         #if DEBUG
         if let testAgentRequestHandler {
             try await testAgentRequestHandler(link)
@@ -9722,7 +9587,7 @@ extension NodeAppModel {
                 ExecApprovalTerminalResult(
                     id: approvalID,
                     kind: kind,
-                    verdict: Self.execApprovalVerdict(for: approvalDecision),
+                    verdict: .decided(approvalDecision),
                     resolvedAtMs: 1),
                 applied: true)
         }
@@ -9788,7 +9653,7 @@ extension NodeAppModel {
         let terminal = ExecApprovalTerminalResult(
             id: approvalID,
             kind: .exec,
-            verdict: Self.execApprovalVerdict(for: decision),
+            verdict: .decided(decision),
             resolvedAtMs: 1)
         let outcome = await self.applyCanonicalExecApprovalTerminal(
             terminal,

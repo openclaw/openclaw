@@ -216,6 +216,9 @@ export function validateLegacySessionRecords(
   purpose: "validate" | "before-archive",
   env: NodeJS.ProcessEnv,
 ): boolean {
+  if (report.issues.some((issue) => issue.code === "legacy_import_deferred" && !issue.sessionKey)) {
+    return false;
+  }
   if (purpose === "before-archive" && records.length === 0) {
     return true;
   }
@@ -246,11 +249,12 @@ function validateLegacySessionRecord(
   const normalizedKey = beforeArchive
     ? record.sessionKey
     : normalizeStoreSessionKey(record.sessionKey);
-  const sqliteSessionId = record.historical
-    ? snapshot.sessionKeysBySessionId.get(record.entry.sessionId) === normalizedKey
-      ? record.entry.sessionId
-      : undefined
-    : snapshot.sessionIdsBySessionKey.get(normalizedKey);
+  const sqliteSessionId =
+    record.historical || record.preserveCurrentSession
+      ? snapshot.sessionKeysBySessionId.get(record.entry.sessionId) === normalizedKey
+        ? record.entry.sessionId
+        : undefined
+      : snapshot.sessionIdsBySessionKey.get(normalizedKey);
   if (!sqliteSessionId) {
     report.issues.push({
       code: "sqlite_entry_missing",
@@ -265,6 +269,16 @@ function validateLegacySessionRecord(
       message: `SQLite sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
       sessionKey: record.sessionKey,
     });
+    return;
+  }
+  // A proven canonical owner permits protected archival, not certification of conflicting bytes.
+  if (
+    beforeArchive &&
+    record.preserveCurrentSession &&
+    report.issues.some(
+      (issue) => issue.code === "legacy_import_deferred" && issue.sessionKey === record.sessionKey,
+    )
+  ) {
     return;
   }
   if (!beforeArchive) {

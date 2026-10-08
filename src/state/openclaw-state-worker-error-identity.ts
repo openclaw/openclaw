@@ -12,14 +12,16 @@ import {
 import {
   SESSION_GOAL_OPERATION_ERROR_CODES,
   SessionGoalOperationError,
-  type SessionGoalOperationErrorCode,
 } from "../config/sessions/goals-operations.types.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import {
   SessionEntryLifecycleUpsertConflictError,
   SqliteSessionMutationConflictError,
+  SqliteTranscriptMutationConflictError,
 } from "../config/sessions/session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
+import { SessionTranscriptWriterClaimReboundError } from "../config/sessions/session-transcript-writer-claim-error.js";
 import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
@@ -48,14 +50,8 @@ import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-st
 import {
   isOpenClawStateLeaseErrorCode,
   OpenClawStateLeaseError,
-  type OpenClawStateLeaseErrorCode,
 } from "./openclaw-state-lease-error.js";
 import { SessionMetadataUnavailableError } from "./session-metadata-unavailable-error.js";
-
-type MaintenanceKind = ConstructorParameters<typeof StartupMaintenanceRequiredError>[0];
-type StateMigrationKind = ConstructorParameters<
-  typeof OpenClawStateDatabaseSchemaMigrationRequiredError
->[0];
 
 const MESSAGE_ONLY_ERRORS = {
   "worktree-source-changed": SessionWorktreeSourceChangedError,
@@ -64,6 +60,7 @@ const MESSAGE_ONLY_ERRORS = {
   "model-selection-locked": ModelSelectionLockedError,
   "session-canonical-key-migration": SessionCanonicalKeyMigrationRequiredError,
   "session-pending-input-custody": SessionPendingInputCustodyError,
+  "session-transcript-read-fence": SessionTranscriptReadFenceError,
   "skill-upload-request": SkillUploadRequestError,
   coordinator: SqliteCoordinatorError,
   ownership: OpenClawStateOwnershipError,
@@ -79,54 +76,7 @@ function isMessageOnlyErrorIdentity(node: { type?: unknown }): node is MessageOn
   return typeof node.type === "string" && Object.hasOwn(MESSAGE_ONLY_ERRORS, node.type);
 }
 
-export type ErrorIdentity =
-  | { type: "session-worktree-owner-mismatch" }
-  | {
-      type: "worktree-removal-contention";
-      kind: "busy" | "finalized";
-      blockedByRun?: { worktreeId: string; pid: number };
-    }
-  | { type: "worktree-removal-lock"; kind: "busy" | "foreign-lock" }
-  | { type: "secret-store-validation"; secretCode: SecretStoreValidationError["code"] }
-  | MessageOnlyErrorIdentity
-  | { type: "session-goal-operation"; goalCode: SessionGoalOperationErrorCode }
-  | { type: "session-mutation-conflict"; operationLabel: string }
-  | { type: "session-lifecycle-upsert-conflict"; sessionKey: string }
-  | { type: "worker-session-already-attached"; sessionId: string; environmentId: string }
-  | {
-      type: "workspace-alias-repointed";
-      aliasPath: string;
-      storedWorkspacePath: string;
-      currentWorkspacePath: string;
-    }
-  | { type: "error" | "aggregate" | "mcp-oauth-corruption" }
-  | { type: "auth-profile-store-unreadable"; databasePath: string }
-  | { type: "state-owner-contention"; databasePath: string }
-  | { type: "ownership-metadata"; databasePath: string }
-  | { type: "external-ownership"; databasePath: string; managerId: string }
-  | { type: "state-lease"; leaseCode: OpenClawStateLeaseErrorCode }
-  | { type: "skill-library"; libraryCode: SkillLibraryErrorCode; currentRevision?: string }
-  | {
-      type: "plugin-blob";
-      blobCode: PluginBlobStoreError["code"];
-      operation: PluginBlobStoreError["operation"];
-      path?: string;
-    }
-  | { type: "maintenance"; kind: MaintenanceKind }
-  | {
-      type: "plugin-state";
-      stateCode: PluginStateStoreError["code"];
-      operation: PluginStateStoreError["operation"];
-      path?: string;
-      owner: PluginStateStoreError["owner"];
-    }
-  | { type: "state-migration"; kind: StateMigrationKind; pathname: string }
-  | {
-      type: "session-metadata";
-      reason: SessionMetadataUnavailableError["reason"];
-      missingTables: readonly string[];
-    }
-  | { type: "agent-media-migration"; pathname: string; schemaVersion: number };
+type ErrorIdentity = NonNullable<ReturnType<typeof parseIdentity>>;
 
 export function identifyError(error: Error): ErrorIdentity {
   if (error instanceof AuthProfileStoreUnreadableError) {
@@ -196,8 +146,14 @@ export function identifyError(error: Error): ErrorIdentity {
   if (error instanceof SessionEntryLifecycleUpsertConflictError) {
     return { type: "session-lifecycle-upsert-conflict", sessionKey: error.sessionKey };
   }
+  if (error instanceof SessionTranscriptWriterClaimReboundError) {
+    return { type: "session-transcript-writer-claim-rebound" };
+  }
   if (error instanceof SqliteSessionMutationConflictError) {
     return { type: "session-mutation-conflict", operationLabel: error.operationLabel };
+  }
+  if (error instanceof SqliteTranscriptMutationConflictError) {
+    return { type: "session-transcript-mutation-conflict", sessionId: error.sessionId };
   }
   if (error instanceof SessionMetadataUnavailableError) {
     return {
@@ -286,7 +242,7 @@ function isSkillLibraryCode(value: unknown): value is SkillLibraryErrorCode {
   );
 }
 
-export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined {
+export function parseIdentity(node: Record<string, unknown>) {
   if (isMessageOnlyErrorIdentity(node)) {
     return { type: node.type };
   }
@@ -298,7 +254,8 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
         return undefined;
       }
       if (node.blockedByRun === undefined) {
-        return { type: node.type, kind: node.kind };
+        const kind: WorktreeRemovalContentionError["kind"] = node.kind;
+        return { type: node.type, kind };
       }
       const blocked = node.blockedByRun;
       if (
@@ -310,16 +267,20 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
       ) {
         return undefined;
       }
+      const kind: WorktreeRemovalContentionError["kind"] = node.kind;
       return {
         type: node.type,
-        kind: node.kind,
+        kind,
         blockedByRun: { worktreeId: blocked.worktreeId, pid: blocked.pid },
       };
     }
-    case "worktree-removal-lock":
-      return node.kind === "busy" || node.kind === "foreign-lock"
-        ? { type: node.type, kind: node.kind }
-        : undefined;
+    case "worktree-removal-lock": {
+      if (node.kind !== "busy" && node.kind !== "foreign-lock") {
+        return undefined;
+      }
+      const kind: WorktreeRemovalLockError["kind"] = node.kind;
+      return { type: node.type, kind };
+    }
     case "plugin-state": {
       const codes: readonly PluginStateStoreError["code"][] = [
         "PLUGIN_STATE_SQLITE_UNAVAILABLE",
@@ -398,6 +359,7 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
     case "error":
     case "aggregate":
     case "mcp-oauth-corruption":
+    case "session-transcript-writer-claim-rebound":
       return { type: node.type };
     case "session-goal-operation": {
       const goalCode = SESSION_GOAL_OPERATION_ERROR_CODES.find((code) => code === node.goalCode);
@@ -411,12 +373,21 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
       return typeof node.operationLabel === "string"
         ? { type: node.type, operationLabel: node.operationLabel }
         : undefined;
-    case "session-metadata":
-      return (node.reason === "schema-missing" || node.reason === "table-missing") &&
-        Array.isArray(node.missingTables) &&
-        node.missingTables.every((table: unknown) => typeof table === "string")
-        ? { type: node.type, reason: node.reason, missingTables: [...node.missingTables] }
+    case "session-transcript-mutation-conflict":
+      return typeof node.sessionId === "string"
+        ? { type: node.type, sessionId: node.sessionId }
         : undefined;
+    case "session-metadata": {
+      if (
+        (node.reason !== "schema-missing" && node.reason !== "table-missing") ||
+        !Array.isArray(node.missingTables) ||
+        !node.missingTables.every((table: unknown) => typeof table === "string")
+      ) {
+        return undefined;
+      }
+      const reason: SessionMetadataUnavailableError["reason"] = node.reason;
+      return { type: node.type, reason, missingTables: [...node.missingTables] };
+    }
     case "auth-profile-store-unreadable":
     case "state-owner-contention":
     case "ownership-metadata":
@@ -445,13 +416,18 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
         : undefined;
     case "maintenance":
       return isStartupMaintenanceKind(node.kind) ? { type: node.type, kind: node.kind } : undefined;
-    case "state-migration":
-      return (node.kind === "audit-events-v2" ||
-        node.kind === "legacy-cron-run-logs" ||
-        node.kind === "legacy-workshop-review-index") &&
-        typeof node.pathname === "string"
-        ? { type: node.type, kind: node.kind, pathname: node.pathname }
-        : undefined;
+    case "state-migration": {
+      if (
+        (node.kind !== "audit-events-v2" &&
+          node.kind !== "legacy-cron-run-logs" &&
+          node.kind !== "legacy-workshop-review-index") ||
+        typeof node.pathname !== "string"
+      ) {
+        return undefined;
+      }
+      const kind: OpenClawStateDatabaseSchemaMigrationRequiredError["kind"] = node.kind;
+      return { type: node.type, kind, pathname: node.pathname };
+    }
     case "agent-media-migration":
       return typeof node.pathname === "string" &&
         typeof node.schemaVersion === "number" &&
@@ -501,6 +477,10 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
       return new SessionEntryLifecycleUpsertConflictError(node.sessionKey);
     case "session-mutation-conflict":
       return new SqliteSessionMutationConflictError(node.operationLabel);
+    case "session-transcript-mutation-conflict":
+      return new SqliteTranscriptMutationConflictError(node.sessionId);
+    case "session-transcript-writer-claim-rebound":
+      return new SessionTranscriptWriterClaimReboundError();
     case "session-metadata":
       return new SessionMetadataUnavailableError(node.reason, undefined, node.missingTables);
     case "error":

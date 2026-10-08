@@ -20,8 +20,6 @@ import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
-type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
-
 export async function completeTerminalEffects(
   context: SubagentLifecycleCompletionContext,
   args: {
@@ -34,7 +32,9 @@ export async function completeTerminalEffects(
     terminalGeneration: number;
     stateContext: OpenClawStateWorkerContext;
     assertCurrent: () => void;
-    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserCleanup>;
+    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
+      typeof cleanupBrowserSessionsForLifecycleEnd
+    >;
   },
 ): Promise<void> {
   const params = context.options;
@@ -43,7 +43,7 @@ export async function completeTerminalEffects(
   let entry = args.entry;
   let { sessionSuperseded, suppressSessionEffects } = args;
   const isCurrentTerminalCallback = () => {
-    if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
+    if (!context.isTerminalCallbackCurrent(entry, terminalGeneration)) {
       return false;
     }
     args.assertCurrent();
@@ -385,6 +385,6 @@ export async function completeTerminalEffects(
 
   await refreshCleanupSuppression();
   if (isCurrentTerminalCallback()) {
-    context.startSubagentAnnounceCleanupFlow(entry.runId, entry);
+    context.startSubagentAnnounceCleanupFlow(entry);
   }
 }

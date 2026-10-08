@@ -691,7 +691,6 @@ export async function recordLoopOutcome(args: {
       toolCallId: args.toolCallId,
       result: args.result,
       error: args.error,
-      config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
     });
     const churnContinues =

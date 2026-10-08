@@ -23,6 +23,10 @@ import { printResult } from "./progress.js";
 import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import {
+  recordMutableUpdateInterruption,
+  withMutableUpdateTerminalSettlement,
+} from "./update-command-mutable-signals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordUpdateResultNextAction,
@@ -48,6 +52,10 @@ type Publisher = (
   onTerminalRecord?: PublishedRecord,
 ) => Promise<UpdateRunResult>;
 const terminalOwners = new WeakMap<Run, { publish?: Publisher }>();
+type TerminalOptions = Pick<UpdateCommandOptions, "json" | "onResult"> & {
+  /** Internal candidate-worker output, never a serialized continuation grant. */
+  onTerminalRecord?: PublishedRecord;
+};
 
 /** Finalization prepares a report; the outer invocation owns its publication. */
 export function deferUpdateCommandTerminalResult(
@@ -112,10 +120,54 @@ export async function prepareUnexpectedUpdateCommandFailure(
 /** Enclose the real executor so its final checks and release precede terminal output. */
 export async function withUpdateCommandTerminalResult<T>(
   operation: (registerRun: (run: Run) => void) => Promise<T>,
-  opts: Pick<UpdateCommandOptions, "json" | "onResult"> & {
-    /** Internal candidate-worker output, never a serialized continuation grant. */
-    onTerminalRecord?: PublishedRecord;
-  } = {},
+  opts: TerminalOptions = {},
+): Promise<T> {
+  let run: Run | undefined;
+  return await withMutableUpdateTerminalSettlement(async (retain) => {
+    try {
+      return await settleUpdateCommandTerminalResult(operation, opts, (admitted) => {
+        run = admitted;
+        retain(admitted);
+      });
+    } catch (error) {
+      if (
+        run &&
+        !(error instanceof UpdateCommandFinalizedRecoveryFailure) &&
+        (error instanceof UpdateCommandPendingRecoveryFailure ||
+          hasCommandProcessCleanupError(error))
+      ) {
+        const input =
+          error instanceof UpdateCommandFailure
+            ? error.result
+            : createUpdateCommandFailureResult({
+                mode: "unknown",
+                durationMs: 0,
+                failure: { cause: error },
+              });
+        const result = recordMutableUpdateInterruption({ run }, input);
+        if (result !== input || result.reason === "interrupted") {
+          // Uncertain writers prohibit state reads and recovery, not a detached failure report.
+          await printResult(
+            result,
+            { ...opts, run },
+            {
+              readHistory: false,
+              nextAction:
+                "Run openclaw update status, then openclaw update repair to inspect retained recovery.",
+            },
+          );
+          throw new UpdateCommandFinalizedRecoveryFailure(result, 1, undefined, { cause: error });
+        }
+      }
+      throw error;
+    }
+  });
+}
+
+async function settleUpdateCommandTerminalResult<T>(
+  operation: (registerRun: (run: Run) => void) => Promise<T>,
+  opts: TerminalOptions,
+  retain: (run: Run) => void,
 ): Promise<T> {
   const owner: { publish?: Publisher } = {};
   let run: Run | undefined;
@@ -136,6 +188,7 @@ export async function withUpdateCommandTerminalResult<T>(
     }
     run = admitted;
     terminalOwners.set(admitted, owner);
+    retain(admitted);
   };
   let outcome: { value: T } | { error: unknown };
   try {

@@ -1,13 +1,34 @@
+import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { SESSION_KEY, withMentionInbox, readMentionInbox } from "./mention-inbox.test-support.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { resolveStateDir } from "../config/state-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  SESSION_ID,
+  SESSION_KEY,
+  withMentionInbox,
+  readMentionInbox,
+} from "./mention-inbox.test-support.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 it("refreshes 50 connected mention views without rereading unchanged session targets", async () => {
+  const cfg: OpenClawConfig = {};
   await withMentionInbox(
     async (f) => {
+      const alternateStorePath = path.join(resolveStateDir(), "mention-alternate.sqlite");
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: SESSION_KEY, storePath: alternateStorePath },
+        {
+          sessionId: SESSION_ID,
+          updatedAt: Date.now(),
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: f.alice.id },
+          displayName: "Alternate conversation",
+        },
+      );
       f.clients.splice(
         0,
         f.clients.length,
@@ -20,6 +41,9 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
       for (const client of f.clients) {
         expect((await readMentionInbox(f.inbox, client)).items).toHaveLength(1);
       }
+      expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
+        "Design review",
+      );
       f.broadcast.mockClear();
       let exactRowReads = 0;
       // oxlint-disable-next-line typescript/unbound-method -- apply preserves the intercepted statement receiver.
@@ -35,7 +59,7 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
       });
       const context: Parameters<typeof emitSessionsChanged>[0] = {
         mentionInbox: f.inbox,
-        getRuntimeConfig: () => ({}),
+        getRuntimeConfig: () => cfg,
         getSessionEventSubscriberConnIds: () => new Set(),
         broadcastToConnIds: f.broadcast,
         chatAbortControllers: new Map(),
@@ -83,11 +107,17 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
       expect([...f.broadcast.mock.calls[0]![2]]).toEqual(["viewer-0"]);
 
       // Keyless invalidation also covers in-place runtime configuration updates.
+      cfg.session = { store: alternateStorePath };
       exactRowReads = 0;
+      f.broadcast.mockClear();
       await f.inbox.invalidateAsync();
       expect(exactRowReads).toBe(1);
+      expect(f.broadcast).toHaveBeenCalledTimes(49);
+      expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
+        "Alternate conversation",
+      );
     },
-    {},
+    cfg,
     { notifications: false },
   );
 });

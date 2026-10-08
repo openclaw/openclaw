@@ -885,7 +885,6 @@ async function startInitializedCodexAppServerClientOnce(
     : params.lifetime.controller.signal;
   const waitForStartup = <T>(
     operation: () => Promise<T>,
-    timeoutMessage = CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
     timeoutErrorFactory?: () => CodexAppServerStartupError,
   ) => {
     if (abandonSignal.aborted) {
@@ -895,7 +894,7 @@ async function startInitializedCodexAppServerClientOnce(
       resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
       ownCodexStartup(params.lifetime, operation()),
       abandonSignal,
-      timeoutMessage,
+      CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
       timeoutErrorFactory,
     );
   };
@@ -1036,7 +1035,6 @@ async function startInitializedCodexAppServerClientOnce(
       try {
         await waitForStartup(
           () => client.initialize(),
-          CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
           () => buildCodexAppServerInitializeTimeoutError(client),
         );
       } catch (error) {

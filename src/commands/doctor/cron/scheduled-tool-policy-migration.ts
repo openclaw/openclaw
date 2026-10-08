@@ -5,6 +5,7 @@ import {
   normalizeCronScheduledToolPolicy,
   resolveCronScheduledToolPolicy,
 } from "../../../cron/scheduled-tool-policy.js";
+import { cronJobUsesToolRuntime } from "../../../cron/tools-allow.js";
 import { normalizeOptionalAccountId } from "../../../routing/account-id.js";
 import { normalizeAgentId, parseSessionDeliveryRoute } from "../../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../../sessions/session-key-utils.js";
@@ -41,27 +42,15 @@ export function createScheduledToolPolicyMigrationCollector() {
   };
 }
 
-function usesToolRuntime(raw: Record<string, unknown>): boolean {
-  const payload = readRecord(raw.payload);
-  const trigger = readRecord(raw.trigger);
-  return (
-    payload?.kind === "agentTurn" ||
-    payload?.kind === "script" ||
-    (typeof trigger?.script === "string" && trigger.script.trim().length > 0)
-  );
-}
-
 /** Recovers only account authority proven by immutable persisted owner identity. */
 function migrateScheduledToolPolicy(
   raw: Record<string, unknown>,
 ): ScheduledToolPolicyMigrationResult {
-  if (!usesToolRuntime(raw)) {
-    return {
-      mutated: false,
-      status: raw.scheduledToolPolicy === undefined ? "not-applicable" : "invalid",
-    };
-  }
   const payload = readRecord(raw.payload);
+  if (!cronJobUsesToolRuntime({ payload, trigger: readRecord(raw.trigger) })) {
+    // Retained account restrictions are dormant until the job uses tools again.
+    return { mutated: false, status: "not-applicable" };
+  }
   const toolsAllow =
     Array.isArray(payload?.toolsAllow) &&
     payload.toolsAllow.every((value): value is string => typeof value === "string")

@@ -13,6 +13,7 @@ import {
 } from "./cli/startup-trace.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isMainModule } from "./infra/is-main.js";
+import "./shared/detached-async-context.js";
 
 const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),

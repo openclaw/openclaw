@@ -2,10 +2,7 @@ import path from "node:path";
 import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   findCapabilityProviderById,
@@ -120,6 +117,7 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
 }): boolean {
   const provider =
     params.provider ??
@@ -128,29 +126,23 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
       providerId: params.providerId,
       normalizeProviderId,
     });
-  if (!provider) {
-    return params.providerId
-      ? hasProviderAuthForTool({
-          provider: params.providerId,
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-        })
-      : false;
+  const providerId = provider ? provider.id : params.providerId;
+  if (providerId === undefined || (!provider && !providerId)) {
+    return false;
   }
-  if (provider.isConfigured) {
+  if (provider?.isConfigured) {
     return provider.isConfigured({
       cfg: params.cfg,
       agentDir: params.agentDir,
     });
   }
   return hasProviderAuthForTool({
-    provider: provider.id,
+    provider: providerId,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
+    authProfileStoreSource: params.authProfileStoreSource,
   });
 }
 
@@ -200,6 +192,7 @@ function resolveCapabilityModelCandidatesForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   providers: CapabilityProvider[];
 }): string[] {
   const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
@@ -227,18 +220,14 @@ function resolveCapabilityModelCandidatesForTool(params: {
   const primaryProvider = resolveDefaultModelRef(params.cfg).provider;
   const normalizedPrimaryProvider = normalizeProviderId(primaryProvider);
   const providerIds = [...providerDefaults.keys()].toSorted();
-  const matchesPrimaryProvider = (providerId: string): boolean => {
-    const entry = providerDefaults.get(providerId);
-    return (
-      normalizeProviderId(providerId) === normalizedPrimaryProvider ||
-      (entry?.aliases ?? []).includes(normalizedPrimaryProvider)
-    );
-  };
+  const matchesPrimaryProvider = (providerId: string): boolean =>
+    normalizeProviderId(providerId) === normalizedPrimaryProvider ||
+    providerDefaults.get(providerId)!.aliases.includes(normalizedPrimaryProvider);
   const orderedProviders = [
     ...providerIds.filter(matchesPrimaryProvider),
     ...providerIds.filter((providerId) => !matchesPrimaryProvider(providerId)),
   ];
-  return uniqueStrings(orderedProviders.flatMap((id) => providerDefaults.get(id)?.ref ?? []));
+  return uniqueStrings(orderedProviders.map((id) => providerDefaults.get(id)!.ref));
 }
 
 /**
@@ -250,6 +239,7 @@ export function resolveCapabilityModelConfigForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
   modelOverride?: string;
   providers: CapabilityProviderSource;
@@ -275,6 +265,7 @@ export function hasGenerationToolAvailability(params: {
   agentDir?: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
   providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
   providerKey: GenerationCapabilityProviderKey;
@@ -321,6 +312,7 @@ export function hasGenerationToolAvailability(params: {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
+      authProfileStoreSource: params.authProfileStoreSource,
       capability: capabilityAuthOperation(params.providerKey),
     }),
   );
@@ -329,18 +321,11 @@ export function hasGenerationToolAvailability(params: {
 export function resolveGenerateAction(
   args: Record<string, unknown>,
 ): "generate" | "status" | "list" {
-  const action = normalizeOptionalLowercaseString(readToolStringParam(args, "action"));
-  switch (action) {
-    case undefined:
-    case "generate":
-      return "generate";
-    case "status":
-      return "status";
-    case "list":
-      return "list";
-    default:
-      throw new ToolInputError('action must be "generate", "status", or "list"');
+  const action = readToolStringParam(args, "action")?.toLowerCase() ?? "generate";
+  if (action === "generate" || action === "status" || action === "list") {
+    return action;
   }
+  throw new ToolInputError('action must be "generate", "status", or "list"');
 }
 
 /**

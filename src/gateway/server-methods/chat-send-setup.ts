@@ -2,6 +2,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import { admitChatSend } from "./chat-send-admission.js";
+import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import {
   respondChatSendAdmissionError,
   runChatSendPreAdmission,
@@ -36,10 +37,13 @@ export async function prepareAndAdmitChatSend(
   onAdmissionOwned?: () => Promise<boolean>,
   options?: {
     trustedSystemInput?: boolean;
+    isDirectExternalUser?: boolean;
     goalResume?: SessionGoalOperation & { action: "resume" };
     providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   },
+  diagnostics?: ChatSendDiagnostics,
 ) {
+  const phase = diagnostics?.scope("admission");
   const assertCurrent =
     sessionMutationAuthorization || hasCurrentClientAuthority
       ? () => {
@@ -77,6 +81,7 @@ export async function prepareAndAdmitChatSend(
     request: normalizedRequest.value,
     context,
     client,
+    isDirectExternalUser: options?.isDirectExternalUser,
   });
   if (!loadedSession.ok) {
     respond(
@@ -109,6 +114,7 @@ export async function prepareAndAdmitChatSend(
       return undefined;
     }
   }
+  phase?.mark("authority");
   const shouldAdmit = await runChatSendPreAdmission({
     request: normalizedRequest.value,
     session: loadedSession.value,
@@ -143,6 +149,7 @@ export async function prepareAndAdmitChatSend(
       respond(false, undefined, nativeRestriction);
       return undefined;
     }
+    phase?.mark("runAdmission");
     admitted = await admitChatSend({
       request: normalizedRequest.value,
       session,
@@ -159,6 +166,7 @@ export async function prepareAndAdmitChatSend(
     if (!admitted.ok) {
       return undefined;
     }
+    phase?.finish();
     return {
       request: normalizedRequest.value,
       session,

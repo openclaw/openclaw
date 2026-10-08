@@ -282,14 +282,14 @@ function writePatchedRuntimeFixture(bundling = "default") {
     );
     let artifact = registryDependencyArtifacts.get(inputKey);
     if (!artifact) {
-      const pack = spawnSync(
-        "npm",
-        ["pack", "--json", "--ignore-scripts", "--pack-destination", repoDir],
-        {
-          cwd: dependencyDir,
-          encoding: "utf8",
-        },
-      );
+      const npm = resolveNpmRunner({
+        npmArgs: ["pack", "--json", "--ignore-scripts", "--pack-destination", repoDir],
+      });
+      const pack = spawnSync(npm.command, npm.args, {
+        ...npm,
+        cwd: dependencyDir,
+        encoding: "utf8",
+      });
       expect(pack.status, pack.stderr).toBe(0);
       const tarball = readFileSync(join(repoDir, parseNpmPackResult(pack.stdout).filename));
       artifact = {
@@ -1347,18 +1347,24 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     try {
       let packResult: NpmPackResult;
       if (bundling === "clawhub") {
-        const cli = join(repoDir, "clawhub.cjs");
+        const cli = join(repoDir, "clawhub");
+        const cliEntry = join(repoDir, "clawhub.mjs");
         const metadata = join(consumerDir, "pack-metadata.json");
         writeFileText(
           cli,
-          `#!${process.execPath}
-const { execFileSync } = require("node:child_process");
-const fs = require("node:fs");
-const path = require("node:path");
+          '#!/bin/sh\nexec "$CLAWHUB_FIXTURE_RUNTIME" "$CLAWHUB_FIXTURE_ENTRY" "$@"\n',
+        );
+        writeFileText(
+          cliEntry,
+          `import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { resolveNpmRunner } from ${JSON.stringify(new URL("../scripts/npm-runner.mts", import.meta.url).href)};
 const args = process.argv.slice(2);
 const source = args[args.indexOf("pack") + 1];
 const destination = args[args.indexOf("--pack-destination") + 1];
-const stdout = execFileSync("npm", ["pack", source, "--json", "--ignore-scripts", "--pack-destination", destination], { encoding: "utf8" });
+const npm = resolveNpmRunner({ npmArgs: ["pack", source, "--json", "--ignore-scripts", "--pack-destination", destination] });
+const stdout = execFileSync(npm.command, npm.args, { ...npm, encoding: "utf8" });
 fs.writeFileSync(${JSON.stringify(metadata)}, stdout);
 const output = JSON.parse(stdout);
 const [packed] = Array.isArray(output) ? output : Object.values(output);
@@ -1373,6 +1379,8 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
           OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
           OPENCLAW_CLAWHUB_CLI: cli,
           OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: consumerDir,
+          CLAWHUB_FIXTURE_RUNTIME: process.execPath,
+          CLAWHUB_FIXTURE_ENTRY: cliEntry,
         };
         delete env.OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT;
         await execFileAsync(

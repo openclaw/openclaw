@@ -178,7 +178,6 @@ function buildCodexAppServerFailureText(message: string): string | null {
   return null;
 }
 
-/** Formats the reply shown when preflight compaction fails before a run. */
 export function buildPreflightCompactionFailureText(
   message: string,
   options?: { includeDetails?: boolean },
@@ -504,7 +503,6 @@ export function buildEmptyInteractiveReplyPayload(params: {
   });
 }
 
-/** Converts known agent-run failures into user-facing reply payloads. */
 export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
   sessionCtx: TemplateContext;

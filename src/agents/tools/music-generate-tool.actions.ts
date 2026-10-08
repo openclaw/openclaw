@@ -56,7 +56,12 @@ function summarizeMusicGenerationCapabilities(
 
 export function createMusicGenerateListActionResult(
   config?: OpenClawConfig,
-  options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
+  options?: {
+    workspaceDir?: string;
+    agentDir?: string;
+    authStore?: AuthProfileStore;
+    authProfileStoreSource?: boolean;
+  },
 ): MediaGenerateActionResult {
   const providers = listRuntimeMusicGenerationProviders({ config });
   return createMediaGenerateProviderListActionResult({
@@ -67,6 +72,7 @@ export function createMusicGenerateListActionResult(
     workspaceDir: options?.workspaceDir,
     agentDir: options?.agentDir,
     authStore: options?.authStore,
+    authProfileStoreSource: options?.authProfileStoreSource,
     listModes: listSupportedMusicGenerationModes,
     summarizeCapabilities: summarizeMusicGenerationCapabilities,
   });

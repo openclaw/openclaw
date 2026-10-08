@@ -58,7 +58,7 @@ it("invalidates fresh inventory when only the persisted session ceiling changes"
   };
 
   const first = await invoke();
-  inventoryMocks.resolveEffectiveToolInventory.mockReturnValueOnce({
+  inventoryMocks.resolveEffectiveToolInventory.mockResolvedValueOnce({
     agentId: "main",
     profile: "coding",
     groups: [],

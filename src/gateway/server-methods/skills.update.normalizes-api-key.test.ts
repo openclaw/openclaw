@@ -69,41 +69,6 @@ function expectWrittenSkillEntry(skillKey: string, entry: unknown) {
 }
 
 describe("skills.update", () => {
-  it("strips embedded CR/LF from apiKey", async () => {
-    writtenConfig = null;
-    loadedConfig = {
-      skills: {
-        entries: {},
-      },
-    };
-
-    let ok: boolean | null = null;
-    let error: unknown = null;
-    await expectDefined(
-      skillsHandlers["skills.update"],
-      'skillsHandlers["skills.update"] test invariant',
-    )({
-      params: {
-        skillKey: "brave-search",
-        apiKey: "abc\r\ndef",
-      },
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
-      context: { getRuntimeConfig: () => ({ skills: { entries: {} } }) } as never,
-      respond: (success, _result, err) => {
-        ok = success;
-        error = err;
-      },
-    });
-
-    expect(ok).toBe(true);
-    expect(error).toBeUndefined();
-    expectWrittenSkillEntry("brave-search", {
-      apiKey: "abcdef",
-    });
-  });
-
   it("redacts apiKey and secret env values from the response but writes full values to config", async () => {
     writtenConfig = null;
     loadedConfig = {
@@ -119,7 +84,7 @@ describe("skills.update", () => {
     )({
       params: {
         skillKey: "demo-skill",
-        apiKey: "secret-api-key-123",
+        apiKey: "secret-api-\r\nkey-123",
         env: {
           GEMINI_API_KEY: "secret-env-key-456",
           BRAVE_REGION: "us",

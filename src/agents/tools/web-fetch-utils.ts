@@ -45,8 +45,7 @@ function decodeEntities(value: string): string {
   return decodeHtmlEntities(value.replace(/&nbsp;/gi, "\u00a0")).replaceAll("\u00a0", " ");
 }
 
-function readAttributeValue(rawTag: string, name: string): string | undefined {
-  const target = name.toLowerCase();
+function readAnchorHref(rawTag: string): string | undefined {
   let pos = 0;
   while (pos < rawTag.length && !isAsciiWhitespace(rawTag.charAt(pos))) {
     pos += 1;
@@ -99,7 +98,7 @@ function readAttributeValue(rawTag: string, name: string): string | undefined {
         value = rawTag.slice(valueStart, pos);
       }
     }
-    if (attrName === target) {
+    if (attrName === "href") {
       return decodeEntities(value);
     }
   }
@@ -277,10 +276,8 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
       i = readRawTextBounds(html, token.name, i).end;
       continue;
     }
-    if (BLOCK_BREAK_TAGS.has(token.name)) {
-      if (closeOpenAnchorWithText(stack, state)) {
-        appendText(stack, " ");
-      }
+    if (BLOCK_BREAK_TAGS.has(token.name) && closeOpenAnchorWithText(stack, state)) {
+      appendText(stack, " ");
     }
     if (token.name === "br" || token.name === "hr") {
       appendText(stack, "\n");
@@ -294,7 +291,7 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
       closeThroughContext(stack, "anchor", state);
       pushContext(
         stack,
-        { kind: "anchor", href: readAttributeValue(token.raw, "href"), hasText: false, parts: [] },
+        { kind: "anchor", href: readAnchorHref(token.raw), hasText: false, parts: [] },
         state,
       );
       continue;

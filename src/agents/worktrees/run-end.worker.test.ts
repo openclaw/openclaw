@@ -47,7 +47,7 @@ afterEach(async () => {
 });
 
 it("joins schema-wrapped work and keeps sibling and successor Gateway lifetimes open", async () => {
-  const { env, database } = fixture();
+  const { env, database } = await fixture();
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   const first = withExistingOpenClawStateSchema({ path: database.path }, () =>
     prepareWorktreeRunEndClose(),
@@ -77,11 +77,11 @@ it("joins schema-wrapped work and keeps sibling and successor Gateway lifetimes 
   );
 });
 
-function fixture() {
+async function fixture() {
   const root = dirs.make("worktree-run-end-worker-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
   const database = openOpenClawStateDatabase({ env });
-  insertRegistryWorktree(env, {
+  await insertRegistryWorktree(env, {
     id: "synthetic",
     name: "synthetic",
     repoFingerprint: "0123456789abcdef",
@@ -104,7 +104,7 @@ function fixture() {
 }
 
 it("settles snapshot chunks and exclusive removal claims without caller-thread SQL", async () => {
-  const { env, database, claim } = fixture();
+  const { env, database, claim } = await fixture();
   const sql = observeMainThreadSql();
   try {
     const mismatch = claimWorktreeRemovalRow(env, {
@@ -170,7 +170,7 @@ it("settles snapshot chunks and exclusive removal claims without caller-thread S
   expect(
     database.db.prepare("SELECT COUNT(*) AS count FROM worktree_provisioned_file_chunks").get(),
   ).toEqual({ count: 0 });
-  updateRegistryWorktree(env, claim.worktreeId, { lastActiveAt: 2 });
+  await updateRegistryWorktree(env, claim.worktreeId, { lastActiveAt: 2 });
   await admitWorktreeRunLeaseRowAsync(
     captureOpenClawStateWorkerContext({ env }),
     { ...claim, token: "successor" },
@@ -255,7 +255,7 @@ it("keeps session worktree row reads out of worker admission callbacks", async (
 });
 
 it("preserves committed bytes after reply loss, rolls back refused commits, and fences unknown cleanup", async () => {
-  const { env, database } = fixture();
+  const { env, database } = await fixture();
   const input = {
     worktreeId: "synthetic",
     path: "retained.bin",

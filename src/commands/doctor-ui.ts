@@ -108,10 +108,8 @@ async function collectProtocolSchemaChangesSince(
   if (!gitLog || gitLog.code !== 0) {
     return null;
   }
-  if (!gitLog.stdout.trim()) {
-    return [];
-  }
-  return gitLog.stdout.trim().split("\n");
+  const output = gitLog.stdout.trim();
+  return output ? output.split("\n") : [];
 }
 
 export function uiProtocolFreshnessIssueToHealthFinding(

@@ -59,15 +59,6 @@ function readServiceSqliteEnvironment(
   };
 }
 
-function readServiceProxyEnvironment(
-  env: Record<string, string | undefined>,
-): Record<string, string | undefined> {
-  // Service env intentionally preserves only the canonical OpenClaw proxy knob;
-  // generic shell proxy vars are audited but not frozen into services.
-  const proxyUrl = normalizeOptionalString(env.OPENCLAW_PROXY_URL);
-  return proxyUrl ? { OPENCLAW_PROXY_URL: proxyUrl } : {};
-}
-
 function normalizeServicePathDir(dir: string | undefined): string | undefined {
   const trimmed = dir?.trim();
   // Service PATH snapshots are only emitted for macOS/Linux; keep POSIX semantics
@@ -163,31 +154,6 @@ function addExistingDir(
   }
 }
 
-// Nix shell precedence: rightmost profile in NIX_PROFILES = highest priority.
-// When NIX_PROFILES is absent, fall back to the default single-user profile.
-function addNixProfileBinDirs(
-  dirs: string[],
-  home: string,
-  env: Record<string, string | undefined> | undefined,
-  options: Pick<MinimalServicePathOptions, "cwd" | "home">,
-  includeMissingDefault: boolean,
-  existsSync: (candidate: string) => boolean,
-): void {
-  const nixProfiles = env?.NIX_PROFILES?.trim();
-  if (nixProfiles) {
-    for (const profile of nixProfiles.split(/\s+/).toReversed()) {
-      addEnvConfiguredBinDir(dirs, appendSubdir(profile, "bin"), options);
-    }
-  } else {
-    const defaultProfileBin = `${home}/.nix-profile/bin`;
-    if (includeMissingDefault) {
-      dirs.push(defaultProfileBin);
-    } else {
-      addExistingDir(dirs, defaultProfileBin, existsSync);
-    }
-  }
-}
-
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   if (platform === "darwin") {
     return [
@@ -239,7 +205,18 @@ function resolveUserBinDirs(
   for (const directory of [".volta/bin", ".asdf/shims", ".bun/bin"]) {
     addExistingDir(dirs, `${home}/${directory}`, existsSync);
   }
-  addNixProfileBinDirs(dirs, home, env, pathOptions, includeMissingUserBinDefaults, existsSync);
+  // Nix gives the rightmost profile highest priority; otherwise use the default profile.
+  const nixProfiles = env?.NIX_PROFILES?.trim();
+  if (nixProfiles) {
+    for (const profile of nixProfiles.split(/\s+/).toReversed()) {
+      addEnvConfiguredBinDir(dirs, appendSubdir(profile, "bin"), pathOptions);
+    }
+  } else {
+    const defaultProfileBin = `${home}/.nix-profile/bin`;
+    if (includeMissingUserBinDefaults || existsSync(defaultProfileBin)) {
+      dirs.push(defaultProfileBin);
+    }
+  }
   // Preserve both the pnpm root (v10) and its bin subdirectory (v11) in order.
   for (const directory of [
     ".nvm/current/bin",
@@ -286,24 +263,24 @@ function resolveGatewaySystemdUnitEnv(env: Record<string, string | undefined>): 
   return `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
 }
 
-export function buildServiceEnvironment(params: {
+type ServiceEnvironmentParams = {
   env: Record<string, string | undefined>;
-  port: number;
-  existingNodeOptions?: string;
   runtime?: GatewayDaemonRuntime;
-  launchdLabel?: string;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
   execPath?: string;
-}): Record<string, string | undefined> {
-  const { env, port, launchdLabel, extraPathDirs } = params;
+};
+
+export function buildServiceEnvironment(
+  params: ServiceEnvironmentParams & {
+    port: number;
+    existingNodeOptions?: string;
+    launchdLabel?: string;
+  },
+): Record<string, string | undefined> {
+  const { env, port, launchdLabel } = params;
   const platform = params.platform ?? process.platform;
-  const commonEnvironment = buildCommonServiceEnvironment(
-    env,
-    platform,
-    extraPathDirs,
-    params.execPath,
-  );
+  const commonEnvironment = buildCommonServiceEnvironment(params, platform);
   const profile = env.OPENCLAW_PROFILE;
   const wrapperPath = normalizeOptionalString(env.OPENCLAW_WRAPPER);
   const resolvedLaunchdLabel =
@@ -333,21 +310,12 @@ export function buildServiceEnvironment(params: {
   };
 }
 
-export function buildNodeServiceEnvironment(params: {
-  env: Record<string, string | undefined>;
-  runtime?: GatewayDaemonRuntime;
-  platform?: NodeJS.Platform;
-  extraPathDirs?: string[];
-  execPath?: string;
-}): Record<string, string | undefined> {
-  const { env, extraPathDirs } = params;
+export function buildNodeServiceEnvironment(
+  params: ServiceEnvironmentParams,
+): Record<string, string | undefined> {
+  const { env } = params;
   const platform = params.platform ?? process.platform;
-  const commonEnvironment = buildCommonServiceEnvironment(
-    env,
-    platform,
-    extraPathDirs,
-    params.execPath,
-  );
+  const commonEnvironment = buildCommonServiceEnvironment(params, platform);
   return {
     ...commonEnvironment,
     ...readServiceSqliteEnvironment(env, platform, params.runtime),
@@ -380,10 +348,8 @@ function resolveServiceTmpDir(
 }
 
 function buildCommonServiceEnvironment(
-  env: Record<string, string | undefined>,
+  { env, extraPathDirs, execPath }: ServiceEnvironmentParams,
   platform: NodeJS.Platform,
-  extraPathDirs: string[] | undefined,
-  execPath?: string,
 ): Record<string, string | undefined> {
   const tmpDir = resolveServiceTmpDir(env, platform);
   // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
@@ -402,6 +368,8 @@ function buildCommonServiceEnvironment(
       : getMinimalServicePathPartsFromEnv({ env, platform, extraDirs: extraPathDirs }).join(
           path.posix.delimiter,
         );
+  // Generic shell proxy vars are audited but never frozen into services.
+  const proxyUrl = normalizeOptionalString(env.OPENCLAW_PROXY_URL);
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,
@@ -409,7 +377,7 @@ function buildCommonServiceEnvironment(
     NODE_USE_SYSTEM_CA: startupTlsEnv.NODE_USE_SYSTEM_CA,
     OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR,
     OPENCLAW_CONFIG_PATH: env.OPENCLAW_CONFIG_PATH,
-    ...readServiceProxyEnvironment(env),
+    ...(proxyUrl ? { OPENCLAW_PROXY_URL: proxyUrl } : {}),
     ...(minimalPath ? { PATH: minimalPath } : {}),
   };
 }

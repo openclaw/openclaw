@@ -31,22 +31,13 @@ export type BrowserDashboardTarget = {
   sessionScoped?: boolean;
 };
 
-export type BrowserDashboard = {
-  sessionKey: string;
-  name: string;
-  instanceId: string;
-  revision: number;
-  paused: boolean;
-  stopping: boolean;
-  url: string;
-  browserTab?: BrowserTabTarget;
-};
+export type BrowserDashboard = Awaited<ReturnType<typeof requestBrowserDashboard>>;
 
 export async function requestBrowserDashboard(
   client: BrowserRequestClient,
   params: BrowserDashboardTarget,
   action: "open" | "resume" | "stop" | "inspect" = "open",
-): Promise<BrowserDashboard> {
+) {
   const result = asRecord(
     await client.request(
       params.sessionScoped ? "browser.dashboard.request" : "browser.request",
@@ -121,35 +112,10 @@ export type BrowserPanelTab = {
   urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
 };
 
-type BrowserTabsSnapshot = {
-  running: boolean;
-  tabs: BrowserPanelTab[];
-};
-
-type BrowserScreenshotCapture = {
-  path: string;
-  targetId: string;
-  url: string;
-};
-
 /** CSS-pixel geometry of the remote page, used to map panel coords to page coords. */
-export type BrowserPageMetrics = {
-  cssWidth: number;
-  cssHeight: number;
-  title: string;
-  url: string;
-};
+export type BrowserPageMetrics = NonNullable<Awaited<ReturnType<typeof readBrowserPageMetrics>>>;
 
-export type BrowserInspectedNode = {
-  tag: string;
-  id: string;
-  classes: string[];
-  role: string;
-  name: string;
-  /** Bounding rect in remote CSS viewport pixels. */
-  rect: { x: number; y: number; width: number; height: number };
-  focusable: boolean;
-};
+export type BrowserInspectedNode = NonNullable<ReturnType<typeof readBrowserInspectedNode>>;
 
 type BrowserRequestEnvelope = {
   method: "GET" | "POST" | "DELETE";
@@ -278,7 +244,7 @@ function normalizeTab(value: unknown): BrowserPanelTab | null {
   };
 }
 
-export async function listBrowserTabs(client: BrowserRequestClient): Promise<BrowserTabsSnapshot> {
+export async function listBrowserTabs(client: BrowserRequestClient) {
   const result = asRecord(await browserRequest(client, { method: "GET", path: "/tabs" }));
   const tabs = Array.isArray(result?.tabs)
     ? result.tabs.flatMap((tab) => normalizeTab(tab) ?? [])
@@ -382,10 +348,7 @@ export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
   );
 }
 
-export async function captureBrowserScreenshot(
-  client: BrowserRequestClient,
-  targetId: string,
-): Promise<BrowserScreenshotCapture> {
+export async function captureBrowserScreenshot(client: BrowserRequestClient, targetId: string) {
   const result = asRecord(
     await browserRequest(client, {
       method: "POST",
@@ -406,14 +369,13 @@ export async function captureBrowserScreenshot(
 
 export async function clickBrowserCoords(
   client: BrowserRequestClient,
-  params: { targetId: string; x: number; y: number; doubleClick?: boolean },
+  params: { targetId: string; x: number; y: number },
 ) {
   await browserAction(client, {
     kind: "clickCoords",
     targetId: params.targetId,
     x: Math.max(0, Math.round(params.x)),
     y: Math.max(0, Math.round(params.y)),
-    ...(params.doubleClick ? { doubleClick: true } : {}),
   });
 }
 
@@ -499,10 +461,7 @@ export async function goBrowserHistory(
   });
 }
 
-export async function readBrowserPageMetrics(
-  client: BrowserRequestClient,
-  targetId: string,
-): Promise<BrowserPageMetrics | null> {
+export async function readBrowserPageMetrics(client: BrowserRequestClient, targetId: string) {
   const result = asRecord(
     await evaluateInBrowser(client, {
       targetId,
@@ -536,7 +495,7 @@ export async function inspectBrowserElementAt(
   );
 }
 
-export function readBrowserInspectedNode(value: unknown): BrowserInspectedNode | null {
+export function readBrowserInspectedNode(value: unknown) {
   const result = asRecord(value);
   if (!result) {
     return null;
@@ -550,6 +509,7 @@ export function readBrowserInspectedNode(value: unknown): BrowserInspectedNode |
       : [],
     role: stringOrEmpty(result.role),
     name: stringOrEmpty(result.name),
+    /** Bounding rect in remote CSS viewport pixels. */
     rect: {
       x: asFiniteNumber(rect?.x) ?? 0,
       y: asFiniteNumber(rect?.y) ?? 0,

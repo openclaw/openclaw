@@ -168,8 +168,8 @@ async function sendLinePairingReply(params: {
   await createChannelPairingChallengeIssuer({
     channel: "line",
     accountId: context.account.accountId,
-    upsertPairingRequest: async ({ id, meta }) =>
-      await upsertChannelPairingRequest({
+    upsertPairingRequest: ({ id, meta }) =>
+      upsertChannelPairingRequest({
         channel: "line",
         id,
         accountId: context.account.accountId,
@@ -181,8 +181,8 @@ async function sendLinePairingReply(params: {
     onCreated: () => {
       logVerbose(`line pairing request sender=${senderId}`);
     },
-    sendPairingReply: async (text) =>
-      await sendLineHandlerText({
+    sendPairingReply: (text) =>
+      sendLineHandlerText({
         context,
         text,
         replyToken,
@@ -204,14 +204,7 @@ function isLineEventAdmitted(access: ResolvedChannelMessageIngress): boolean {
 async function resolveLineEventAdmission(
   event: MessageEvent | PostbackEvent | JoinEvent,
   context: LineHandlerContext,
-): Promise<{
-  access: ResolvedChannelMessageIngress;
-  resolveBoundAccess: (
-    contextBinding?: ChannelIngressContextBinding,
-  ) => Promise<ResolvedChannelMessageIngress>;
-  mentions?: LineInboundMentionAccess;
-  preparedRoute?: PreparedLineInboundRoute;
-} | null> {
+) {
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
@@ -253,8 +246,7 @@ async function resolveLineEventAdmission(
         entryIdPrefix: "line-entry",
       },
       cfg,
-      readStoreAllowFrom: async () =>
-        await readChannelAllowFromStore("line", undefined, account.accountId),
+      readStoreAllowFrom: () => readChannelAllowFromStore("line", undefined, account.accountId),
       subject: event.type === "join" ? {} : { stableId: senderId },
       conversation: {
         kind: isGroup ? "group" : "direct",

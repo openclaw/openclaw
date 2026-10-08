@@ -1,4 +1,5 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { resolveUiConversationIdentity, hasUiSessionDefaults } from "../sessions/session-key.ts";
 import type {
@@ -9,10 +10,7 @@ import type {
   HumanMention,
 } from "./chat-types.ts";
 import { findChatSubmissionMessage } from "./history-message-identity.ts";
-import {
-  observeOutboxRecoveryOwner,
-  outboxPayloadCanRecover,
-} from "./outbox-payload-store.runtime.ts";
+import { outboxPayloadCanRecover } from "./outbox-payload-store.runtime.ts";
 import { normalizeStoredSession } from "./outbox-store-codec.ts";
 import { nextDraftRevision, readDraftRevisionState } from "./outbox-store-draft-state.ts";
 import type { ComposerStorageTarget, StoredChatOutboxScope } from "./outbox-store-scope.ts";
@@ -202,7 +200,7 @@ export function captureChatOutboxRecoveryDestination(
   scope: StoredChatOutboxScope,
 ) {
   const storage = getSafeSessionStorage();
-  const recoveryScope = observeOutboxRecoveryOwner(state);
+  const recoveryScope = readOfflineStorageScope(state);
   if (
     !storage ||
     !recoveryScope ||

@@ -32,8 +32,9 @@ import {
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { i18n, t } from "../../i18n/index.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { formatDateTimeMs } from "../../lib/format.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
@@ -58,13 +59,6 @@ function grantIsActive(grant: ExecApprovalStandingGrant, nowMs: number): boolean
 }
 const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
 const APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
-
-function formatResolvedAt(timestampMs: number): string {
-  return new Intl.DateTimeFormat(i18n.getLocale(), {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(timestampMs));
-}
 
 const APPROVAL_KIND_LABELS = {
   exec: "approvalHistory.kinds.exec",
@@ -484,7 +478,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
                     (item) => html`
                       <tr>
                         <td data-label=${t("approvalHistory.columns.resolved")}>
-                          ${formatResolvedAt(item.resolvedAtMs)}
+                          ${formatDateTimeMs(item.resolvedAtMs, { dateStyle: "medium", timeStyle: "short" })}
                         </td>
                         <td data-label=${t("approvalHistory.columns.kind")}>
                           ${t(APPROVAL_KIND_LABELS[item.presentation.kind])}

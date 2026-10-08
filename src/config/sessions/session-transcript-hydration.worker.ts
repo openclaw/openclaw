@@ -59,7 +59,7 @@ export async function streamSessionTranscriptHydration(
       const source = prepareTranscriptEventReadQuery(database, request.resolvedScope.sessionId, {
         ...request.target,
         beforeEventSeq: fence?.beforeRawSeq,
-      });
+      }).$if(request.afterSeq !== undefined, (query) => query.where("seq", ">", request.afterSeq!));
       const readPart = prepareSqliteQueryTakeFirstSync<
         { seq: number; offset: number },
         { data: Uint8Array }

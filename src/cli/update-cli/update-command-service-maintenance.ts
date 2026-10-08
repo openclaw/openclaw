@@ -162,7 +162,8 @@ type ManagedServiceStopParams = {
   expectedService?: Pick<
     PreManagedServiceStop,
     "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
-  >;
+  > &
+    Partial<Pick<PreManagedServiceStop, "stopped">>;
   allowInstallRootChange?: boolean;
   onStopped?: (state: PreManagedServiceStop) => void;
   /** Doctor restores this same native instance after its offline repair. */
@@ -305,6 +306,17 @@ async function stopManagedServiceBeforeMutableUpdate(
   try {
     const inspectedService = resolveGatewayService();
     service = inspectedService;
+    // Stable 2026.9.2/2026.9.3 handoffs predate serviceManagerUid. Their stopped
+    // native unit can already be collected when candidate validation reinspects it,
+    // so retain the installed updater's account as the native manager boundary.
+    const legacyStoppedManagerUid =
+      process.platform === "linux" &&
+      params.expectedService?.stopped === true &&
+      params.expectedService.serviceManagerUid === undefined &&
+      params.expectedService.serviceEnv &&
+      typeof process.geteuid === "function"
+        ? process.geteuid()
+        : undefined;
     for (let attempt = 0; ; attempt++) {
       const retryTimeout = process.platform === "win32" && attempt === 0;
       try {
@@ -313,9 +325,12 @@ async function stopManagedServiceBeforeMutableUpdate(
             inspectedService,
             serviceEnv,
             params.timeoutMs,
-            params.phase === "inspect"
+            params.phase === "inspect" && !params.assertCurrent
               ? undefined
-              : { managerUid: params.expectedService?.serviceManagerUid, assertCurrent },
+              : {
+                  managerUid: params.expectedService?.serviceManagerUid ?? legacyStoppedManagerUid,
+                  assertCurrent,
+                },
           ),
         );
       } catch (error) {

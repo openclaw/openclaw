@@ -19,15 +19,10 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}) {
   return {
     prepareReload: prepareMemoryManagerReload,
     async getMemorySearchManager(params) {
-      const { manager, debug, error } = await getMemorySearchManager({
+      return await getMemorySearchManager({
         ...params,
         ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
       });
-      return {
-        manager,
-        debug,
-        error,
-      };
     },
     resolveMemoryBackendConfig,
     async authorizeSearchHits(params) {

@@ -13,7 +13,7 @@ import {
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import { listLegacyOAuthSidecarPaths } from "../commands/doctor-auth-legacy-paths.js";
+import { listReferencedLegacyOAuthSidecarPaths } from "../commands/doctor-auth-legacy-paths.js";
 import { createConfigRuntimeEnv } from "../config/config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
@@ -53,10 +53,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { listLegacyPairingStoreFiles } from "./pairing-files.js";
 import { isPathInside } from "./path-guards.js";
-import {
-  detectLegacyAcpReplayLedger,
-  migrateLegacyAcpReplayLedger,
-} from "./state-migrations.acp-replay.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import {
   legacyAgentQuarantineNotices,
   resolveLegacyStandaloneAgentDir,
@@ -118,7 +115,6 @@ import {
   migrateLegacyMeetingTranscripts,
 } from "./state-migrations.meeting-transcripts.js";
 import {
-  createLegacyStateMigrationStepReceipt,
   formatStartupMigrationFailure,
   logStateMigrationResult,
   mergeNotices,
@@ -161,22 +157,12 @@ import {
   detectLegacyRescuePending,
   discardLegacyRescuePending,
 } from "./state-migrations.rescue-pending.js";
-import {
-  detectLegacyRestartSentinel,
-  migrateLegacyRestartSentinel,
-} from "./state-migrations.restart-sentinel.js";
 import { listRetiredDeliveryQueueFiles } from "./state-migrations.retired-delivery-files.js";
 import { assertNoRetiredStateFiles } from "./state-migrations.retired-files.js";
+import { assertNoRetiredRuntimeStateFiles } from "./state-migrations.retired-runtime-files.js";
 import {
   migrateLegacyConfigHealth,
-  migrateLegacyCurrentConversationBindings,
-  migrateLegacyPluginBindingApprovals,
-  migrateLegacyVoiceWakeSettings,
   resolveLegacyConfigHealthPath,
-  resolveLegacyCurrentConversationBindingsPath,
-  resolveLegacyPluginBindingApprovalsPath,
-  resolveLegacyVoiceWakeRoutingPath,
-  resolveLegacyVoiceWakeTriggersPath,
 } from "./state-migrations.runtime-state.js";
 import {
   listLegacySessionKeys,
@@ -197,6 +183,7 @@ import {
   createStateSchemaMigrationStep,
   describeStateSchemaMigration,
 } from "./state-migrations.state-schema.js";
+import { runLegacyStateMigrationSteps } from "./state-migrations.steps.js";
 import {
   detectLegacyTuiLastSessions,
   inspectLegacyTuiLastSessionRefusal,
@@ -214,10 +201,6 @@ import type {
   LegacyStateMigrationStep,
   PreparedPostSessionPluginMigration,
 } from "./state-migrations.types.js";
-import {
-  migrateLegacyUpdateCheckState,
-  resolveLegacyUpdateCheckPath,
-} from "./state-migrations.update-check.js";
 import { detectLegacyWebPush, migrateLegacyWebPush } from "./state-migrations.web-push.js";
 import {
   detectLegacyWorkspaceState,
@@ -251,6 +234,7 @@ export async function detectLegacyStateMigrations(params: {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
+  assertNoRetiredRuntimeStateFiles(stateDir, env, homedir);
   assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(stateDir));
   const oauthDir = resolveOAuthDir(
     createConfigRuntimeEnv(params.sourceConfigBeforeMigrations ?? params.cfg, env),
@@ -396,32 +380,10 @@ export async function detectLegacyStateMigrations(params: {
   });
   const pairingStoreFiles =
     params.mode === "automatic" ? [] : await listLegacyPairingStoreFiles(stateDir);
-  const voiceWake = {
-    triggersPath: resolveLegacyVoiceWakeTriggersPath(stateDir),
-    routingPath: resolveLegacyVoiceWakeRoutingPath(stateDir),
-  };
-  const hasVoiceWake =
-    migrationFileExists(voiceWake.triggersPath) || migrationFileExists(voiceWake.routingPath);
-  const updateCheck = {
-    sourcePath: resolveLegacyUpdateCheckPath(stateDir),
-  };
-  const hasUpdateCheck = migrationFileExists(updateCheck.sourcePath);
   const configHealth = {
     sourcePath: resolveLegacyConfigHealthPath(stateDir),
   };
   const hasConfigHealth = migrationFileExists(configHealth.sourcePath);
-  const pluginBindingApprovals = {
-    sourcePath: resolveLegacyPluginBindingApprovalsPath(env, homedir),
-  };
-  const hasPluginBindingApprovals =
-    path.resolve(path.dirname(pluginBindingApprovals.sourcePath)) === path.resolve(stateDir) &&
-    migrationFileExists(pluginBindingApprovals.sourcePath);
-  const currentConversationBindings = {
-    sourcePath: resolveLegacyCurrentConversationBindingsPath(stateDir),
-  };
-  const hasCurrentConversationBindings = migrationFileExists(
-    currentConversationBindings.sourcePath,
-  );
   const detectDoctorOwnedState = <TDetection>(
     detect: (options: { stateDir: string; doctorOnlyStateMigrations?: boolean }) => TDetection,
   ): TDetection =>
@@ -433,7 +395,6 @@ export async function detectLegacyStateMigrations(params: {
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
   const auditLogs = detectDoctorOwnedState(detectLegacyAuditLogs);
-  const acpReplayLedger = detectDoctorOwnedState(detectLegacyAcpReplayLedger);
   const managedOutgoingImages = detectDoctorOwnedState(detectLegacyManagedOutgoingImages);
   const apns = detectDoctorOwnedState(detectLegacyApnsRegistrations);
   const deviceAuth = detectDoctorOwnedState(detectLegacyDeviceAuth);
@@ -457,7 +418,6 @@ export async function detectLegacyStateMigrations(params: {
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
-  const restartSentinel = detectLegacyRestartSentinel({ stateDir });
   const workspace = await detectLegacyWorkspaceState({
     cfg: params.cfg,
     stateDir,
@@ -620,17 +580,7 @@ export async function detectLegacyStateMigrations(params: {
         ? `- Shared auth store skipped: store held: ${sharedAuthStore.sourcePath}`
         : "- Shared auth store: legacy main-agent rows → shared SQLite state",
     ],
-    [hasVoiceWake, "- Voice Wake settings: legacy JSON files → shared SQLite state"],
-    [hasUpdateCheck, "- Update-check state: legacy JSON file → shared SQLite state"],
     [hasConfigHealth, "- Config health state: legacy JSON file → shared SQLite state"],
-    [
-      hasPluginBindingApprovals,
-      "- Plugin binding approvals: legacy JSON file → shared SQLite state",
-    ],
-    [
-      hasCurrentConversationBindings,
-      "- Current-conversation bindings: legacy JSON file → shared SQLite state",
-    ],
     [
       tuiLastSessions.hasLegacy,
       "- TUI last-session pointers: legacy JSON file → shared SQLite state",
@@ -643,7 +593,6 @@ export async function detectLegacyStateMigrations(params: {
       true,
       `- ${source.label}: legacy JSONL file → shared SQLite state`,
     ]),
-    [acpReplayLedger.hasLegacy, "- ACP replay ledger: legacy JSON file → shared SQLite state"],
     [
       managedOutgoingImages.hasLegacy,
       "- Managed outgoing images: legacy record JSON → shared SQLite state",
@@ -661,7 +610,6 @@ export async function detectLegacyStateMigrations(params: {
       meetingTranscripts.hasLegacy,
       "- Meeting transcripts: legacy JSON/JSONL files → shared SQLite state",
     ],
-    [restartSentinel.hasLegacy, "- Restart sentinel: legacy JSON → shared SQLite state"],
     [workspace.hasLegacy, "- Workspace setup and attestations: legacy files → shared SQLite state"],
     [
       webPush.hasLegacy,
@@ -725,30 +673,13 @@ export async function detectLegacyStateMigrations(params: {
     sharedAuthStore,
     worktrees,
     pairingStores: { sourcePaths: pairingStoreFiles, hasLegacy: pairingStoreFiles.length > 0 },
-    voiceWake: {
-      ...voiceWake,
-      hasLegacy: hasVoiceWake,
-    },
-    updateCheck: {
-      ...updateCheck,
-      hasLegacy: hasUpdateCheck,
-    },
     configHealth: {
       ...configHealth,
       hasLegacy: hasConfigHealth,
     },
-    pluginBindingApprovals: {
-      ...pluginBindingApprovals,
-      hasLegacy: hasPluginBindingApprovals,
-    },
-    currentConversationBindings: {
-      ...currentConversationBindings,
-      hasLegacy: hasCurrentConversationBindings,
-    },
     tuiLastSessions,
     commitments,
     auditLogs,
-    acpReplayLedger,
     managedOutgoingImages,
     apns,
     deviceAuth,
@@ -756,7 +687,6 @@ export async function detectLegacyStateMigrations(params: {
     execApprovals,
     mcpOauth,
     meetingTranscripts,
-    restartSentinel,
     workspace,
     webPush,
     nodeHost,
@@ -775,22 +705,16 @@ const unresolvedMigrationStepLayout = [
   ["managed-worktrees", "shared", "all"],
   ["shared-auth-store", "shared", "all"],
   ["debug-proxy-capture", "shared", "all"],
-  ["voice-wake", "shared", "all"],
-  ["update-check", "shared", "all"],
   ["config-health", "shared", "all"],
-  ["plugin-binding-approvals", "shared", "all"],
-  ["current-conversation-bindings", "shared", "all"],
   ["delivery-queues", "shared", "doctor"],
   ["pairing-stores", "shared", "doctor"],
   ["tui-last-session", "final", "doctor"],
   ["commitments", "final", "doctor"],
   ["audit-logs", "final", "doctor"],
-  ["acp-replay-ledger", "final", "doctor"],
   ["managed-outgoing-images", "final", "doctor"],
   ["apns-registrations", "final", "doctor"],
   ["exec-approvals", "final", "doctor"],
   ["mcp-oauth", "final", "doctor"],
-  ["restart-sentinel", "final", "all"],
   ["workspace-state", "final", "all"],
   ["web-push", "final", "doctor"],
   ["node-host", "final", "doctor"],
@@ -1180,25 +1104,9 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
       pathEndpoints(...detected.pairingStores.sourcePaths),
       detected.pairingStores.hasLegacy,
     ],
-    "voice-wake": [
-      pathEndpoints(detected.voiceWake.triggersPath, detected.voiceWake.routingPath),
-      detected.voiceWake.hasLegacy,
-    ],
-    "update-check": [
-      pathEndpoints(detected.updateCheck.sourcePath),
-      detected.updateCheck.hasLegacy,
-    ],
     "config-health": [
       pathEndpoints(detected.configHealth.sourcePath),
       detected.configHealth.hasLegacy,
-    ],
-    "plugin-binding-approvals": [
-      pathEndpoints(detected.pluginBindingApprovals.sourcePath),
-      detected.pluginBindingApprovals.hasLegacy,
-    ],
-    "current-conversation-bindings": [
-      pathEndpoints(detected.currentConversationBindings.sourcePath),
-      detected.currentConversationBindings.hasLegacy,
     ],
     "tui-last-session": [
       pathEndpoints(detected.tuiLastSessions.sourcePath),
@@ -1211,10 +1119,6 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
     "audit-logs": [
       pathEndpoints(...detected.auditLogs.sources.map((source) => source.sourcePath)),
       detected.auditLogs.hasLegacy,
-    ],
-    "acp-replay-ledger": [
-      pathEndpoints(detected.acpReplayLedger.sourcePath),
-      detected.acpReplayLedger.hasLegacy,
     ],
     "managed-outgoing-images": [
       pathEndpoints(detected.managedOutgoingImages.sourceDir),
@@ -1265,10 +1169,6 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
       detected.rescuePending.hasLegacy,
       [],
       "checkpoint-required",
-    ],
-    "restart-sentinel": [
-      pathEndpoints(detected.restartSentinel?.sourcePath),
-      detected.restartSentinel?.hasLegacy === true,
     ],
     "channel-pairing": [
       pathEndpoints(
@@ -1387,21 +1287,7 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
       "shared",
       false,
     ),
-    ownerStep("voice-wake", detected.voiceWake, migrateLegacyVoiceWakeSettings, "shared"),
-    ownerStep("update-check", detected.updateCheck, migrateLegacyUpdateCheckState, "shared"),
     ownerStep("config-health", detected.configHealth, migrateLegacyConfigHealth, "shared", false),
-    ownerStep(
-      "plugin-binding-approvals",
-      detected.pluginBindingApprovals,
-      migrateLegacyPluginBindingApprovals,
-      "shared",
-    ),
-    ownerStep(
-      "current-conversation-bindings",
-      detected.currentConversationBindings,
-      migrateLegacyCurrentConversationBindings,
-      "shared",
-    ),
   ];
 
   const eagerStateSteps: LegacyStateMigrationStep[] = [
@@ -1452,7 +1338,6 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
           ? [ownerStep("commitments", detected.commitments, migrateLegacyCommitments)]
           : []),
         ownerStep("audit-logs", detected.auditLogs, migrateLegacyAuditLogs),
-        ownerStep("acp-replay-ledger", detected.acpReplayLedger, migrateLegacyAcpReplayLedger),
         ownerStep(
           "managed-outgoing-images",
           detected.managedOutgoingImages,
@@ -1486,7 +1371,6 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
     : undefined;
   let unavailableWorkshopWorkspaces: ReadonlyMap<string, string> | undefined;
   const finalSteps: LegacyStateMigrationStep[] = [
-    ownerStep("restart-sentinel", detected.restartSentinel, migrateLegacyRestartSentinel),
     {
       ...ownerStep("workspace-state", detected.workspace, async (options) => {
         // Shared/agent schemas are ready here. Repair alias ownership before
@@ -1729,6 +1613,11 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   // The identity owner refuses unusable snapshot paths first; only an admitted
   // state directory is scanned for retired files, so a non-directory path keeps
   // its `snapshot-identity-unavailable` refusal instead of an inspection error.
+  assertNoRetiredRuntimeStateFiles(
+    requestedSnapshot.stateDir,
+    env,
+    () => requestedSnapshot.homeDir,
+  );
   assertNoRetiredStateFiles(
     "JSON delivery queues",
     listRetiredDeliveryQueueFiles(requestedSnapshot.stateDir),
@@ -2174,147 +2063,6 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   return plan;
 }
 
-async function runLegacyStateMigrationSteps(
-  steps: readonly LegacyStateMigrationStep[],
-  onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void,
-  shouldRun?: (step: LegacyStateMigrationStep) => boolean,
-  options?: {
-    onUnexpectedFailure?: (error: unknown) => void;
-    refusedAgentDatabasePaths?: Set<string>;
-  },
-): Promise<{
-  sources: MigrationMessages[];
-  sharedSources: MigrationMessages[];
-  finalSources: MigrationMessages[];
-  sharedNoticeSources: MigrationMessages[];
-  finalNoticeSources: MigrationMessages[];
-  entries: Array<{ id: string; result: MigrationMessages }>;
-  receipts: LegacyStateMigrationStepReceipt[];
-  deferredSteps: LegacyStateMigrationStep[];
-  haltedBy: LegacyStateMigrationStepReceipt | undefined;
-}> {
-  const sources: MigrationMessages[] = [];
-  const sharedSources: MigrationMessages[] = [];
-  const finalSources: MigrationMessages[] = [];
-  const sharedNoticeSources: MigrationMessages[] = [];
-  const finalNoticeSources: MigrationMessages[] = [];
-  const entries: Array<{ id: string; result: MigrationMessages }> = [];
-  const receipts: LegacyStateMigrationStepReceipt[] = [];
-  const deferredSteps: LegacyStateMigrationStep[] = [];
-  let haltedBy: LegacyStateMigrationStepReceipt | undefined;
-
-  // Keep writers serial. Scoped ownership refusals leave independent owners available.
-  for (const [index, step] of steps.entries()) {
-    const refusedDependencies = [...(options?.refusedAgentDatabasePaths ?? [])].filter(
-      (databasePath) =>
-        // Post-session plugins depend on canonical session repair, including its database owners.
-        step.deferredExecution?.kind === "post-session-plugin" ||
-        (step.reversibility !== "not-applicable" &&
-          [...step.source, ...step.target].some(
-            (endpoint) =>
-              endpoint.kind !== "owner" &&
-              (path.resolve(endpoint.path) === databasePath ||
-                (endpoint.kind === "path" && isPathInside(endpoint.path, databasePath))),
-          )),
-    );
-    if (refusedDependencies.length > 0) {
-      const message = `Migration step "${step.id}" was not run because it requires refused agent database(s): ${refusedDependencies.join(", ")}.`;
-      const result = { changes: [], warnings: [message] };
-      const receipt: LegacyStateMigrationStepReceipt = {
-        ...migrationStepPlan(step),
-        outcome: "refused",
-        ...result,
-        refusal: { code: "blocked-by-agent-database-refusal", message },
-        refusedAgentDatabasePaths: refusedDependencies,
-      };
-      entries.push({ id: step.id, result });
-      receipts.push(receipt);
-      onStepReceipt?.(receipt);
-      sources.push(result);
-      (step.phase === "shared" ? sharedSources : finalSources).push(result);
-      continue;
-    }
-    if (step.deferredExecution) {
-      // This phase depends on later canonical session repair. Keep its authority open
-      // until that writer runs; an earlier refusal still closes it through the tail path.
-      deferredSteps.push(step);
-      continue;
-    }
-    if (shouldRun && !shouldRun(step) && step.requiredness === "not-required") {
-      const receipt: LegacyStateMigrationStepReceipt = {
-        ...migrationStepPlan(step),
-        outcome: "skipped",
-        changes: [],
-        warnings: [],
-      };
-      receipts.push(receipt);
-      onStepReceipt?.(receipt);
-      continue;
-    }
-    let result: MigrationMessages;
-    let receipt: LegacyStateMigrationStepReceipt | undefined;
-    let unexpectedFailure: { error: unknown } | undefined;
-    try {
-      result = await step.run();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      result = { changes: [], warnings: [message] };
-      receipt = {
-        ...migrationStepPlan(step),
-        outcome: "refused",
-        ...result,
-        refusal: { code: "step-threw", message },
-      };
-      unexpectedFailure = { error };
-    }
-    receipt ??= createLegacyStateMigrationStepReceipt(migrationStepPlan(step), result);
-    entries.push({ id: step.id, result });
-    receipts.push(receipt);
-    onStepReceipt?.(receipt);
-    if (unexpectedFailure) {
-      options?.onUnexpectedFailure?.(unexpectedFailure.error);
-    }
-    sources.push(result);
-    (step.phase === "shared" ? sharedSources : finalSources).push(result);
-    if (!unexpectedFailure && step.collectNotices) {
-      (step.phase === "shared" ? sharedNoticeSources : finalNoticeSources).push(result);
-    }
-    if (receipt.outcome === "refused") {
-      if (
-        step.id === "media-persistence" &&
-        result.refusedAgentDatabasePaths?.length &&
-        options?.refusedAgentDatabasePaths
-      ) {
-        for (const databasePath of result.refusedAgentDatabasePaths) {
-          options.refusedAgentDatabasePaths.add(path.resolve(databasePath));
-        }
-        continue;
-      }
-      haltedBy = receipt;
-      receipts.push(
-        ...createBlockedLegacyStateMigrationStepReceipts({
-          steps: steps.slice(index + 1),
-          blocker: receipt,
-          onStepReceipt,
-        }),
-      );
-      break;
-    }
-  }
-
-  return {
-    sources,
-    sharedSources,
-    finalSources,
-    sharedNoticeSources,
-    finalNoticeSources,
-    entries,
-    receipts,
-    deferredSteps,
-    haltedBy,
-  };
-}
-
 function completedPluginMigrationFields(
   sources: readonly MigrationMessages[],
 ): Pick<MigrationMessages, "completedPluginIds" | "requiredPluginIds" | "statelessPluginIds"> {
@@ -2363,7 +2111,15 @@ export async function runLegacyStateMigrations(params: {
     stepReceipts: LegacyStateMigrationStepReceipt[];
   }
 > {
+  const signal = resolveSqliteInspectionSignal();
+  let failure: { error: unknown } | undefined;
+  const executionOptions = {
+    onUnexpectedFailure: (error: unknown) => {
+      failure ??= { error };
+    },
+  };
   const detected = params.detected;
+  assertNoRetiredRuntimeStateFiles(detected.stateDir, params.env);
   assertNoRetiredStateFiles(
     "JSON delivery queues",
     listRetiredDeliveryQueueFiles(detected.stateDir),
@@ -2371,8 +2127,12 @@ export async function runLegacyStateMigrations(params: {
   const env = params.env ?? process.env;
   const config = params.config ?? ({} as OpenClawConfig);
   assertNoRetiredStateFiles("OAuth credential sidecars", [
-    ...listLegacyOAuthSidecarPaths(env, config, detected.stateDir),
-    ...listLegacyOAuthSidecarPaths({ ...env, OPENCLAW_OAUTH_DIR: detected.oauthDir }),
+    ...listReferencedLegacyOAuthSidecarPaths(env, config, detected.stateDir),
+    ...listReferencedLegacyOAuthSidecarPaths(
+      { ...env, OPENCLAW_OAUTH_DIR: detected.oauthDir },
+      config,
+      detected.stateDir,
+    ),
   ]);
   const legacySessionSurfaces = params.legacySessionSurfaces;
   const buildSteps = (pluginStateMigrationInventory?: PluginDoctorStateMigrationInventory) =>
@@ -2389,22 +2149,31 @@ export async function runLegacyStateMigrations(params: {
       legacySessionSurfaces,
     });
   const { preparation: preparationSteps, remaining: remainingSteps } = buildSteps();
-  const preparation = await runLegacyStateMigrationSteps(preparationSteps, params.onStepReceipt);
+  const preparation = await runLegacyStateMigrationSteps(
+    preparationSteps,
+    params.onStepReceipt,
+    undefined,
+    executionOptions,
+  );
   if (preparation.haltedBy) {
     const notices = mergeNotices(preparation.sources);
+    const stepReceipts = [
+      ...preparation.receipts,
+      ...createBlockedLegacyStateMigrationStepReceipts({
+        steps: remainingSteps,
+        blocker: preparation.haltedBy,
+        onStepReceipt: params.onStepReceipt,
+      }),
+    ];
+    if (failure && signal?.aborted && failure.error === signal.reason) {
+      throw failure.error;
+    }
     return {
       changes: preparation.sources.flatMap((source) => source.changes),
       warnings: preparation.sources.flatMap((source) => source.warnings),
       ...(notices.length > 0 ? { notices } : {}),
       mode: "doctor",
-      stepReceipts: [
-        ...preparation.receipts,
-        ...createBlockedLegacyStateMigrationStepReceipts({
-          steps: remainingSteps,
-          blocker: preparation.haltedBy,
-          onStepReceipt: params.onStepReceipt,
-        }),
-      ],
+      stepReceipts,
     };
   }
 
@@ -2414,12 +2183,17 @@ export async function runLegacyStateMigrations(params: {
   const migrations = await runLegacyStateMigrationSteps(
     buildSteps(inventory).remaining,
     params.onStepReceipt,
+    undefined,
+    executionOptions,
   );
   const notices = mergeNotices([
     ...preparation.sources,
     ...migrations.sharedNoticeSources,
     ...migrations.finalNoticeSources,
   ]);
+  if (failure && signal?.aborted && failure.error === signal.reason) {
+    throw failure.error;
+  }
   return {
     mode: "doctor",
     ...completedPluginMigrationFields(migrations.sources),
@@ -2466,13 +2240,17 @@ export async function autoMigrateLegacyState(params: {
   stepReceipts: LegacyStateMigrationStepReceipt[];
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
 }> {
+  const signal = resolveSqliteInspectionSignal();
   let failure: { error: unknown } | undefined;
   const result = await executeLegacyStateMigrations(params, (error) => {
     failure ??= { error };
   });
-  // Automatic callers still receive the original failure, but only after the execution
-  // owner has closed every remaining receipt without running later migrations.
-  if (params.doctorOnlyStateMigrations !== true && failure) {
+  // Settle all receipts before forwarding cancellation to Doctor's service restoration.
+  if (
+    failure &&
+    (params.doctorOnlyStateMigrations !== true ||
+      (signal?.aborted && failure.error === signal.reason))
+  ) {
     throw failure.error;
   }
   return result;
@@ -2501,10 +2279,11 @@ async function executeLegacyStateMigrations(
     ),
   };
   const initialStateDir = resolveStateDir(env, homedir);
+  assertNoRetiredRuntimeStateFiles(initialStateDir, env, homedir);
   assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(initialStateDir));
   assertNoRetiredStateFiles(
     "OAuth credential sidecars",
-    listLegacyOAuthSidecarPaths(env, params.cfg, initialStateDir),
+    listReferencedLegacyOAuthSidecarPaths(env, params.cfg, initialStateDir),
   );
   const checkKey = `${path.resolve(initialStateDir)}\0${mode}`;
   // An earlier attempt may leave post-session work or a refusal unresolved.
@@ -2551,7 +2330,7 @@ async function executeLegacyStateMigrations(
         requiredness: "required",
         reversibility: "checkpoint-required",
         run: async () => {
-          const result = await autoMigrateLegacyStateDir({ env, homedir, log: params.log });
+          const result = await autoMigrateLegacyStateDir({ env, homedir });
           const stillPending = resolvePendingLegacyStateDirMigrationPaths({ env, homedir });
           return stillPending
             ? {
@@ -3236,13 +3015,8 @@ async function executeLegacyStateMigrations(
     !detected.sharedAuthStore.hasLegacy &&
     !detected.worktrees.hasLegacy &&
     detected.worktrees.pathRewrites.length === 0 &&
-    !detected.voiceWake.hasLegacy &&
-    !detected.updateCheck.hasLegacy &&
     !detected.configHealth.hasLegacy &&
-    !detected.pluginBindingApprovals.hasLegacy &&
-    !detected.currentConversationBindings.hasLegacy &&
     !detected.deviceAuth.hasLegacy &&
-    !detected.restartSentinel?.hasLegacy &&
     !detected.workspace.hasLegacy &&
     !detected.channelPairing.hasLegacy;
   // SQLite rows can still need owner repair when legacy file detectors have no work.

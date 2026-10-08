@@ -180,7 +180,7 @@ suite.define(() => {
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-agent-menu")
-        .getByRole("menuitemradio", { name: "Research", exact: true })
+        .getByRole("menuitem", { name: "Research", exact: true })
         .click();
       await rowFor(research[0]!.key).waitFor({ state: "visible" });
       const loadMore = sidebar.locator(".sidebar-session-pagination--roster > button");

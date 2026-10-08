@@ -58,35 +58,67 @@ export async function importLegacySessionRecords(
     return;
   }
   try {
-    const requireEmptyStore = Boolean(
+    const recoveryHistoryUnverified = Boolean(
       recoveryInventory?.report.artifacts.some((artifact) =>
         ["unreadable-manifest", "manifest-directory-alias"].includes(artifact.reason),
       ),
     );
-    const assertRestoredIndexCurrent = requireEmptyStore
-      ? undefined
-      : prepareRestoredSessionIndex({ target, env, expectedIndexIdentity, recoveryInventory });
-    // The exceptional empty-store admission and every row must share one transaction.
-    const batchSize = requireEmptyStore ? records.length : SESSION_IMPORT_BATCH_SIZE;
+    let assertRestoredIndexCurrent: (() => void) | undefined;
+    try {
+      if (!recoveryHistoryUnverified) {
+        assertRestoredIndexCurrent = prepareRestoredSessionIndex({
+          target,
+          env,
+          expectedIndexIdentity,
+          recoveryInventory,
+        });
+      }
+    } catch (error) {
+      report.issues.push({
+        code: "legacy_import_deferred",
+        message: `${formatErrorMessage(error)}. Originals retained; preserve the files and receipts, restore verified recovery evidence, then rerun openclaw doctor --fix.`,
+      });
+      return;
+    }
     const importedTranscriptSources = new Set<string>();
     const existingSnapshot = readOnlySqliteValidationSnapshot(target);
-    for (let offset = 0; offset < records.length; offset += batchSize) {
-      const pending = records.slice(offset, offset + batchSize).flatMap((record) => {
-        const prepared = prepareLegacySessionImport(
-          target,
-          record,
-          report,
-          importedTranscriptSources,
-          existingSnapshot.ok ? existingSnapshot.snapshot : undefined,
-          env,
-        );
-        return prepared ? [{ ...prepared, params: { ...prepared.params, env }, record }] : [];
+    if (!existingSnapshot.ok) {
+      report.issues.push({
+        code: "legacy_import_deferred",
+        message: `Cannot verify the destination for ${target.storePath}: ${formatErrorMessage(existingSnapshot.error)}. Originals retained; repair the named SQLite destination before retrying openclaw doctor --fix.`,
       });
+      return;
+    }
+    for (let offset = 0; offset < records.length; offset += SESSION_IMPORT_BATCH_SIZE) {
+      const pending = records
+        .slice(offset, offset + SESSION_IMPORT_BATCH_SIZE)
+        .flatMap((record) => {
+          // Unreadable history cannot authorize replay of a current node's metadata or generation.
+          record.preserveCurrentSession =
+            recoveryHistoryUnverified || Boolean(assertRestoredIndexCurrent);
+          try {
+            const prepared = prepareLegacySessionImport(
+              target,
+              record,
+              report,
+              importedTranscriptSources,
+              existingSnapshot.snapshot,
+              env,
+              recoveryHistoryUnverified,
+            );
+            return prepared ? [{ ...prepared, params: { ...prepared.params, env }, record }] : [];
+          } catch (error) {
+            report.issues.push({
+              code: "legacy_import_deferred",
+              sessionKey: record.sessionKey,
+              message: `${record.transcriptPath ?? target.storePath}: ${formatErrorMessage(error)}. Original retained; verify this source against a backup and rerun openclaw doctor --fix.`,
+            });
+            return [];
+          }
+        });
       const imported = await importSqliteSessionRowsBatch(
         pending.map((entry, index) => ({
           ...entry.params,
-          requireEmptyStore,
-          historicalOnly: entry.params.historicalOnly || Boolean(assertRestoredIndexCurrent),
           ...(index === 0 && assertRestoredIndexCurrent
             ? { beforePersistentApply: assertRestoredIndexCurrent }
             : {}),
@@ -129,12 +161,9 @@ export async function importLegacySessionRecords(
   }
 }
 
-function prepareRestoredSessionIndex(params: {
-  target: SessionStoreTarget;
-  env: NodeJS.ProcessEnv;
-  expectedIndexIdentity?: MigrationArtifactIdentity;
-  recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
-}): (() => void) | undefined {
+function prepareRestoredSessionIndex(
+  params: Parameters<typeof importLegacySessionRecords>[0],
+): (() => void) | undefined {
   const { expectedIndexIdentity, recoveryInventory, target } = params;
   if (!expectedIndexIdentity || !recoveryInventory) {
     return undefined;
@@ -239,6 +268,7 @@ function prepareLegacySessionImport(
   importedTranscriptSources: Set<string>,
   existingSnapshot: ReadOnlySqliteValidationSnapshot | undefined,
   env: NodeJS.ProcessEnv,
+  recoveryHistoryUnverified: boolean,
 ) {
   if (
     record.historical &&
@@ -267,24 +297,37 @@ function prepareLegacySessionImport(
       : undefined;
   record.sourceFingerprint = transcriptFingerprint;
   const result = countTranscriptEventsForPath(record.transcriptPath);
+  const currentOwner = existingSnapshot?.sessionKeysBySessionId.get(record.entry.sessionId);
+  if (record.preserveCurrentSession && currentOwner && currentOwner !== record.sessionKey) {
+    throw new Error(
+      `Historical transcript ${record.entry.sessionId} already belongs to ${currentOwner}`,
+    );
+  }
+  if (
+    recoveryHistoryUnverified &&
+    result.status === "malformed" &&
+    (existingSnapshot?.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0) > 0
+  ) {
+    throw new Error(result.message);
+  }
   const transcriptMtimeMs = readLegacyTranscriptMtimeMs(record);
-  const acpEntry = !record.historical
-    ? normalizePersistedSessionEntryShape(record.entry, { sessionKey: record.sessionKey })
-    : undefined;
+  const normalizedEntry = normalizePersistedSessionEntryShape(record.entry, {
+    sessionKey: record.sessionKey,
+  });
   const params = {
-    historicalOnly: Boolean(record.historical),
+    historicalOnly: Boolean(record.historical || record.preserveCurrentSession),
     allowMalformedRowRepair: true,
     repairLegacyTranscript: true,
     agentId: target.agentId,
-    entry: record.entry,
-    ...(acpEntry?.acp
+    entry: { ...(normalizedEntry ?? record.entry), sessionId: record.entry.sessionId },
+    ...(!record.historical && normalizedEntry?.acp
       ? {
           legacyAcpMigrationSource: prepareLegacyAcpMigrationSource({
             sourcePath: target.storePath,
             sourceSessionKey: record.sessionKey,
-            sessionId: acpEntry.sessionId,
-            lifecycleRevision: acpEntry.lifecycleRevision,
-            meta: acpEntry.acp,
+            sessionId: normalizedEntry.sessionId,
+            lifecycleRevision: normalizedEntry.lifecycleRevision,
+            meta: normalizedEntry.acp,
           }),
         }
       : {}),
@@ -341,7 +384,9 @@ function prepareLegacySessionImport(
       }
     } catch (error) {
       report.issues.push({
-        code: "sqlite_transcript_count_mismatch",
+        code: recoveryHistoryUnverified
+          ? "legacy_import_deferred"
+          : "sqlite_transcript_count_mismatch",
         sessionKey: record.sessionKey,
         message: `${record.transcriptPath}: ${formatErrorMessage(error)}. Original retained. Compare the named events with a verified backup, restore a corrected JSONL at this path, then rerun openclaw doctor --session-sqlite recover.`,
       });

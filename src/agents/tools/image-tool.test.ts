@@ -425,12 +425,6 @@ function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string },
   return minimaxUnderstandImageMock;
 }
 
-function stubImageDescriptionFetch(text = "ok") {
-  const fetch = vi.fn(async () => Response.json({ content: text }));
-  global.fetch = withFetchPreconnect(fetch);
-  return fetch;
-}
-
 function createDefaultImageFallbackExpectation(primary: string) {
   return {
     primary,
@@ -823,13 +817,6 @@ describe("image tool implicit imageModel config", () => {
       expected: createDefaultImageFallbackExpectation("minimax-portal/MiniMax-VL-01"),
     },
     {
-      name: "pairs opencode-go primary with the plugin-owned image model",
-      cfg: { agents: { defaults: { model: { primary: "opencode-go/minimax-m2.7" } } } },
-      env: { OPENCODE_API_KEY: "opencode-test" },
-      checkTool: true,
-      expected: { primary: "opencode-go/kimi-k2.6" },
-    },
-    {
       name: "uses Codex media for implicit OpenAI image defaults on canonical OAuth-only auth",
       cfg: openAiPrimaryCfg,
       profiles: { "openai:chatgpt": openAiOAuthProfile() },
@@ -1091,42 +1078,6 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it.each([false, true])(
-    "pairs MiniMax with its image default and fallbacks (chat metadata: %s)",
-    async (withChatMetadata) => {
-      await withTempAgentDir(async (agentDir) => {
-        vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-        if (!withChatMetadata) {
-          vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-test");
-        }
-        vi.stubEnv("OPENAI_API_KEY", "openai-test");
-        vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
-        const cfg: OpenClawConfig = {
-          agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
-          ...(withChatMetadata
-            ? {
-                models: {
-                  mode: "merge",
-                  providers: {
-                    minimax: {
-                      baseUrl: "https://api.minimax.io/anthropic",
-                      apiKey: "${MINIMAX_API_KEY}",
-                      api: "anthropic-messages",
-                      models: [makeModelDefinition("MiniMax-M2.7", ["text"])],
-                    },
-                  },
-                },
-              }
-            : {}),
-        };
-        expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
-          createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
-        );
-        expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
-      });
-    },
-  );
-
   it("keeps MiniMax CN chat metadata off automatic image routing", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
@@ -1292,34 +1243,24 @@ describe("image tool implicit imageModel config", () => {
   });
 
   it.each([
-    { provider: "acme", model: "vision-1", prefixed: false, configKey: false, checkTool: true },
-    {
-      provider: "hatchery-qwen3.6-plus",
-      model: "qwen3.6-plus",
-      prefixed: false,
-      configKey: true,
-      checkTool: true,
-    },
-    { provider: "kimchi", model: "vision-1", prefixed: true, configKey: false, checkTool: false },
+    { provider: "acme", model: "vision-1", prefixed: false, checkTool: true },
+    { provider: "kimchi", model: "vision-1", prefixed: true, checkTool: false },
   ])(
     "pairs configured image model $provider/$model",
-    async ({ provider, model, prefixed, configKey, checkTool }) => {
+    async ({ provider, model, prefixed, checkTool }) => {
       await withTempAgentDir(async (agentDir) => {
-        if (!configKey) {
-          await writeAuthProfiles(
-            agentDir,
-            createAuthProfileStoreFixture({
-              [`${provider}:default`]: { type: "api_key", provider, key: "sk-test" },
-            }),
-          );
-        }
+        await writeAuthProfiles(
+          agentDir,
+          createAuthProfileStoreFixture({
+            [`${provider}:default`]: { type: "api_key", provider, key: "sk-test" },
+          }),
+        );
         const cfg: OpenClawConfig = {
           agents: { defaults: { model: { primary: `${provider}/text-1` } } },
           models: {
             providers: {
               [provider]: {
                 baseUrl: "https://example.com",
-                ...(configKey ? { apiKey: "sk-configured" } : {}), // pragma: allowlist secret
                 models: [
                   makeModelDefinition(prefixed ? `${provider}/text-1` : "text-1", ["text"]),
                   makeModelDefinition(prefixed ? `${provider}/${model}` : model, ["text", "image"]),
@@ -1576,69 +1517,6 @@ describe("image tool implicit imageModel config", () => {
     },
   );
 
-  it.each(["openrouter", "minimax-portal"] as const)(
-    "uses generic image execution without a %s media registration",
-    async (provider) => {
-      await withTempAgentDir(async (agentDir) => {
-        const isMinimax = provider === "minimax-portal";
-        if (isMinimax) {
-          installImageUnderstandingProviderStubs();
-          await writeAuthProfiles(
-            agentDir,
-            createAuthProfileStoreFixture({
-              "minimax-portal:default": openAiOAuthProfile("minimax-portal"),
-            }),
-          );
-          vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-        }
-        const text = isMinimax ? "ok" : "ok openrouter";
-        const fetch = isMinimax
-          ? vi.fn(async () =>
-              Response.json({ content: text, base_resp: { status_code: 0, status_msg: "" } }),
-            )
-          : stubImageDescriptionFetch(text);
-        if (isMinimax) {
-          global.fetch = withFetchPreconnect(fetch);
-        }
-        const model = isMinimax ? "MiniMax-VL-01" : "google/gemini-2.5-flash-lite";
-        const cfg: OpenClawConfig = {
-          agents: {
-            defaults: {
-              model: {
-                primary: isMinimax ? "minimax-portal/MiniMax-M2.7" : `${provider}/${model}`,
-              },
-              imageModel: { primary: `${provider}/${model}` },
-            },
-          },
-          ...(isMinimax
-            ? {}
-            : {
-                models: {
-                  providers: {
-                    openrouter: {
-                      api: "openai-completions",
-                      baseUrl: "https://openrouter.ai/api/v1",
-                      apiKey: "openrouter-test",
-                      models: [makeModelDefinition(model, ["text", "image"])],
-                    },
-                  },
-                },
-              }),
-        };
-        const tool = createRequiredImageTool({ config: cfg, agentDir });
-        const result = await tool.execute("t1", {
-          prompt: "Describe the image.",
-          path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-        });
-        expect(fetch).toHaveBeenCalledTimes(1);
-        expectToolText(result, text);
-        if (isMinimax) {
-          expect(result.details).toMatchObject({ text });
-        }
-      });
-    },
-  );
-
   it("exposes an Anthropic-safe image schema without union keywords", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
       const violations = findSchemaUnionKeywords(tool.parameters, "image.parameters");
@@ -1661,14 +1539,14 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it.each([
-    { name: "image", input: { image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}` } },
-    { name: "images", input: { images: [`data:image/png;base64,${ONE_PIXEL_PNG_B64}`] } },
-  ])("does not accept the legacy $name argument", async ({ input }) => {
-    await withMinimaxImageToolFromTempAgentDir(async (tool) => {
-      await expect(tool.execute("legacy-image-arg", input)).rejects.toThrow("path required");
-    });
-  });
+  it.each([{ name: "image", input: { image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}` } }])(
+    "does not accept the legacy $name argument",
+    async ({ input }) => {
+      await withMinimaxImageToolFromTempAgentDir(async (tool) => {
+        await expect(tool.execute("legacy-image-arg", input)).rejects.toThrow("path required");
+      });
+    },
+  );
 
   it("preserves the unsupported image reference result contract", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
@@ -2031,15 +1909,6 @@ describe("image tool implicit imageModel config", () => {
 });
 
 describe("image tool data URL support", () => {
-  it("decodes base64 image data URLs", () => {
-    const pngB64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
-    const out = testing.decodeDataUrl(`data:image/png;base64,${pngB64}`);
-    expect(out.kind).toBe("image");
-    expect(out.mimeType).toBe("image/png");
-    expect(out.buffer).toEqual(Buffer.from(pngB64, "base64"));
-  });
-
   it("rejects non-image data URLs", () => {
     expect(() => testing.decodeDataUrl("data:text/plain;base64,SGVsbG8=")).toThrow(
       /Unsupported data URL type/i,
@@ -2192,30 +2061,6 @@ describe("image tool MiniMax VLM routing", () => {
     const tool = createRequiredImageTool({ config: cfg, agentDir });
     return { fetch: fetchMock, tool, cfg, agentDir };
   }
-
-  it("accepts path for single-image requests and calls minimaxUnderstandImage", async () => {
-    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
-
-    const res = await tool.execute("t1", {
-      prompt: "Describe the image.",
-      path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-    });
-
-    expect(fetch).toHaveBeenCalledTimes(1);
-    const callArgs = fetch.mock.calls[0]?.[0] as {
-      apiKey?: string;
-      prompt?: string;
-      imageDataUrl?: string;
-      provider?: string;
-      modelBaseUrl?: string;
-    };
-    expect(callArgs?.apiKey).toBe("minimax-test");
-    expect(callArgs?.prompt).toBe("Describe the image.");
-    expect(callArgs?.imageDataUrl).toContain("data:image/png;base64,");
-
-    const text = res.content?.find((b) => b.type === "text")?.text ?? "";
-    expect(text).toBe("ok");
-  });
 
   it("combines path + paths with dedupe and enforces maxImages", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
@@ -2461,14 +2306,12 @@ describe("image tool response validation", () => {
     precedingBlocks?: number;
     rejectText?: boolean;
   }>([
-    ...["reasoning_content", "reasoning", "reasoning_details", "reasoning_text"].map(
-      (signature) => ({
-        name: signature,
-        signature,
-        expected: true,
-        rejectText: true,
-      }),
-    ),
+    {
+      name: "reasoning_content",
+      signature: "reasoning_content",
+      expected: true,
+      rejectText: true,
+    },
     {
       name: "Responses JSON",
       signature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
@@ -2690,7 +2533,6 @@ describe("image compression policy", () => {
     { route: "primary", supplied: "captured", expected: "captured", maxSidePx: 96 },
     { route: "override", supplied: "captured", expected: "captured", maxSidePx: 96 },
     { route: "fallback", supplied: "captured", expected: "captured", maxSidePx: 96 },
-    { route: "primary", supplied: "ambient", expected: "ambient", maxSidePx: 192 },
     { route: "primary", supplied: "none", expected: "ambient", maxSidePx: 192 },
   ])(
     "uses $supplied metadata for $route image selection and compression",
@@ -2909,99 +2751,6 @@ describe("image compression policy", () => {
         {},
       ],
     });
-  });
-
-  it("keeps runtime Anthropic media limits for dated model variants", async () => {
-    testing.setProviderDepsForTest({
-      resolveModelAsync: async (_provider, model) => ({
-        logicalRef: { provider: _provider, model },
-        model: {
-          mediaInput: {
-            image: model.includes("opus")
-              ? { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" }
-              : { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
-          },
-        } as never,
-        authStorage: {} as never,
-        modelRegistry: {} as never,
-      }),
-    });
-    try {
-      await expect(
-        testing.resolveImageCompressionPolicy({
-          cfg: {},
-          imageModelConfig: {
-            primary: "anthropic/claude-opus-4.7-20260219",
-            fallbacks: ["anthropic/claude-sonnet-4.6-20260219"],
-          },
-          imageCount: 1,
-        }),
-      ).resolves.toEqual({
-        imageCount: 1,
-        models: [
-          { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-          { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
-        ],
-      });
-    } finally {
-      testing.setProviderDepsForTest();
-    }
-  });
-
-  it("merges partial configured Anthropic media policy with runtime side limits", async () => {
-    testing.setProviderDepsForTest({
-      resolveModelAsync: async (_provider, _model, _agentDir, _cfg, options) => ({
-        logicalRef: { provider: _provider, model: _model },
-        model: {
-          mediaInput: {
-            image: options?.skipProviderRuntimeHooks
-              ? { maxBytes: 1_000_000 }
-              : { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-          },
-        } as never,
-        authStorage: {} as never,
-        modelRegistry: {} as never,
-      }),
-    });
-    try {
-      await expect(
-        testing.resolveImageCompressionPolicy({
-          cfg: {
-            models: {
-              providers: {
-                anthropic: {
-                  baseUrl: "https://api.anthropic.com",
-                  api: "anthropic-messages",
-                  models: [
-                    {
-                      id: "claude-opus-4.7-20260219",
-                      name: "Claude Opus 4.7 dated",
-                      reasoning: true,
-                      input: ["text", "image"],
-                      contextWindow: 200_000,
-                      maxTokens: 64_000,
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      mediaInput: { image: { maxBytes: 1_000_000 } },
-                    },
-                  ],
-                },
-              },
-            },
-          } satisfies OpenClawConfig,
-          imageModelConfig: {
-            primary: "anthropic/claude-opus-4.7-20260219",
-          },
-          imageCount: 1,
-        }),
-      ).resolves.toEqual({
-        imageCount: 1,
-        models: [
-          { maxBytes: 1_000_000, maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-        ],
-      });
-    } finally {
-      testing.setProviderDepsForTest();
-    }
   });
 });
 

@@ -34,7 +34,7 @@ import {
   resolveAgentRunFailureText,
   resolveReplyFailureSummary,
 } from "./agent-runner-failure-reply.js";
-import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.js";
+import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.types.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import {
   buildRestartLifecycleReplyText,

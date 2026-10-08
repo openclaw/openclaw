@@ -1068,22 +1068,7 @@ function buildLightDreamingBody(entries: ShortTermRecallEntry[]): string[] {
   ]);
 }
 
-type RemTruthSelection = {
-  key: string;
-  snippet: string;
-  confidence: number;
-  evidence: string;
-};
-
-type RemTruthCandidate = Omit<RemTruthSelection, "key">;
-
-export type RemDreamingPreview = {
-  sourceEntryCount: number;
-  reflections: string[];
-  candidateTruths: RemTruthCandidate[];
-  candidateKeys: string[];
-  bodyLines: string[];
-};
+export type RemDreamingPreview = ReturnType<typeof previewRemDreaming>;
 
 function calculateCandidateTruthConfidence(entry: ShortTermRecallEntry): number {
   const recallStrength = Math.min(1, Math.log1p(entry.recallCount) / Math.log1p(6));
@@ -1099,10 +1084,7 @@ function calculateCandidateTruthConfidence(entry: ShortTermRecallEntry): number 
   );
 }
 
-function selectRemCandidateTruths(
-  entries: ShortTermRecallEntry[],
-  limit: number,
-): RemTruthSelection[] {
+function selectRemCandidateTruths(entries: ShortTermRecallEntry[], limit: number) {
   if (limit <= 0) {
     return [];
   }
@@ -1168,7 +1150,7 @@ export function previewRemDreaming(params: {
   entries: ShortTermRecallEntry[];
   limit: number;
   minPatternStrength: number;
-}): RemDreamingPreview {
+}) {
   const reflections = buildRemReflections(params.entries, params.limit, params.minPatternStrength);
   const candidateSelections = selectRemCandidateTruths(
     params.entries,

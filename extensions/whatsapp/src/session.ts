@@ -164,10 +164,6 @@ function resolveEnvWaWebSocketUrl(): string | undefined {
   return url.toString();
 }
 
-/**
- * Create a Baileys socket backed by the multi-file auth store we keep on disk.
- * Consumers can opt into QR printing for interactive login flows.
- */
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,

@@ -21,7 +21,7 @@ import {
 import { readCachedNativeGitHubToken } from "../../agents/github-read-identity.js";
 import { listRegistryWorktrees } from "../../agents/worktrees/registry.js";
 import { managedWorktrees, type ManagedWorktreeService } from "../../agents/worktrees/service.js";
-import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { ProjectCloneError } from "../../projects/project-clone-runtime.js";

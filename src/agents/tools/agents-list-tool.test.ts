@@ -39,7 +39,6 @@ describe("agents_list tool", () => {
       agents: {
         defaults: {
           model: "anthropic/claude-opus-4.5",
-          agentRuntime: { id: "openclaw" },
           subagents: { allowAgents: ["codex"] },
         },
         entries: {
@@ -53,7 +52,7 @@ describe("agents_list tool", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig);
+    } satisfies OpenClawConfig);
 
     const tool = createAgentsListTool({ agentSessionKey: "agent:main:main" });
     expect(tool.outputSchema).toMatchObject({
