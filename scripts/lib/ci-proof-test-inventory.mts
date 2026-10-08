@@ -2027,7 +2027,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/doctor-session-sqlite.compaction.test.ts",
   "src/commands/doctor-session-sqlite.deferred-plugin.test.ts",
   "src/commands/doctor-session-sqlite.discovery.test.ts",
-  "src/commands/doctor-session-sqlite.inspection.test.ts",
   "src/commands/doctor-session-sqlite.memory.test.ts",
   "src/commands/doctor-session-sqlite.publication-recovery.test.ts",
   "src/commands/doctor-session-sqlite.receipt-recovery.test.ts",
