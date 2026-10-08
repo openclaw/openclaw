@@ -24,13 +24,20 @@ export type MediaGenerationOperation = {
   error?: string;
 };
 
+type MediaProgressDraft = {
+  draft: ProgressContinuationDraft;
+  /** Owed runs and their progress tool names. */
+  runs: Map<string, string>;
+  undelivered: boolean;
+};
+
 const state = resolveGlobalSingleton(Symbol.for("openclaw.mediaGenerationOperations"), () => ({
   operations: new Map<string, MediaGenerationOperation>(),
   active: new Map<string, { sessionKey: string; agentId?: string; generation: string }>(),
   owners: new Map<string, string>(),
   admissions: new Map<string, string>(),
   // Process-local like the channel transport that renders the retained card.
-  drafts: new Map<string, { draft: ProgressContinuationDraft; runIds: Set<string> }>(),
+  drafts: new Map<string, MediaProgressDraft>(),
 }));
 const RECENT_COMPLETION_MS = 2 * 60_000;
 
@@ -45,8 +52,8 @@ function pruneCompletedOperations(): void {
         operation.endedAt <
           (operation.terminalOutcome === "blocked" ? now - 7 * 24 * 60 * 60_000 : cutoff))
     ) {
-      state.operations.delete(id);
       clearGeneratedMediaTaskActivity(id);
+      state.operations.delete(id);
       state.owners.delete(id);
     }
   }
@@ -79,13 +86,26 @@ export function registerGeneratedMediaTaskActivity(
     generation,
   });
 }
-/** Every ending path clears activity after the completion wake, so a retained card outlives the result. */
+/**
+ * Every ending path clears activity after its completion wake. A retained card
+ * leaves once every run delivered its result; otherwise it keeps the failed run
+ * as the chat's visible outcome.
+ */
 export function clearGeneratedMediaTaskActivity(runId: string): void {
   state.active.delete(runId);
   const live = state.drafts.get(runId);
+  const name = live?.runs.get(runId);
+  if (!live || !name) {
+    return;
+  }
   state.drafts.delete(runId);
-  live?.runIds.delete(runId);
-  if (live?.runIds.size === 0) {
+  live.runs.delete(runId);
+  const operation = state.operations.get(runId);
+  if (operation?.status !== "succeeded" || operation.terminalOutcome === "blocked") {
+    live.undelivered = true;
+    live.draft.push({ itemId: runId, kind: "tool", name, phase: "end", status: "failed" });
+  }
+  if (live.runs.size === 0 && !live.undelivered) {
     live.draft.retire();
   }
 }
@@ -99,24 +119,20 @@ export function adoptMediaGenerationProgressDraft(
   requesterAgentId: string | undefined,
   draft: ProgressContinuationDraft,
 ): boolean {
-  const owed = listMediaGenerationOperations(sessionKey, requesterAgentId).flatMap((operation) =>
-    operation.runId && state.active.has(operation.runId) && !state.drafts.has(operation.runId)
-      ? [{ runId: operation.runId, taskKind: operation.taskKind }]
-      : [],
+  const runs = new Map(
+    listMediaGenerationOperations(sessionKey, requesterAgentId).flatMap((operation) =>
+      operation.runId && state.active.has(operation.runId) && !state.drafts.has(operation.runId)
+        ? [[operation.runId, operation.taskKind.replace(/_generation$/, "_generate")] as const]
+        : [],
+    ),
   );
-  if (owed.length === 0) {
+  if (runs.size === 0) {
     return false;
   }
-  const live = { draft, runIds: new Set(owed.map(({ runId }) => runId)) };
-  for (const { runId, taskKind } of owed) {
+  const live = { draft, runs, undelivered: false };
+  for (const [runId, name] of runs) {
     state.drafts.set(runId, live);
-    draft.push({
-      itemId: runId,
-      kind: "tool",
-      name: taskKind.replace(/_generation$/, "_generate"),
-      phase: "update",
-      status: "running",
-    });
+    draft.push({ itemId: runId, kind: "tool", name, phase: "update", status: "running" });
   }
   return true;
 }

@@ -382,8 +382,8 @@ so the conversation gets no failure warning. Detached `image_generate`,
 `video_generate`, and `music_generate` runs deliver their result as a later
 turn; a turn that ends with such a run in flight and no final reply stays
 pending instead of reporting a missing reply. Its waiting reply is the standard
-waiting status, or on Telegram the turn's visible progress card, which stays until
-the run delivers or fails.
+waiting status, or on Telegram and Discord the turn's visible progress card, which
+the result replaces; an undelivered result leaves the card showing the failed run.
 
 The controlling parent resumes a paused native child with an ordinary
 `sessions_send` continuation. The runtime preserves the original task and its

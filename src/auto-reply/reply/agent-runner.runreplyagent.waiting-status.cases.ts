@@ -26,6 +26,7 @@ type WaitingStatusFixture = {
   createMinimalRun: (params?: {
     opts?: InternalGetReplyOptions;
     currentInboundEventKind?: "room_event";
+    runtimePolicySessionKey?: string;
   }) => {
     run: () => Promise<ReplyPayload | ReplyPayload[] | undefined>;
   };
@@ -106,7 +107,7 @@ export function registerWaitingStatusCases({
   });
 
   it.each([
-    { label: "no children", acceptedSessionSpawns: [] },
+    { label: "no children", acceptedSessionSpawns: [], delivered: true },
     {
       label: "a fire-and-forget child",
       acceptedSessionSpawns: [
@@ -116,10 +117,18 @@ export function registerWaitingStatusCases({
           expectsCompletionMessage: false,
         },
       ],
+      delivered: true,
     },
+    {
+      label: "a shared main session",
+      acceptedSessionSpawns: [],
+      runtimePolicySessionKey: "agent:main:telegram:default:direct:42",
+      delivered: true,
+    },
+    { label: "a failed run", acceptedSessionSpawns: [], delivered: false },
   ])(
-    "hands the progress card to a media-run continuation with $label until the run ends",
-    async ({ acceptedSessionSpawns }) => {
+    "hands the progress card to a media-run continuation with $label",
+    async ({ acceptedSessionSpawns, runtimePolicySessionKey, delivered }) => {
       onTestFinished(resetGeneratedMediaTaskActivityForTests);
       let handle: MediaGenerationTaskHandle | undefined;
       runEmbeddedAgentMock.mockImplementationOnce(
@@ -127,10 +136,11 @@ export function registerWaitingStatusCases({
           assert(params.preparedRunAdmission);
           assert(params.sessionKey);
           await params.preparedRunAdmission.admit("embedded");
+          // Media tools admit their runs under the attempt's sandbox (runtime policy) key.
           handle = admitMediaHandle({
             taskId: "waiting-image",
             runId: `tool:image_generate:${randomUUID()}`,
-            requesterSessionKey: params.sessionKey,
+            requesterSessionKey: params.sandboxSessionKey ?? params.sessionKey,
             requesterAgentId: params.agentId,
             taskLabel: "waiting image",
           });
@@ -142,7 +152,10 @@ export function registerWaitingStatusCases({
         },
       );
       const onPendingContinuation = vi.fn();
-      const { run } = createMinimalRun({ opts: { onPendingContinuation } });
+      const { run } = createMinimalRun({
+        opts: { onPendingContinuation },
+        runtimePolicySessionKey,
+      });
 
       const result = await run();
       expect(result).toMatchObject({
@@ -153,23 +166,18 @@ export function registerWaitingStatusCases({
       assert(result && !Array.isArray(result) && handle);
       const draft = { push: vi.fn(), retire: vi.fn() };
       expect(getReplyPayloadMetadata(result)?.progressContinuation?.adopt(draft)).toBe(true);
-      expect(draft.push.mock.calls).toEqual([
-        [
-          expect.objectContaining({
-            itemId: handle.runId,
-            name: "image_generate",
-            status: "running",
-          }),
-        ],
-      ]);
-      expect(draft.retire).not.toHaveBeenCalled();
-      createMediaGenerationTaskLifecycle("image").completeTaskRun({
-        handle,
-        provider: "fixture",
-        model: "fixture",
-        count: 1,
-      });
-      expect(draft.retire).toHaveBeenCalledOnce();
+      const item = { itemId: handle.runId, kind: "tool", name: "image_generate" };
+      expect(draft.push.mock.calls).toEqual([[{ ...item, phase: "update", status: "running" }]]);
+      const lifecycle = createMediaGenerationTaskLifecycle("image");
+      if (delivered) {
+        lifecycle.completeTaskRun({ handle, provider: "fixture", model: "fixture", count: 1 });
+        expect(draft.retire).toHaveBeenCalledOnce();
+      } else {
+        // An undelivered result keeps the card as the chat's visible outcome.
+        lifecycle.failTaskRun({ handle, error: new Error("provider failed") });
+        expect(draft.push.mock.calls.at(-1)).toEqual([{ ...item, phase: "end", status: "failed" }]);
+        expect(draft.retire).not.toHaveBeenCalled();
+      }
     },
   );
 
