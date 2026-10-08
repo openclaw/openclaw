@@ -180,7 +180,7 @@ describe("GitHub tool identity", () => {
         : {}),
       PREVIEW_SERVICE_TOKEN: "",
     });
-    expect(Object.keys(envScrub.localIdentityEnv).length).toBe(managed ? 1 : 0);
+    expect(envScrub.managedLocalIdentity).toBe(managed);
     expect(envScrub.excludedStoreNames).toEqual([]);
 
     const storeScrub = prepareGitHubToolEnvironment({

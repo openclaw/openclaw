@@ -208,14 +208,16 @@ function prepareGitHubToolEnvironmentForIdentity(
   }
   return Object.freeze({
     credentialScrubEnv: Object.freeze(credentialScrubEnv),
-    localIdentityEnv: Object.freeze(
-      managedLocalIdentity
-        ? managedGitHubIdentityEnvironment({
-            profileDir: identity.profileDir,
-            gitAuthor: identity.config.gitAuthor,
-          })
-        : {},
-    ),
+    localIdentityEnv: Object.freeze({
+      ...(managedLocalIdentity &&
+        managedGitHubIdentityEnvironment({
+          profileDir: identity.profileDir,
+          gitAuthor: identity.config.gitAuthor,
+        })),
+      // Child Git (including promisor fetches) must leave maintenance to the Gateway owner.
+      // Keep the counted identity settings intact; Git propagates these parameters to children.
+      GIT_CONFIG_PARAMETERS: "'maintenance.auto=false' 'gc.auto=0'",
+    }),
     excludedStoreNames: Object.freeze(excludedStoreNames),
     managedLocalIdentity,
   });

@@ -100,7 +100,7 @@ describe("prepared harness tool environment", () => {
       });
       expect(environment?.localToolPathPrepend).toEqual(["/fixture/cli", "/fixture/global"]);
       expect(environment?.localProcessEnv).toBeUndefined();
-      expect(environment?.localIdentityEnv).toEqual({});
+      expect(environment?.localIdentityEnv).not.toHaveProperty("GH_CONFIG_DIR");
       expect(Object.isFrozen(environment?.localToolEnv)).toBe(true);
       expect(Object.isFrozen(environment?.localToolPathPrepend)).toBe(true);
       host.closeHost();

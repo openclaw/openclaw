@@ -523,7 +523,9 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     });
     expect(getUserProfileListItem(owner())).toEqual(before);
     expect(config.tools?.github).toBeUndefined();
-    expect(prepareGitHubToolEnvironment({ config, agentId: "main" }).localIdentityEnv).toEqual({});
+    expect(prepareGitHubToolEnvironment({ config, agentId: "main" }).managedLocalIdentity).toBe(
+      false,
+    );
     expect(await rpc(alice, "users.self")).toHaveBeenCalledWith(true, { profile: before });
     for (const [method, missingScope] of [
       ["tools.github.authorize.start", "operator.admin"],

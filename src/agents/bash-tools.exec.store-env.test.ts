@@ -373,7 +373,9 @@ describe("exec store environment", () => {
       HTTPS_PROXY: "http://inherited-proxy.test:8080",
       NODE_EXTRA_CA_CERTS: "/inherited/ca.pem",
     });
-    expect(mocks.gatewayParams[0]?.requestedEnv).toBeUndefined();
+    for (const key of ["PATH", "HTTPS_PROXY", "NODE_EXTRA_CA_CERTS"]) {
+      expect(mocks.gatewayParams[0]?.requestedEnv?.[key]).toBeUndefined();
+    }
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: expect.stringMatching(/HTTPS_PROXY, NODE_EXTRA_CA_CERTS, PATH/u),
