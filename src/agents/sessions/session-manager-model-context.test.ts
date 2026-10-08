@@ -69,7 +69,7 @@ it("reports context queue overload without losing context and completes every ad
       release.resolve();
       expect(await Promise.all(accepted)).toEqual(Array.from({ length: 128 }, () => expected));
       // Foreground reads run on a worker pool, so completion order is not FIFO.
-      expect([...completed].sort((a, b) => a - b)).toEqual(
+      expect(completed.toSorted((a, b) => a - b)).toEqual(
         Array.from({ length: 128 }, (_, index) => index),
       );
       expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
