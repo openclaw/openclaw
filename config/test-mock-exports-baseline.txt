@@ -982,8 +982,6 @@
 ["extensions/matrix/src/matrix/client/create-client.test.ts","./logging.js","aa8ed39dc90819f426bb472daed2c779bdb649603bc61ffaf32969c1d69398c5",1]
 ["extensions/matrix/src/matrix/client/create-client.test.ts","./storage.js","ce5dd7a899bd1c89563593b27fb3ea6429794e4225e0ada4f096fc5fe3c81498",1]
 ["extensions/matrix/src/matrix/client/shared.lifecycle.test.ts","./create-client.js","b94dd4414c709cf0bdc953b56d25a1906857d5f56a510055bbe6eb13eef3f19c",1]
-["extensions/matrix/src/matrix/client/shared.monitor-tasks.test.ts","./config.js","78271383e62f17c218e144abefaf88ca5a0f89c577670ddd0c97748f1ae67bdd",1]
-["extensions/matrix/src/matrix/client/shared.monitor-tasks.test.ts","./create-client.js","b94dd4414c709cf0bdc953b56d25a1906857d5f56a510055bbe6eb13eef3f19c",1]
 ["extensions/matrix/src/matrix/client/shared.test.ts","./config.js","78271383e62f17c218e144abefaf88ca5a0f89c577670ddd0c97748f1ae67bdd",1]
 ["extensions/matrix/src/matrix/client/shared.test.ts","./create-client.js","b94dd4414c709cf0bdc953b56d25a1906857d5f56a510055bbe6eb13eef3f19c",1]
 ["extensions/matrix/src/matrix/delivery-plan.test.ts","./send/client.js","83e9416d2e6eabf0ea87f107743b9f70fa9fe1ea4b20a4b0b7913fb14eabb8ce",1]
