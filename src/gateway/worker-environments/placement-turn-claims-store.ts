@@ -7,6 +7,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { preparePlacementProjectionPublication } from "./placement-read-publication.js";
 import { isCurrentPlacementTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementState } from "./placement-state.js";
 import {
@@ -128,6 +129,9 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
       let prepared: PlacementTurnClaimReceipt | undefined;
       let previousState: WorkerSessionPlacementState | null | undefined;
       let published = false;
+      let projectionPublication:
+        | ReturnType<typeof preparePlacementProjectionPublication>
+        | undefined;
       const mutation = createPlacementWorkerMutation({
         context,
         label: "Placement claim",
@@ -153,6 +157,12 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
             throw new Error("Placement claim commit has no receipt");
           }
           prepared = facts;
+          if (facts.projection) {
+            projectionPublication = preparePlacementProjectionPublication(
+              context.admission.identity,
+              facts.projection,
+            );
+          }
           if (command.type === "placementTurns.releaseIfOwned" && !facts.placement) {
             return undefined;
           }
@@ -235,14 +245,21 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
               (command.type !== "placementTurns.startDrain" ||
                 command.input.workspaceBaseManifestRef !== undefined);
             if (notifySession) {
-              sessionChanges.emit({
+              const change = {
                 agentId: receipt.placement.agentId,
                 sessionKey: receipt.placement.sessionKey,
-              });
+              };
+              try {
+                projectionPublication?.publish(change);
+                sessionChanges.emit(change);
+              } finally {
+                projectionPublication?.release();
+              }
             }
           }
         },
         async recoverUnknown(error, publication) {
+          projectionPublication?.release();
           if (
             command.type !== "placementTurns.claim" &&
             command.type !== "placementTurns.release" &&
@@ -339,6 +356,8 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
           throw new ActiveTurnClaimError(sessionId);
         }
         throw error;
+      } finally {
+        projectionPublication?.release();
       }
     }
   }
