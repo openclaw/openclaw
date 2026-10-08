@@ -455,6 +455,8 @@ The normal handoff parent prepares this database before launching its sealed
 helper. The helper receives the captured database identity and operates only on
 that existing database, without resolving installation packages or recreating
 missing or empty state.
+Package recovery helpers are also self-contained: their status and recovery
+commands do not need neighboring installation assets or service controllers.
 
 Current update, Doctor, and handoff owners serialize coordinator writes before
 pinning a read snapshot. They prepare an existing-directory capability and use
