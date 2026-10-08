@@ -245,9 +245,18 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
   }
   const canonical = apnsRegistrationToRow(normalized);
   if (
-    (Object.keys(canonical) as (keyof typeof canonical)[]).some(
-      (column) => canonical[column] !== row[column],
-    )
+    canonical.node_id !== row.node_id ||
+    canonical.transport !== row.transport ||
+    canonical.token !== row.token ||
+    canonical.relay_handle !== row.relay_handle ||
+    canonical.send_grant !== row.send_grant ||
+    canonical.installation_id !== row.installation_id ||
+    canonical.relay_origin !== row.relay_origin ||
+    canonical.topic !== row.topic ||
+    canonical.environment !== row.environment ||
+    canonical.distribution !== row.distribution ||
+    canonical.token_debug_suffix !== row.token_debug_suffix ||
+    canonical.updated_at_ms !== row.updated_at_ms
   ) {
     throw new Error("non-canonical APNs registration row");
   }
