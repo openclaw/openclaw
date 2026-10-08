@@ -16,6 +16,42 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+## Committed facts and completeness
+
+Synchronous compatibility writers and workers share the existing postcommit
+installation boundary. A managed outer transaction installs every owner's facts,
+then projections, then public notifications. Releasing a nested savepoint does
+not publish; nested and outer rollback discard their staged publications. A
+notification failure cannot undo a committed write or suppress later notifications.
+Failed fact installation retires the affected scope before notification. If its
+owner cannot fence that failure, the batch suppresses public notification and
+reports the failure without replaying the mutation.
+
+Private receipt envelopes identify the operation, physical source and connection
+incarnation, domain, and exact affected keys. Each key contains a postimage,
+explicit absence, unchanged facts, or unknown coverage. Missing coverage is never
+absence. Session replacement receipts carry the existing entry and membership
+postimages; their current publication owner still handles newer native writes,
+deletions, unknown successors, and delayed receipts. Transport sequencing does not
+replace that domain supersession logic or compare revisions across connections.
+
+Worker receipt capture precedes fallible observers. Its private transport uses
+operation identity and a monotonically increasing commit sequence, so identical
+successive commits remain distinct and duplicate or older deliveries cannot
+restore prior facts. Native settlement and result delivery remain separate:
+retained commit evidence survives a lost reply, while missing or conflicting
+evidence stays unknown. Unknown writes are never automatically repeated.
+
+This is a scoped completeness contract, not global writer certification. Session
+transcript/context coverage, conversation and plugin-state writers, approvals,
+placement and workspace writers, raw SQLite handles, and foreign-process refresh
+retain their existing guards until their own coverage is complete. Unmanaged raw
+transactions are not covered by managed savepoint publication. A receipt grants
+neither current permission nor cross-store exclusion through destination commit.
+This foundation adds no SQL, schema validation, persistent storage, SDK
+deprecation, or migration. Admission continues to own validation; receipt
+installation consumes the physical facts already captured by that owner.
+
 Gateway deleted-agent checks batch ACP metadata candidates through the shared-state
 reader only for free ACP keys whose agent is absent. When a foreign commit requires
 the content-version marker to be refreshed, the reader fetches that marker and the

@@ -9,6 +9,14 @@ title: "Storage changes and release preflight"
 
 ## Preparing for another database backend
 
+Commit receipts are process-local publication evidence, not a persistent format.
+The shared receipt/completeness contract changes neither schema versions nor
+stored bytes, retention, backup, or rollback policy. Existing published updaters
+need no receipt migration. A confirmed write remains committed if a notification
+or result delivery fails; recovery reconciles through its original owner instead
+of repeating the write. See
+[committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness).
+
 SQLite remains the supported runtime store. Preparation for PostgreSQL should
 improve the existing store owners and their tests before adding a driver or
 configuration option. The initial target is remote persistence for one Gateway;

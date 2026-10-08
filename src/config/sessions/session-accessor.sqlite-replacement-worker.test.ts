@@ -38,6 +38,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as configEnv from "../config-env-vars.js";
+import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   readCommittedSessionEntryCache,
@@ -339,6 +340,17 @@ it("publishes committed sharing and reader invalidation before observers, and ro
       entry: projectSessionSharingEntry(original),
       membership: new Set(["member"]),
     });
+    const predicate = retainPreparedSessionEntryPredicate({
+      databaseIdentity: `file:${identity}`,
+      sessionKey,
+      entry: original,
+      matches(_before, after) {
+        if (after?.visibility === "read-only") {
+          throw new Error("Synthetic comparison unavailable after COMMIT");
+        }
+        return true;
+      },
+    });
     const reader = new OpenClawAgentDatabaseReadOnlyScope();
     let readerDatabase: DatabaseSync | undefined;
     reader.read(
@@ -355,20 +367,31 @@ it("publishes committed sharing and reader invalidation before observers, and ro
           visibility: sharing.readCurrent()?.entry?.visibility,
           membership: [...(sharing.readCurrent()?.membership ?? [])],
           cache: readerDatabase && readCommittedSessionEntryCache(readerDatabase),
+          predicateCurrent: predicate.isCurrent(),
         });
       }
     });
     try {
-      await applySessionEntryExactReplacements({
+      const publicationFailure = await applySessionEntryExactReplacements({
         storePath: database.path,
         sessionKeys: [sessionKey],
         update: ([row]) => ({
           result: undefined,
           replacements: [{ sessionKey, entry: { ...row!.entry, visibility: "read-only" } }],
         }),
-      });
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe("read-only");
+      expect(publicationFailure).toBeUndefined();
       expect(observed).toEqual([
-        { visibility: "read-only", membership: ["member"], cache: undefined },
+        {
+          visibility: "read-only",
+          membership: ["member"],
+          cache: undefined,
+          predicateCurrent: false,
+        },
       ]);
       const createAdmission = admission.createSqliteWorkerOperationAdmission;
       let current = true;
@@ -422,6 +445,7 @@ it("publishes committed sharing and reader invalidation before observers, and ro
     } finally {
       stop();
       sharing.release();
+      predicate.release();
       reader.close();
     }
   });
