@@ -236,6 +236,21 @@ describe("normalizeSlackOutboundText", () => {
     ).toStrictEqual([]);
   });
 
+  it("keeps a quote marker whose escaping depends on the following space", () => {
+    expect(markdownToSlackMrkdwnChunks("a > b **bold**> quote", 17)).toEqual([
+      "a &gt; b *bold*> ",
+      "quote",
+    ]);
+  });
+
+  it("measures native tokens with spaces as one unit when chunking", () => {
+    expect(markdownToSlackMrkdwnChunks("beta beta <@U1|some one> <https://x|a b> x", 23)).toEqual([
+      "beta beta &lt;@U1|some ",
+      "one&gt; <https://x|a b>",
+      " x",
+    ]);
+  });
+
   it("includes transcript protection when a native token exactly fills the chunk budget", () => {
     expect(markdownToSlackMrkdwnChunks("<@U|user[t]>", 12)).toEqual(["&lt;@U|user[", "t]&gt;"]);
   });

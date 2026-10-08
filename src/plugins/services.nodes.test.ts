@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGatewayMethodRegistry } from "../gateway/methods/registry.js";
 import {
@@ -24,6 +25,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import * as nativeModuleRequire from "./native-module-require.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -43,6 +45,7 @@ import {
 } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { createPluginServiceNodeInvoker } from "./service-nodes.js";
 import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
@@ -130,6 +133,38 @@ const request = {
 };
 
 describe("service-owned node invocation", () => {
+  it("releases retiring callers while stopped node capabilities remain reachable", async () => {
+    type NodeInvoker = NonNullable<ReturnType<typeof createPluginServiceNodeInvoker>>;
+    class RetiringCaller {
+      stop(invoker: NodeInvoker) {
+        invoker.stop();
+      }
+    }
+    const { registry, record } = await startFixture();
+    const invokers = Array.from({ length: 12 }, () => {
+      const invoker = createPluginServiceNodeInvoker({
+        registry,
+        record,
+        lease: createPluginRuntimeCapabilityLease("retained node capability"),
+        isStopping: () => false,
+      });
+      if (!invoker) {
+        throw new Error("Node invoker was not created");
+      }
+      new RetiringCaller().stop(invoker);
+      return invoker;
+    });
+    // Inspect retention before any error matcher can materialize the lazy stack.
+    expect(queryObjects(RetiringCaller)).toBe(0);
+    for (const invoker of invokers) {
+      const reason: unknown = await invoker.invoke(request).catch((error: unknown) => error);
+      expect(reason).toBeInstanceOf(Error);
+      expect(reason).toMatchObject({ message: "Plugin service node access stopped" });
+      await expect(invoker.invoke(request)).rejects.toBe(reason);
+      await expect(invoker.openDuplex(request)).rejects.toBe(reason);
+    }
+  });
+
   it.each([false, true])(
     "preserves document read access for a profile-backed=%s reader",
     async (profileBacked) => {

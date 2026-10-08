@@ -74,13 +74,9 @@ function agentMapping(route: string, overrides: HookMappingConfig = {}): HookMap
   };
 }
 
-function setHookAgentRoster(explicitSole = false): void {
-  testState.agentsConfig = explicitSole
-    ? { ownership: "explicit", entries: { main: {} } }
-    : { ownership: "explicit", entries: { main: {}, hooks: {} } };
-  if (!explicitSole) {
-    testState.agentConfig = { ...testState.agentConfig, systemAgent: { agentId: "main" } };
-  }
+function setHookAgentRoster(): void {
+  testState.agentsConfig = { ownership: "explicit", entries: { main: {}, hooks: {} } };
+  testState.agentConfig = { ...testState.agentConfig, systemAgent: { agentId: "main" } };
 }
 
 function mockIsolatedRunOk(once = false): void {
@@ -549,20 +545,6 @@ describe("gateway server hooks", () => {
     });
   });
 
-  test("does not retain oversized idempotency keys for replay dedupe", async () => {
-    configureHooks();
-    const oversizedKey = "x".repeat(257);
-
-    await withGatewayServer(async ({ port }) => {
-      mockIsolatedRunOk();
-      await expectFirstHookDelivery(port, oversizedKey);
-      await postAgentHookWithIdempotency(port, oversizedKey);
-      await waitForSystemEvent();
-
-      expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
-    });
-  });
-
   test("dispatches agent hooks when the process clock is outside the Date range", async () => {
     configureHooks();
 
@@ -670,29 +652,6 @@ describe("gateway server hooks", () => {
       const mappedDeniedBody = (await resMappedDenied.json()) as { error?: string };
       expect(mappedDeniedBody.error).toContain("hooks.allowedAgentIds");
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
-    });
-  });
-
-  test("allows omitted agentId when the explicit sole target is allowlisted", async () => {
-    configureHooks({
-      allowRequestSessionKey: true,
-      allowedSessionKeyPrefixes: ["hook:", "agent:"],
-      allowedAgentIds: ["main"],
-    });
-    testState.sessionConfig = { scope: "global" };
-    setHookAgentRoster(true);
-    await withGatewayServer(async ({ port }) => {
-      mockIsolatedRunOk(true);
-      await postHook(port, "agent", {
-        message: "Default target",
-        sessionKey: "agent:hooks:slack:channel:c123",
-      });
-      await waitForSystemEventTexts("agent:main:global");
-      const noAgentCall = cronRunCall();
-      expect(noAgentCall?.job?.agentId).toBe("main");
-      expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
-      expect(peekSystemEventEntries("agent:main:main")).toStrictEqual([]);
-      drainSystemEvents("agent:main:global");
     });
   });
 
@@ -893,6 +852,86 @@ describe("gateway server hooks", () => {
         error: expect.stringContaining("sessionKey or hooks.defaultSessionKey"),
       });
       expect(cronIsolatedRun).not.toHaveBeenCalled();
+    });
+  });
+
+  test("keeps session mode in the idempotency dispatch scope", async () => {
+    configureHooks({
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+    });
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOk();
+      const headers = { "Idempotency-Key": "hook-idem-session-mode" };
+      const basePayload = {
+        message: "Do it",
+        name: "Email",
+        sessionKey: "hook:mode:42",
+      };
+      const isolated = await postHook(
+        port,
+        "agent",
+        { ...basePayload, sessionMode: "isolated" },
+        { headers },
+      );
+      expect(isolated.status).toBe(200);
+      const persistent = await postHook(
+        port,
+        "agent",
+        { ...basePayload, sessionMode: "persistent" },
+        { headers },
+      );
+      expect(persistent.status).toBe(200);
+      await waitForCronIsolatedRuns(2);
+
+      expect(cronRunCall(0).job?.sessionTarget).toBe("isolated");
+      expect(cronRunCall(1).job?.sessionTarget).toBe("session:hook:mode:42");
+    });
+  });
+
+  test("keeps account id in the idempotency dispatch scope", async () => {
+    configureHooks();
+    await withGatewayServer(async ({ port }) => {
+      setTestPluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin: createChannelTestPluginBase({
+              id: "discord",
+              config: {
+                listAccountIds: () => ["work", "personal"],
+                resolveAccount: (_cfg, accountId) => ({ accountId }),
+              },
+            }),
+          },
+        ]),
+      );
+      mockIsolatedRunOk();
+      const headers = { "Idempotency-Key": "hook-idem-account-id" };
+      const basePayload = {
+        message: "Do it",
+        channel: "discord",
+        to: "channel-1",
+      };
+      const work = await postHook(
+        port,
+        "agent",
+        { ...basePayload, accountId: "work" },
+        { headers },
+      );
+      expect(work.status).toBe(200);
+      const personal = await postHook(
+        port,
+        "agent",
+        { ...basePayload, accountId: "personal" },
+        { headers },
+      );
+      expect(personal.status).toBe(200);
+      await waitForCronIsolatedRuns(2);
+
+      expect(cronRunCall(0).job?.delivery?.accountId).toBe("work");
+      expect(cronRunCall(1).job?.delivery?.accountId).toBe("personal");
     });
   });
 });

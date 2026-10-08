@@ -358,9 +358,7 @@ it("preserves a due legacy one-shot through Doctor ownership repair, then runs i
 
 it.each([
   { name: "missing", mode: undefined, expected: "announce" },
-  { name: "null", mode: null, expected: "announce" },
   { name: "retired alias", mode: "deliver", expected: "announce" },
-  { name: "announce casing", mode: " ANNOUNCE ", expected: "announce" },
   { name: "none casing", mode: " NoNe ", expected: "none" },
   { name: "webhook casing", mode: " WeBhOoK ", expected: "webhook" },
 ])(

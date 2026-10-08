@@ -22,6 +22,7 @@ import {
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
 } from "../config/sessions/session-transcript-reconcile.js";
+import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-contract.js";
@@ -32,6 +33,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   readSessionTranscriptRawDelta,
   readSessionTranscriptVisibleMessageDelta,
+  withSessionTranscriptWriteLock,
 } from "./session-transcript-runtime.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-visible-transcript-");
@@ -43,6 +45,110 @@ describe("session transcript visible cursor SDK", () => {
   beforeEach(() => {
     tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
+  });
+
+  it("settles nested reads through lock preparation, cancellation, and closure", async ({
+    signal,
+  }) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "nested-worker-read",
+      sessionKey: "agent:main:nested-worker-read",
+      storePath: path.join(tempDir, "nested-worker-read.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "user", content: "before nested read" },
+    });
+    const resumeLateRead = createDeferred();
+    let lateRead: Promise<unknown> | undefined;
+    await withSessionTranscriptWriteLock(scope, async (locked) => {
+      await expect(locked.readEvents()).resolves.toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "before nested read" }),
+        }),
+      );
+      await expect(
+        withSessionTranscriptDeltaReader(scope, (reader) => reader.raw({ maxEvents: 10 }), signal),
+      ).resolves.toMatchObject({
+        kind: "page",
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            event: expect.objectContaining({
+              message: expect.objectContaining({ content: "before nested read" }),
+            }),
+          }),
+        ]),
+      });
+      await locked.appendMessage({
+        message: { role: "assistant", content: "after nested read" },
+        prepareMessageAfterIdempotencyCheckAsync: async (message) => {
+          await expect(readSessionTranscriptVisibleMessageDelta(scope)).resolves.toMatchObject({
+            kind: "page",
+            entries: [{ message: { role: "user", content: "before nested read" } }],
+          });
+          return message;
+        },
+      });
+      await expect(readSessionTranscriptVisibleMessageDelta(scope)).resolves.toMatchObject({
+        kind: "page",
+        entries: [
+          { message: { role: "user", content: "before nested read" } },
+          { message: { role: "assistant", content: "after nested read" } },
+        ],
+      });
+      await expect(readSessionTranscriptWatermarkAsync(scope)).resolves.toMatchObject({
+        maxSeq: 2,
+      });
+      const cancel = new AbortController();
+      await expect(
+        withSessionTranscriptDeltaReader(
+          scope,
+          async (reader) => {
+            const preparing = createDeferred();
+            const finishPreparation = createDeferred();
+            const writing = locked.appendMessage({
+              message: { role: "user", content: "after cancelled read" },
+              prepareMessageAfterIdempotencyCheckAsync: async (message) => {
+                preparing.resolve();
+                await withinTest(finishPreparation.promise, signal);
+                return message;
+              },
+            });
+            try {
+              await withinTest(
+                awaitGateBeforeSettlement(preparing.promise, writing, "Append skipped preparation"),
+                signal,
+              );
+              const reading = reader.raw({ maxEvents: 10 });
+              cancel.abort(new Error("nested reader cancelled"));
+              await expect(reading).rejects.toThrow("nested reader cancelled");
+            } finally {
+              finishPreparation.resolve();
+              await writing;
+            }
+          },
+          cancel.signal,
+        ),
+      ).rejects.toThrow("nested reader cancelled");
+      lateRead = resumeLateRead.promise.then(() => readSessionTranscriptRawDelta(scope));
+    });
+    const lateRejection = expect(lateRead).rejects.toThrow("Transcript write context is closed");
+    resumeLateRead.resolve();
+    await lateRejection;
+    await expect(readSessionTranscriptRawDelta({ ...scope, maxEvents: 10 })).resolves.toMatchObject(
+      {
+        kind: "page",
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            event: expect.objectContaining({
+              message: expect.objectContaining({ content: "after cancelled read" }),
+            }),
+          }),
+        ]),
+      },
+    );
   });
 
   it("refuses a queued delta read after its prepared executor generation is replaced", async ({
@@ -131,7 +237,9 @@ describe("session transcript visible cursor SDK", () => {
         .spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmission")
         .mockImplementation((...args) => {
           const pending = admit(...args);
-          queued.resolve();
+          if (args[0].path === scope.storePath && args[4] === signal) {
+            queued.resolve();
+          }
           return pending;
         });
       restoreAdmission = () => admission.mockRestore();

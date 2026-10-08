@@ -31,6 +31,7 @@ import {
   type SessionTranscriptAnchorFacts,
   type SessionTranscriptAnchorSelection,
 } from "./session-transcript-anchor-read.kernel.js";
+import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
 import type { SessionTranscriptWorkerReadSource } from "./session-transcript-read-source.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -199,6 +200,12 @@ export async function readSessionTranscriptAnchorsFromSource(
     return facts;
   };
   try {
+    if (onRead) {
+      const locked = runLockedSessionTranscriptRead(options, read, signal);
+      if (locked) {
+        return await locked;
+      }
+    }
     return onRead
       ? await runOpenClawAgentWriteAdmission(
           options,

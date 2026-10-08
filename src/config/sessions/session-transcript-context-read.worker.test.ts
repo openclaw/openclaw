@@ -11,7 +11,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { upsertSessionEntryCore } from "./session-accessor.js";
+import { upsertSessionEntryCore, withTranscriptWriteLock } from "./session-accessor.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readSessionTranscriptContextProjectionAsync } from "./session-transcript-context-read.js";
 import { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
@@ -19,6 +19,50 @@ import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fen
 import * as contextWorker from "./session-transcript-read-worker-runtime.js";
 import { readSessionTranscriptWatermarkAsync } from "./session-transcript-watermark.js";
 import * as historyReaders from "./session-transcript-worker-readers.js";
+
+it("validates context projection inside a transcript lock and append preparation", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ label: "locked-context-projection" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "locked-context",
+      sessionKey: "agent:main:locked-context",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target);
+    await manager.appendMessageAsync({ role: "user", content: "earlier", timestamp: 1 });
+    const project = () =>
+      readSessionTranscriptContextProjectionAsync(
+        target,
+        async (source) => {
+          const snapshot = await contextWorker.readSessionTranscriptContextMessagesInWorker(
+            source.target,
+            source.admission,
+            signal,
+            source.physicalSource?.expectedIdentity,
+          );
+          return { value: snapshot.messages, version: snapshot.version };
+        },
+        signal,
+      );
+    await withTranscriptWriteLock(target, async (locked) => {
+      await expect(project()).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
+      await locked.appendMessage({
+        message: { role: "user", content: "later", timestamp: 2 },
+        prepareMessageAfterIdempotencyCheckAsync: async (message) => {
+          await expect(project()).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
+          return message;
+        },
+      });
+      await expect(project()).resolves.toMatchObject([
+        { role: "user", content: "earlier" },
+        { role: "user", content: "later" },
+      ]);
+    });
+  });
+});
 
 it.each(["admission", "later-append"] as const)(
   "validates a retained projection after a %s change without rejecting valid fenced history",

@@ -127,15 +127,17 @@ export async function readSessionEntryWorkerRequest(
   if (request.kind === "session-runtime-target") {
     const { readSessionTranscriptRuntimeTarget } =
       await import("./session-accessor.transcript-target.js");
-    const readTarget = () =>
-      readSessionTranscriptRuntimeTarget(request.scope, {
-        keyFormat: request.keyFormat,
-        databaseAgentId: request.database.agentId,
-        continuation: request.continuation,
-      });
     const read = withOpenClawAgentDatabaseReadOnly(
       (database) => {
-        const target = readTarget();
+        const target = readSessionTranscriptRuntimeTarget(
+          request.scope,
+          {
+            keyFormat: request.keyFormat,
+            databaseAgentId: request.database.agentId,
+            continuation: request.continuation,
+          },
+          database,
+        );
         return {
           target,
           source: captureSessionEntryReadSource(
