@@ -31,6 +31,8 @@ export type ParsedTranscriptEntry = {
   provider?: string;
   model?: string;
   stopReason?: string;
+  /** Mirror identity and source fingerprint of a user prompt mirrored from a native runtime. */
+  mirrorKey?: string;
   toolNames: string[];
   toolResultCounts: { total: number; errors: number };
 };

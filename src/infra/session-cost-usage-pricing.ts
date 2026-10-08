@@ -1,5 +1,7 @@
 import { calculateUsageCost, type ModelCostConfig } from "@openclaw/llm-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { hasRecordedUsageCost, normalizeUsage } from "../agents/usage.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
@@ -48,6 +50,16 @@ const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
   return undefined;
 };
 
+const parseMirrorKey = (message: Record<string, unknown>): string | undefined => {
+  const meta = message["__openclaw"];
+  if (!isRecord(meta)) {
+    return undefined;
+  }
+  const identity = normalizeOptionalString(meta.mirrorIdentity);
+  const fingerprint = normalizeOptionalString(meta.mirrorSourceFingerprint);
+  return identity && fingerprint ? `${identity}\0${fingerprint}` : undefined;
+};
+
 export const parseUsageCostTranscriptRecord = (
   entry: Record<string, unknown>,
 ): ParsedTranscriptEntry | null => {
@@ -88,6 +100,7 @@ export const parseUsageCostTranscriptRecord = (
     provider,
     model,
     stopReason,
+    mirrorKey: role === "user" ? parseMirrorKey(message) : undefined,
     toolNames: isStandaloneToolResult ? [] : extractToolCallNames(message),
     toolResultCounts: isStandaloneToolResult
       ? {

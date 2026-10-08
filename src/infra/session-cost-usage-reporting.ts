@@ -292,6 +292,7 @@ export async function loadSessionLogs(
     const retentionLimit = limit * 2;
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
     const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
+    let lastUserMirrorKey: string | undefined;
 
     for await (const parsed of readTranscriptRecordsBestEffort(sessionFile, scoped.incognito)) {
       let role: SessionLogEntry["role"];
@@ -388,6 +389,13 @@ export async function loadSessionLogs(
       // Logs share pricing and timestamp interpretation with summaries and charts.
       // Recomputing here can turn unknown prices into zero or ignore tiered rates.
       const entry = await parseUsageCostTranscriptEntryAsync(parsed, resolveCost, scoped.config);
+      if (role === "user") {
+        // Same rule as the rollup: a re-mirrored copy of the previous prompt is not a new message.
+        if (entry?.mirrorKey && entry.mirrorKey === lastUserMirrorKey) {
+          continue;
+        }
+        lastUserMirrorKey = entry?.mirrorKey;
+      }
       const usage = role === "assistant" ? entry?.usage : undefined;
 
       logs.push({
