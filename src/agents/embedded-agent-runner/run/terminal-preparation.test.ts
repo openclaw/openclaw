@@ -765,6 +765,44 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     });
   });
 
+  it("keeps a prepared trusted window legacy when another model identity is reported", async () => {
+    const outerContextTokenMeta: OuterContextTokenMeta = {
+      contextTokens: 1_000_000,
+      contextTokensSource: "resolved-v1",
+    };
+    const routed = await prepareStats({
+      assistantProvider: "routed-provider",
+      outerContextTokenMeta,
+    });
+    expect(routed.agentMeta).toMatchObject({
+      provider: "routed-provider",
+      model: "cost-model",
+      contextTokens: 1_000_000,
+      contextTokensSource: "resolved",
+    });
+
+    const selected = await prepareStats({
+      attempt: { runtimeModelSelection: { provider: "native-provider", model: "native-model" } },
+      assistantProvider: "openclaw",
+      outerContextTokenMeta,
+    });
+    expect(selected.agentMeta).toMatchObject({
+      provider: "native-provider",
+      model: "native-model",
+      contextTokensSource: "resolved",
+    });
+
+    const attemptOwned = await prepareStats({
+      assistantProvider: "routed-provider",
+      attempt: { contextTokens: 400_000, contextTokensSource: "runtime" },
+      outerContextTokenMeta,
+    });
+    expect(attemptOwned.agentMeta).toMatchObject({
+      contextTokens: 400_000,
+      contextTokensSource: "runtime",
+    });
+  });
+
   it("reports the terminal physical attempt's redacted credential source", async () => {
     const prepared = await prepareStats({
       attempt: {

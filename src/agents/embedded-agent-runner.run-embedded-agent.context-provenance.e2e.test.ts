@@ -59,7 +59,11 @@ beforeEach(() => {
   runAttempt.mockResolvedValueOnce(
     makeEmbeddedRunnerAttempt({
       assistantTexts: ["ok"],
-      lastAssistant: buildEmbeddedRunnerAssistant({ content: [{ type: "text", text: "ok" }] }),
+      // Trusted provenance is bound to the prepared model, so the attempt reports that model.
+      lastAssistant: buildEmbeddedRunnerAssistant({
+        model: "wide-model",
+        content: [{ type: "text", text: "ok" }],
+      }),
     }),
   );
 });
@@ -135,6 +139,8 @@ describe("embedded run context provenance", () => {
     });
 
     expect(result.meta.agentMeta).toMatchObject({
+      provider: "openai",
+      model: "wide-model",
       contextTokens: testCase.contextTokens,
       contextTokensSource: testCase.source,
     });
