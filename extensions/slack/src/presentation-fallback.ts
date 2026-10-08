@@ -27,53 +27,14 @@ function resolveSlackCommandFallback(command: string): {
   };
 }
 
-function escapeSlackPresentationChartBlock(
-  block: MessagePresentationChartBlock,
-): MessagePresentationChartBlock {
-  if (block.chartType === "pie") {
-    return {
-      ...block,
-      title: escapeSlackMrkdwn(block.title),
-      segments: block.segments.map((segment) => ({
-        ...segment,
-        label: escapeSlackMrkdwn(segment.label),
-      })),
-    };
-  }
-  return {
-    ...block,
-    title: escapeSlackMrkdwn(block.title),
-    categories: block.categories.map(escapeSlackMrkdwn),
-    series: block.series.map((series) => ({
-      ...series,
-      name: escapeSlackMrkdwn(series.name),
-    })),
-    ...(block.xLabel ? { xLabel: escapeSlackMrkdwn(block.xLabel) } : {}),
-    ...(block.yLabel ? { yLabel: escapeSlackMrkdwn(block.yLabel) } : {}),
-  };
-}
-
-function escapeSlackPresentationTableBlock(
-  block: MessagePresentationTableBlock,
-): MessagePresentationTableBlock {
-  return {
-    ...block,
-    caption: escapeSlackMrkdwn(block.caption),
-    headers: block.headers.map(escapeSlackMrkdwn),
-    rows: block.rows.map((row) =>
-      row.map((cell) => (typeof cell === "string" ? escapeSlackMrkdwn(cell) : cell)),
-    ),
-  };
-}
-
 function escapeSlackPresentationFallbackBlock(
   block: MessagePresentationBlock,
 ): MessagePresentationBlock {
   if (block.type === "chart") {
-    return escapeSlackPresentationChartBlock(block);
+    return { type: "text", text: renderSlackMessagePresentationChartFallbackText(block) };
   }
   if (block.type === "table") {
-    return escapeSlackPresentationTableBlock(block);
+    return { type: "text", text: renderSlackMessagePresentationTableFallbackText(block) };
   }
   if (block.type === "buttons") {
     return {
@@ -121,13 +82,13 @@ function escapeSlackPresentationFallbackBlock(
 export function renderSlackMessagePresentationChartFallbackText(
   block: MessagePresentationChartBlock,
 ): string {
-  return renderMessagePresentationChartFallbackText(escapeSlackPresentationChartBlock(block));
+  return escapeSlackMrkdwn(renderMessagePresentationChartFallbackText(block));
 }
 
 export function renderSlackMessagePresentationTableFallbackText(
   block: MessagePresentationTableBlock,
 ): string {
-  return renderMessagePresentationTableFallbackText(escapeSlackPresentationTableBlock(block));
+  return escapeSlackMrkdwn(renderMessagePresentationTableFallbackText(block));
 }
 
 export function renderSlackMessagePresentationFallbackText(params: {
