@@ -40,9 +40,6 @@ inherited lock deadline without rereading the connection's timeout. FIFO,
 lock-wait budgets, schemas, stored data, and update behavior are unchanged.
 
 The admitted catalog includes index names and trigger definitions alongside tables.
-Admission captures these objects and the published schema version in one pinned
-metadata query. Native PRAGMA reads preserve admission when operator tables or
-views shadow the table-valued PRAGMA.
 Canonical session validation consumes these definitions without another catalog scan.
 First-use schema owners skip additive DDL only when all their tables and indexes
 are present in the current facts. Foreign schema changes, local DDL, rollback, and
