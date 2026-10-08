@@ -51,14 +51,18 @@ let gateway: GatewayHarness;
 const connectionReleases: Promise<void>[] = [];
 let restoreConnectionObserver: (() => void) | undefined;
 
-function trackChatTerminalStates(socket: GatewaySocket, runId: string): string[] {
+function trackChatTerminalStates(
+  socket: GatewaySocket,
+  runId: string,
+  onYielded?: () => void,
+): string[] {
   const terminalStates: string[] = [];
   socket.on("message", (raw) => {
     try {
       const frame = JSON.parse(rawDataToString(raw)) as {
         type?: string;
         event?: string;
-        payload?: { runId?: string; state?: string };
+        payload?: { runId?: string; state?: string; yielded?: boolean };
       };
       if (
         frame.type === "event" &&
@@ -67,6 +71,9 @@ function trackChatTerminalStates(socket: GatewaySocket, runId: string): string[]
         typeof frame.payload.state === "string"
       ) {
         terminalStates.push(frame.payload.state);
+        if (frame.payload.yielded === true) {
+          onYielded?.();
+        }
       }
     } catch {
       // The owned test socket may also carry unrelated gateway events.
@@ -352,9 +359,9 @@ describe("gateway WebSocket chat abort ownership", () => {
     );
   });
 
-  test.each([false, true])(
+  test.for([false, true])(
     "retains dispatch failure and rejects late abort after yielded waiting end=%s",
-    async (yielded) => {
+    async (yielded, { signal }) => {
       const sessionDirectory = temporaryDirectories.make("openclaw-chat-error-late-abort-");
       const storePath = path.join(sessionDirectory, "sessions.json");
       testState.sessionStorePath = storePath;
@@ -364,7 +371,8 @@ describe("gateway WebSocket chat abort ownership", () => {
       const dispatchEntered = createDeferred();
       const dispatchRelease = createDeferred();
       const runId = `real-websocket-dispatch-error-before-late-abort-${yielded}`;
-      const terminalStates = trackChatTerminalStates(socket, runId);
+      const yieldedFrame = createDeferred();
+      const terminalStates = trackChatTerminalStates(socket, runId, yieldedFrame.resolve);
       let admissionRelease: Promise<void> | undefined;
 
       try {
@@ -398,13 +406,6 @@ describe("gateway WebSocket chat abort ownership", () => {
           throw new Error("Held dispatch must retain its session admission");
         }
         if (yielded) {
-          const yieldedFrame = onceMessage(
-            socket,
-            (frame) =>
-              frame.event === "chat" &&
-              frame.payload?.runId === runId &&
-              frame.payload?.yielded === true,
-          );
           expect(
             emitAgentEventIfCurrent({
               runId,
@@ -420,7 +421,7 @@ describe("gateway WebSocket chat abort ownership", () => {
               },
             }),
           ).toBe(true);
-          await yieldedFrame;
+          await withinTest(yieldedFrame.promise, signal);
         }
         dispatchRelease.resolve();
         await admissionRelease;
