@@ -29,12 +29,10 @@ owners' updates, so the agent says so instead of editing them.
   which definition is used.
 - **Hash bound:** update proposals bind to the current target hash and go
   `stale` if the live skill changes before apply.
-- **Scanner gated:** apply reruns the security scanner before writing. Only
-  critical findings block apply; warn-level findings remain visible but do not
-  block it. Prompt-related keywords are not scanner findings: mentioning hidden
-  instructions or tool approval does not establish an instruction override.
-  Literal credential rejection, approval policy, and blocking evaluator decisions
-  remain enforced.
+- **Credential checked:** drafts reject recognized literal credentials, and apply
+  checks them again before writing. Generic code heuristics do not block proposal
+  apply. Approval policy and blocking evaluator decisions remain enforced; use
+  `openclaw security audit --deep` for advisory code diagnostics.
 - **Recoverable:** apply writes rollback metadata before touching live files.
 - **Revision atomic:** create and revise flush a complete immutable proposal
   generation, publish it with an atomic rename, then sync its parent directory

@@ -1593,21 +1593,44 @@ describe("skill workshop proposals", () => {
     expect(applied).not.toContain("Short listing label");
   });
 
-  it("quarantines unsafe proposals during apply", async () => {
-    const workspaceDir = await makeWorkspace();
-    const proposal = await proposeCreateSkill({
-      workspaceDir,
-      name: "Unsafe Skill",
-      description: "Unsafe draft",
-      content: "# Unsafe\n\n```ts\nimport { exec } from 'child_process';\nexec('whoami');\n```\n",
-    });
+  it.each([
+    {
+      name: "Git Version",
+      description: "Check the installed Git version",
+      path: "scripts/git-version.js",
+      example: 'import { execFile } from "node:child_process";\nexecFile("git", ["--version"]);\n',
+    },
+    {
+      name: "API Authentication",
+      description: "Authenticate with an environment token",
+      path: "scripts/api-auth.js",
+      example:
+        'const token = process.env.API_TOKEN;\nfetch("https://example.test/api", { headers: { Authorization: `Bearer ${token}` } });\n',
+    },
+  ])(
+    "applies $name in Markdown and a support file",
+    async ({ name, description, path: filePath, example }) => {
+      const workspaceDir = await makeWorkspace();
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        name,
+        description,
+        content: `# ${name}\n\n\`\`\`js\n${example}\`\`\`\n`,
+        supportFiles: [{ path: filePath, content: example }],
+      });
 
-    expect(proposal.record.scan.state).toBe("failed");
-    await expect(
-      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
-    ).rejects.toThrow("Proposal scan failed");
-    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("quarantined");
-  });
+      const applied = await applySkillProposal({
+        workspaceDir,
+        proposalId: proposal.record.id,
+      });
+      expect(applied.record.status).toBe("applied");
+      await expect(fs.readFile(applied.targetSkillFile, "utf8")).resolves.toContain(example);
+      await expect(
+        fs.readFile(path.join(applied.record.target.skillDir, filePath), "utf8"),
+      ).resolves.toBe(example);
+      expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
+    },
+  );
 
   it.each([
     "skill name",
@@ -1760,31 +1783,6 @@ describe("skill workshop proposals", () => {
     await expect(readSkillProposalDraftDirectory(draftDir)).rejects.toThrow(
       "Proposal support files must not be executable",
     );
-  });
-
-  it("quarantines proposals with unsafe support file contents during apply", async () => {
-    const workspaceDir = await makeWorkspace();
-    const proposal = await proposeCreateSkill({
-      workspaceDir,
-      name: "Unsafe Support",
-      description: "Unsafe support script",
-      content: "# Unsafe Support\n",
-      supportFiles: [
-        {
-          path: "scripts/run.js",
-          content: "eval('2 + 2');\n",
-        },
-      ],
-    });
-
-    expect(proposal.record.scan.state).toBe("failed");
-    await expect(
-      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
-    ).rejects.toThrow("Proposal scan failed");
-    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("quarantined");
-    await expect(
-      fs.access(path.join(workshopSkillsDir(), "unsafe-support", "scripts", "run.js")),
-    ).rejects.toThrow();
   });
 
   it.each([
