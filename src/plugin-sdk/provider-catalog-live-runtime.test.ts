@@ -8,6 +8,7 @@ import {
   clearLiveCatalogCacheForTests,
   fetchLiveProviderModelIds,
   LiveModelCatalogHttpError,
+  readLiveModelCatalogStringField,
   type LiveModelCatalogFetchGuard,
 } from "./provider-catalog-live-runtime.js";
 import type { ProviderCatalogContext } from "./provider-catalog-shared.js";
@@ -504,6 +505,33 @@ describe("provider-catalog-live-runtime", () => {
 
     expect(fallback.apiKey).toBe("PROVIDER_API_KEY");
     expect(fallback.models.map((model) => model.id)).toEqual(["model-a", "model-b"]);
+  });
+
+  it("admits and rejects listed rows through the provider id selector", async () => {
+    const { fetchGuard } = buildFetchGuard({
+      data: [
+        { slug: "model-a" },
+        { slug: "fresh-chat" },
+        { slug: "fresh-embedding" },
+        { id: "model-b", object: "model" },
+      ],
+    });
+    const models = [buildModel("model-a"), buildModel("model-b")];
+
+    const provider = await buildLiveModelProviderConfig({
+      discoveryMode: "strict",
+      providerId: "provider",
+      endpoint: "https://provider.example.test/v1/models",
+      providerConfig: { api: "openai-completions", baseUrl: "https://provider.example.test/v1" },
+      fetchGuard,
+      models,
+      readModelId: (row) => readLiveModelCatalogStringField(row, "slug"),
+    });
+
+    expect(provider.models).toEqual([
+      expect.objectContaining({ id: "fresh-chat", input: ["text"] }),
+      models[0],
+    ]);
   });
 
   it("builds newly listed text models from OpenAI-compatible catalog metadata", async () => {

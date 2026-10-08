@@ -43,7 +43,11 @@ GPT-3.5, GPT-4 (including GPT-4o and GPT-4.1), o1, o3, and o4 models stay hidden
 from the list because they fail on the default Codex runtime. You can still select
 one by its reference, for example as `agents.defaults.model.primary` or a session
 model; set `agents.defaults.models["openai/<model>"].agentRuntime.id` to
-`"openclaw"` so it runs.
+`"openclaw"` so it runs. o1, o3-mini, GPT-3.5, GPT-4, GPT-4 Turbo, and GPT-4.1
+nano also reject OpenAI's hosted web search, which that runtime adds by default:
+set `tools.web.search.provider` to a managed provider such as `brave`, or
+`tools.web.search.enabled: false`, before using them (see
+[Native OpenAI web search](/tools/web#native-openai-web-search)).
 
 ## Daybreak Blue and Red
 

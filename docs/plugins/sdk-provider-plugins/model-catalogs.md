@@ -154,9 +154,12 @@ it as `projectRows`; the shared runtime still owns guarded fetches,
 provider-auth headers, cache admission, and static fallback.
 
 Use `buildLiveModelProviderConfig` when the plugin builds the provider config
-itself. Without `projectRows`, it applies the same listing rules as
-`liveModelDiscovery`. Pass `projectRows` when the live API publishes richer
-model metadata:
+itself. Without `projectRows`, the listing decides which models exist: every
+listed chat model is published, static `models` rows only enrich matching IDs,
+and non-chat rows are filtered by the same rules as `liveModelDiscovery`. To
+restrict the list, pass `readModelId(row)` and return `undefined` for rows the
+provider does not support; the returned string also becomes the model ID. Pass
+`projectRows` when the live API publishes richer model metadata:
 
 ```typescript index.ts
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -252,9 +255,9 @@ export default definePluginEntry({
 available. Keep an offline `staticRun` or static fallback so setup, docs,
 tests, and picker surfaces do not depend on live network access. Use a TTL
 appropriate for model-list freshness, avoid request-time filesystem polling,
-and pass a provider-specific `readRows` / `readModelId` only when the
-upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
-shape.
+and pass a provider-specific `readRows` only when the upstream response is not an
+OpenAI-compatible `{ data: [{ id, object }] }` shape. Pass `readModelId` when
+rows carry their ID elsewhere or the provider must reject some listed rows.
 
 During model-runtime preparation, `staticCatalog.run` and `prepareSyntheticAuth`
 receive an optional `signal`. Shutdown and plugin/config replacement abort it.
