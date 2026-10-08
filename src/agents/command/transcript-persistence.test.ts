@@ -61,7 +61,7 @@ it.each(["CLI", "ACP"] as const)(
 );
 
 it.each(["CLI", "ACP"] as const)(
-  "records the run id on the %s assistant row so its visible final is found by run",
+  "recovers the complete %s answer for its run after a later turn",
   async (runtime) => {
     const cwd = sessionDirs.make();
     const runId = `run-${runtime.toLowerCase()}-final`;
@@ -82,19 +82,24 @@ it.each(["CLI", "ACP"] as const)(
       sessionAgentId: "main",
       sessionCwd: cwd,
       config: {},
-      runId,
     };
-    if (runtime === "CLI") {
-      await persistCliTurnTranscript({
-        ...common,
-        result: { payloads: [{ text: finalText }], meta: { durationMs: 0 } },
-      });
-    } else {
-      await persistAcpTurnTranscript({
-        ...common,
-        finalText,
-        terminalOutcome: { reason: "completed", status: "ok" },
-      });
+    for (const turn of [
+      { runId, finalText },
+      { runId: `${runId}-later`, finalText: "A different turn's answer" },
+    ]) {
+      if (runtime === "CLI") {
+        await persistCliTurnTranscript({
+          ...common,
+          runId: turn.runId,
+          result: { payloads: [{ text: turn.finalText }], meta: { durationMs: 0 } },
+        });
+      } else {
+        await persistAcpTurnTranscript({
+          ...common,
+          ...turn,
+          terminalOutcome: { reason: "completed", status: "ok" },
+        });
+      }
     }
     const found = await findTranscriptEvent(target, { kind: "visible-final", runId });
     expect(found?.event).toMatchObject({
