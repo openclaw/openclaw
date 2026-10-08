@@ -575,11 +575,12 @@ export function closeOpenClawStateDatabaseByPath(
   options?: OpenClawStateDatabaseCloseOptions,
 ): boolean {
   const resolvedPath = resolveDatabasePath({ path: pathname });
+  const cachedDatabase = cachedDatabases.get(resolvedPath);
   return retireOpenClawStateDatabaseHandles(
     resolvedPath,
     options,
-    // A cached owner already identifies the exact handle; avoid opening a read worker.
-    cachedDatabases.has(resolvedPath) ? undefined : asyncResources.identity(pathname),
+    // A cached owner already has a recorded physical identity; avoid opening a read worker.
+    cachedDatabase ? databaseIdentities.get(cachedDatabase.db) : asyncResources.identity(pathname),
   );
 }
 
@@ -600,16 +601,8 @@ export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseO
   retireOpenClawStateDatabaseHandles(undefined, options);
 }
 
-<<<<<<< HEAD
 /** Register a resource owner before it can admit any shared-state worker opens. */
 export const registerOpenClawStateDatabaseAsyncResource = asyncResources.register;
-=======
-export function registerOpenClawStateDatabaseAsyncResource(
-  resource: OpenClawStateDatabaseAsyncResource,
-): () => void {
-  return asyncResources.register(resource);
-}
->>>>>>> 2952212e65f (fix(doctor): preserve independent state readers)
 
 export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;
 

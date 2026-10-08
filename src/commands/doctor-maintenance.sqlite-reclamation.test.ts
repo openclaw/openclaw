@@ -91,7 +91,9 @@ it("settles the inherited WAL owner without closing an independent same-database
       await maintenance.acquire();
       await maintenance.release();
       released = true;
-      expect(reader!.dataVersion()).toEqual(expect.any(Number));
+      expect(reader!.read(({ db }) => db.prepare("SELECT 1 AS one").get())).toEqual({
+        one: 1,
+      });
     } finally {
       reader?.dispose();
       if (!released) {

@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs, { symlinkSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -23,6 +23,19 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 describe("shared-state disposal ownership", () => {
+  it("closes every cached alias of the same physical database", () => {
+    const root = tempDirs.make("openclaw-state-physical-alias-");
+    const pathname = path.join(root, "state.sqlite");
+    const alias = path.join(root, "alias.sqlite");
+    const owner = openOpenClawStateDatabase({ path: pathname });
+    symlinkSync(pathname, alias);
+    const aliasedOwner = openOpenClawStateDatabase({ path: alias });
+
+    expect(cache.closeOpenClawStateDatabaseByPath(pathname)).toBe(true);
+    expect(owner.db.isOpen).toBe(false);
+    expect(aliasedOwner.db.isOpen).toBe(false);
+  });
+
   it("disposes a revoked owner's exact handle without changing a successor SQLite family", async () => {
     const root = tempDirs.make("openclaw-state-revoked-disposal-");
     const databasePath = path.join(root, "state", "openclaw.sqlite");
