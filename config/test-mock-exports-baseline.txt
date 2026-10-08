@@ -2384,7 +2384,6 @@
 ["src/agents/embedded-agent-helpers/error-text.test.ts","../../logging/subsystem.js","8ad8d703b12215bcc12658da1545116c4acf158332d727dca8ed089fb50a86fe",1]
 ["src/agents/embedded-agent-runner-extraparams.test.ts","../plugins/provider-hook-runtime.js","30e37a43c41e437def63c284b62b4ea68e55d0aed2822f8bd16b9e0211428519",1]
 ["src/agents/embedded-agent-runner.e2e.test.ts","./agent-bundle-mcp-tools.js","471354e8e36f08c236d86fc8e185e94ae8d4c50210dc038a508ca37e37a4c2a0",1]
-["src/agents/embedded-agent-runner.e2e.test.ts","./embedded-agent-runner/run/auth-controller.js","0d6e89eaa158aec85a33cea6e4c8e2e7202f64610b84e280bab6832c8c571c40",1]
 ["src/agents/embedded-agent-runner.e2e.test.ts","./models-config.js","43e92a3b28c40e4c9e2e8c6f3ac97d252299c9dc7d21e6b08d6cc1d83195b67a",1]
 ["src/agents/embedded-agent-runner.openai-tool-id-preservation.test.ts","../plugins/provider-hook-runtime.js","40320317c3dff2436b1ce41fb970b9267e0e53a8fb9a57377fc52c47bc9a3c17",1]
 ["src/agents/embedded-agent-runner.openai-tool-id-preservation.test.ts","../plugins/provider-runtime.js","6a848f8c77f8b4fa8457351bcc6e51b0c25eedfbc6ecbe429f58d3ebc950fde1",1]
