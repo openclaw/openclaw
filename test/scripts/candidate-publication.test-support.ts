@@ -37,13 +37,16 @@ const time = "2026-08-28T12:00:00.000Z";
 export function candidatePublicationFixture(
   options: {
     candidateSha?: string;
+    transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
   } = {},
 ) {
   const fixture = trustedMainNpmFixture();
   const q = options.candidateSha ?? defaultQ;
-  const branch = options.candidateSha ? "release-ci/" + q.slice(0, 12) + "-123" : defaultBranch;
+  const branch =
+    options.transportRef ??
+    (options.candidateSha ? "release-ci/" + q.slice(0, 12) + "-123" : defaultBranch);
   const legacyRunId = fixture.runId;
   const runId = options.runId ?? legacyRunId;
   const workflowSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
@@ -81,6 +84,7 @@ export function candidatePublicationFixture(
   const admission = admissionFixture(true, {
     inputs,
     candidateSha: q,
+    transportRef: branch,
     candidateVersion: "2026.8.28-beta.1",
     policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
     workflowSource,
