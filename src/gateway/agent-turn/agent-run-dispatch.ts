@@ -33,6 +33,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
+import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
@@ -47,6 +48,7 @@ import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-exec
 import {
   isGatewayAgentAbortRejection,
   projectRejectedGatewayStatus,
+  projectWithdrawnAgentInput,
   RESOLVED_GATEWAY_STATUS_BY_TERMINAL_CLASSIFICATION,
   resolveGatewayAgentAbortStopReason,
   resolveResolvedAgentTimeoutStopReason,
@@ -91,6 +93,12 @@ export function dispatchAgentRunFromGateway(params: {
   const registeredRunEntry = params.admittedRunEntry;
   const jobSessionBinding = registeredRunEntry ?? params.ingressOpts;
   let runOwnerSettled = false;
+  const projectInputOutcome = (payload: unknown) =>
+    projectWithdrawnAgentInput(
+      payload,
+      readWithdrawnUserTurnInputId(params.ingressOpts.userTurnTranscriptRecorder),
+      registeredRunEntry?.abortStopReason,
+    );
   let pendingReplay: DedupeEntry | undefined;
   const publishReplay = (entry: DedupeEntry) => {
     if (!runOwnerSettled) {
@@ -101,7 +109,7 @@ export function dispatchAgentRunFromGateway(params: {
       dedupe: params.context.dedupe,
       keys: params.dedupeKeys,
       session: captureAgentJobSession(jobSessionBinding),
-      entry: diagnostics.forReplay(entry),
+      entry: diagnostics.forReplay({ ...entry, payload: projectInputOutcome(entry.payload) }),
     });
   };
   const registeredRunInstance = registeredRunEntry?.operationalRunInstance;
@@ -446,7 +454,7 @@ export function dispatchAgentRunFromGateway(params: {
       await cleanupRunOwner();
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
-      params.io.emitFinal([true, { ...payload }, undefined], { runId: params.runId });
+      params.io.emitFinal([true, projectInputOutcome(payload), undefined], { runId: params.runId });
       return { terminalOutcome, settled };
     })
     .catch(async (cause: unknown) => {
@@ -512,13 +520,14 @@ export function dispatchAgentRunFromGateway(params: {
       persistTerminalDedupe(settled);
       await cleanupRunOwner();
       const responseError = aborted && settled ? undefined : error;
-      params.io.emitFinal([aborted && settled, payload, responseError], {
+      params.io.emitFinal([aborted && settled, projectInputOutcome(payload), responseError], {
         runId: params.runId,
         ...diagnostics.errorMeta(responseError?.message, !aborted),
       });
       return { terminalOutcome, settled };
     });
-  const runCompletion = (async () => {
+  // Gateway shutdown must join this execution, not just its admission.
+  return (async () => {
     try {
       return await dispatchCompletion;
     } finally {
@@ -529,7 +538,4 @@ export function dispatchAgentRunFromGateway(params: {
       }
     }
   })();
-
-  // Gateway shutdown must join this execution, not just its admission.
-  return runCompletion;
 }

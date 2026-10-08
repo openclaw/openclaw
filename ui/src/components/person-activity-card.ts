@@ -44,11 +44,7 @@ type PersonCardInput = {
 /** Loaded, caller-visible roster facts, paired with their owning list scope. */
 function loadedPresenceSessions(input: PersonCardInput): Map<string, ScopedSession> {
   const sessions = new Map<string, ScopedSession>();
-  const data = input.sessionData;
-  if (!data) {
-    return sessions;
-  }
-  for (const row of data.sessionsResult?.sessions ?? []) {
+  for (const row of input.sessionData?.sessionsResult?.sessions ?? []) {
     const agentId = parseAgentSessionKey(row.key)?.agentId ?? row.agentId ?? input.watchAgentId;
     const key = sessionIdentity(row.key, agentId, input);
     if (!sessions.has(key)) {

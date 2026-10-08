@@ -277,6 +277,7 @@ export async function runAcpAgentCommand(params: {
       : undefined;
     params.trackInternalModelRunTarget(internalTarget);
     const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
+      assistantIdempotencyKey: params.runId,
       body: params.body,
       transcriptBody: params.transcriptBody,
       inputProvenance: params.opts.inputProvenance,

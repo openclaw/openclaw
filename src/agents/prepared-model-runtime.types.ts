@@ -37,6 +37,8 @@ export type PreparedModelCatalogRefreshOptions = {
   refresh?: boolean;
   providerIds?: readonly string[];
   changedOnly?: boolean;
+  /** Await acquisition instead of returning published rows after the foreground deadline. */
+  wait?: boolean;
 };
 
 export type PreparedNativeModelSelection = {
@@ -225,16 +227,22 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
   fullCatalogConcurrencyLimit: number;
 }>;
 
+export type PreparedModelCatalogProviderFacts = {
+  source: string;
+  credentials: string;
+  expiresAt?: number;
+  /** Consecutive failed discoveries; their backed-off retry deadline is `expiresAt`. */
+  discoveryFailures?: number;
+  legacyRows?: ReadonlySet<string>;
+};
+
 export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
   runtimeModels: ReadonlyMap<string, readonly Model[]>;
   key: string;
   pluginFingerprint: string;
   nativeSource: string;
-  providers: ReadonlyMap<
-    string,
-    { source: string; credentials: string; expiresAt?: number; legacyRows?: ReadonlySet<string> }
-  >;
+  providers: ReadonlyMap<string, PreparedModelCatalogProviderFacts>;
   discoveryOrigins: readonly { provider: string; profileId?: string }[];
 };
 

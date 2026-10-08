@@ -1702,13 +1702,12 @@ describe("gateway agent handler chat.abort integration", () => {
         resolveAgentRunExpiresAtMs({ now: abortEntry.startedAtMs, timeoutMs: 120_000 }),
       );
 
-      nowMs += 120_000;
-      const executionStartedAtMs = nowMs;
+      nowMs += 119_999;
       const executionStarted = requireValue(onExecutionStarted, "execution-start callback missing");
       await executionStarted();
       expect(abortEntry.startedAtMs).toBe(admissionStartedAtMs + 90_000);
       expect(abortEntry.expiresAtMs).toBe(
-        resolveAgentRunExpiresAtMs({ now: executionStartedAtMs, timeoutMs: 120_000 }),
+        resolveAgentRunExpiresAtMs({ now: nowMs, timeoutMs: 120_000 }),
       );
 
       const firstExecutionExpiryMs = abortEntry.expiresAtMs;
@@ -1761,7 +1760,8 @@ describe("gateway agent handler chat.abort integration", () => {
 
       expect(abortEntry.startedAtMs).toBe(startedAtMs);
       expect(abortEntry.expiresAtMs).toBe(queueExpiresAtMs);
-      expect(abortEntry.controller.signal.aborted).toBe(false);
+      expect(abortEntry.controller.signal.aborted).toBe(true);
+      expect(abortEntry.abortStopReason).toBe("timeout");
 
       nowMs = queueExpiresAtMs - 1;
       await executionStarted();

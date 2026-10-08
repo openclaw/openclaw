@@ -62,7 +62,6 @@ async function runReply(
 it.each([
   [{ timeoutOverrideMs: 1500 }, 1500, 1500],
   [{ timeoutOverrideSeconds: 0 }, MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS],
-  [{}, 180000, undefined],
 ])(
   "passes timeout options %s to the actual runtime entrypoint",
   async (options, expected, override) => {

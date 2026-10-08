@@ -148,12 +148,10 @@ export function resolveConfiguredProviderDefaultApi(params: {
     return undefined;
   }
   const normalized = resolveProviderTransport({
-    provider: params.provider,
+    ...params,
+    modelId: undefined,
     api: undefined,
     baseUrl: providerConfiguredBaseUrl,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    runtimeHooks: params.runtimeHooks,
   });
   return normalized.api ?? "openai-completions";
 }
@@ -389,14 +387,10 @@ export function applyConfiguredProviderOverrides(params: {
     );
     const aliasTransport = manifestAliasTransport
       ? resolveProviderTransport({
-          provider: params.provider,
-          modelId,
+          ...params,
           api: manifestAliasTransport.api ?? discoveredModel.api,
           baseUrl:
             normalizeOptionalString(manifestAliasTransport.baseUrl) ?? discoveredModel.baseUrl,
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          runtimeHooks: params.runtimeHooks,
         })
       : undefined;
     const requestConfig = resolveProviderRequestConfig({
@@ -514,13 +508,10 @@ export function applyConfiguredProviderOverrides(params: {
         configuredStaticCatalogModel,
       ];
   const resolvedTransport = resolveProviderTransport({
-    provider: params.provider,
+    ...params,
     modelId: discoveredModel.id,
     api: transportSources.find((entry) => entry?.api != null)?.api ?? providerDefaultApi,
     baseUrl: transportSources.map((entry) => normalizeOptionalString(entry?.baseUrl)).find(Boolean),
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    runtimeHooks: params.runtimeHooks,
   });
   if (
     !hasConfiguredModelRouteSupport({

@@ -280,11 +280,9 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         workspaceDir: params.harness.workspaceDir,
         pluginRegistry: requireActivePluginRegistry(),
       });
-    if (params.harness.preparation.kind === "measured") {
-      await params.harness.preparation.run(prepare);
-    } else {
-      await prepare();
-    }
+    await (params.harness.preparation.kind === "measured"
+      ? params.harness.preparation.run(prepare)
+      : prepare());
     preparedHarnessRuntimes.add(key);
   };
   // Result classification and thrown errors must honor the same live delivery custody.

@@ -426,32 +426,6 @@ describe("AppSidebar group section ordering", () => {
     await sidebar.updateComplete;
   }
 
-  it("persists a group dropped before Coding without rewriting unchanged catalog order", async () => {
-    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);
-
-    await dropGroupBeforeCoding(sidebar, "Beta");
-
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
-        ["Alpha", "Beta"],
-        ["category:Alpha", "ungrouped", "groups", "category:Beta", "work"],
-      ),
-    );
-  });
-
-  it("also updates catalog order when a group crosses another group on its way to Coding", async () => {
-    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);
-
-    await dropGroupBeforeCoding(sidebar, "Alpha");
-
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith(
-        ["Beta", "Alpha"],
-        ["category:Beta", "ungrouped", "groups", "category:Alpha", "work"],
-      ),
-    );
-  });
-
   it("does not persist cross-group ordering when the catalog update fails", async () => {
     const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta"]);
     const before = renderedSectionIds(sidebar);

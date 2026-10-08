@@ -1150,6 +1150,7 @@ src/infra/worker-native-lifecycle.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
+src/infra/worker-pool-sizing.ts
 src/infra/worker-request-diagnostics.ts
 src/infra/worker-request-kind.ts
 src/infra/worker-task-capacity.ts
@@ -1761,6 +1762,7 @@ src/state/openclaw-state-read-scope.ts
 src/state/openclaw-state-read-worker.ts
 src/state/openclaw-state-schema-compatibility.ts
 src/state/openclaw-state-schema-inspection.ts
+src/state/openclaw-state-schema-preflight.ts
 src/state/openclaw-state-schema-publication.ts
 src/state/openclaw-state-schema.sql
 src/state/openclaw-state-schema.ts

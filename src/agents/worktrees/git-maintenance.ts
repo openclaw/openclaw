@@ -12,6 +12,7 @@ type MaintenanceParams = {
   signal?: AbortSignal;
   commitGuard?: () => void;
   retryDeferred?: boolean;
+  shouldDeferRepository?: (repoRoot: string) => string | undefined;
 };
 
 /** Repair pack lookup even when the repository's broader maintenance is suspended. */
@@ -70,7 +71,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
     });
     for (const repoRoot of new Set(live.map((record) => record.repoRoot))) {
       assertCurrent();
-      if (failed.has(repoRoot)) {
+      if (failed.has(repoRoot) || params.shouldDeferRepository?.(repoRoot)) {
         continue;
       }
       try {

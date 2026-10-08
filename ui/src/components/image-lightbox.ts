@@ -79,9 +79,8 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   private originalBlobUrl = "";
   private originalUrlRequest = 0;
   @state() private scale = 1;
-  @state() private imageReady = false;
 
-  private panzoom?: PanzoomObject;
+  @state() private panzoom?: PanzoomObject;
   private panzoomImage?: HTMLImageElement;
   private panzoomStage?: HTMLDivElement;
   private backdropPointer: { pointerId: number; clientX: number; clientY: number } | undefined;
@@ -209,7 +208,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       this.mediaKind === "video"
         ? t("chat.mediaPlayer.closeVideoPreview")
         : t("chat.imageLightbox.close");
-    const canZoom = this.imageReady && this.panzoom !== undefined;
+    const canZoom = this.panzoom !== undefined;
     const width = this.currentImage?.width;
     const height = this.currentImage?.height;
     const sized = Number.isFinite(width) && width! > 0 && Number.isFinite(height) && height! > 0;
@@ -370,7 +369,6 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     });
     image.addEventListener("panzoomchange", this.handlePanzoomChange);
     stage.addEventListener("wheel", this.handleWheel, { passive: false });
-    this.imageReady = true;
   }
 
   private destroyPanzoom() {
@@ -384,7 +382,6 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     this.panzoom = undefined;
     this.panzoomImage = undefined;
     this.panzoomStage = undefined;
-    this.imageReady = false;
   }
 
   private handlePanzoomChange = (event: Event) => {

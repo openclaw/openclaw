@@ -113,10 +113,6 @@ function compareArtifactNames(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function normalizeRelativePath(filePath: string): string {
-  return filePath.split(path.sep).join("/");
-}
-
 const ARTIFACT_STAT_FIELDS = ["dev", "ino", "mode", "size", "mtimeNs", "ctimeNs"] as const;
 
 function sameOpenedFile(left: BigIntStats, right: BigIntStats): boolean {
@@ -199,7 +195,7 @@ async function listPackageFiles(params: {
       if (!entry.isFile()) {
         throw new Error(`Codex runtime artifact contains an unsupported entry: ${entryPath}`);
       }
-      files.push(normalizeRelativePath(path.relative(params.rootPath, entryPath)));
+      files.push(path.relative(params.rootPath, entryPath).split(path.sep).join("/"));
     }
   };
   await visit(params.rootPath, 0);

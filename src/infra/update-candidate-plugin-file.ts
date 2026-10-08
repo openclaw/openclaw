@@ -90,7 +90,7 @@ export async function copyUpdateCandidatePluginFiles(
             UpdateCandidatePluginFileReply
           >({
             workerUrl: resolveRuntimeProcessEntrypointUrl("updateCandidateState"),
-            maxWorkers: 4,
+            workerClass: "compute",
             maxPendingTasks: 4,
             restartOnError: false,
           });

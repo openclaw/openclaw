@@ -313,6 +313,14 @@ class SessionsPage extends OpenClawLightDomElement {
     );
   }
 
+  private publishRequestError(scope: SessionsPageRequestScope, error: unknown): "failed" | "stale" {
+    if (!this.isRequestScopeCurrent(scope)) {
+      return "stale";
+    }
+    this.error = formatUiError(error);
+    return "failed";
+  }
+
   private mutationDisabledReason(request: SessionMethodAccessRequest): string | undefined {
     const access = readSessionMethodAccess(this.context?.gateway.snapshot, request);
     return access.allowed ? undefined : access.reason;
@@ -575,12 +583,7 @@ class SessionsPage extends OpenClawLightDomElement {
     await this.transcriptSearchTask.run();
   }
 
-  private updateFilters(next: {
-    activeMinutes: string;
-    limit: string;
-    includeGlobal: boolean;
-    includeUnknown: boolean;
-  }) {
+  private updateFilters(next: Parameters<SessionsProps["onFiltersChange"]>[0]) {
     this.activeMinutes = next.activeMinutes;
     this.limit = next.limit;
     this.includeGlobal = next.includeGlobal;
@@ -783,9 +786,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
       rows = listed;
     } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
+      this.publishRequestError(scope, error);
       return;
     }
     const archivedRows = rows.filter((row) => row.archived === true);
@@ -1076,11 +1077,7 @@ class SessionsPage extends OpenClawLightDomElement {
       this.selectedSessions = selected;
       return "completed";
     } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-        return "failed";
-      }
-      return "stale";
+      return this.publishRequestError(scope, error);
     }
   }
 
@@ -1145,9 +1142,7 @@ class SessionsPage extends OpenClawLightDomElement {
         this.error = scope.sessions.state.error;
       }
     } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
+      this.publishRequestError(scope, error);
     }
   }
 
@@ -1279,11 +1274,7 @@ class SessionsPage extends OpenClawLightDomElement {
                   await this.refreshSessionList(scope);
                 }
               })
-              .catch((error: unknown) => {
-                if (this.isRequestScopeCurrent(scope)) {
-                  this.error = formatUiError(error);
-                }
-              });
+              .catch((error: unknown) => this.publishRequestError(scope, error));
             break;
           }
           case "toggle-unread":
@@ -1441,15 +1432,13 @@ class SessionsPage extends OpenClawLightDomElement {
           deleteSelectedDisabledReason: this.selectedDeleteDisabledReason(),
           onFiltersChange: (next) => this.updateFilters(next),
           onClearFilters: () => {
-            this.activeMinutes = "";
-            this.limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
-            this.includeGlobal = true;
-            this.includeUnknown = false;
             this.searchQuery = "";
-            this.page = 0;
-            this.selectedSessions = new Map();
-            this.deepLinkSessionKey = null;
-            void this.refreshSessionList();
+            this.updateFilters({
+              activeMinutes: "",
+              limit: String(SESSIONS_PAGE_DEFAULT_LIMIT),
+              includeGlobal: true,
+              includeUnknown: false,
+            });
           },
           onSearchChange: (query) => {
             this.routeDataEnabled = false;
@@ -1547,9 +1536,7 @@ class SessionsPage extends OpenClawLightDomElement {
         signal: this.pluginActionLifetime.signal,
       });
     } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
+      this.publishRequestError(scope, error);
     }
   }
 }

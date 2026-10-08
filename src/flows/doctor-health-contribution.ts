@@ -9,23 +9,29 @@ import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type { HealthFinding, HealthRepairContext } from "./health-checks.js";
 
-export function createDoctorHealthContribution(params: {
-  id: string;
-  label: string;
+type DoctorContributionOptions = {
   healthCheckIds?: readonly string[];
   healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
   required?: true;
   updateWork?: DoctorHealthContribution["updateWork"];
-  run?: (ctx: DoctorHealthFlowContext) => Promise<void>;
-}): DoctorHealthContribution {
-  const healthChecks = normalizeHealthChecks(params.id, params.healthChecks);
+  run?: DoctorHealthContribution["run"];
+};
+
+export function createDoctorHealthContribution(
+  id: string,
+  label: string,
+  options: DoctorContributionOptions | DoctorHealthContribution["run"],
+): DoctorHealthContribution {
+  const params: DoctorContributionOptions =
+    typeof options === "function" ? { run: options } : options;
+  const healthChecks = normalizeHealthChecks(id, params.healthChecks);
   const healthCheckIds = params.healthCheckIds ?? healthChecks.map((check) => check.id);
   if (params.run === undefined && healthChecks.length === 0) {
-    throw new Error(`doctor contribution ${params.id} must define run or healthChecks`);
+    throw new Error(`doctor contribution ${id} must define run or healthChecks`);
   }
   return {
-    id: params.id,
-    label: params.label,
+    id,
+    label,
     healthChecks,
     healthCheckIds,
     ...(params.required ? { required: true as const } : {}),

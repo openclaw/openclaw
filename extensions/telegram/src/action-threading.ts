@@ -14,11 +14,8 @@ export function resolveTelegramAutoThreadId(params: {
     return undefined;
   }
   const parsedChannel = parseTelegramTarget(context.currentChannelId);
-  if (
-    normalizeLowercaseStringOrEmpty(parsedTo.chatId) !==
+  return normalizeLowercaseStringOrEmpty(parsedTo.chatId) ===
     normalizeLowercaseStringOrEmpty(parsedChannel.chatId)
-  ) {
-    return undefined;
-  }
-  return context.currentThreadTs;
+    ? context.currentThreadTs
+    : undefined;
 }

@@ -437,12 +437,14 @@ async function updatePluginsAfterCoreUpdateWithLease(
       guardedWriteOptions.assertCurrent?.();
       lease.assertOwned();
     };
+    const assertRecoveryCurrent = () =>
+      assertInstalledPluginIdRecoveryCurrent(
+        params.configSnapshot.sourceConfig,
+        installedPluginIdRecovery,
+        convergenceEnv,
+      );
     assertCurrent();
-    await assertInstalledPluginIdRecoveryCurrent(
-      params.configSnapshot.sourceConfig,
-      installedPluginIdRecovery,
-      convergenceEnv,
-    );
+    await assertRecoveryCurrent();
     assertCurrent();
     await commitPluginInstallRecordsWithConfig({
       beforePersistentEffect: assertCurrent,
@@ -458,11 +460,7 @@ async function updatePluginsAfterCoreUpdateWithLease(
           assertCurrent();
           await params.configWriteOptions.beforeCommit?.();
           assertCurrent();
-          await assertInstalledPluginIdRecoveryCurrent(
-            params.configSnapshot.sourceConfig,
-            installedPluginIdRecovery,
-            convergenceEnv,
-          );
+          await assertRecoveryCurrent();
           assertCurrent();
         },
         inputBase: "source",

@@ -847,7 +847,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         params,
         userMcpServersEnabled: false,
         abandonClient,
-        nativeHookRelayGeneration: "original-relay",
+        buildFinalConfigPatch: () => ({ nativeHookRelayGeneration: "original-relay" }),
         pluginThreadConfig: {
           enabled: true,
           requiresCurrentPolicyCheck: true,
@@ -883,7 +883,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       warming = true;
       const pending = startOrResumeThread({
         ...common,
-        nativeHookRelayGeneration: "stale-refresh",
+        buildFinalConfigPatch: () => ({ nativeHookRelayGeneration: "stale-refresh" }),
       });
       await entered.promise;
       expect(isCodexAppServerLiveThreadClaimed(client, started.threadId)).toBe(true);

@@ -35,6 +35,7 @@ import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
+  type StateSchemaVersionFacts,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
@@ -173,11 +174,17 @@ export function assertOpenClawStateDatabaseOwner(
 /** Require the canonical shared-state owner and schema before offline file maintenance. */
 export function assertOpenClawStateDatabaseForMaintenance(
   database: DatabaseSync,
-  options: { pathname: string },
+  options: { pathname: string; schemaVersions?: StateSchemaVersionFacts },
   readTable?: SqliteTableContractReader,
 ): void {
-  const userVersion = assertSupportedStateSchemaVersion(database, options.pathname);
-  if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+  const userVersion = assertSupportedStateSchemaVersion(
+    database,
+    options.pathname,
+    options.schemaVersions,
+  );
+  const contentVersion =
+    options.schemaVersions?.contentVersion ?? readStateSchemaContentVersion(database);
+  if (contentVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );

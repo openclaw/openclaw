@@ -63,6 +63,19 @@ type ChatAbortTarget = Pick<
   "sessionKey" | "sessionId" | "agentId" | "ownerConnId" | "ownerDeviceId"
 >;
 
+function captureAbortTargetIdentity<T extends ChatAbortTarget>(
+  entries: ReadonlyMap<string, T>,
+  runId: string,
+  entry: T,
+) {
+  const { sessionKey, sessionId, agentId } = entry;
+  return () =>
+    entries.get(runId) === entry &&
+    entry.sessionKey === sessionKey &&
+    entry.sessionId === sessionId &&
+    entry.agentId === agentId;
+}
+
 export async function handleChatAbortRequestWithLifecycle(
   options: GatewayRequestHandlerOptions,
   lifecycle: ChatAbortLifecycle = {},
@@ -94,10 +107,6 @@ export async function handleChatAbortRequestWithLifecycle(
     abortCfg,
     rawSessionKey,
   );
-  const inferredSessionAgentId =
-    !agentIdOverride && parsedAbortSessionKey
-      ? normalizeAgentId(parsedAbortSessionKey.agentId)
-      : undefined;
   const bareSessionAgentResolution = !parsedAbortSessionKey
     ? resolveRequestedSessionAgentId(abortCfg, rawSessionKey, agentIdOverride)
     : undefined;
@@ -106,7 +115,7 @@ export async function handleChatAbortRequestWithLifecycle(
     return;
   }
   const abortAgentId = parsedAbortSessionKey
-    ? (agentIdOverride ?? inferredSessionAgentId)
+    ? (agentIdOverride ?? normalizeAgentId(parsedAbortSessionKey.agentId))
     : bareSessionAgentResolution?.agentId;
   if (!abortAgentId) {
     respond(
@@ -301,18 +310,10 @@ export async function handleChatAbortRequestWithLifecycle(
       return undefined;
     }
     const queued = withdrawalQueue?.controller === controller ? withdrawalQueue : undefined;
-    const activeTarget = active && {
-      entry: active,
-      sessionKey: active.sessionKey,
-      sessionId: active.sessionId,
-      agentId: active.agentId,
-    };
-    const queuedTarget = queued && {
-      entry: queued,
-      sessionKey: queued.sessionKey,
-      sessionId: queued.sessionId,
-      agentId: queued.agentId,
-    };
+    const activeCurrent =
+      active && captureAbortTargetIdentity(context.chatAbortControllers, runId, active);
+    const queuedCurrent =
+      queued && captureAbortTargetIdentity(context.chatQueuedTurns, runId, queued);
     const release = queued?.holdPendingInputWithdrawal?.();
     if (!queued || !release) {
       throw new Error("Queued input is already starting; refresh before removing it.");
@@ -323,33 +324,18 @@ export async function handleChatAbortRequestWithLifecycle(
         if (!inputWithdrawn || controller.signal.aborted) {
           return;
         }
-        if (
-          activeTarget &&
-          context.chatAbortControllers.get(runId) === activeTarget.entry &&
-          activeTarget.entry.controller === controller &&
-          activeTarget.entry.sessionKey === activeTarget.sessionKey &&
-          activeTarget.entry.sessionId === activeTarget.sessionId &&
-          activeTarget.entry.agentId === activeTarget.agentId
-        ) {
-          abortChatRunById(ops, { runId, sessionKey: activeTarget.sessionKey, stopReason: "rpc" });
+        if (active && active.controller === controller && activeCurrent?.()) {
+          abortChatRunById(ops, { runId, sessionKey: active.sessionKey, stopReason: "rpc" });
         }
-        if (
-          !controller.signal.aborted &&
-          queuedTarget &&
-          context.chatQueuedTurns.get(runId) === queuedTarget.entry &&
-          queuedTarget.entry.controller === controller &&
-          queuedTarget.entry.sessionKey === queuedTarget.sessionKey &&
-          queuedTarget.entry.sessionId === queuedTarget.sessionId &&
-          queuedTarget.entry.agentId === queuedTarget.agentId
-        ) {
+        if (!controller.signal.aborted && queued.controller === controller && queuedCurrent?.()) {
           abortQueuedChatTurnById(context.chatQueuedTurns, {
             runId,
-            sessionKey: queuedTarget.sessionKey,
+            sessionKey: queued.sessionKey,
             stopReason: "rpc",
           });
         }
       } finally {
-        release?.();
+        release();
       }
     };
   };
@@ -488,6 +474,7 @@ export async function handleChatAbortRequestWithLifecycle(
         return;
       }
       const { sessionKey, sessionId, agentId } = queued;
+      const isQueuedCurrent = captureAbortTargetIdentity(chatQueuedTurns, runId, queued);
       const ownsTarget = () =>
         chatQueuedTurns.get(runId) === queued &&
         isQueuedChatTurnForSession(chatQueuedTurns, runId, { sessionKey, sessionId, agentId });
@@ -505,12 +492,7 @@ export async function handleChatAbortRequestWithLifecycle(
           await respondWithWorkerRuns([]);
           return;
         }
-        if (
-          chatQueuedTurns.get(runId) !== queued ||
-          queued.sessionKey !== sessionKey ||
-          queued.sessionId !== sessionId ||
-          queued.agentId !== agentId
-        ) {
+        if (!isQueuedCurrent()) {
           throw new Error("Run changed before cancellation; retry Stop.");
         }
         const queuedRes = abortQueuedChatTurnById(chatQueuedTurns, {
@@ -595,11 +577,9 @@ export async function handleChatAbortRequestWithLifecycle(
   }
   let aborted = false;
   const { sessionKey, sessionId, agentId, controlUiVisible } = active;
+  const isActiveCurrent = captureAbortTargetIdentity(context.chatAbortControllers, runId, active);
   const ownsTarget = () =>
-    context.chatAbortControllers.get(runId) === active &&
-    active.sessionKey === sessionKey &&
-    active.sessionId === sessionId &&
-    active.agentId === agentId &&
+    isActiveCurrent() &&
     isChatAbortControllerEntryAbortable(active) &&
     (!discardPendingInput || ownsWithdrawalQueue());
   const releaseWithdrawal = holdPendingInputWithdrawal(active.controller);
@@ -645,12 +625,7 @@ export async function handleChatAbortRequestWithLifecycle(
         beforeKill: () => {
           // The descendant owner can await a reservation even when no child survives.
           assertCurrent();
-          if (
-            context.chatAbortControllers.get(runId) !== active ||
-            active.sessionKey !== sessionKey ||
-            active.sessionId !== sessionId ||
-            active.agentId !== agentId
-          ) {
+          if (!isActiveCurrent()) {
             if (inputWithdrawn) {
               return false;
             }

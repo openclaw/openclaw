@@ -33,11 +33,6 @@ import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
 
 const REPLAY_TOOL_CALL_NAME_MAX_CHARS = 64;
 
-type ReplayToolCallSanitizeReport = {
-  messages: AgentMessage[];
-  droppedAssistantMessages: number;
-};
-
 function isReplaySafeThinkingTurn(
   content: unknown[],
   allowedToolNames: Set<string> | undefined,
@@ -106,11 +101,7 @@ function resolveReplayToolCallName(
   if (rawName.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS * 2) {
     return null;
   }
-  const normalized = resolveToolCallName(rawName, allowedToolNames, rawId, true);
-  if (!normalized) {
-    return null;
-  }
-  const trimmed = normalized.trim();
+  const trimmed = resolveToolCallName(rawName, allowedToolNames, rawId, true)?.trim();
   if (!trimmed || trimmed.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS || /\s/.test(trimmed)) {
     return null;
   }
@@ -121,7 +112,7 @@ function sanitizeReplayToolCallInputs(
   messages: AgentMessage[],
   allowedToolNames?: Set<string>,
   allowProviderOwnedThinkingReplay?: boolean,
-): ReplayToolCallSanitizeReport {
+) {
   let changed = false;
   let droppedAssistantMessages = 0;
   const out: AgentMessage[] = [];
@@ -216,14 +207,10 @@ function isSignedThinkingReplayAssistantSpan(message: AgentMessage | undefined):
 
 function sanitizeAnthropicReplayToolResults(
   messages: AgentMessage[],
-  options?: {
-    disallowEmbeddedUserToolResultsForSignedThinkingReplay?: boolean;
-  },
+  disallowEmbeddedUserToolResultsForSignedThinkingReplay: boolean,
 ): AgentMessage[] {
   let changed = false;
   const out: AgentMessage[] = [];
-  const disallowEmbeddedUserToolResultsForSignedThinkingReplay =
-    options?.disallowEmbeddedUserToolResultsForSignedThinkingReplay === true;
 
   for (const [index, message] of messages.entries()) {
     if (!message) {
@@ -254,7 +241,6 @@ function sanitizeAnthropicReplayToolResults(
         return true;
       }
       if (shouldStripEmbeddedToolResults) {
-        changed = true;
         return false;
       }
       const resultIds = normalizeUniqueTrimmedStringList([
@@ -263,10 +249,6 @@ function sanitizeAnthropicReplayToolResults(
         typedBlock.tool_use_id,
         typedBlock.tool_call_id,
       ]);
-      if (resultIds.length === 0) {
-        changed = true;
-        return false;
-      }
       return validToolUseIds.size > 0 && resultIds.some((id) => validToolUseIds.has(id));
     });
 
@@ -396,9 +378,10 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
         : sanitized.messages;
     let strippedTrailingAssistantPrefill = false;
     if (transcriptPolicy?.validateAnthropicTurns) {
-      nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {
-        disallowEmbeddedUserToolResultsForSignedThinkingReplay: allowProviderOwnedThinkingReplay,
-      });
+      nextMessages = sanitizeAnthropicReplayToolResults(
+        nextMessages,
+        allowProviderOwnedThinkingReplay,
+      );
     }
     if (transcriptPolicy?.validateAnthropicTurns || transcriptPolicy?.validateGeminiTurns) {
       const beforeStrip = nextMessages;

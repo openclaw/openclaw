@@ -88,7 +88,7 @@ export type SessionEntryListScope = Partial<
   sessionKeys?: readonly string[];
   /** Set false for readers that do not consume derived participant identities or counts. */
   includeParticipants?: boolean;
-  /** Retain full cron-run entries for deletion guards, and only metadata for ordinary sessions. */
+  /** Validate the complete listing, retaining full cron-run entries for deletion guards. */
   cronRetention?: true;
   /** Validate the complete listing, retaining full expired cron rows only for this logical owner. */
   expiredCronRuns?: { agentId: string; updatedBefore: number };
@@ -347,7 +347,7 @@ export type TranscriptMessageAppendResult<TMessage> = {
 
 /** Transcript update fields supplied by callers; the target is resolved here. */
 export type TranscriptUpdatePayload = Partial<SessionTranscriptUpdate> &
-  Pick<InternalSessionTranscriptUpdate, "lifecycleRevision">;
+  Pick<InternalSessionTranscriptUpdate, "lifecycleRevision" | "assistantItemIds">;
 
 export type LatestTranscriptAssistantText = {
   id?: string;
