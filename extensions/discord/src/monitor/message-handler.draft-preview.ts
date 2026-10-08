@@ -200,6 +200,13 @@ export function createDiscordDraftPreviewController(params: {
     onCleanupFailure: (err) => params.log(`discord: draft cleanup failed: ${String(err)}`),
   });
 
+  const resetProgressState = () => {
+    lastPartialText = "";
+    draftText = "";
+    hasStreamedAssistantText = false;
+    draftChunker?.reset();
+  };
+
   const beginNewProgressTurn = (options?: { force?: boolean }) => {
     const beganNewTurn = progressDraft.beginNewTurn(options);
     if (beganNewTurn) {
@@ -221,10 +228,7 @@ export function createDiscordDraftPreviewController(params: {
         params.log("discord: calling forceNewMessage() for draft stream");
         draftStream?.forceNewMessage();
       }
-      lastPartialText = "";
-      draftText = "";
-      hasStreamedAssistantText = false;
-      draftChunker?.reset();
+      resetProgressState();
     }
     return beganNewTurn;
   };
