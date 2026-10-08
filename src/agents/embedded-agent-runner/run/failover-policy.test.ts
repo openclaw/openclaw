@@ -307,6 +307,22 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it.each(["404 page not found", "not_found_error"])(
+    "keeps profile rotation for ambiguous not-found text %j",
+    (errorMessage) => {
+      expect(
+        resolveAssistantDecision({
+          failoverFailure: true,
+          failoverReason: "model_not_found",
+          errorMessage,
+        }),
+      ).toEqual({
+        action: "rotate_profile",
+        reason: "model_not_found",
+      });
+    },
+  );
+
   it("does not fall back on stale classified assistant text after rotation is exhausted", () => {
     expect(
       resolveAssistantDecision({

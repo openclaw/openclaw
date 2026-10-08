@@ -77,9 +77,9 @@ function isConcreteNonTimeoutAssistantFailure(params: AssistantDecisionParams): 
 }
 
 function isProviderWideMissingModel(params: AssistantDecisionParams): boolean {
-  // The reason alone also covers "does not exist or you do not have access".
-  // Skip rotation only when the same classifier proves the id is missing
-  // provider-wide, so another authorized profile cannot serve it.
+  // model_not_found also covers access denials and generic 404/not_found_error
+  // text. Skip rotation only when the message affirmatively says this model
+  // id is missing, retired, or deprecated for the provider.
   return (
     params.failoverFailure &&
     params.failoverReason === "model_not_found" &&

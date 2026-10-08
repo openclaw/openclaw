@@ -628,6 +628,16 @@ describe("handleEmbeddedAssistantFailure", () => {
       errorMessage: "The model does not exist or you do not have access",
       rotates: true,
     },
+    {
+      label: "rotates a generic 404 page not found response to the next profile",
+      errorMessage: "404 page not found",
+      rotates: true,
+    },
+    {
+      label: "rotates a bare not_found_error response to the next profile",
+      errorMessage: "not_found_error",
+      rotates: true,
+    },
   ])("$label", async ({ errorMessage, rotates }) => {
     const fixture = makeExhaustedCredentialFailureInput();
     const assistant = buildEmbeddedRunnerAssistant({
