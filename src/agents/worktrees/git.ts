@@ -158,14 +158,18 @@ async function runOwnedGitCommand<
           killProcessTree: options.killProcessTree ?? (args[0] === "fetch" && gitArgs === args),
         });
       const result = await run();
-      // Admit the flag-only forms used by base selection and object hydration.
-      // Values of other options (such as --server-option origin) are not remote authority.
+      if (gitArgs !== args || args[0] !== "fetch" || result.code !== 128) {
+        return result;
+      }
+      // Admit our origin fetches, including the default-branch owner's canonical refspec.
+      // Unknown option values (such as --server-option origin) cannot select a remote.
+      const [remote, refspec, ...extra] = args
+        .slice(1)
+        .filter((arg) => !REPAIRABLE_FETCH_FLAGS.has(arg));
       if (
-        gitArgs !== args ||
-        args[0] !== "fetch" ||
-        result.code !== 128 ||
-        args.filter((arg) => arg === "origin").length !== 1 ||
-        args.slice(1).some((arg) => arg !== "origin" && !REPAIRABLE_FETCH_FLAGS.has(arg))
+        remote !== "origin" ||
+        extra.length > 0 ||
+        (refspec !== undefined && !/^\+refs\/heads\/(.+):refs\/remotes\/origin\/\1$/u.test(refspec))
       ) {
         return result;
       }

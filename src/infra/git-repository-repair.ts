@@ -43,6 +43,8 @@ export async function withGitRepositoryRepair<T extends FetchResult>(params: {
   /** Project refresh owns this mapping independently of checkout-local config. */
   canonicalTracking?: boolean;
   pruneTracking?: boolean;
+  /** Carry source-ref preservation through a caller's later publication. */
+  onRepaired?: (protectedRefs: ReadonlySet<string>) => void;
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }): Promise<T> {
@@ -257,6 +259,7 @@ export async function withGitRepositoryRepair<T extends FetchResult>(params: {
     if (retried.termination !== "exit" || retried.code !== 0) {
       throw new Error("fetch still fails after ref-tip repair");
     }
+    params.onRepaired?.(protectedRefs);
     log.warn(
       `Git repository repaired for ${params.cwd}: fetched ${missing.length} missing tips, pruned ${obsolete.length} obsolete tracking refs, cleared ${cleared} stale ref locks`,
     );

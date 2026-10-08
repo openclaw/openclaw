@@ -222,6 +222,7 @@ export async function refreshProjectCheckout(
       );
     }
     const stagingOptions = { ...options, objectDirectory: objects };
+    let protectedRefs: ReadonlySet<string> | undefined;
     if (currentRefs.size > 0) {
       // Seed only refs already owned by the managed checkout. Besides enabling
       // incremental negotiation, this keeps transport isolated from local branches.
@@ -234,6 +235,9 @@ export async function refreshProjectCheckout(
         result: await seed(),
         remote: input.url,
         canonicalTracking: true,
+        onRepaired: (refs) => {
+          protectedRefs = refs;
+        },
         signal: options.signal,
         assertCurrent: options.assertCurrent,
         run: (args, commandOptions) =>
@@ -282,13 +286,18 @@ export async function refreshProjectCheckout(
     const updates = [
       ...Array.from(fetchedRefs, ([ref, commit]) => `update ${ref} ${commit}`),
       ...Array.from(currentRefs.keys())
-        .filter((ref) => !fetchedRefs.has(ref))
+        .filter((ref) => !fetchedRefs.has(ref) && !protectedRefs?.has(ref))
         .map((ref) => `delete ${ref}`),
     ];
     if (updates.length > 0) {
-      const updated = await runProjectCheckoutGit(input, options, ["update-ref", "--stdin"], {
-        input: `${updates.join("\n")}\n`,
-      });
+      const updated = await runProjectCheckoutGit(
+        input,
+        options,
+        ["update-ref", "--no-deref", "--stdin"],
+        {
+          input: `${updates.join("\n")}\n`,
+        },
+      );
       if (updated.code !== 0 || updated.termination !== "exit") {
         throw new ProjectCloneError(
           "clone_failed",

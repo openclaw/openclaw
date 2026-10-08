@@ -111,7 +111,9 @@ describe("shared repository missing-tip recovery", () => {
         // The live entry point inherits this variable from its process environment.
         vi.stubEnv("GIT_NO_LAZY_FETCH", "1");
         try {
-          expect((await resolveWorktreeBase(clone)).commit).toBe(tip);
+          const selected = await resolveWorktreeBase(clone);
+          expect(selected.commit).toBe(tip);
+          expect(selected.fetchSucceeded).toBe(true);
         } finally {
           vi.unstubAllEnvs();
         }
@@ -218,10 +220,15 @@ describe("shared repository missing-tip recovery", () => {
     );
   });
 
-  it.each(["local symbolic branch", "worktree HEAD"] as const)(
-    "retains an obsolete tracking ref required by a %s",
-    async (owner) => {
-      const { clone, source, linked, retired } = await brokenClone();
+  it.each([
+    ["local symbolic branch", "fetch"],
+    ["worktree HEAD", "fetch"],
+    ["local symbolic branch", "project refresh"],
+    ["worktree HEAD", "project refresh"],
+  ] as const)(
+    "retains an obsolete tracking ref required by a %s during %s",
+    async (owner, operation) => {
+      const { clone, source, linked, retired, url } = await brokenClone();
       await git(source, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
       if (owner === "local symbolic branch") {
         await git(clone, [
@@ -233,9 +240,13 @@ describe("shared repository missing-tip recovery", () => {
       } else {
         await git(linked, ["symbolic-ref", "HEAD", "refs/remotes/origin/retired"]);
       }
-      expect(
-        (await runGit(clone, ["fetch", "--no-auto-maintenance", "origin"], { env })).code,
-      ).toBe(0);
+      if (operation === "project refresh") {
+        await refreshProjectCheckout({ target: clone, url }, { env });
+      } else {
+        expect(
+          (await runGit(clone, ["fetch", "--no-auto-maintenance", "origin"], { env })).code,
+        ).toBe(0);
+      }
       expect(await git(clone, ["rev-parse", "refs/remotes/origin/retired"])).toBe(retired);
       expect(
         await git(owner === "local symbolic branch" ? clone : linked, [
@@ -245,6 +256,28 @@ describe("shared repository missing-tip recovery", () => {
       ).toBe(retired);
     },
   );
+
+  it("does not follow a tracking alias replaced immediately before project publication", async () => {
+    const { clone, tip, url } = await brokenClone();
+    expect((await runGit(clone, ["fetch", "--no-auto-maintenance", "origin"], { env })).code).toBe(
+      0,
+    );
+    const replacement = "refs/remotes/origin/retired2";
+    await git(clone, ["update-ref", replacement, tip]);
+    const run = processExec.runCommandWithTimeout;
+    let replaced = false;
+    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      const result = await run(argv, options);
+      if (!replaced && argv.includes("for-each-ref") && argv[argv.indexOf("-C") + 1] !== clone) {
+        replaced = true;
+        await git(clone, ["symbolic-ref", replacement, "refs/heads/retained"]);
+      }
+      return result;
+    });
+    await refreshProjectCheckout({ target: clone, url }, { env });
+    expect(replaced).toBe(true);
+    expect(await git(clone, ["rev-parse", "refs/heads/retained"])).toBe(tip);
+  });
 
   it.each(["unavailable", "uncertain"] as const)(
     "preserves local work when repair is %s",

@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireFileLock } from "./file-lock.js";
 import { clearStaleGitRemoteRefLocks } from "./git-ref-lock-repair.js";
 
+const itLinux = it.runIf(process.platform === "linux");
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
@@ -17,7 +18,6 @@ async function fixture() {
   const disk = await fs.statfs(commonDirectory);
   disk.type = 0xef53;
   vi.spyOn(fs, "statfs").mockResolvedValue(disk);
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   vi.spyOn(os, "uptime").mockReturnValue(3_600);
   // The fixture's unchanged inodes precede a simulated reboot by two hours.
   const now = Date.now() + 3 * 60 * 60_000;
@@ -27,49 +27,55 @@ async function fixture() {
   return { root, commonDirectory, origin, now, disk, repair };
 }
 
-it("clears abandoned pre-boot tracking locks while preserving uncertain and local refs", async () => {
-  const f = await fixture();
-  const files = ["abandoned", "same-boot", "nonempty", "hardlinked"];
-  for (const name of files) {
-    await fs.writeFile(path.join(f.origin, `${name}.lock`), name === "nonempty" ? "pending" : "");
-  }
-  const sameBoot = path.join(f.origin, "same-boot.lock");
-  await fs.utimes(sameBoot, new Date(f.now), new Date(f.now));
-  await fs.link(path.join(f.origin, "hardlinked.lock"), path.join(f.root, "other-owner"));
-  await fs.mkdir(path.join(f.commonDirectory, "refs/heads"));
-  const local = path.join(f.commonDirectory, "refs/heads/local.lock");
-  await fs.writeFile(local, "");
-  await expect(
-    f.repair([...files.map((name) => `refs/remotes/origin/${name}`), "refs/heads/local"]),
-  ).resolves.toBe(1);
-  await expect(fs.lstat(path.join(f.origin, "abandoned.lock"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-  for (const name of files.slice(1)) {
-    await expect(fs.lstat(path.join(f.origin, `${name}.lock`))).resolves.toBeDefined();
-  }
-  await expect(fs.lstat(local)).resolves.toBeDefined();
-});
+itLinux(
+  "clears abandoned pre-boot tracking locks while preserving uncertain and local refs",
+  async () => {
+    const f = await fixture();
+    const files = ["abandoned", "same-boot", "nonempty", "hardlinked"];
+    for (const name of files) {
+      await fs.writeFile(path.join(f.origin, `${name}.lock`), name === "nonempty" ? "pending" : "");
+    }
+    const sameBoot = path.join(f.origin, "same-boot.lock");
+    await fs.utimes(sameBoot, new Date(f.now), new Date(f.now));
+    await fs.link(path.join(f.origin, "hardlinked.lock"), path.join(f.root, "other-owner"));
+    await fs.mkdir(path.join(f.commonDirectory, "refs/heads"));
+    const local = path.join(f.commonDirectory, "refs/heads/local.lock");
+    await fs.writeFile(local, "");
+    await expect(
+      f.repair([...files.map((name) => `refs/remotes/origin/${name}`), "refs/heads/local"]),
+    ).resolves.toBe(1);
+    await expect(fs.lstat(path.join(f.origin, "abandoned.lock"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    for (const name of files.slice(1)) {
+      await expect(fs.lstat(path.join(f.origin, `${name}.lock`))).resolves.toBeDefined();
+    }
+    await expect(fs.lstat(local)).resolves.toBeDefined();
+  },
+);
 
-it("preserves locks reached through symlinks and paths outside the tracking namespace", async () => {
-  const f = await fixture();
-  const outside = path.join(f.root, "outside");
-  await fs.mkdir(outside);
-  await fs.writeFile(path.join(outside, "tip.lock"), "");
-  await fs.symlink(outside, path.join(f.origin, "linked"), "dir");
-  await fs.symlink(path.join(outside, "tip.lock"), path.join(f.origin, "tip.lock"));
-  await expect(
-    f.repair([
-      "refs/remotes/origin/linked/tip",
-      "refs/remotes/origin/tip",
-      "refs/remotes/origin/../../../../outside/tip",
-    ]),
-  ).resolves.toBe(0);
-  await expect(fs.lstat(path.join(outside, "tip.lock"))).resolves.toBeDefined();
-  expect((await fs.lstat(path.join(f.origin, "tip.lock"))).isSymbolicLink()).toBe(true);
-});
+itLinux(
+  "preserves locks reached through symlinks and paths outside the tracking namespace",
+  async () => {
+    const f = await fixture();
+    const outside = path.join(f.root, "outside");
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, "tip.lock"), "");
+    await fs.symlink(outside, path.join(f.origin, "linked"), "dir");
+    await fs.symlink(path.join(outside, "tip.lock"), path.join(f.origin, "tip.lock"));
+    await expect(
+      f.repair([
+        "refs/remotes/origin/linked/tip",
+        "refs/remotes/origin/tip",
+        "refs/remotes/origin/../../../../outside/tip",
+      ]),
+    ).resolves.toBe(0);
+    await expect(fs.lstat(path.join(outside, "tip.lock"))).resolves.toBeDefined();
+    expect((await fs.lstat(path.join(f.origin, "tip.lock"))).isSymbolicLink()).toBe(true);
+  },
+);
 
-it.each(["network filesystem", "unavailable filesystem", "same boot"])(
+itLinux.each(["network filesystem", "unavailable filesystem", "same boot"])(
   "preserves empty locks with %s evidence",
   async (reason) => {
     const f = await fixture();
@@ -87,7 +93,7 @@ it.each(["network filesystem", "unavailable filesystem", "same boot"])(
   },
 );
 
-it("preserves a lock replaced during inspection", async () => {
+itLinux("preserves a lock replaced during inspection", async () => {
   const f = await fixture();
   const target = path.join(f.origin, "tip.lock");
   const replacement = path.join(f.origin, "replacement.lock");
@@ -105,7 +111,7 @@ it("preserves a lock replaced during inspection", async () => {
   await expect(fs.readFile(target, "utf8")).resolves.toBe("replacement owner");
 });
 
-it("preserves native locks while another repair owns reclamation", async () => {
+itLinux("preserves native locks while another repair owns reclamation", async () => {
   const f = await fixture();
   const target = path.join(f.origin, "tip.lock");
   await fs.writeFile(target, "");
@@ -123,7 +129,7 @@ it("preserves native locks while another repair owns reclamation", async () => {
   await expect(f.repair(["refs/remotes/origin/tip"])).resolves.toBe(1);
 });
 
-it("revalidates authority after inspecting the candidate lock", async () => {
+itLinux("revalidates authority after inspecting the candidate lock", async () => {
   const f = await fixture();
   const target = path.join(f.origin, "tip.lock");
   await fs.writeFile(target, "");
