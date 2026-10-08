@@ -7062,7 +7062,6 @@
 ["src/flows/doctor-health.update-scope.test.ts","../state/config-machine-state-write.js","e55fa551692a7b3b9ba417c5d8da7cbca275404b0660f17c9fa9015f48fff738",1]
 ["src/flows/doctor-health.update-scope.test.ts","./doctor-workspace-suggestion-scopes.js","27c49aa84cac4cc02fb94010842b77febcddd7bd91d5412151909368be1b15a7",1]
 ["src/flows/doctor-health.update.test.ts","../cli/update-cli/update-command.js","b9a86a66602f5df6f7250a377d0676838c76d6a3b152cf83127156e7a122c4ec",1]
-["src/flows/doctor-health.update.test.ts","../commands/configure.shared.js","541bc7b85a9dc084f2ec09e14c5b78f7aeca0d0654a08c399f561e3f4d61c68e",1]
 ["src/flows/doctor-health.update.test.ts","../commands/doctor-config-flow.js","e918ce1529fac6d9a87dabf4c7f1be7077ae2a70b070afe77a3a45e587016af8",1]
 ["src/flows/doctor-health.update.test.ts","../commands/doctor-install.js","404932f0e9552c939f0c25e17c0c521d23613c538d0e8917d1996c2f0eedff1e",1]
 ["src/flows/doctor-health.update.test.ts","../commands/doctor-platform-notes.js","73798bc8c0f36129929c5624ce666c8446478eab6f608f9fbb3a7e1b4a4498e2",1]
