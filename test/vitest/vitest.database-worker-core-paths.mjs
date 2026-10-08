@@ -554,6 +554,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.retention.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.steering.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-execution-settle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-stream-prepare.test.ts",

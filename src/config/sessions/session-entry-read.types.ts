@@ -106,6 +106,7 @@ export type SessionEntryCohortRequest = Pick<
   | "lifecycleSessionKey"
 > & {
   sessionKeys: readonly string[];
+  includeColdMetadata?: boolean;
   expected?: {
     /** Native incarnation returned by this cohort, independent of the host execution claim. */
     incarnation: string;
@@ -115,7 +116,7 @@ export type SessionEntryCohortRequest = Pick<
       lifecycleRevision: string | undefined;
     }[];
   };
-  transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq"> & {
+  transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq" | "includeMessagesForRunId"> & {
     sessionKey: string;
     /** Captured logical owner; the executor still selects the physical database. */
     agentId?: string;
@@ -155,6 +156,7 @@ export type SessionExactEntriesWorkerResult = {
 };
 
 export type SessionEntryCohortResult = SessionExactEntriesWorkerResult & {
+  coldArchives?: Array<Omit<SessionColdArchive, "archive_blob">>;
   source: NonNullable<SessionExactEntriesWorkerResult["source"]>;
   databaseIdentity: NonNullable<SessionExactEntriesWorkerResult["databaseIdentity"]>;
 };

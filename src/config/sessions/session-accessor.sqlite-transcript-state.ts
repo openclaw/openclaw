@@ -67,9 +67,17 @@ export function readTranscriptContextVersionInTransaction(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ) {
+  return readTranscriptContextStateInTransaction(database, sessionId).version;
+}
+
+/** Preparation consumes cold presence and the matching version from one read phase. */
+export function readTranscriptContextStateInTransaction(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+) {
   const cold = readSessionColdTranscript(database.db, sessionId);
   const version = transcriptContextVersionQuery(database.db)(sessionId)!;
-  return cold ? { ...version, rawSeq: cold.last_seq } : version;
+  return { coldArchive: cold, version: cold ? { ...version, rawSeq: cold.last_seq } : version };
 }
 
 function createTranscriptGeneration(): string {

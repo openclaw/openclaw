@@ -221,6 +221,8 @@ export async function readSessionManagerModelContextAsync<T>(
       options.signal,
       through,
       limits,
+      undefined,
+      true,
     ),
   );
   options.signal?.throwIfAborted();

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { persistSessionTranscriptTurn, replaceSessionEntrySync } from "./session-accessor.js";
@@ -42,13 +43,28 @@ describe("selected transcript turn cold restoration", () => {
     });
     const descriptor = readSessionColdTranscript(fixture.database(), historicalId);
     expect(descriptor).toBeDefined();
+    const prepareMessage = vi.fn(async (message: unknown) => {
+      expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
+      return message;
+    });
     const append = () =>
       persistSessionTranscriptTurn(
         { ...fixture.scope, sessionKey: "agent:main:global" },
         {
           expectedSessionId: historicalId,
           expectedLifecycleRevision: "selected",
-          messages: [{ message: { role: "user", content: "Resume selected history" } }],
+          messages: [
+            {
+              message: {
+                role: "user",
+                content: "Resume selected history",
+                idempotencyKey: "resume-selected-history",
+              },
+              workerPreparation: {
+                prepareMessageAfterIdempotencyCheckAsync: prepareMessage,
+              },
+            },
+          ],
           updateMode: "none",
         },
       );
@@ -58,12 +74,13 @@ describe("selected transcript turn cold restoration", () => {
         updatedAt: 2,
         lifecycleRevision: "successor",
       });
-    return { ...fixture, append, descriptor, replaceRevision };
+    return { ...fixture, append, descriptor, replaceRevision, prepareMessage };
   }
 
   it("restores raw-key history and appends through the qualified identity", async () => {
     const fixture = await createFixture();
     await expect(fixture.append()).resolves.toMatchObject({ appendedCount: 1 });
+    expect(fixture.prepareMessage).toHaveBeenCalledOnce();
     expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
     const events = loadTranscriptEventsSync(fixture.scope);
     expect(events).toContainEqual(expect.objectContaining({ id: "history-user" }));
@@ -75,6 +92,25 @@ describe("selected transcript turn cold restoration", () => {
     expect(fixture.database().prepare("SELECT session_key FROM session_nodes").all()).toEqual([
       { session_key: "global" },
     ]);
+  });
+
+  it("restores archived history through the bounded manager's own read admission", async () => {
+    const fixture = await createFixture();
+    const manager = await SessionManager.openBoundedAsync(
+      { ...fixture.scope, sessionKey: "agent:main:global" },
+      { maxBytes: 2 * 1024 * 1024, maxEvents: 5 },
+    );
+    expect(manager.getEntry("history-user")).toMatchObject({
+      message: { content: [{ type: "text", text: "你好 🦞\n".repeat(12_000) }] },
+    });
+    expect(manager.getEntry("history-assistant")).toMatchObject({
+      parentId: "history-user",
+      message: { content: [{ type: "text", text: "Preserved response" }] },
+    });
+    expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
+    expect(fixture.snapshot().events.filter((event) => event.session_id === historicalId)).toEqual(
+      fixture.original.events.filter((event) => event.session_id === historicalId),
+    );
   });
 
   it.each(["before restoration", "at worker admission"])(
@@ -118,6 +154,7 @@ describe("selected transcript turn cold restoration", () => {
       });
       expect(admitted).toBe(timing === "at worker admission");
       expect(commitRequested).toBe(false);
+      expect(fixture.prepareMessage).not.toHaveBeenCalled();
       expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(
         fixture.descriptor,
       );

@@ -55,6 +55,11 @@ export const sessionManagerReloadTranscriptCohort = Symbol.for(
   "openclaw.session-manager.reload-transcript-cohort",
 );
 
+/** @internal Initial hydration and its synchronous replay decision share one admission. */
+export const sessionManagerOpenTranscriptCohort = Symbol.for(
+  "openclaw.session-manager.open-transcript-cohort",
+);
+
 export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   migrated = false;
   protected sessionId = "";

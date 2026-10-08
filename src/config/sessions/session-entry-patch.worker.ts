@@ -12,7 +12,7 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import { sessionEntryPatchPredicateMatches } from "./session-entry-patch-guard.js";
+import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import {
   mergeSessionEntryPatch,
   reduceSessionEntryPatch,
@@ -41,7 +41,12 @@ export function commitSessionEntryPatch(
 ): SessionEntryPatchReceipt {
   return writeTransaction(input.operationLabel, "Session patch", (database) => {
     let result: SessionEntryPatchCommitted;
-    if (!sessionEntryPatchPredicateMatches(database, input.sessionKey, input.shouldCommitIf)) {
+    const predicate = readSessionEntryPatchPredicate(
+      database,
+      input.sessionKey,
+      input.shouldCommitIf,
+    );
+    if (!predicate.matches) {
       // A false predicate precedes CAS and the throwing guard, including for a null patch.
       result = { kind: "session-entry-patch", entry: null };
     } else {
@@ -105,7 +110,15 @@ export function commitSessionEntryPatch(
             database,
           )
         : undefined;
-      result = { kind: "session-entry-patch", entry: mutation.entry, publication };
+      result = {
+        kind: "session-entry-patch",
+        entry: mutation.entry,
+        publication,
+        transcriptPredicate:
+          mutation.entry.sessionId === predicate.transcriptPredicate?.sessionId
+            ? predicate.transcriptPredicate
+            : undefined,
+      };
     }
     return transferSessionEntryWorkerCandidate(database, admit, result);
   });

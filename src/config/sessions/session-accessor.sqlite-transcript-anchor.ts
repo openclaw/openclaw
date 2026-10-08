@@ -1,8 +1,10 @@
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptScope,
@@ -13,18 +15,47 @@ import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
-/** Reads one active message identity from the caller's current SQLite transaction. */
-export function readActiveTranscriptEntryAnchorInTransaction(params: {
+type ActiveTranscriptAnchorRead = {
   database: Pick<OpenClawAgentDatabase, "db" | "path">;
   resolved: ResolvedTranscriptScope;
   entryId: string;
   message?: unknown;
-}): TranscriptEntryAnchor | undefined {
+};
+
+/** Reads one active message identity from the caller's current SQLite transaction. */
+export function readActiveTranscriptEntryAnchorInTransaction(
+  params: ActiveTranscriptAnchorRead,
+): TranscriptEntryAnchor | undefined {
   // Branch changes retain old projection rows until deferred reconciliation.
   // An anchor must never certify those rows as the current active path.
   if (sessionTranscriptIndexNeedsReconcile(params.database.db, params.resolved.sessionId)) {
     return undefined;
   }
+  return readActiveTranscriptEntryAnchorRow(params);
+}
+
+/** Borrow readiness only while the projection owner's synchronous snapshot remains open. */
+export function readActiveTranscriptEntryAnchorFromProjection(
+  projection: CurrentTranscriptProjection,
+  entryId: string,
+  message?: unknown,
+): TranscriptEntryAnchor | undefined {
+  assertTransactionUsable(projection.database.db);
+  const sessionKey = projection.resolved.sessionKey;
+  if (!projection.database.db.isTransaction || !sessionKey) {
+    throw new Error("Transcript anchor projection requires its selected session snapshot");
+  }
+  return readActiveTranscriptEntryAnchorRow({
+    database: projection.database,
+    resolved: { ...projection.resolved, sessionKey },
+    entryId,
+    message,
+  });
+}
+
+function readActiveTranscriptEntryAnchorRow(
+  params: ActiveTranscriptAnchorRead,
+): TranscriptEntryAnchor | undefined {
   const db = getSessionKysely(params.database.db);
   const row = executeSqliteQueryTakeFirstSync(
     params.database.db,

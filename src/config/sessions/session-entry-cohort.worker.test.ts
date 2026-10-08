@@ -33,6 +33,9 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       parentSessionKey: parentKey,
     };
     writeSessionEntry(database, parentKey, { sessionId: "parent", updatedAt: 1 });
+    replaceTranscriptEventsSync({ ...scope, sessionKey: parentKey, sessionId: "parent" }, [
+      { type: "session", id: "parent", version: 3 },
+    ]);
     writeSessionEntry(database, sessionKey, entry);
     addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 1 });
     recordSessionParticipant(scope, {
@@ -64,6 +67,7 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       replyInitializationSessionKey: sessionKey,
       includeMembers: true,
       includeParticipantRecords: true,
+      includeColdMetadata: true,
       lifecycleSessionKey: sessionKey,
       transcript: {
         sessionKey,
@@ -74,6 +78,7 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
     };
     const read = (input = request) => operations["session.entry.read"](input, context);
     const first = read();
+    expect(first.coldArchives).toEqual([]);
     expect(first.entries.map(({ sessionKey: key }) => key)).toEqual([sessionKey, parentKey]);
     expect(first.members?.[sessionKey]?.map(({ identityId }) => identityId)).toEqual(["member"]);
     expect(first.participantRecords?.[sessionKey]).toMatchObject([
@@ -131,6 +136,14 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
             "UPDATE transcript_rewrite_watermarks SET generation = 'foreign-generation' WHERE session_id = ?",
           )
           .run(scope.sessionId);
+        peer
+          .prepare(
+            `INSERT INTO session_transcript_cold_archives
+              (session_id, generation, archive_name, archive_sha256, event_count,
+               raw_bytes, archive_bytes, last_seq, archived_at, storage)
+             VALUES ('parent', 'foreign-cold', 'cohort-parent.gz', ?, 1, 40, 20, 0, 1, 'file')`,
+          )
+          .run("0".repeat(64));
         return rows;
       });
     const reopen = vi
@@ -160,7 +173,9 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       expect(transactionCommands).toEqual([]);
       expect(sql.counts.fresh).toBe(1);
       sql.counts.fresh = 0;
-      expect(read().members?.[sessionKey]?.map(({ identityId }) => identityId)).toEqual(["member"]);
+      const pinned = read();
+      expect(pinned.members?.[sessionKey]?.map(({ identityId }) => identityId)).toEqual(["member"]);
+      expect(pinned.coldArchives).toEqual([]);
       expect(sql.counts.fresh).toBe(1);
       expect(transactionCommands).toEqual(["BEGIN", "COMMIT"]);
       // A known write cannot hide the foreign change from this connection's next use.
@@ -168,6 +183,9 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       sql.counts.fresh = 0;
       transactionCommands.length = 0;
       const current = read();
+      expect(current.coldArchives).toMatchObject([
+        { session_id: "parent", generation: "foreign-cold", last_seq: 0 },
+      ]);
       expect(current.members?.[sessionKey]).toEqual([]);
       expect(current.participantRecords?.[sessionKey]).toMatchObject([{ contributionCount: 9 }]);
       expect(current.transcript?.watermark).toEqual({

@@ -208,7 +208,6 @@ export type {
   ExactSessionEntry,
   LatestTranscriptAssistantText,
   SessionAccessScope,
-  SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryReplacementSnapshot,
   SessionEntryReplacementUpdate,

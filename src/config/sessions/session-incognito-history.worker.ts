@@ -45,7 +45,10 @@ import type {
 import type { IncognitoHistoryOperations } from "./session-incognito-history-contract.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
-import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
+import {
+  prepareSessionTranscriptAnchorMessageReader,
+  readSessionTranscriptAnchorFactsInDatabase,
+} from "./session-transcript-anchor-read.kernel.js";
 import { isSessionTranscriptIndexStatusClean } from "./session-transcript-index-status.worker.js";
 import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
@@ -233,11 +236,18 @@ export function createIncognitoHistoryWorker(
           return { channel, accountId, target: address, threadId, nativeChannelId };
         });
         return;
-      case "session.history.anchors":
+      case "session.history.anchors": {
+        const readMessage = await prepareSessionTranscriptAnchorMessageReader(command.input);
         prepared = prepareHistoryRead(command.type, () =>
-          readSessionTranscriptAnchorFactsInDatabase(database, resolvedScope, command.input),
+          readSessionTranscriptAnchorFactsInDatabase(
+            database,
+            resolvedScope,
+            command.input,
+            readMessage,
+          ),
         );
         return;
+      }
       case "session.history.accounting":
       case "session.history.bounded-tail":
         prepared = prepareHistoryRead(command.type, () =>
