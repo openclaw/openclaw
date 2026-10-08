@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -23,14 +24,15 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
-import { resolveExecDefaults } from "../exec-defaults.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
 import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
+import { assertSandboxPath } from "../sandbox-paths.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
+import { isToolAllowedByPolicies } from "../tool-policy-match.js";
 import {
   restartCliLiveSession,
   createCliLiveSessionCapability,
@@ -40,12 +42,12 @@ import {
   requestCliNativeToolApproval,
   resolveCliNativeToolApprovalPlan,
 } from "./cli-native-tool-approval.js";
+import * as nativePolicy from "./cli-native-tool-policy.js";
 import { createCliAbortError } from "./execute-node-claude.js";
 import { createCliPluginWatchdog, type CliWatchdogClock } from "./execute-plugin-watchdog.js";
 import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
-import { normalizeCliToolName } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS = 5_000;
@@ -61,13 +63,25 @@ function createPluginToolPermissionHandler(params: {
   env: NodeJS.ProcessEnv;
 }): (request: CliBackendToolPermissionRequest) => Promise<CliBackendToolPermissionResult> {
   const run = params.context.params;
-  const permission = resolveExecDefaults({
-    cfg: run.config,
-    sessionEntry: run.sessionEntry,
-    execOverrides: run.execOverrides,
-    agentId: run.agentId,
-    sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
-  });
+  const { permission, policySessionKey, policyAgentId, effectiveToolPolicies, fsWorkspaceOnly } =
+    nativePolicy.resolveCliNativeToolPolicy(params.context);
+  const preparedCwd = params.context.cwd ?? params.context.workspaceDir;
+  const assertNativeFilePath = async (filePath: string, nativeCwd?: string) => {
+    if (!fsWorkspaceOnly) {
+      return;
+    }
+    const cwd = nativeCwd;
+    if (!path.isAbsolute(filePath) && (!cwd || !path.isAbsolute(cwd))) {
+      throw new Error(
+        "OpenClaw denied native file tool use: relative file path requires an absolute native cwd.",
+      );
+    }
+    await assertSandboxPath({
+      filePath,
+      cwd: cwd && path.isAbsolute(cwd) ? cwd : preparedCwd,
+      root: params.context.workspaceDir,
+    });
+  };
   const grants = new Set<string>();
 
   return async (request) => {
@@ -89,24 +103,49 @@ function createPluginToolPermissionHandler(params: {
       return denyTool(`OpenClaw denied native tool ${toolName}: it is unavailable to this run.`);
     }
 
-    // Provider schemas are not policy schemas: match canonical names and file operands.
-    const canonicalToolName = normalizeCliToolName(toolName);
+    // Provider schemas are not policy schemas: match backend-projected capabilities and operands.
+    const { nativeToolName, canonicalToolName } = nativePolicy.resolveCliNativeToolPolicyName(
+      params.context,
+      toolName,
+    );
     if (params.context.hostOwnedTools?.includes(canonicalToolName)) {
       return denyTool(`Use OpenClaw ${canonicalToolName}; its native equivalent is unavailable.`);
     }
+    if (!isToolAllowedByPolicies(canonicalToolName, effectiveToolPolicies)) {
+      return denyTool(`OpenClaw tool policy denied native tool ${canonicalToolName}.`);
+    }
+    const nativeGrepTool = nativeToolName === "grep" && canonicalToolName === "read";
+    const canonicalFileTool = ["read", "write", "edit"].includes(canonicalToolName);
     const nativeFileTool =
-      ["read", "write", "edit"].includes(canonicalToolName) &&
-      Object.hasOwn(request.toolInput, "file_path");
+      canonicalFileTool && (nativeGrepTool || Object.hasOwn(request.toolInput, "file_path"));
+    if (canonicalFileTool && !nativeFileTool) {
+      return denyTool("OpenClaw denied native file tool use: invalid file path.");
+    }
     let policyInput = request.toolInput;
     if (nativeFileTool) {
-      const nativePath = request.toolInput.file_path;
+      const nativePath = nativeGrepTool
+        ? (request.toolInput.path ?? ".")
+        : request.toolInput.file_path;
       if (typeof nativePath !== "string") {
         return denyTool("OpenClaw denied native file tool use: invalid file path.");
       }
-      if (Object.hasOwn(request.toolInput, "path") && request.toolInput.path !== nativePath) {
+      if (
+        !nativeGrepTool &&
+        Object.hasOwn(request.toolInput, "path") &&
+        request.toolInput.path !== nativePath
+      ) {
         return denyTool("OpenClaw denied native file tool use: conflicting file paths.");
       }
-      policyInput = { ...request.toolInput, path: nativePath };
+      try {
+        await assertNativeFilePath(nativePath, request.cwd);
+      } catch (error) {
+        return denyTool(error instanceof Error ? error.message : String(error));
+      }
+      policyInput = nativeGrepTool
+        ? Object.hasOwn(request.toolInput, "path")
+          ? request.toolInput
+          : { ...request.toolInput, path: nativePath }
+        : { ...request.toolInput, path: nativePath };
       if (canonicalToolName === "edit") {
         const { old_string: oldText, new_string: newText, edits } = request.toolInput;
         if (typeof oldText !== "string" || typeof newText !== "string") {
@@ -140,11 +179,11 @@ function createPluginToolPermissionHandler(params: {
       ...(request.toolCallId ? { toolCallId: request.toolCallId } : {}),
       signal,
       ctx: {
-        ...(run.agentId ? { agentId: run.agentId } : {}),
+        ...(policyAgentId ? { agentId: policyAgentId } : {}),
         ...(run.config ? { config: run.config } : {}),
-        cwd: params.context.cwd ?? params.context.workspaceDir,
+        cwd: request.cwd ?? preparedCwd,
         workspaceDir: params.context.workspaceDir,
-        ...(run.sessionKey ? { sessionKey: run.sessionKey } : {}),
+        ...(policySessionKey ? { sessionKey: policySessionKey } : {}),
         sessionId: run.sessionId,
         runId: run.runId,
         ...(run.trigger ? { trigger: run.trigger } : {}),
@@ -159,7 +198,7 @@ function createPluginToolPermissionHandler(params: {
         turnSourceThreadId: run.currentThreadTs,
         loopDetection: resolveToolLoopDetectionConfig({
           cfg: run.config,
-          agentId: run.agentId,
+          agentId: policyAgentId,
         }),
       },
     });
@@ -180,9 +219,14 @@ function createPluginToolPermissionHandler(params: {
       if (typeof toolInput.path !== "string") {
         return denyTool("OpenClaw denied native file tool use: invalid rewritten file path.");
       }
+      try {
+        await assertNativeFilePath(toolInput.path, request.cwd);
+      } catch (error) {
+        return denyTool(error instanceof Error ? error.message : String(error));
+      }
       if (toolInput === policyInput) {
         toolInput = request.toolInput;
-      } else {
+      } else if (!nativeGrepTool) {
         toolInput = { ...toolInput, file_path: toolInput.path };
         if (!Object.hasOwn(request.toolInput, "path")) {
           delete toolInput.path;
@@ -228,7 +272,7 @@ function createPluginToolPermissionHandler(params: {
         toolInput,
         pluginId: params.context.backendResolved.id,
         sessionKey: run.sessionKey,
-        agentId: run.agentId,
+        agentId: policyAgentId,
         toolCallId: request.toolCallId,
         cwd: request.cwd,
         fallbackCwd: params.context.cwd ?? params.context.workspaceDir,
@@ -237,7 +281,7 @@ function createPluginToolPermissionHandler(params: {
           ...params.env,
           PATH: mergePathPrepend(
             params.env.PATH,
-            resolveExecToolConfig({ cfg: run.config, agentId: run.agentId }).pathPrepend ?? [],
+            resolveExecToolConfig({ cfg: run.config, agentId: policyAgentId }).pathPrepend ?? [],
           ),
         },
         assertActive,
