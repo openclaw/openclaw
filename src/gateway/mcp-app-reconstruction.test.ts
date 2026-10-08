@@ -26,7 +26,21 @@ vi.mock("../agents/mcp-ui-resource.js", () => ({
   getMcpAppViewLease: mocks.getMcpAppViewLease,
 }));
 vi.mock("./session-transcript-readers.js", () => ({
-  visitSessionMessagesAsync: mocks.visitSessionMessagesAsync,
+  readSessionTranscriptSummaryAsync: async (
+    _scope: unknown,
+    query: import("./session-transcript-summary.js").SessionTranscriptSummaryQuery,
+  ) => {
+    if (query.kind !== "mcp-app") {
+      throw new Error("Expected MCP transcript query");
+    }
+    const { selectMcpAppReconstructionData } = await import("./mcp-app-transcript.js");
+    return {
+      kind: "mcp-app",
+      data: selectMcpAppReconstructionData((visit) => {
+        mocks.visitSessionMessagesAsync(_scope, visit);
+      }, query.lookup),
+    };
+  },
 }));
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
@@ -61,7 +75,7 @@ beforeEach(() => {
 
 async function restoreFromMessages(messages: unknown[], viewId: string) {
   mocks.visitSessionMessagesAsync.mockImplementation(
-    async (_scope: unknown, visit: (message: unknown) => void) => {
+    (_scope: unknown, visit: (message: unknown) => void) => {
       for (const message of messages) {
         visit(message);
       }
@@ -147,7 +161,7 @@ describe("MCP App transcript reconstruction", () => {
         storePath: "/tmp/openclaw-agent.sqlite",
       });
       mocks.visitSessionMessagesAsync.mockImplementation(
-        async (_scope: unknown, visit: (message: unknown) => void) => {
+        (_scope: unknown, visit: (message: unknown) => void) => {
           for (const message of [
             {
               role: "assistant",
@@ -305,7 +319,6 @@ describe("MCP App transcript reconstruction", () => {
 
     await restoreFromMessages(messages, "mcp-app-stream");
 
-    expect(mocks.visitSessionMessagesAsync).toHaveBeenCalledTimes(2);
     expect(mocks.fetchMcpAppView).toHaveBeenCalledWith(
       expect.objectContaining({ toolInput: { page: 1 } }),
     );

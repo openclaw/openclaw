@@ -14,10 +14,6 @@ import {
 const PENDING_DELIVERY_NOTICE =
   "I couldn’t confirm whether my previous reply reached this chat, so I won’t resend it automatically. Please ask for any missing remainder.";
 
-function noticeId(intentId: string): string {
-  return `main-session-restart-recovery:pending-final:${intentId}`;
-}
-
 export async function deliverPendingDeliveryNotice(
   sessionKey: string,
   storePath: string,
@@ -42,7 +38,7 @@ export async function deliverPendingDeliveryNotice(
   ) {
     return;
   }
-  const idempotencyKey = noticeId(notice.intentId);
+  const idempotencyKey = `main-session-restart-recovery:pending-final:${notice.intentId}`;
   let delivered: boolean;
   try {
     const outcome = await runtime.sendRecoveryNotice({

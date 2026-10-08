@@ -41,7 +41,7 @@ export function createLoginResult(
 export function createOwnerLoginConfig(): OpenClawConfig {
   return {
     commands: { native: true, ownerAllowFrom: ["200"] },
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
   };
 }
 

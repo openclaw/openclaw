@@ -17,7 +17,6 @@ import {
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
   buildMentionPrompt,
-  createMatrixQaDriverScenarioClient,
   createMatrixQaScenarioClient,
   isMatrixQaMessageLikeKind,
   primeMatrixQaDriverScenarioClient,
@@ -165,52 +164,6 @@ export async function runRoomAutoJoinInviteScenario(context: MatrixQaScenarioCon
   } satisfies MatrixQaScenarioExecution;
 }
 
-async function restoreMembershipLossRoom(params: {
-  context: MatrixQaScenarioContext;
-  driverClient: ReturnType<typeof createMatrixQaDriverScenarioClient>;
-  roomId: string;
-  sutClient: ReturnType<typeof createMatrixQaScenarioClient>;
-}) {
-  await params.driverClient.inviteUserToRoom({
-    roomId: params.roomId,
-    userId: params.context.sutUserId,
-  });
-  await waitForMembershipEvent({
-    ...resolveMatrixQaActorSyncParams(params.context, "driver"),
-    membership: "invite",
-    roomId: params.roomId,
-    stateKey: params.context.sutUserId,
-    timeoutMs: params.context.timeoutMs,
-  });
-  await params.sutClient.joinRoom(params.roomId);
-  return await waitForMembershipEvent({
-    ...resolveMatrixQaActorSyncParams(params.context, "driver"),
-    membership: "join",
-    roomId: params.roomId,
-    stateKey: params.context.sutUserId,
-    timeoutMs: params.context.timeoutMs,
-  });
-}
-
-async function ensureMembershipLossRoomRestored(params: {
-  driverClient: ReturnType<typeof createMatrixQaDriverScenarioClient>;
-  roomId: string;
-  sutClient: ReturnType<typeof createMatrixQaScenarioClient>;
-  sutUserId: string;
-}) {
-  try {
-    await params.sutClient.joinRoom(params.roomId);
-    return;
-  } catch {
-    // A kicked member needs an invite; an already joined member succeeds above.
-  }
-  await params.driverClient.inviteUserToRoom({
-    roomId: params.roomId,
-    userId: params.sutUserId,
-  });
-  await params.sutClient.joinRoom(params.roomId);
-}
-
 export async function runMembershipLossScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEMBERSHIP_ROOM_KEY);
   const { client: driverClient } = await primeMatrixQaDriverScenarioClient(context);
@@ -246,11 +199,24 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
       token: noReplyToken,
     });
 
-    const joinEvent = await restoreMembershipLossRoom({
-      context,
-      driverClient,
+    await driverClient.inviteUserToRoom({
       roomId,
-      sutClient,
+      userId: context.sutUserId,
+    });
+    await waitForMembershipEvent({
+      ...resolveMatrixQaActorSyncParams(context, "driver"),
+      membership: "invite",
+      roomId,
+      stateKey: context.sutUserId,
+      timeoutMs: context.timeoutMs,
+    });
+    await sutClient.joinRoom(roomId);
+    const joinEvent = await waitForMembershipEvent({
+      ...resolveMatrixQaActorSyncParams(context, "driver"),
+      membership: "join",
+      roomId,
+      stateKey: context.sutUserId,
+      timeoutMs: context.timeoutMs,
     });
     membershipRestored = true;
     const recovered = await runTopologyScopedTopLevelScenario({
@@ -282,12 +248,13 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
     // A lost kick response can still mean the kick applied.
     if (!membershipRestored) {
       try {
-        await ensureMembershipLossRoomRestored({
-          driverClient,
-          roomId,
-          sutClient,
-          sutUserId: context.sutUserId,
-        });
+        try {
+          await sutClient.joinRoom(roomId);
+        } catch {
+          // A kicked member needs an invite; an already joined member succeeds above.
+          await driverClient.inviteUserToRoom({ roomId, userId: context.sutUserId });
+          await sutClient.joinRoom(roomId);
+        }
       } catch (cleanupError) {
         throw new AggregateError(
           [error, cleanupError],
@@ -301,10 +268,7 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
 }
 
 export async function runReactionThreadedScenario(context: MatrixQaScenarioContext) {
-  const thread = await runThreadScenario(context, {
-    createNestedReply: true,
-    tokenPrefix: "MATRIX_QA_REACTION_THREAD",
-  });
+  const thread = await runThreadScenario(context, "MATRIX_QA_REACTION_THREAD");
   assertThreadReplyArtifact(thread.reply, {
     expectedRootEventId: thread.rootEventId,
     label: "threaded reaction reply",
@@ -328,7 +292,7 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
   return {
     artifacts: {
       driverEventId: thread.driverEventId,
-      ...buildMatrixQaReactionArtifacts({ reaction }),
+      ...buildMatrixQaReactionArtifacts(reaction),
       reply: thread.reply,
       rootEventId: thread.rootEventId,
       token: thread.token,
@@ -336,15 +300,10 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
     details: [
       ...buildMatrixQaThreadDetailLines({
         result: thread,
-        includeNestedTrigger: true,
         extraLines: [`thread reply event: ${thread.reply.eventId}`],
         replyLabel: "thread reply",
       }),
-      ...buildMatrixQaReactionDetailLines({
-        reactionEmoji: reaction.reactionEmoji,
-        reactionEventId: reaction.reactionEventId,
-        reactionTargetEventId: reaction.reactionTargetEventId,
-      }),
+      ...buildMatrixQaReactionDetailLines(buildMatrixQaReactionArtifacts(reaction)),
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }

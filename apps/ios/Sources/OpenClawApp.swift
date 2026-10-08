@@ -101,41 +101,31 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                     model.updateAPNsDeviceToken(token)
                 }
             }
-            if !self.pendingExecApprovalPrompts.isEmpty {
-                let pending = self.pendingExecApprovalPrompts
-                self.pendingExecApprovalPrompts.removeAll()
-                Task { @MainActor in
-                    for prompt in pending {
-                        await model.presentExecApprovalNotificationPrompt(prompt)
-                    }
-                }
+            self.deliverPending(&self.pendingExecApprovalPrompts) { prompt in
+                await model.presentExecApprovalNotificationPrompt(prompt)
             }
-            if !self.pendingExecApprovalRequestedPushes.isEmpty {
-                let pending = self.pendingExecApprovalRequestedPushes
-                self.pendingExecApprovalRequestedPushes.removeAll()
-                Task { @MainActor in
-                    for push in pending {
-                        _ = await model.handleExecApprovalRequestedRemotePush(push)
-                    }
-                }
+            self.deliverPending(&self.pendingExecApprovalRequestedPushes) { push in
+                _ = await model.handleExecApprovalRequestedRemotePush(push)
             }
-            if !self.pendingExecApprovalResolvedPushes.isEmpty {
-                let pending = self.pendingExecApprovalResolvedPushes
-                self.pendingExecApprovalResolvedPushes.removeAll()
-                Task { @MainActor in
-                    for push in pending {
-                        _ = await model.handleExecApprovalResolvedRemotePush(push)
-                    }
-                }
+            self.deliverPending(&self.pendingExecApprovalResolvedPushes) { push in
+                await model.handleExecApprovalResolvedRemotePush(push)
             }
-            if !self.pendingOpenURLs.isEmpty {
-                let pending = self.pendingOpenURLs
-                self.pendingOpenURLs.removeAll()
-                Task { @MainActor in
-                    for url in pending {
-                        await self.handleOpenURL(url, model: model)
-                    }
-                }
+            self.deliverPending(&self.pendingOpenURLs) { url in
+                await model.handleDeepLink(url: url)
+            }
+        }
+    }
+
+    private func deliverPending<Value>(
+        _ pending: inout [Value],
+        perform: @escaping @MainActor (Value) async -> Void)
+    {
+        guard !pending.isEmpty else { return }
+        let values = pending
+        pending.removeAll()
+        Task { @MainActor in
+            for value in values {
+                await perform(value)
             }
         }
     }
@@ -183,20 +173,9 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             return true
         }
         Task { @MainActor in
-            await self.handleOpenURL(url, model: model)
+            await model.handleDeepLink(url: url)
         }
         return true
-    }
-
-    func handleOpenURL(_ url: URL, model: NodeAppModel) async {
-        guard let route = DeepLinkParser.parse(url) else { return }
-
-        switch route {
-        case .agent, .dashboard, .gatewayAdd:
-            await model.handleDeepLink(url: url)
-        case let .gateway(link):
-            model.stageGatewaySetupLink(link)
-        }
     }
 
     private func registerForRemoteNotificationsIfEnrollmentReady(_ application: UIApplication) async {
@@ -237,12 +216,11 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         Task { @MainActor in
             if let push = ApprovalNotificationBridge.parseResolvedPush(userInfo: userInfo) {
                 if let appModel = self.resolvedAppModel() {
-                    let handled = await appModel.handleExecApprovalResolvedRemotePush(push)
-                    completionHandler(handled ? .newData : .noData)
+                    await appModel.handleExecApprovalResolvedRemotePush(push)
                 } else {
                     self.pendingExecApprovalResolvedPushes.append(push)
-                    completionHandler(.newData)
                 }
+                completionHandler(.newData)
                 return
             }
             guard let appModel = self.resolvedAppModel() else {
@@ -354,7 +332,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             actionIDKey = WatchPromptNotificationBridge.actionIDKey(index: index)
             actionLabelKey = WatchPromptNotificationBridge.actionLabelKey(index: index)
         }
-        guard let actionID = WatchMessagingPayloadCodec.nonEmpty(userInfo[actionIDKey] as? String) else { return nil }
+        guard let actionID = (userInfo[actionIDKey] as? String)?.trimmedNonEmpty else { return nil }
         guard let payload = userInfo[WatchPromptNotificationBridge.chatDeliveryContextKey] as? [String: Any],
               let context = try? OpenClawWatchChatDeliveryCodec.decodeContext(payload),
               let promptID = userInfo[WatchPromptNotificationBridge.promptIDKey] as? String,
@@ -521,9 +499,9 @@ enum WatchPromptNotificationBridge {
         var userInfo: [AnyHashable: Any] = [
             typeKey: typeValue,
         ]
-        userInfo[self.promptIDKey] = WatchMessagingPayloadCodec.nonEmpty(params.promptId)
-        userInfo[self.sessionKeyKey] = WatchMessagingPayloadCodec.nonEmpty(params.sessionKey)
-        userInfo[self.gatewayStableIDKey] = WatchMessagingPayloadCodec.nonEmpty(gatewayStableID)
+        userInfo[self.promptIDKey] = params.promptId?.trimmedNonEmpty
+        userInfo[self.sessionKeyKey] = params.sessionKey?.trimmedNonEmpty
+        userInfo[self.gatewayStableIDKey] = gatewayStableID?.trimmedNonEmpty
         if let context = chatDeliveryContext,
            let encoded = try? OpenClawWatchChatDeliveryCodec.encode(context)
         {
@@ -722,7 +700,7 @@ struct OpenClawApp: App {
                 .onOpenURL { url in
                     // SwiftUI owns normal scene delivery; the delegate also queues URLs
                     // that arrive before the scene has installed its model.
-                    Task { await self.appDelegate.handleOpenURL(url, model: self.appModel) }
+                    Task { await self.appModel.handleDeepLink(url: url) }
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)

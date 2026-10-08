@@ -9,10 +9,13 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { SubagentRegistryWriteError } from "../registry/subagent-registry-persistence.js";
-import * as registryState from "../registry/subagent-registry-state.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import {
+  SubagentRegistryWriteError,
+  mutateSubagentRuns,
+} from "../registry/subagent-registry-persistence.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import {
   advanceRequesterWakeTime,
   armRequesterWake,
@@ -25,7 +28,6 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun: vi.fn() }));
-vi.mock("../registry/subagent-registry-state.js", { spy: true });
 
 describe("requester wake cancellation rollback", () => {
   let database: OpenClawStateDatabase;
@@ -80,10 +82,6 @@ describe("requester wake cancellation rollback", () => {
       const original = structuredClone(input.subagent);
       const driver = requesterWakeDriver(inputs);
       const finalized = vi.fn();
-      driver.controller.options.persistOrThrow = (...ids) => {
-        // A sibling write must not persist another member's staged cancellation.
-        registryState.persistSubagentRunsToDiskOrThrow(subagentRuns, ids);
-      };
       if (outcome === "delivered") {
         database.db.exec(
           "CREATE TRIGGER reject_delivered AFTER UPDATE ON subagent_runs WHEN json_extract(NEW.payload_json, '$.delivery.status') = 'delivered' BEGIN SELECT RAISE(ABORT, 'cut:delivered'); END",
@@ -109,15 +107,19 @@ describe("requester wake cancellation rollback", () => {
             finalized,
           );
         } else {
-          await params.transitionBatch(batch, {
-            status: "dispatching",
-            attemptCount: 1,
-            replayCount: 1,
-            nextAttemptAt: Date.now() + 30_000,
-            batchRunIds,
-            rearmGeneration: 1,
-            lastError: "ambiguous transport",
-          });
+          await params.transitionBatch(
+            batch,
+            {
+              status: "dispatching",
+              attemptCount: 1,
+              replayCount: 1,
+              nextAttemptAt: Date.now() + 30_000,
+              batchRunIds,
+              rearmGeneration: 1,
+              lastError: "ambiguous transport",
+            },
+            () => {},
+          );
         }
         return outcome === "delivered";
       });
@@ -128,12 +130,26 @@ describe("requester wake cancellation rollback", () => {
         "not-committed",
         new Error("Stop write rejected"),
       );
-      vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementationOnce(
-        async () => {
-          writerEntered.resolve();
-          await releaseWriter.promise;
-          throw writeFailure;
-        },
+      const runWorker = stateWorker.runOpenClawStateWorkerOperation;
+      let stopHeld = false;
+      vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+        (context, operation, options) =>
+          runWorker(
+            context,
+            (scope) =>
+              operation({
+                execute: async (command, executeOptions) => {
+                  if (command.type === "subagents.persistChanges" && !stopHeld) {
+                    stopHeld = true;
+                    writerEntered.resolve();
+                    await releaseWriter.promise;
+                    throw writeFailure;
+                  }
+                  return scope.execute(command, executeOptions);
+                },
+              }),
+            options,
+          ),
       );
       let stopResult: Promise<PromiseSettledResult<void>[]> | undefined;
       try {
@@ -149,7 +165,7 @@ describe("requester wake cancellation rollback", () => {
         ]);
         await writerEntered.promise;
 
-        // Both native retry callbacks run while Stop has only staged its write.
+        // Retry callbacks cannot publish a completion while Stop owns admission.
         // The sibling reconciles the shared pending commit through its real owner.
         await advanceRequesterWakeTime(retryAt - Date.now());
         expect(driver.wake).toHaveBeenCalledOnce();
@@ -161,8 +177,9 @@ describe("requester wake cancellation rollback", () => {
         }
 
         let successor: typeof input.subagent | undefined;
+        let successorWrite: Promise<void> | undefined;
         if (owner !== "current") {
-          successor = owner === "replacement" ? structuredClone(original) : input.subagent;
+          successor = structuredClone(original);
           successor.suppressCompletionDelivery = undefined;
           successor.requesterSettleWake = {
             status: "pending",
@@ -174,12 +191,21 @@ describe("requester wake cancellation rollback", () => {
           if (owner === "replacement") {
             successor.generation = (original.generation ?? 0) + 1;
           }
-          subagentRuns.set(successor.runId, successor);
-          driver.controller.options.persistOrThrow(successor.runId);
-          driver.controller.resumeRequesterSettleWake(successor.runId, successor);
+          const next = successor;
+          successorWrite = mutateSubagentRuns([next.runId], () => ({
+            value: undefined,
+            postimages: new Map([[next.runId, next]]),
+          }));
         }
         releaseWriter.resolve();
         expect(await stopResult).toEqual([{ status: "rejected", reason: writeFailure }]);
+        await successorWrite;
+        if (successor) {
+          driver.controller.resumeRequesterSettleWake(
+            successor.runId,
+            subagentRuns.get(successor.runId)!,
+          );
+        }
         await advanceRequesterWakeTime(60_000);
 
         expect(driver.wake).toHaveBeenCalledTimes(outcome === "replay budget" ? 2 : 1);
@@ -208,15 +234,15 @@ describe("requester wake cancellation rollback", () => {
             });
           }
           if (owner === "replacement") {
-            expect(subagentRuns.get(input.subagent.runId)).toBe(successor);
+            expect(subagentRuns.get(input.subagent.runId)?.generation).toBe(successor?.generation);
             expect(stored.get(input.subagent.runId)?.requesterSettleWake).toEqual(
               successor?.requesterSettleWake,
             );
             expect(stored.get(input.subagent.runId)?.delivery?.status).toBe("in_progress");
-            expect(driver.wake.mock.calls[1]?.[0].settledEntry).toBe(sibling.subagent);
+            expect(driver.wake.mock.calls[1]?.[0].settledEntry.runId).toBe(sibling.subagent.runId);
           }
         } else {
-          expect(subagentRuns.get(input.subagent.runId)).toBe(successor);
+          expect(subagentRuns.get(input.subagent.runId)?.generation).toBe(successor?.generation);
           expect(stored.get(input.subagent.runId)?.requesterSettleWake).toEqual(
             successor?.requesterSettleWake,
           );

@@ -539,8 +539,10 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
     expect(textDeltas(events).join("")).toBe(chunks.join(""));
   });
 
-  it("resets an open fence between completions", async () => {
-    const first = "```toml\n[read.section]\n";
+  it.each([
+    ["an open fence", "```toml\n[read.section]\n"],
+    ["an unfinished text line", "hello"],
+  ])("resets %s between completions", async (_name, first) => {
     const events = await normalize(
       [
         streamTextDelta(first),
@@ -550,7 +552,7 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
       ],
       { protectFences: true },
     );
-    expect(textDeltas(events).join("")).not.toContain('{"path":"x"}');
+    expect(textDeltas(events)).toEqual([first]);
   });
 
   it("bounds prefix checks and parsing across later candidates (#122513)", async () => {

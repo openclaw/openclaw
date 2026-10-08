@@ -7,7 +7,6 @@ import type {
   NodeWorkerWorkspaceProcessInput,
 } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
-import type { WorkerToolName } from "../../worker/tool-authority.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerWorkspaceApplyResult,
@@ -262,8 +261,8 @@ export type WorkerTurnTunnelHandle = Omit<
   "launchTurn" | "measureLaunchTurn" | "readLaunchToolNames"
 > & {
   measureLaunchTurn(plan: WorkerLaunchPlan, claim: WorkerSessionTurnClaim): number;
-  /** Worker tool names the destination's installed supervisor admits in launch descriptors. */
-  readLaunchToolNames(): Promise<readonly WorkerToolName[]>;
+  /** Placement tool implementations available in the destination's installed supervisor. */
+  readLaunchToolNames(): Promise<readonly string[]>;
   launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
 };
 

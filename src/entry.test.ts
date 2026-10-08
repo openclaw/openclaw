@@ -1,7 +1,42 @@
 // Tests CLI entrypoint argument handling and startup behavior.
 import { describe, expect, it, vi } from "vitest";
+import { runWithPrecomputedHelpMocks } from "./cli/precomputed-help.test-helpers.js";
+import * as rootHelp from "./cli/program/root-help.js";
+import * as liveHelp from "./cli/root-help-live-config.js";
+import * as helpMetadata from "./cli/root-help-metadata.js";
 import { tryHandlePrecomputedCommandHelpFastPath, tryHandleRootHelpFastPath } from "./entry.js";
 import { withEnvAsync } from "./test-utils/env.js";
+
+async function runRootHelp(
+  argv: string[],
+  setup: {
+    env?: NodeJS.ProcessEnv;
+    outputPrecomputedRootHelpText?: typeof helpMetadata.outputPrecomputedRootHelpText;
+    outputRootHelp?: typeof rootHelp.outputRootHelp;
+    loadRootHelpRenderOptionsForConfigSensitivePlugins?: typeof liveHelp.loadRootHelpRenderOptionsForConfigSensitivePlugins;
+  },
+) {
+  const spies = [
+    vi
+      .spyOn(helpMetadata, "outputPrecomputedRootHelpText")
+      .mockImplementation(setup.outputPrecomputedRootHelpText ?? (() => false)),
+    vi
+      .spyOn(rootHelp, "outputRootHelp")
+      .mockImplementation(setup.outputRootHelp ?? (async () => {})),
+    vi
+      .spyOn(liveHelp, "loadRootHelpRenderOptionsForConfigSensitivePlugins")
+      .mockImplementation(
+        setup.loadRootHelpRenderOptionsForConfigSensitivePlugins ?? (async () => null),
+      ),
+  ];
+  try {
+    return await withEnvAsync(setup.env ?? {}, () => tryHandleRootHelpFastPath(argv));
+  } finally {
+    for (const spy of spies) {
+      spy.mockRestore();
+    }
+  }
+}
 
 describe("entry root help fast path", () => {
   it("respects the startup help fast path kill switch", async () => {
@@ -11,7 +46,7 @@ describe("entry root help fast path", () => {
     const loadRootHelpRenderOptionsForConfigSensitivePlugins = vi.fn(async () => null);
 
     await expect(
-      tryHandleRootHelpFastPath(argv, {
+      runRootHelp(argv, {
         env: { OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" },
         outputPrecomputedRootHelpText,
         outputRootHelp,
@@ -31,7 +66,7 @@ describe("entry root help fast path", () => {
 
     await withEnvAsync({ OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" }, async () => {
       await expect(
-        tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+        runRootHelp(["node", "openclaw", "--help"], {
           outputPrecomputedRootHelpText,
           outputRootHelp,
           loadRootHelpRenderOptionsForConfigSensitivePlugins,
@@ -48,7 +83,7 @@ describe("entry root help fast path", () => {
     const outputPrecomputedRootHelpText = vi.fn(() => true);
     const outputRootHelp = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+    const handled = await runRootHelp(["node", "openclaw", "--help"], {
       env: {},
       outputPrecomputedRootHelpText,
       outputRootHelp,
@@ -63,7 +98,7 @@ describe("entry root help fast path", () => {
   it("renders root help without importing the full program", async () => {
     const outputRootHelp = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+    const handled = await runRootHelp(["node", "openclaw", "--help"], {
       outputRootHelp,
       loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
       env: {},
@@ -87,7 +122,7 @@ describe("entry root help fast path", () => {
       env: {},
     };
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+    const handled = await runRootHelp(["node", "openclaw", "--help"], {
       env: {},
       outputPrecomputedRootHelpText: outputPrecomputedRootHelpText.mockReturnValue(true),
       outputRootHelp,
@@ -109,7 +144,7 @@ describe("entry root help fast path", () => {
 
     try {
       await expect(
-        tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+        runRootHelp(["node", "openclaw", "--help"], {
           env: {},
           loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => ({
             config: {},
@@ -135,7 +170,7 @@ describe("entry root help fast path", () => {
   it("ignores non-root help invocations", async () => {
     const outputRootHelp = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "status", "--help"], {
+    const handled = await runRootHelp(["node", "openclaw", "status", "--help"], {
       outputRootHelp,
       loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
       env: {},
@@ -148,14 +183,11 @@ describe("entry root help fast path", () => {
   it("skips the host help fast path when a container target is active", async () => {
     const outputRootHelp = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(
-      ["node", "openclaw", "--container", "demo", "--help"],
-      {
-        outputRootHelp,
-        loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
-        env: {},
-      },
-    );
+    const handled = await runRootHelp(["node", "openclaw", "--container", "demo", "--help"], {
+      outputRootHelp,
+      loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
+      env: {},
+    });
 
     expect(handled).toBe(false);
     expect(outputRootHelp).not.toHaveBeenCalled();
@@ -171,7 +203,8 @@ describe("entry precomputed command help fast path", () => {
     "renders precomputed %s help without loading the full program",
     async (command, key) => {
       const output = vi.fn(() => true);
-      const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      const handled = await runWithPrecomputedHelpMocks(
+        tryHandlePrecomputedCommandHelpFastPath,
         ["node", "openclaw", command, "--help"],
         {
           env: {},
@@ -187,10 +220,14 @@ describe("entry precomputed command help fast path", () => {
   it("renders precomputed doctor help without loading the full program", async () => {
     const outputPrecomputedSubcommandHelpText = vi.fn(() => true);
     expect(
-      await tryHandlePrecomputedCommandHelpFastPath(["node", "openclaw", "doctor", "--help"], {
-        env: {},
-        outputPrecomputedSubcommandHelpText,
-      }),
+      await runWithPrecomputedHelpMocks(
+        tryHandlePrecomputedCommandHelpFastPath,
+        ["node", "openclaw", "doctor", "--help"],
+        {
+          env: {},
+          outputPrecomputedSubcommandHelpText,
+        },
+      ),
     ).toBe(true);
     expect(outputPrecomputedSubcommandHelpText).toHaveBeenCalledExactlyOnceWith("doctor");
   });
@@ -198,7 +235,8 @@ describe("entry precomputed command help fast path", () => {
   it("renders precomputed subcommand help with leading root options", async () => {
     const outputPrecomputedSubcommandHelpText = vi.fn(() => true);
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "--profile", "work", "--no-color", "models", "-h"],
       {
         env: {},
@@ -225,11 +263,15 @@ describe("entry precomputed command help fast path", () => {
     const outputPrecomputedSubcommandHelpText = vi.fn();
 
     for (const argv of invocations) {
-      const handled = await tryHandlePrecomputedCommandHelpFastPath(argv, {
-        env: {},
-        outputPrecomputedSubcommandHelpText:
-          outputPrecomputedSubcommandHelpText.mockReturnValue(true),
-      });
+      const handled = await runWithPrecomputedHelpMocks(
+        tryHandlePrecomputedCommandHelpFastPath,
+        argv,
+        {
+          env: {},
+          outputPrecomputedSubcommandHelpText:
+            outputPrecomputedSubcommandHelpText.mockReturnValue(true),
+        },
+      );
 
       expect(handled).toBe(false);
     }
@@ -240,7 +282,8 @@ describe("entry precomputed command help fast path", () => {
     const outputPrecomputedNodesHelpText = vi.fn();
     const loadRootHelpRenderOptionsForConfigSensitivePlugins = vi.fn(async () => ({ env: {} }));
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "nodes", "--help"],
       {
         env: {},
@@ -255,7 +298,8 @@ describe("entry precomputed command help fast path", () => {
   });
 
   it("falls through when startup metadata is unavailable", async () => {
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "secrets", "--help"],
       {
         env: {},
@@ -267,7 +311,8 @@ describe("entry precomputed command help fast path", () => {
   });
 
   it("falls through when startup metadata loading fails", async () => {
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "secrets", "--help"],
       {
         env: {},
@@ -281,7 +326,8 @@ describe("entry precomputed command help fast path", () => {
   });
 
   it("falls through when the nodes live-config probe fails", async () => {
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "nodes", "--help"],
       {
         env: {},
@@ -297,7 +343,8 @@ describe("entry precomputed command help fast path", () => {
   it("ignores nested subcommand help invocations", async () => {
     const outputPrecomputedNodesHelpText = vi.fn();
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "nodes", "invoke", "--help"],
       {
         env: {},
@@ -312,7 +359,8 @@ describe("entry precomputed command help fast path", () => {
   it("ignores command version invocations", async () => {
     const outputPrecomputedNodesHelpText = vi.fn();
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "nodes", "--version"],
       {
         env: {},
@@ -327,7 +375,8 @@ describe("entry precomputed command help fast path", () => {
   it("respects the startup help fast path kill switch", async () => {
     const outputPrecomputedSecretsHelpText = vi.fn();
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "secrets", "--help"],
       {
         env: { OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" },
@@ -342,7 +391,8 @@ describe("entry precomputed command help fast path", () => {
   it("respects the process env startup help fast path kill switch", async () => {
     const outputPrecomputedSecretsHelpText = vi.fn();
     await withEnvAsync({ OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" }, async () => {
-      const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      const handled = await runWithPrecomputedHelpMocks(
+        tryHandlePrecomputedCommandHelpFastPath,
         ["node", "openclaw", "secrets", "--help"],
         {
           outputPrecomputedSecretsHelpText: outputPrecomputedSecretsHelpText.mockReturnValue(true),
@@ -357,7 +407,8 @@ describe("entry precomputed command help fast path", () => {
   it("skips the host command help fast path when a container target is active", async () => {
     const outputPrecomputedSecretsHelpText = vi.fn();
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "--container", "demo", "secrets", "--help"],
       {
         env: {},
@@ -372,7 +423,8 @@ describe("entry precomputed command help fast path", () => {
   it("skips the host command help fast path when a container target comes from env", async () => {
     const outputPrecomputedBrowserHelpText = vi.fn();
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+    const handled = await runWithPrecomputedHelpMocks(
+      tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "browser", "--help"],
       {
         env: { OPENCLAW_CONTAINER: "demo" },

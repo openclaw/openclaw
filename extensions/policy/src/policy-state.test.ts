@@ -230,7 +230,7 @@ describe("scanPolicyToolPosture", () => {
     const evidence = scanPolicyToolPosture({
       tools: { exec: { mode: "auto" } },
       agents: {
-        list: [{ id: "reviewer", tools: { exec: { ask: "always" } } }],
+        entries: { reviewer: { tools: { exec: { ask: "always" } } } },
       },
     });
 
@@ -246,7 +246,7 @@ describe("scanPolicyToolPosture", () => {
           id: "reviewer-exec-ask",
           kind: "execAsk",
           value: "always",
-          source: "oc://openclaw.config/agents/list/#0/tools/exec/ask",
+          source: "oc://openclaw.config/agents/entries/reviewer/tools/exec/ask",
         }),
       ]),
     );
@@ -506,15 +506,21 @@ describe("scanPolicyExecApprovals", () => {
     ]);
   });
 
-  it("normalizes legacy default agents and string allowlist entries", () => {
+  it("projects canonical approval entries while retaining source indices across invalid entries", () => {
     expect(
       scanPolicyExecApprovals(
         JSON.stringify({
           version: 1,
           agents: {
-            default: {
+            main: {
               security: "allowlist",
-              allowlist: ["legacy", { pattern: "doctor" }],
+              allowlist: [
+                null,
+                { id: "entry-1", pattern: "legacy" },
+                "not-an-approval-entry",
+                { pattern: " " },
+                { id: "entry-2", pattern: "doctor" },
+              ],
             },
           },
         }),
@@ -529,21 +535,21 @@ describe("scanPolicyExecApprovals", () => {
         kind: "agent",
         agentId: "main",
         security: "allowlist",
-        source: "oc://exec-approvals.json/agents/default",
+        source: "oc://exec-approvals.json/agents/main",
       }),
       expect.objectContaining({
         id: "agent:main:allowlist:0",
         kind: "allowlist",
         agentId: "main",
         pattern: "legacy",
-        source: "oc://exec-approvals.json/agents/default/allowlist/#0",
+        source: "oc://exec-approvals.json/agents/main/allowlist/#1",
       }),
       expect.objectContaining({
         id: "agent:main:allowlist:1",
         kind: "allowlist",
         agentId: "main",
         pattern: "doctor",
-        source: "oc://exec-approvals.json/agents/default/allowlist/#1",
+        source: "oc://exec-approvals.json/agents/main/allowlist/#4",
       }),
     ]);
   });

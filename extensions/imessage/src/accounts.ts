@@ -8,10 +8,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import {
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageAccountConfig } from "./account-types.js";
 import {
   expandIMessageUserPath,
@@ -42,16 +39,10 @@ export const resolveDefaultIMessageAccountId = resolveDefaultAccountId;
 
 type IMessageStreamingConfig = NonNullable<IMessageAccountConfig["streaming"]>;
 
-function asStreamingConfigObject(value: unknown): IMessageStreamingConfig | undefined {
-  return asOptionalRecord(value) as IMessageStreamingConfig | undefined;
-}
-
 function mergeIMessageStreamingConfig(
-  base: unknown,
-  account: unknown,
+  baseConfig: IMessageStreamingConfig | undefined,
+  accountConfig: IMessageStreamingConfig | undefined,
 ): IMessageStreamingConfig | undefined {
-  const baseConfig = asStreamingConfigObject(base);
-  const accountConfig = asStreamingConfigObject(account);
   if (!baseConfig || !accountConfig) {
     return accountConfig ?? baseConfig;
   }
@@ -81,10 +72,10 @@ function mergeIMessageAccountConfig(cfg: OpenClawConfig, accountId: string): IMe
   const accountConfig = resolveAccountEntry(cfg.channels?.imessage?.accounts, accountId);
   const merged = resolveMergedIMessageAccountConfig(cfg, accountId);
   const streaming = mergeIMessageStreamingConfig(
-    (cfg.channels?.imessage as Record<string, unknown> | undefined)?.streaming,
-    (accountConfig as Record<string, unknown> | undefined)?.streaming,
+    cfg.channels?.imessage?.streaming,
+    accountConfig?.streaming,
   );
-  return streaming !== undefined ? ({ ...merged, streaming } as IMessageAccountConfig) : merged;
+  return streaming !== undefined ? { ...merged, streaming } : merged;
 }
 
 export function resolveIMessageAccount(params: {

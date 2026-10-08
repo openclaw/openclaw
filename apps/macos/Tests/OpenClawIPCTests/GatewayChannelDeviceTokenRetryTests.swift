@@ -57,11 +57,20 @@ private final class TrustedDeviceRetryGatewaySession: WebSocketSessioning, Gatew
 
     private let lock = NSLock()
     private let recorder: ConnectAuthRecorder
+    private let canRetryWithDeviceToken: Bool?
+    private let recommendedNextStep: String?
     private var makeCount = 0
 
-    init(recorder: ConnectAuthRecorder, allowsDeviceTokenRetryAuth: Bool) {
+    init(
+        recorder: ConnectAuthRecorder,
+        allowsDeviceTokenRetryAuth: Bool,
+        canRetryWithDeviceToken: Bool?,
+        recommendedNextStep: String?)
+    {
         self.recorder = recorder
         self.allowsDeviceTokenRetryAuth = allowsDeviceTokenRetryAuth
+        self.canRetryWithDeviceToken = canRetryWithDeviceToken
+        self.recommendedNextStep = recommendedNextStep
     }
 
     func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
@@ -76,6 +85,8 @@ private final class TrustedDeviceRetryGatewaySession: WebSocketSessioning, Gatew
             return current
         }
         let recorder = self.recorder
+        let canRetryWithDeviceToken = self.canRetryWithDeviceToken
+        let recommendedNextStep = self.recommendedNextStep
         let task = GatewayTestWebSocketTask(
             sendHook: { _, message, sendIndex in
                 if sendIndex == 0 {
@@ -88,11 +99,17 @@ private final class TrustedDeviceRetryGatewaySession: WebSocketSessioning, Gatew
                 }
                 let id = task.snapshotConnectRequestID() ?? "connect"
                 if attemptIndex == 0 {
-                    return .data(GatewayWebSocketTestSupport.connectAuthFailureData(
+                    var details: [String: Any] = [
+                        "code": GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
+                        "authReason": "token_mismatch",
+                    ]
+                    if let canRetryWithDeviceToken { details["canRetryWithDeviceToken"] = canRetryWithDeviceToken }
+                    if let recommendedNextStep { details["recommendedNextStep"] = recommendedNextStep }
+                    return try .data(GatewayWebSocketTestSupport.errorResponseData(
                         id: id,
-                        detailCode: GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
-                        canRetryWithDeviceToken: true,
-                        recommendedNextStep: GatewayConnectRecoveryNextStep.retryWithDeviceToken.rawValue))
+                        code: "INVALID_REQUEST",
+                        message: "gateway auth rejected",
+                        details: details))
                 }
                 return .data(GatewayWebSocketTestSupport.connectOkData(id: id))
             })
@@ -166,7 +183,17 @@ struct GatewayChannelDeviceTokenRetryTests {
         }
     }
 
-    @Test func `remote pinned TLS retries stale shared token with stored device token`() async throws {
+    @Test(arguments: [
+        (Optional(true), Optional("retry_with_device_token")),
+        (false, "update_auth_credentials"),
+        (false, "retry_with_device_token"),
+        (nil, nil),
+        (nil, "retry_with_device_token"),
+    ])
+    func `remote pinned TLS requires explicit device-token retry permission`(
+        canRetryWithDeviceToken: Bool?,
+        recommendedNextStep: String?) async throws
+    {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -182,7 +209,9 @@ struct GatewayChannelDeviceTokenRetryTests {
             let recorder = ConnectAuthRecorder()
             let session = TrustedDeviceRetryGatewaySession(
                 recorder: recorder,
-                allowsDeviceTokenRetryAuth: true)
+                allowsDeviceTokenRetryAuth: true,
+                canRetryWithDeviceToken: canRetryWithDeviceToken,
+                recommendedNextStep: recommendedNextStep)
             let options = GatewayConnectOptions(
                 role: "operator",
                 scopes: ["operator.read"],
@@ -199,23 +228,31 @@ struct GatewayChannelDeviceTokenRetryTests {
                 session: WebSocketSessionBox(session: session),
                 connectOptions: options)
 
+            await channel._test_setConnectFailureBackoffWaitHandler {}
             do {
+                do {
+                    try await channel.connect()
+                    Issue.record("expected stale shared-token connect to fail before device-token retry")
+                } catch let error as GatewayConnectAuthError {
+                    #expect(error.detail == .authTokenMismatch)
+                    #expect(error.canRetryWithDeviceToken == (canRetryWithDeviceToken == true))
+                    #expect(error.isNonRecoverable == (canRetryWithDeviceToken != true))
+                }
+
                 try await channel.connect()
-                Issue.record("expected stale shared-token connect to fail before device-token retry")
-            } catch let error as GatewayConnectAuthError {
-                #expect(error.detail == .authTokenMismatch)
+
+                let firstAuth = try #require(recorder.auth(at: 0))
+                #expect(firstAuth["token"] as? String == "stale-shared-token")
+                #expect(firstAuth["deviceToken"] == nil)
+
+                let retryAuth = try #require(recorder.auth(at: 1))
+                #expect(retryAuth["token"] as? String == "stale-shared-token")
+                #expect(retryAuth["deviceToken"] as? String ==
+                    (canRetryWithDeviceToken == true ? "stored-device-token" : nil))
+            } catch {
+                await channel.shutdown()
+                throw error
             }
-
-            try await channel.connect()
-
-            let firstAuth = try #require(recorder.auth(at: 0))
-            #expect(firstAuth["token"] as? String == "stale-shared-token")
-            #expect(firstAuth["deviceToken"] == nil)
-
-            let retryAuth = try #require(recorder.auth(at: 1))
-            #expect(retryAuth["token"] as? String == "stale-shared-token")
-            #expect(retryAuth["deviceToken"] as? String == "stored-device-token")
-
             await channel.shutdown()
         }
     }

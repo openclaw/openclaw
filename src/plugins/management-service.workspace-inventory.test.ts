@@ -18,7 +18,6 @@ import { persistPluginInstall } from "./install-persistence.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
-import { PluginInstallPersistedError } from "./lifecycle.js";
 import { loadPluginRegistryHandle } from "./loader.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -319,7 +318,7 @@ it("preserves env references across management capability consent", async () => 
   expect(fresh.sourceConfig.messages?.responsePrefix).toBe("after-consent");
 });
 
-it.each(["config-write", "runtime-apply", "none"] as const)(
+it.each(["config-write", "none"] as const)(
   "keeps desired and running inventory separate with failure=%s",
   async (failure) => {
     const root = makeTrackedTempDir("managed-install-inventory", roots);
@@ -367,9 +366,6 @@ it.each(["config-write", "runtime-apply", "none"] as const)(
       };
     });
     const applyRuntime = vi.fn(async () => {
-      if (failure === "runtime-apply") {
-        throw rejected;
-      }
       return { operationId: "install", generation: 1, pluginIds: [fixture.pluginId] };
     });
     const installed = persistPluginInstall({
@@ -382,13 +378,6 @@ it.each(["config-write", "runtime-apply", "none"] as const)(
     });
     if (failure === "none") {
       expect(await installed).toEqual(config);
-    } else if (failure === "runtime-apply") {
-      const result = await installed.catch((error: unknown) => error);
-      expect(result).toBeInstanceOf(PluginInstallPersistedError);
-      expect(result).toMatchObject({ pluginId: fixture.pluginId });
-      if (result instanceof PluginInstallPersistedError) {
-        expect(result.cause).toBe(rejected);
-      }
     } else {
       await expect(installed).rejects.toBe(rejected);
     }

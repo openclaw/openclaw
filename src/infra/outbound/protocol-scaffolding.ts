@@ -7,20 +7,12 @@ import {
 import { escapeRegExp } from "../../shared/regexp.js";
 import { findCodeRegions } from "../../shared/text/code-regions.js";
 
-const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
-const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = INTERNAL_RUNTIME_SCAFFOLDING_TAGS.join("|");
-const INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE = new RegExp(
+const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = "system-reminder|previous_response";
+const INTERNAL_RUNTIME_SCAFFOLDING_PATTERNS = [
   `<\\s*(${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*>[\\s\\S]*?<\\s*\\/\\s*\\1\\s*>`,
-  "gi",
-);
-const INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE = new RegExp(
   `<\\s*(?:${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*\\/\\s*>`,
-  "gi",
-);
-const INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE = new RegExp(
   `<\\s*\\/?\\s*(?:${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*>`,
-  "gi",
-);
+].map((pattern) => new RegExp(pattern, "gi"));
 const INTERNAL_RUNTIME_MARKER_LINE_PATTERNS = [
   "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>",
   "<<<END_UNTRUSTED_CHILD_RESULT>>>",
@@ -77,11 +69,11 @@ function unwrapPromptDataWrapperLines(text: string): string {
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
     const nextLine = lines[index + 1] ?? "";
-    if (isPromptDataHeaderLine(line) && isPromptDataTagLine(nextLine, "open")) {
-      changed = true;
-      continue;
-    }
-    if (isPromptDataTagLine(line, "open") || isPromptDataTagLine(line, "close")) {
+    if (
+      (isPromptDataHeaderLine(line) && isPromptDataTagLine(nextLine, "open")) ||
+      isPromptDataTagLine(line, "open") ||
+      isPromptDataTagLine(line, "close")
+    ) {
       changed = true;
       continue;
     }
@@ -93,15 +85,14 @@ function unwrapPromptDataWrapperLines(text: string): string {
 export function stripInternalRuntimeScaffolding(text: string): string {
   // Removal and whitespace normalization cannot introduce a missing "<".
   const hasAngleMarker = text.includes("<");
-  let stripped = stripInternalRuntimeContext(
-    hasAngleMarker
-      ? unwrapPromptDataWrapperLines(stripInlineInternalRuntimeContextBlocks(text))
-          .replace(INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
-          .replace(INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
-          .replace(INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "")
-      : text,
-    { preserveSurroundingWhitespace: true },
-  );
+  let stripped = text;
+  if (hasAngleMarker) {
+    stripped = unwrapPromptDataWrapperLines(stripInlineInternalRuntimeContextBlocks(stripped));
+    for (const pattern of INTERNAL_RUNTIME_SCAFFOLDING_PATTERNS) {
+      stripped = stripped.replace(pattern, "");
+    }
+  }
+  stripped = stripInternalRuntimeContext(stripped, { preserveSurroundingWhitespace: true });
   if (hasAngleMarker) {
     // Global replacement resets lastIndex, including between nested payload fields.
     for (const pattern of INTERNAL_RUNTIME_MARKER_LINE_PATTERNS) {

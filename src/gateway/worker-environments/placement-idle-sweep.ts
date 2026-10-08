@@ -73,7 +73,7 @@ export function createWorkerPlacementIdleSweep(options: {
         }
         if (
           projection.workspaceRecoveryPendingSessionIds.has(placement.sessionId) ||
-          options.placements.getPlacementMove(placement.sessionId) ||
+          projection.moves.has(placement.sessionId) ||
           options.isPlacementOperationInFlight?.(placement.sessionId)
         ) {
           continue;
@@ -86,22 +86,32 @@ export function createWorkerPlacementIdleSweep(options: {
             agentId: placement.agentId,
           };
           const hasSessionWork = await getSessionWorkAdmissionCheck?.(request);
-          const beforeDrain = () => {
-            const current = options.placements.get(placement.sessionId);
+          const assertCurrent = () => {
             if (
               options.getConfig().cloudWorkers?.profiles?.[environment.profileId]?.suspendAfter !==
                 suspendAfter ||
-              hasSessionWork?.() ||
-              current?.state !== "active" ||
-              current.generation !== placement.generation ||
-              current.environmentId !== placement.environmentId ||
-              current.activeOwnerEpoch !== placement.activeOwnerEpoch ||
-              current.updatedAtMs !== placement.updatedAtMs ||
-              current.turnClaim
+              hasSessionWork?.()
             ) {
               throw new WorkerPlacementAutoSuspendBusyError();
             }
           };
+          const beforeDrain = Object.assign(
+            () => {
+              assertCurrent();
+              const current = options.placements.get(placement.sessionId);
+              if (
+                current?.state !== "active" ||
+                current.generation !== placement.generation ||
+                current.environmentId !== placement.environmentId ||
+                current.activeOwnerEpoch !== placement.activeOwnerEpoch ||
+                current.updatedAtMs !== placement.updatedAtMs ||
+                current.turnClaim
+              ) {
+                throw new WorkerPlacementAutoSuspendBusyError();
+              }
+            },
+            { assertCurrent },
+          );
           await options.dispatch.reclaim(request, undefined, beforeDrain);
           options.info(
             `auto-suspended ${placement.sessionKey} after ${suspendAfter} idle; wakes on next message`,

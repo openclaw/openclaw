@@ -11,12 +11,17 @@ export const GATEWAY_RESTART_WAIT_OUTCOMES = [
   "build-id-mismatch",
   "stale-pids",
   "stopped-free",
+  "service-definition-refused",
   "timeout",
   "still-starting",
   "generation-changed",
 ] as const;
 
 export type GatewayRestartWaitOutcome = (typeof GATEWAY_RESTART_WAIT_OUTCOMES)[number];
+
+export type GatewayRestartResult = GatewayRestartSnapshot & {
+  outcome: "ready" | "starting" | "failed";
+};
 
 export type UnavailablePluginHealthSummary = {
   id: string;
@@ -37,6 +42,7 @@ export type GatewayRestartSnapshot = {
   activatedPluginErrors?: PluginHealthErrorSummary[];
   unavailablePlugins?: UnavailablePluginHealthSummary[];
   channelProbeErrors?: Array<{ id: string; error: string }>;
+  channelProbeTimeouts?: Array<{ id: string; error: string }>;
   expectedVersion?: string;
   versionMismatch?: {
     expected: string;

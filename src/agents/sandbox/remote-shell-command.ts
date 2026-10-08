@@ -35,10 +35,7 @@ function assertValidExecRemoteCommand(command: string): void {
   const pendingHeredocs: PendingHeredoc[] = [];
 
   for (let index = 0; index < command.length; index += 1) {
-    const frame = frames.at(-1);
-    if (!frame) {
-      throw new Error("Malformed SSH/OpenShell exec command: parser state underflow.");
-    }
+    const frame = frames.at(-1)!;
     const char = command.charAt(index);
 
     if (frame.escaping) {
@@ -58,38 +55,46 @@ function assertValidExecRemoteCommand(command: string): void {
       continue;
     }
 
-    if (frame.quote === "double") {
-      if (char === '"') {
-        frame.quote = "plain";
-        continue;
-      }
-      if (char === "`") {
-        frames.push(createExecCommandFrame("backtick"));
-        continue;
-      }
-      if (char === "$" && command[index + 1] === "(" && command[index + 2] === "(") {
-        frames.push(createExecCommandFrame("arithmetic", 2));
-        index += 2;
-        continue;
-      }
-      if (char === "$" && command[index + 1] === "(") {
-        frames.push(createExecCommandFrame("command-substitution", 1));
-        index += 1;
-      }
+    if (frame.quote === "double" && char === '"') {
+      frame.quote = "plain";
       continue;
     }
 
-    if (frame.kind === "arithmetic") {
+    if (
+      frame.quote === "plain" &&
+      (frame.kind === "arithmetic" || frame.kind === "command-substitution")
+    ) {
       if (char === "(") {
         frame.parenDepth += 1;
-        continue;
-      }
-      if (char === ")") {
+      } else if (char === ")") {
         frame.parenDepth -= 1;
         if (frame.parenDepth === 0) {
           frames.pop();
         }
       }
+      if (frame.kind === "arithmetic" || char === "(" || char === ")") {
+        continue;
+      }
+    }
+
+    if (char === "`") {
+      if (frame.quote === "plain" && frame.kind === "backtick") {
+        frames.pop();
+      } else {
+        frames.push(createExecCommandFrame("backtick"));
+      }
+      continue;
+    }
+    if (char === "$" && command[index + 1] === "(") {
+      const arithmetic = command[index + 2] === "(";
+      const depth = arithmetic ? 2 : 1;
+      frames.push(
+        createExecCommandFrame(arithmetic ? "arithmetic" : "command-substitution", depth),
+      );
+      index += depth;
+      continue;
+    }
+    if (frame.quote === "double") {
       continue;
     }
 
@@ -108,30 +113,12 @@ function assertValidExecRemoteCommand(command: string): void {
       }
     }
 
-    if (frame.kind === "backtick" && char === "`") {
-      frames.pop();
-      continue;
-    }
     if (char === "'") {
       frame.quote = "single";
       continue;
     }
     if (char === '"') {
       frame.quote = "double";
-      continue;
-    }
-    if (char === "`") {
-      frames.push(createExecCommandFrame("backtick"));
-      continue;
-    }
-    if (char === "$" && command[index + 1] === "(" && command[index + 2] === "(") {
-      frames.push(createExecCommandFrame("arithmetic", 2));
-      index += 2;
-      continue;
-    }
-    if (char === "$" && command[index + 1] === "(") {
-      frames.push(createExecCommandFrame("command-substitution", 1));
-      index += 1;
       continue;
     }
     if (char === "#" && isShellCommentStart(command, index)) {
@@ -155,50 +142,28 @@ function assertValidExecRemoteCommand(command: string): void {
         );
       }
     }
-    if (frame.kind === "command-substitution") {
-      if (char === "(") {
-        frame.parenDepth += 1;
-        continue;
-      }
-      if (char === ")") {
-        frame.parenDepth -= 1;
-        if (frame.parenDepth === 0) {
-          frames.pop();
-        }
-      }
-    }
   }
 
-  const openFrame = frames.at(-1);
-  if (openFrame?.escaping) {
+  if (frames.at(-1)!.escaping) {
     throw new Error("Malformed SSH/OpenShell exec command: trailing backslash escape.");
   }
-  if (pendingHeredocs.length > 0) {
-    const pending = pendingHeredocs.at(0);
-    if (!pending) {
-      throw new Error("Malformed SSH/OpenShell exec command: parser state underflow.");
-    }
+  const pending = pendingHeredocs[0];
+  if (pending) {
     throw new Error(
       `Malformed SSH/OpenShell exec command: unterminated here-doc ${pending.delimiter}.`,
     );
   }
   for (const frame of frames.toReversed()) {
-    if (frame.quote === "single") {
-      throw new Error("Malformed SSH/OpenShell exec command: unclosed single quote.");
+    if (frame.quote !== "plain") {
+      throw new Error(`Malformed SSH/OpenShell exec command: unclosed ${frame.quote} quote.`);
     }
-    if (frame.quote === "double") {
-      throw new Error("Malformed SSH/OpenShell exec command: unclosed double quote.");
-    }
-    if (frame.kind === "backtick") {
-      throw new Error(
-        "Malformed SSH/OpenShell exec command: unterminated backtick command substitution.",
-      );
-    }
-    if (frame.kind === "command-substitution") {
-      throw new Error("Malformed SSH/OpenShell exec command: unterminated command substitution.");
-    }
-    if (frame.kind === "arithmetic") {
-      throw new Error("Malformed SSH/OpenShell exec command: unterminated arithmetic expansion.");
+    if (frame.kind !== "root") {
+      const label = {
+        backtick: "backtick command substitution",
+        "command-substitution": "command substitution",
+        arithmetic: "arithmetic expansion",
+      }[frame.kind];
+      throw new Error(`Malformed SSH/OpenShell exec command: unterminated ${label}.`);
     }
   }
 }
@@ -384,54 +349,35 @@ function readHeredocDelimiter(
   let delimiter = "";
   let quote: ExecCommandQuoteState = "plain";
   let escaping = false;
-  while (cursor < command.length) {
+  for (; cursor < command.length; cursor += 1) {
     const char = command[cursor];
     if (escaping) {
       delimiter += char;
       escaping = false;
-      cursor += 1;
       continue;
     }
-    if (quote === "single") {
-      if (char === "'") {
+    if (quote !== "plain") {
+      if (char === (quote === "single" ? "'" : '"')) {
         quote = "plain";
-      } else {
-        delimiter += char;
-      }
-      cursor += 1;
-      continue;
-    }
-    if (quote === "double") {
-      if (char === '"') {
-        quote = "plain";
-      } else if (char === "\\") {
+      } else if (quote === "double" && char === "\\") {
         escaping = true;
       } else {
         delimiter += char;
       }
-      cursor += 1;
       continue;
     }
     if (char === "\\") {
       escaping = true;
-      cursor += 1;
       continue;
     }
-    if (char === "'") {
-      quote = "single";
-      cursor += 1;
-      continue;
-    }
-    if (char === '"') {
-      quote = "double";
-      cursor += 1;
+    if (char === "'" || char === '"') {
+      quote = char === "'" ? "single" : "double";
       continue;
     }
     if (isHeredocDelimiterTerminator(char)) {
       break;
     }
     delimiter += char;
-    cursor += 1;
   }
   if (quote !== "plain" || escaping) {
     throw new Error("Malformed SSH/OpenShell exec command: unterminated here-doc delimiter.");

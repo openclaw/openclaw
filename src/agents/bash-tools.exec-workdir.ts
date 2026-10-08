@@ -18,21 +18,13 @@ export type ExecWorkdirResolution =
   | { kind: "node"; remoteCwd?: string }
   | { kind: "unavailable"; requestedCwd: string };
 
-type NormalizedWorkdirInput =
-  | { kind: "omitted" }
-  | { kind: "blank"; raw: string }
-  | { kind: "specified"; value: string };
-
 type SandboxWorkdir = {
   hostCwd: string;
   containerCwd: string;
   scriptPreflightCwd: string | null;
 };
 
-type BackendHostWorkdirCandidate = {
-  hostPath: string;
-  hostRoot: string;
-  containerRoot: string;
+type BackendHostWorkdirCandidate = ContainerHostWorkdirMapping & {
   failIfInvalid: boolean;
 };
 
@@ -46,14 +38,6 @@ type ExistingHostPathResult =
   | { kind: "available"; workdir: SandboxWorkdir }
   | { kind: "missing"; relative: string }
   | { kind: "invalid" };
-
-function normalizeExplicitWorkdirInput(workdir: string | undefined): NormalizedWorkdirInput {
-  if (workdir === undefined || workdir === "") {
-    return { kind: "omitted" };
-  }
-  const value = normalizeOptionalString(workdir);
-  return value ? { kind: "specified", value } : { kind: "blank", raw: workdir };
-}
 
 function unavailable(requestedCwd: string): ExecWorkdirResolution {
   return { kind: "unavailable", requestedCwd };
@@ -164,19 +148,13 @@ function isContainerWorkdirInsideRoot(params: { root: string; workdir: string })
 }
 
 function resolveBackendWorkdirRoots(sandbox: BashSandboxConfig): string[] {
-  const roots: string[] = [];
-  const addRoot = (root: string | undefined) => {
-    const normalized = normalizeContainerPath(root ?? "");
-    if (normalized === "." || !path.posix.isAbsolute(normalized) || roots.includes(normalized)) {
-      return;
-    }
-    roots.push(normalized);
-  };
-  addRoot(sandbox.containerWorkdir);
-  for (const root of sandbox.workdirRoots ?? []) {
-    addRoot(root);
-  }
-  return roots;
+  return [
+    ...new Set(
+      [sandbox.containerWorkdir, ...(sandbox.workdirRoots ?? [])]
+        .map((root) => normalizeContainerPath(root ?? ""))
+        .filter((root) => path.posix.isAbsolute(root)),
+    ),
+  ];
 }
 
 function resolveBackendContainerWorkdir(params: {
@@ -380,16 +358,13 @@ export async function resolveExecWorkdir(params: {
   nodeCwd?: string;
   sandbox?: BashSandboxConfig;
 }): Promise<ExecWorkdirResolution> {
-  const explicitWorkdir = normalizeExplicitWorkdirInput(params.workdir);
-  if (explicitWorkdir.kind === "blank") {
-    return unavailable(explicitWorkdir.raw);
+  const explicitWorkdir = normalizeOptionalString(params.workdir);
+  if (params.workdir !== undefined && params.workdir !== "" && !explicitWorkdir) {
+    return unavailable(params.workdir);
   }
 
   if (params.host === "node") {
-    const remoteCwd =
-      explicitWorkdir.kind === "specified"
-        ? explicitWorkdir.value
-        : normalizeOptionalString(params.nodeCwd);
+    const remoteCwd = explicitWorkdir ?? normalizeOptionalString(params.nodeCwd);
     return remoteCwd ? { kind: "node", remoteCwd } : { kind: "node" };
   }
 
@@ -399,21 +374,17 @@ export async function resolveExecWorkdir(params: {
     if (!sandbox) {
       throw new Error("exec internal error: sandbox workdir resolution requires sandbox config");
     }
-    const requestedCwd =
-      explicitWorkdir.kind === "specified"
-        ? explicitWorkdir.value
-        : (defaultCwd ?? sandbox.containerWorkdir);
+    const requestedCwd = explicitWorkdir ?? defaultCwd ?? sandbox.containerWorkdir;
     const resolved = await resolveSandboxWorkdir({ workdir: requestedCwd, sandbox });
     return resolved ? { kind: "sandbox", ...resolved } : unavailable(requestedCwd);
   }
 
-  const requestedCwd =
-    explicitWorkdir.kind === "specified" ? explicitWorkdir.value : (defaultCwd ?? safeCurrentCwd());
+  const requestedCwd = explicitWorkdir ?? defaultCwd ?? safeCurrentCwd();
   if (!requestedCwd) {
     return unavailable("current working directory");
   }
   let hostPath = requestedCwd;
-  if (explicitWorkdir.kind === "specified" && defaultCwd && !path.isAbsolute(requestedCwd)) {
+  if (explicitWorkdir && defaultCwd && !path.isAbsolute(requestedCwd)) {
     const baseCwd = resolveExistingHostWorkdir(defaultCwd);
     if (!baseCwd) {
       return unavailable(defaultCwd);

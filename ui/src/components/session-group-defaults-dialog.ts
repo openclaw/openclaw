@@ -8,8 +8,8 @@ import type {
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { pathDisplayName } from "../lib/path-display.ts";
 import { renderSessionMenuItem } from "../pages/new-session/cloud-target.ts";
-import { folderDisplayName } from "../pages/new-session/path.ts";
 import { PlaceBrowserState } from "../pages/new-session/place-browser-state.ts";
 import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
 import "../styles/new-session.css";
@@ -158,13 +158,13 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
 
     const showBrowser = () => {
       browserVisible = true;
-      void browser.navigate(cwd || undefined);
+      void browser.navigate(cwd || undefined, "initial");
     };
 
     function paint() {
       const trimmedCwd = cwd.trim();
       const folderLabel = trimmedCwd
-        ? folderDisplayName(trimmedCwd)
+        ? pathDisplayName(trimmedCwd)
         : t("sessionsView.groupDefaultsCwdPlaceholder");
       const environmentState =
         repositoryStatus === "checking"

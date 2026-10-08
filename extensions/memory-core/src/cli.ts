@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   formatDocsLink,
   formatHelpExamples,
@@ -27,8 +26,6 @@ import {
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
 } from "./short-term-promotion-types.js";
-
-const loadMemoryCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
 
 const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 const DEFAULT_SESSION_BACKFILL_LIMIT_DAYS = 92;
@@ -78,7 +75,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
             "openclaw memory status --fix",
             "Repair stale recall locks and normalize promotion metadata.",
           ],
-          ["openclaw memory status --deep", "Probe embedding provider readiness."],
+          ["openclaw memory status --deep", "Check embedding provider readiness."],
           ["openclaw memory index --force", "Force a full reindex."],
           ['openclaw memory search "meeting notes"', "Quick search using positional query."],
           [
@@ -126,12 +123,12 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .description("Show memory search index status")
     .option("--agent <id>", "Agent id (default: all configured agents)")
     .option("--json", "Print JSON")
-    .option("--deep", "Probe embedding provider availability")
+    .option("--deep", "Check embedding provider availability")
     .option("--index", "Reindex if dirty (implies --deep)")
     .option("--fix", "Repair stale recall locks and normalize promotion metadata")
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions & { force?: boolean }) => {
-      const runtime = await loadMemoryCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMemoryStatus(opts, hostOptions);
     });
 
@@ -142,7 +139,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--force", "Force full reindex", false)
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
-      const runtime = await loadMemoryCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMemoryIndex(opts, hostOptions);
     });
 
@@ -152,7 +149,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--agent <id>", "Agent id (default: all configured agents)")
     .option("--yes", "Skip confirmation", false)
     .action(async (opts: MemoryResetCommandOptions) => {
-      const runtime = await loadMemoryCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMemoryReset(opts);
     });
 
@@ -178,7 +175,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       if (!query) {
         throw new Error("Missing search query. Provide a positional query or use --query <text>.");
       }
-      const runtime = await loadMemoryCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMemorySearch(query, opts, hostOptions);
     });
 
@@ -213,7 +210,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
           "Memory forget requires --session <id-or-key>, --hook-source <source>, or --participant <actor-id>.",
         );
       }
-      const runtime = await loadMemoryCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMemoryForget(opts);
     });
 
@@ -241,7 +238,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--include-promoted", "Include already promoted candidates", false)
     .option("--json", "Print JSON")
     .action(async (opts: MemoryPromoteCommandOptions) => {
-      const runtime = await loadMemoryCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMemoryPromote(opts, hostOptions);
     });
 
@@ -257,7 +254,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       if (!selector) {
         throw new Error("Memory promote-explain requires a non-empty selector.");
       }
-      const runtime = await loadMemoryCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMemoryPromoteExplain(selector, opts, hostOptions);
     });
 
@@ -270,7 +267,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--include-promoted", "Include already promoted deep candidates", false)
     .option("--json", "Print JSON")
     .action(async (opts: MemoryRemHarnessOptions) => {
-      const runtime = await loadMemoryCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMemoryRemHarness(opts, hostOptions);
     });
 
@@ -292,7 +289,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     )
     .option("--json", "Print JSON")
     .action(async (opts: MemoryRemBackfillOptions) => {
-      const runtime = await loadMemoryCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMemoryRemBackfill(opts, hostOptions);
     });
 
@@ -321,7 +318,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     )
     .option("--json", "Print JSON")
     .action(async (opts: MemorySessionBackfillOptions) => {
-      const runtime = await loadMemoryCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMemorySessionBackfill(opts, hostOptions);
     });
 

@@ -2,20 +2,11 @@
 import { pathToFileURL } from "node:url";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { CliArgumentError } from "./lib/error-format.mts";
 import { parseStrictIntegerOption } from "./lib/strict-integer-option.ts";
-
-type CliOptions = {
-  help: boolean;
-  prompt: string;
-  runs: number;
-};
 
 const DEFAULT_PROMPT = "Reply with a single word: ok. No punctuation or extra text.";
 const DEFAULT_RUNS = 10;
-
-class CliArgumentError extends Error {
-  override name = "CliArgumentError";
-}
 
 function readValue(argv: string[], index: number, flag: string): string {
   const value = argv[index + 1]?.trim() ?? "";
@@ -25,7 +16,7 @@ function readValue(argv: string[], index: number, flag: string): string {
   return value;
 }
 
-function parseArgs(argv = process.argv.slice(2)): CliOptions {
+function parseArgs(argv = process.argv.slice(2)) {
   let help = false;
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 1) {

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  createDefaultWorkboardSessionsBoardSpec,
   normalizeWorkboardSessionsBoardSpec,
   patchWorkboardSessionsBoardSpec,
   type WorkboardSessionPlacement,
@@ -19,7 +20,7 @@ import type {
 } from "./persistence-types.js";
 
 type SessionsBoardDatabase = {
-  workboard_boards: { id: string; sessions_spec: string | null; updated_at: number };
+  workboard_boards: { id: string; kind: string; sessions_spec: string | null; updated_at: number };
   workboard_session_placements: {
     board_id: string;
     session_key: string;
@@ -30,6 +31,18 @@ type SessionsBoardDatabase = {
     updated_at: number;
   };
 };
+
+// Match the previous defaults as persisted by contract normalization, including field/value order.
+const PREVIOUS_DEFAULT_RULES = new Map(
+  Object.entries({
+    "needs-input": { health: ["waiting-on-user"] },
+    working: { health: ["on-track", "grinding", "wrapping-up"], run: ["active"] },
+    stuck: { health: ["stuck", "failed"] },
+    "in-review": { pullRequest: ["open", "draft"] },
+    merged: { pullRequest: ["merged"] },
+    done: { health: ["done"] },
+  }).map(([id, match]) => [id, JSON.stringify(match)]),
+);
 
 export class WorkboardSqliteSessionsBoardStore {
   constructor(
@@ -80,9 +93,52 @@ export class WorkboardSqliteSessionsBoardStore {
     }));
   }
 
-  writePlacements(
+  repairPlacements(): { placements: number; boards: number } {
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const query = getNodeSqliteKysely<SessionsBoardDatabase>(this.db);
+      const placements = Number(
+        executeSqliteQuerySync(
+          this.db,
+          query.deleteFrom("workboard_session_placements").where("source", "!=", "operator"),
+        ).numAffectedRows ?? 0n,
+      );
+      const defaults = createDefaultWorkboardSessionsBoardSpec().columns;
+      let boards = 0;
+      for (const { id } of executeSqliteQuerySync(
+        this.db,
+        query.selectFrom("workboard_boards").select("id").where("kind", "=", "sessions"),
+      ).rows) {
+        const board = this.get(id);
+        if (
+          board.sessions.columns.some((column) => {
+            const previous = PREVIOUS_DEFAULT_RULES.get(column.id);
+            return previous === undefined || JSON.stringify(column.match) !== previous;
+          })
+        ) {
+          continue;
+        }
+        const columns = board.sessions.columns.map((column) => ({
+          ...column,
+          match: defaults.find((entry) => entry.id === column.id)?.match,
+        }));
+        if (
+          columns.map((column) => column.id).join(",") ===
+          [...PREVIOUS_DEFAULT_RULES.keys()].join(",")
+        ) {
+          columns.splice(1, 0, ...columns.splice(2, 1));
+        }
+        if (JSON.stringify(columns) !== JSON.stringify(board.sessions.columns)) {
+          this.update(id, { columns });
+          boards += 1;
+        }
+      }
+      return { placements, boards };
+    });
+  }
+
+  writePlacement(
     boardId: string,
-    placements: WorkboardSessionPlacementWrite[],
+    placement: WorkboardSessionPlacementWrite,
     expectedSpec: WorkboardSessionsBoardSpec,
   ): boolean {
     const expected = JSON.stringify(normalizeWorkboardSessionsBoardSpec(expectedSpec));
@@ -91,69 +147,53 @@ export class WorkboardSqliteSessionsBoardStore {
       if (JSON.stringify(board.sessions) !== expected) {
         return false;
       }
+      if (!board.sessions.columns.some((column) => column.id === placement.columnId)) {
+        throw new Error(`Unknown sessions board column: ${placement.columnId}`);
+      }
+      if (
+        !placement.sessionKey ||
+        placement.source !== "operator" ||
+        typeof placement.reason !== "string" ||
+        !Number.isSafeInteger(placement.updatedAt) ||
+        placement.updatedAt < 0
+      ) {
+        throw new Error("Invalid session pin.");
+      }
       const query = getNodeSqliteKysely<SessionsBoardDatabase>(this.db);
-      const columns = new Set(board.sessions.columns.map((column) => column.id));
-      const keys = new Set<string>();
-      const revisions = new Map<string, number>();
-      for (const placement of placements) {
-        if (!columns.has(placement.columnId)) {
-          throw new Error(`Unknown sessions board column: ${placement.columnId}`);
-        }
-        if (!placement.sessionKey || keys.has(placement.sessionKey)) {
-          throw new Error("Session placement keys must be non-empty and unique.");
-        }
-        keys.add(placement.sessionKey);
-        if (
-          !["state", "model", "operator"].includes(placement.source) ||
-          typeof placement.reason !== "string" ||
-          !placement.factsHash ||
-          !Number.isSafeInteger(placement.updatedAt) ||
-          placement.updatedAt < 0
-        ) {
-          throw new Error("Invalid session placement.");
-        }
-        const current = executeSqliteQueryTakeFirstSync(
-          this.db,
-          query
-            .selectFrom("workboard_session_placements")
-            .select("updated_at")
-            .where("board_id", "=", boardId)
-            .where("session_key", "=", placement.sessionKey),
-        );
-        if (current?.updated_at !== placement.expectedUpdatedAt) {
-          return false;
-        }
-        revisions.set(
-          placement.sessionKey,
-          Math.max(placement.updatedAt, (current?.updated_at ?? -1) + 1),
-        );
+      const current = executeSqliteQueryTakeFirstSync(
+        this.db,
+        query
+          .selectFrom("workboard_session_placements")
+          .select("updated_at")
+          .where("board_id", "=", boardId)
+          .where("session_key", "=", placement.sessionKey),
+      );
+      if (current?.updated_at !== placement.expectedUpdatedAt) {
+        return false;
       }
-      // Compare every row before writing any, so a late model batch cannot undo an operator move.
-      for (const placement of placements) {
-        executeSqliteQuerySync(
-          this.db,
-          query
-            .insertInto("workboard_session_placements")
-            .values({
-              board_id: boardId,
-              session_key: placement.sessionKey,
-              column_id: placement.columnId,
-              source: placement.source,
-              reason: placement.reason,
-              facts_hash: placement.factsHash,
-              updated_at: revisions.get(placement.sessionKey) ?? placement.updatedAt,
-            })
-            .onConflict((conflict) =>
-              conflict.columns(["board_id", "session_key"]).doUpdateSet((eb) => ({
-                column_id: eb.ref("excluded.column_id"),
-                source: eb.ref("excluded.source"),
-                reason: eb.ref("excluded.reason"),
-                facts_hash: eb.ref("excluded.facts_hash"),
-                updated_at: eb.ref("excluded.updated_at"),
-              })),
-            ),
-        );
-      }
+      executeSqliteQuerySync(
+        this.db,
+        query
+          .insertInto("workboard_session_placements")
+          .values({
+            board_id: boardId,
+            session_key: placement.sessionKey,
+            column_id: placement.columnId,
+            source: "operator",
+            reason: placement.reason,
+            facts_hash: "",
+            updated_at: Math.max(placement.updatedAt, (current?.updated_at ?? -1) + 1),
+          })
+          .onConflict((conflict) =>
+            conflict.columns(["board_id", "session_key"]).doUpdateSet((eb) => ({
+              column_id: eb.ref("excluded.column_id"),
+              source: eb.ref("excluded.source"),
+              reason: eb.ref("excluded.reason"),
+              facts_hash: eb.ref("excluded.facts_hash"),
+              updated_at: eb.ref("excluded.updated_at"),
+            })),
+          ),
+      );
       return true;
     });
   }

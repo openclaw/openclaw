@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
@@ -442,8 +442,8 @@ registerGatewayUpdateHistoryTests(() => port, readonlyPreparation);
 describe("gateway update.run", () => {
   test("persists the accepted handoff before parking and restarting its foreground owner", async () => {
     await withoutSupervisorHints(async () => {
-      const [installSurface, gatewayOwner, handoff, restart] = await Promise.all([
-        import("../infra/update-runner-install-surface.js"),
+      const [installStatus, gatewayOwner, handoff, restart] = await Promise.all([
+        import("../infra/update-install-status.js"),
         import("../infra/gateway-owner-lease.js"),
         import("../infra/update-managed-service-handoff.js"),
         import("../infra/restart.js"),
@@ -454,12 +454,13 @@ describe("gateway update.run", () => {
       }
       const root = updateDirs.make("openclaw-update-role-");
       const entrypoint = path.join(root, "dist", "index.js");
-      const surface = vi.spyOn(installSurface, "resolveUpdateInstallSurface").mockResolvedValue({
-        kind: "git",
-        mode: "git",
-        root,
-        packageRoot: root,
-      });
+      const installation = vi
+        .spyOn(installStatus, "resolveStartupInstallStatus")
+        .mockResolvedValue({
+          root,
+          status: { root, installKind: "git", packageManager: "pnpm" },
+          installReceipt: null,
+        });
       // The shared server starts below the CLI run loop that publishes its owner.
       const readOwner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
         owner: "role-update-owner",
@@ -562,7 +563,7 @@ describe("gateway update.run", () => {
         transfer.mockRestore();
         start.mockRestore();
         readOwner.mockRestore();
-        surface.mockRestore();
+        installation.mockRestore();
       }
     });
   });
@@ -667,6 +668,7 @@ describe("gateway node command allowlist", () => {
   });
 
   test("exposes and invokes live commands only after pending node pairing is approved", async () => {
+    await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveLocal: false } } } });
     const invokeCapture = createInvokeCapture();
     const fixture = nodeFixture("node-approve-live-commands", {
       commands: ["canvas.snapshot", "system.run"],
@@ -691,6 +693,7 @@ describe("gateway node command allowlist", () => {
   });
 
   test("rechecks current allowlist before exposing approved live commands", async () => {
+    await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveLocal: false } } } });
     let originalConfig: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
     const reconcileRuntimePolicy = reloadFixture.reconcileRuntimePolicy;
     if (!reconcileRuntimePolicy) {
@@ -721,6 +724,7 @@ describe("gateway node command allowlist", () => {
   });
 
   test("records only allowlisted commands in pending node pairing requests", async () => {
+    await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveLocal: false } } } });
     const fixture = nodeFixture("node-pending-allowlisted-only", {
       commands: ["system.run", "canvas.snapshot"],
       platform: "İOS",

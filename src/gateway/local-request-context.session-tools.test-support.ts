@@ -21,6 +21,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
 import type {
   PersistedUserTurnMessage,
@@ -90,8 +91,13 @@ export function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<vo
     const resources = new LegacyPluginSdkResourceHost();
     try {
       await resources.run(() =>
-        withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
-          run(cfg),
+        withLocalGatewayRequestScope(
+          { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
+          async () => {
+            // Fixture startup must finish before a tool's request deadline begins.
+            await getPluginRuntimeGatewayRequestScope()?.context?.ensureSessionRowProjection?.();
+            return run(cfg);
+          },
         ),
       );
     } finally {

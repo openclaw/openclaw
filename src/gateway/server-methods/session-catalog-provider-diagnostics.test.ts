@@ -51,8 +51,11 @@ afterEach(() => {
 });
 
 describe("session catalog provider diagnostics", () => {
-  it("maps a provider hash once at debug level without catalog content", async () => {
-    const catalog = provider("codex", async () => []);
+  it("maps fast provider calls once at debug level without catalog content", async () => {
+    const catalog = provider("codex", async () => {
+      clock += 999;
+      return [];
+    });
     await listSessionCatalogProvider(catalog, {});
     await listSessionCatalogProvider(catalog, {});
     expect(catalogLog.debug).toHaveBeenCalledExactlyOnceWith("session catalog provider identity", {
@@ -230,10 +233,10 @@ describe("session catalog provider diagnostics", () => {
     },
   );
 
-  it.each(["disabled", "sink-disabled", "disabled-during-call", "enabled-during-call", "fast"])(
+  it.each(["sink-disabled", "disabled-during-call", "enabled-during-call"])(
     "leaves diagnostics silent for %s calls",
     async (mode) => {
-      if (mode === "disabled" || mode === "enabled-during-call") {
+      if (mode === "enabled-during-call") {
         setDiagnosticsEnabledForProcess(false);
       }
       if (mode === "sink-disabled") {
@@ -241,7 +244,7 @@ describe("session catalog provider diagnostics", () => {
       }
       const hosts: SessionCatalogHost[] = [];
       const list = async () => {
-        clock = mode === "fast" ? 999 : 1_500;
+        clock = 1_500;
         if (mode === "disabled-during-call" || mode === "enabled-during-call") {
           setDiagnosticsEnabledForProcess(mode === "enabled-during-call");
         }

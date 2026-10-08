@@ -6,8 +6,8 @@ import {
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
+import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
-import * as subagentStore from "../../agents/subagents/registry/subagent-registry.store.test-support.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -156,7 +156,7 @@ describe("exec approval signed agent runtime", () => {
           ],
           ["active", { activeOwnerEpoch: 3 }],
         ] as const) {
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId: source.sessionId,
             from: placement.state,
             to,
@@ -267,7 +267,7 @@ describe("exec approval signed agent runtime", () => {
           completion: { required: false },
           delivery: { status: "not_required" },
         });
-        subagentStore.saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+        saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: parent },
           {

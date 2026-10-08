@@ -318,7 +318,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
             canMutate: this.canMutate,
             canGrant: this.canGrant,
           },
-          nothing,
           this.active,
         );
       }

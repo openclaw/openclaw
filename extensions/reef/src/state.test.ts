@@ -813,10 +813,25 @@ describe("Reef SQLite state", () => {
       deliveredMaxEntries: 1,
     });
 
-    await expect(stores.replay.claim("alice", "first", "a".repeat(64))).resolves.toBe("new");
-    await stores.replay.consume("alice", "first");
+    await expect(stores.replay.claim("alice", receiptId, "a".repeat(64))).resolves.toBe("new");
+    await stores.replay.complete(
+      "alice",
+      receiptId,
+      signReceipt(
+        {
+          id: receiptId,
+          bodyHash: "a".repeat(64),
+          auditHead: "c".repeat(64),
+          status: "accepted",
+        },
+        keys.signing.secretKey,
+      ),
+      { text: "first" },
+    );
     await expect(stores.replay.claim("alice", "second", "b".repeat(64))).rejects.toThrow();
-    await expect(stores.replay.claim("alice", "first", "a".repeat(64))).resolves.toBe("duplicate");
+    await expect(stores.replay.claim("alice", receiptId, "a".repeat(64))).resolves.toBe(
+      "duplicate",
+    );
 
     await stores.delivered.confirm("first");
     await expect(stores.delivered.confirm("second")).rejects.toThrow();

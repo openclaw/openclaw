@@ -225,9 +225,7 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
       say(`Snapshot hint: ${this.options.snapshotHint}`);
       say(`Resolved snapshot: ${this.snapshot.name} [${this.snapshot.state}]`);
       say(`Latest npm version: ${this.latestVersion}`);
-      say(
-        `Current head: ${run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim()}`,
-      );
+      say(`Current head: ${run("git", ["rev-parse", "--short", "HEAD"]).stdout.trim()}`);
       say(
         `Discord smoke: ${this.discordEnabled() ? `guild=${this.options.discordGuildId} channel=${this.options.discordChannelId}` : "disabled"}`,
       );
@@ -254,17 +252,13 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
             this.artifact.version || (await expectedPackageTargetVersion(this.artifact));
         }
       } else if (this.targetInstallsDirectly()) {
-        this.targetExpectVersion = run(
-          "npm",
-          [
-            "view",
-            this.options.targetPackageSpec || "",
-            "version",
-            "--userconfig",
-            path.join(this.tgzDir, "npmrc"),
-          ],
-          { quiet: true },
-        ).stdout.trim();
+        this.targetExpectVersion = run("npm", [
+          "view",
+          this.options.targetPackageSpec || "",
+          "version",
+          "--userconfig",
+          path.join(this.tgzDir, "npmrc"),
+        ]).stdout.trim();
       }
 
       await this.runLanesAndFinish();
@@ -362,26 +356,7 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
       }),
     );
     await this.phases.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
-    await this.phases.phase("fresh.gateway-start", 180, () => this.startManualGatewayIfNeeded());
-    await this.phases.phase("fresh.gateway-status", 180, () => this.verifyGateway());
-    this.status.freshGateway = "pass";
-    await this.phases.phase("fresh.dashboard-load", 180, () => this.verifyDashboardLoad());
-    this.status.freshDashboard = "pass";
-    await this.phases.phase("fresh.first-agent-turn", this.agentTimeoutSeconds, () =>
-      this.verifyTurn(),
-    );
-    this.status.freshAgent = "pass";
-    if (this.discordEnabled()) {
-      this.status.freshDiscord = "fail";
-      await this.phases.phase("fresh.discord-config", 600, () => this.discord?.configure());
-      await this.phases.phase("fresh.discord-gateway-ready", 180, () =>
-        this.ensureDiscordGatewayReady(),
-      );
-      await this.phases.phase("fresh.discord-roundtrip", 180, () =>
-        this.runDiscordRoundtrip("fresh"),
-      );
-      this.status.freshDiscord = "pass";
-    }
+    await this.runGatewaySmoke("fresh");
   }
 
   protected async runUpgradeLane(): Promise<void> {
@@ -422,38 +397,38 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
       );
     }
     await this.phases.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
-    await this.phases.phase("upgrade.gateway-start", 180, () => this.startManualGatewayIfNeeded());
-    await this.phases.phase("upgrade.gateway-status", 180, () => this.verifyGateway());
-    this.status.upgradeGateway = "pass";
-    await this.phases.phase("upgrade.dashboard-load", 180, () => this.verifyDashboardLoad());
-    this.status.upgradeDashboard = "pass";
-    await this.phases.phase("upgrade.first-agent-turn", this.agentTimeoutSeconds, () =>
+    await this.runGatewaySmoke("upgrade");
+  }
+
+  private async runGatewaySmoke(lane: "fresh" | "upgrade"): Promise<void> {
+    await this.phases.phase(`${lane}.gateway-start`, 180, () => this.startManualGatewayIfNeeded());
+    await this.phases.phase(`${lane}.gateway-status`, 180, () => this.verifyGateway());
+    this.status[`${lane}Gateway`] = "pass";
+    await this.phases.phase(`${lane}.dashboard-load`, 180, () => this.verifyDashboardLoad());
+    this.status[`${lane}Dashboard`] = "pass";
+    await this.phases.phase(`${lane}.first-agent-turn`, this.agentTimeoutSeconds, () =>
       this.verifyTurn(),
     );
-    this.status.upgradeAgent = "pass";
+    this.status[`${lane}Agent`] = "pass";
     if (this.discordEnabled()) {
-      this.status.upgradeDiscord = "fail";
-      await this.phases.phase("upgrade.discord-config", 600, () => this.discord?.configure());
-      await this.phases.phase("upgrade.discord-gateway-ready", 180, () =>
+      this.status[`${lane}Discord`] = "fail";
+      await this.phases.phase(`${lane}.discord-config`, 600, () => this.discord?.configure());
+      await this.phases.phase(`${lane}.discord-gateway-ready`, 180, () =>
         this.ensureDiscordGatewayReady(),
       );
-      await this.phases.phase("upgrade.discord-roundtrip", 180, () =>
-        this.runDiscordRoundtrip("upgrade"),
+      await this.phases.phase(`${lane}.discord-roundtrip`, 180, () =>
+        this.runDiscordRoundtrip(lane),
       );
-      this.status.upgradeDiscord = "pass";
+      this.status[`${lane}Discord`] = "pass";
     }
   }
 
-  private guestOpenClawEntryExec(
-    args: string[],
-    options: { check?: boolean; env?: Record<string, string> } = {},
-  ): string {
+  private guestOpenClawEntryExec(args: string[]): string {
     const argv = args.map((arg) => shellQuote(arg)).join(" ");
     return this.guest.sh(
       `set -e
 entry="$(npm root -g)/openclaw/openclaw.mjs"
 exec node "$entry" ${argv}`,
-      options.env,
     );
   }
 
@@ -461,18 +436,10 @@ exec node "$entry" ${argv}`,
     const prlctlDeadline = Date.now() + 45_000;
     const deadline = Date.now() + timeoutSeconds * 1000;
     while (Date.now() < prlctlDeadline && Date.now() < deadline) {
-      const result = run("prlctl", ["exec", this.options.vmName, "--current-user", "whoami"], {
-        check: false,
-        quiet: true,
-        timeoutMs: this.phases.remainingTimeoutMs(),
-      });
-      const user = result.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
-      if (result.status === 0 && /^[A-Za-z0-9._-]+$/.test(user)) {
-        this.guestUser = user;
-        this.guestTransport = "current-user";
+      if (this.tryCurrentUser()) {
         return;
       }
-      run("sleep", ["2"], { quiet: true });
+      run("sleep", ["2"]);
     }
     const fallback = this.resolveDesktopUser();
     if (fallback) {
@@ -484,20 +451,26 @@ exec node "$entry" ${argv}`,
       return;
     }
     while (Date.now() < deadline) {
-      const result = run("prlctl", ["exec", this.options.vmName, "--current-user", "whoami"], {
-        check: false,
-        quiet: true,
-        timeoutMs: this.phases.remainingTimeoutMs(),
-      });
-      const user = result.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
-      if (result.status === 0 && /^[A-Za-z0-9._-]+$/.test(user)) {
-        this.guestUser = user;
-        this.guestTransport = "current-user";
+      if (this.tryCurrentUser()) {
         return;
       }
-      run("sleep", ["2"], { quiet: true });
+      run("sleep", ["2"]);
     }
     throw new Error("guest current user did not become available");
+  }
+
+  private tryCurrentUser(): boolean {
+    const result = run("prlctl", ["exec", this.options.vmName, "--current-user", "whoami"], {
+      check: false,
+      timeoutMs: this.phases.remainingTimeoutMs(),
+    });
+    const user = result.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
+    if (result.status !== 0 || !/^[A-Za-z0-9._-]+$/.test(user)) {
+      return false;
+    }
+    this.guestUser = user;
+    this.guestTransport = "current-user";
+    return true;
   }
 
   private resolveDesktopUser(): string {
@@ -511,7 +484,6 @@ exec node "$entry" ${argv}`,
   private readDesktopUserOutput(args: string[]): string {
     return run("prlctl", ["exec", this.options.vmName, ...args], {
       check: false,
-      quiet: true,
       timeoutMs: this.phases.remainingTimeoutMs(30_000),
     }).stdout;
   }
@@ -530,7 +502,7 @@ exec node "$entry" ${argv}`,
       const result = run(
         "prlctl",
         ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id],
-        { check: false, quiet: true, timeoutMs: this.phases.remainingTimeoutMs(360_000) },
+        { check: false, timeoutMs: this.phases.remainingTimeoutMs(360_000) },
       );
       this.phases.append(result.stdout);
       this.phases.append(result.stderr);
@@ -541,27 +513,24 @@ exec node "$entry" ${argv}`,
       warn(`snapshot-switch attempt ${attempt} failed (rc=${result.status})`);
       const status = run("prlctl", ["status", this.options.vmName], {
         check: false,
-        quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(60_000),
       }).stdout;
       if (status.includes(" running") || status.includes(" suspended")) {
         run("prlctl", ["stop", this.options.vmName, "--kill"], {
           check: false,
-          quiet: true,
           timeoutMs: this.phases.remainingTimeoutMs(120_000),
         });
         waitForVmStatus(this.options.vmName, "stopped", 360, {
           probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000),
         });
       }
-      run("sleep", ["3"], { quiet: true });
+      run("sleep", ["3"]);
     }
     if (!restored) {
       throw new Error("snapshot restore failed");
     }
     const status = run("prlctl", ["status", this.options.vmName], {
       check: false,
-      quiet: true,
       timeoutMs: this.phases.remainingTimeoutMs(60_000),
     }).stdout;
     if (this.snapshot.state === "poweroff" || status.includes(" stopped")) {
@@ -570,13 +539,11 @@ exec node "$entry" ${argv}`,
       });
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
       run("prlctl", ["start", this.options.vmName], {
-        quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(120_000),
       });
     } else if (status.includes(" suspended")) {
       say(`Resume restored snapshot ${this.snapshot.name}`);
       run("prlctl", ["start", this.options.vmName], {
-        quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(120_000),
       });
     }
@@ -805,7 +772,7 @@ sleep 1`,
       }
       if (attempt < 8) {
         warn(`gateway-status retry ${attempt}`);
-        run("sleep", ["5"], { quiet: true });
+        run("sleep", ["5"]);
       }
     }
     throw new Error("gateway status did not become RPC-ready");
@@ -956,7 +923,7 @@ ${posixAgentTurnScript({
     const summary = {
       currentHead:
         this.artifact?.buildCommitShort ||
-        run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim(),
+        run("git", ["rev-parse", "--short", "HEAD"]).stdout.trim(),
       freshMain: {
         agent: this.status.freshAgent,
         dashboard: this.status.freshDashboard,

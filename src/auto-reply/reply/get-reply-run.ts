@@ -9,11 +9,7 @@ import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-conte
 
 async function executePreparedReplyContext(context: PreparedReplyRunContext) {
   const admission = await prepareReplyRunAdmission(context);
-  if (admission.kind === "reply") {
-    return admission.reply;
-  }
-
-  return executePreparedReplyRun(admission);
+  return admission.kind === "reply" ? admission.reply : executePreparedReplyRun(admission);
 }
 
 /** Runs a prepared reply turn after session, prompt, queue, and policy state are resolved. */

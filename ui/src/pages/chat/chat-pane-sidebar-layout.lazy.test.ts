@@ -2,6 +2,7 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
 const lazyMocks = vi.hoisted(() => ({
@@ -38,7 +39,6 @@ describe("chat pane lazy sidebar failures", () => {
         renderSidebarRegion({
           presentationId: "sidebar-layout-fixture",
           availableWidth: 1_400,
-          availableSlots: ["detail"],
           callbacks: {
             activatePanel: vi.fn(),
             togglePanelExpanded: vi.fn(),
@@ -50,8 +50,12 @@ describe("chat pane lazy sidebar failures", () => {
           },
           layout,
           narrow: false,
-          panelActions: {},
-          panelTemplates: { detail: html`<aside>Review</aside>` },
+          panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+            Object.assign(definition, {
+              available: definition.slot === "detail",
+              content: definition.slot === "detail" ? html`<aside>Review</aside>` : null,
+            }),
+          ),
           primary: html`<main data-primary>Primary chat</main>`,
           requestUpdate: renderCurrent,
         }),

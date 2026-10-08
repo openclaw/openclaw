@@ -85,13 +85,17 @@ it.each(["direct", "cell", "nested", "detached"] as const)(
       applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, shell] });
     }
     const { session } = await createTestSession({ customTools: nested ? h.tools : [shell] });
-    const prepared = prepareCatalogExecutor([], { activeSession: session });
+    const prepared = prepareCatalogExecutor({ activeSession: session });
     const finalRequested = createDeferredCore();
     let requests = 0;
     let finished = false;
     const command = {
       command: "verify-result",
-      ...(mode === "detached" ? { background: true } : mode === "cell" ? {} : { required: true }),
+      ...(mode === "detached"
+        ? { background: true }
+        : mode === "cell"
+          ? {}
+          : { awaitResults: true }),
     };
     streamMocks.streamSimple.mockImplementation((model, context) => {
       requests++;
@@ -107,7 +111,7 @@ it.each(["direct", "cell", "nested", "detached"] as const)(
                 arguments: nested
                   ? {
                       code: `return await exec(${JSON.stringify(command)});`,
-                      required: mode !== "nested",
+                      awaitResults: mode !== "nested",
                       title: "Collect required verification",
                     }
                   : command,

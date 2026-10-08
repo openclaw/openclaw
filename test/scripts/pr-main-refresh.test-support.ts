@@ -11,6 +11,7 @@ import {
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createPrivateHandoffStoreFixture } from "./pr-private-handoff.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
@@ -151,7 +152,8 @@ export function createMainRefreshFixture(
   } else {
     // Copy complete object stores (including sameTreeHead), never shared refs or
     // hardlinks. Create worktrees afterward so their absolute back-links stay local.
-    cpSync(template.canonical, canonical, copyOptions);
+    // The wrapper's process-group runner executes canonical scripts/pr directly.
+    copyTreeCloseOnExec(template.canonical, canonical);
   }
   git(canonical, "remote", "set-url", "origin", origin);
   git(canonical, "config", `url.${origin}.insteadOf`, "https://github.com/fixture/repo");
@@ -295,7 +297,8 @@ export function createMainRefreshFixture(
   writeFileSync(eventsFile, "");
   const prelude = `#!${process.execPath}
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, statSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 
 const controlFile = ${JSON.stringify(controlFile)};
 const eventsFile = ${JSON.stringify(eventsFile)};
@@ -429,6 +432,15 @@ exec ${shellQuote(realGit)} "$@"
     prelude +
       `
 event({ kind: 'gh', args });
+const inputPath = args.find(arg => arg.startsWith('--input='))?.slice('--input='.length)
+  ?? (args.includes('--input') ? args[args.indexOf('--input') + 1] : undefined);
+let inputPayload;
+if (args[0] === 'api' && inputPath !== undefined) {
+  if (inputPath === '-' || !isAbsolute(inputPath)) throw new Error('API payload must use an absolute file, not stdin');
+  if (!statSync(inputPath).isFile()) throw new Error('API payload file is unavailable');
+  if (readFileSync(0).length) throw new Error('API payload leaked to child stdin');
+  inputPayload = readFileSync(inputPath, 'utf8');
+}
 if (args[0] === 'browse') {
   console.log('https://github.com/fixture/repo');
   process.exit(0);
@@ -439,8 +451,11 @@ if (repositoryLocatorRequest) {
   console.log(JSON.stringify({ full_name: 'fixture/repo', html_url: 'https://github.com/fixture/repo' }));
   process.exit(0);
 }
+const repositoryAuthorityArgs = ['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'];
+const repositoryAuthorityRequests = [repositoryAuthorityArgs,
+  [...repositoryAuthorityArgs, '-H', 'X-GitHub-Api-Version: 2026-03-10']];
 if (args[0] === 'api' && args.includes('repos/fixture/repo') &&
-    JSON.stringify(args.filter(arg => arg !== '--include')) !== JSON.stringify(['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'])) {
+    !repositoryAuthorityRequests.some(expected => JSON.stringify(args.filter(arg => arg !== '--include')) === JSON.stringify(expected))) {
   throw new Error('Unexpected authoritative repository request');
 }
 let value;
@@ -455,8 +470,8 @@ if (args[0] === 'pr' && args[1] === 'view') {
   control.metadata.autoMergeRequest = { mergeMethod: 'SQUASH' };
   writeFileSync(controlFile, JSON.stringify(control));
   value = {};
-} else if (args[0] === 'api' && args.includes('graphql') && args.includes('--input')) {
-  const payload = JSON.parse(readFileSync(0, 'utf8'));
+} else if (args[0] === 'api' && args.includes('graphql') && inputPayload !== undefined) {
+  const payload = JSON.parse(inputPayload);
   const input = payload.variables.input;
   if (input.expectedHeadOid !== control.metadata.headRefOid || input.pullRequestId !== control.metadata.id ||
       input.mergeMethod !== 'SQUASH' || Object.hasOwn(input, 'commitHeadline')) {

@@ -9,6 +9,33 @@ read_when:
 Explicit SQLite maintenance runs offline, with the Gateway stopped. This page covers
 shared-state compaction and the targeted session SQLite modes.
 
+SQLite keeps pages freed by deletes available for reuse inside the database file.
+Older databases created with `auto_vacuum=NONE` cannot release those pages through
+OpenClaw's routine incremental reclamation. A plain `VACUUM` shrinks the file once
+but leaves that mode unchanged. Use the matching Doctor `compact` command below
+with the Gateway stopped: it also enables `auto_vacuum=INCREMENTAL`, so routine
+maintenance can reclaim pages from later deletes. Compaction preserves retained
+data; it does not change session or transcript retention settings.
+
+Normal updates now perform this conversion once for existing shared-state and
+agent databases after Doctor finishes schema repairs, while maintenance still
+owns the stopped Gateway. Databases already using `FULL` or `INCREMENTAL` are
+left alone. The conversion needs temporary disk space and can add maintenance
+time for a large database. Insufficient or unmeasurable free space, unsafe file
+aliases, and an active SQLite reader defer this optional cleanup with the
+matching manual command. Failed integrity checks or an unverified conversion
+keep the update failed rather than restarting against uncertain state.
+
+The automatic check conservatively measures possible SQLite temporary volumes.
+Low or unmeasurable space on an unused fallback volume can defer conversion too,
+because the runtime cannot reliably report SQLite's selected temporary directory.
+This deferral does not stop the normal update; use the reported offline Doctor
+command after checking the available space.
+
+After conversion, normal bounded incremental reclamation can return pages freed
+by later deletes. It does not repack partially filled pages, so explicit offline
+compaction remains useful after large cleanup operations.
+
 On Linux, a stopped Gateway service can still have child processes in its systemd
 cgroup. Doctor and update maintenance remain blocked until those processes exit.
 Inspect the service status and journal, and have the process owner stop the
@@ -102,6 +129,14 @@ migration sources. Hot transcript JSONL files are imported and archived after
 successful import; archive-tier JSONL files remain support artifacts, not
 runtime fallbacks.
 
+Older V2 migration receipts can record completed index moves without file identity.
+Doctor compares a surviving archive with the current `sessions.json`: different
+content imports as a new legacy index. If the archive is identical or missing,
+Doctor imports history while preserving current SQLite session metadata. It does
+not invent identity fields in the old receipt or delete its archive. The current
+index follows normal verification and archival after import. This repair runs in
+Doctor before runtime readiness, including during upgrades.
+
 When a plugin migration is deferred, the verified import receipt also captures
 unreferenced JSONL inputs. Completing the plugin migration archives those originals
 with the same identity and byte checks as indexed transcripts. A transcript's
@@ -115,6 +150,13 @@ Retries and read-only checks reuse the verified receipt, including transcripts
 discovered outside `sessions.json`. Doctor reports one pending-plugin warning
 for these retained inputs; they do not fail the completed core migration or
 require `doctor --session-sqlite recover`. Warning-only results exit successfully.
+After verified archival, Doctor retires the deferral receipt while keeping the
+archive manifest for recovery. Disabling or uninstalling the owning plugin also
+releases its pending obligation on the next import or repair. An enabled plugin
+that is temporarily unavailable remains pending. Later explicit imports can
+discover new legacy transcripts normally. While a receipt is still active, new
+files outside that receipt remain in place; Doctor names the receipt, plugin,
+and commands needed to finish the old migration and retry their import.
 An active legacy JSONL outside that receipt is an advisory awaiting verification.
 `doctor --fix` and `--session-sqlite recover` verify that its event identities and
 contents are present in the owning agent's SQLite transcript. A prefix or subset
@@ -423,10 +465,19 @@ restore fail closed so restore cannot silently replace or hide recoverable data.
 Reimporting an unchanged, manifest-recorded restored index preserves current SQLite
 session metadata while reconciling its transcript history. It does not reset newer
 labels, activity timestamps, or the current session pointer to the restored values.
-A changed restore receipt refuses import without replacing that state. Unreadable
-recovery history permits an import only when the destination has no session rows;
-Doctor verifies that condition and imports the target in one transaction. This can
-use a larger transaction than normal batched imports. A newly created index with a
+A changed restore receipt leaves that target's originals in place with a warning,
+without stopping unrelated Doctor or post-session plugin repairs. Unreadable
+recovery history no longer requires an empty SQLite destination: Doctor reconciles
+each session, preserves its current metadata and generation, verifies existing
+transcript content, and imports new history through the normal staged importer.
+Verified originals move to the recovery archive with recorded receipts. Conflicting
+or malformed history with a verified SQLite owner moves to that archive as protected
+input, with a target warning; it is not certified as imported or eligible for cleanup.
+Unverified ownership or recovery evidence leaves originals in place. Preserve the
+originals and receipts, compare the named events with a verified backup, and use
+`--session-sqlite restore` before correcting an archived source and retrying Doctor.
+These rules also apply during
+updates and keep the existing archive/restore path for rollback. A newly created index with a
 different file identity remains an ordinary import when recovery history is readable.
 Keep recovery manifests with their original files so Doctor can distinguish the two.
 Shared indexes retain a receipt for each agent's SQLite target; another owner's

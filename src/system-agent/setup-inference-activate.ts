@@ -30,7 +30,6 @@ import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
-  sameDefaultInferenceRoute,
 } from "./inference-route.js";
 import { stageCodexCandidate } from "./setup-inference-codex.js";
 import {
@@ -495,7 +494,7 @@ async function verifyAndActivateCandidate(
     const config = currentSnapshot.runtimeConfig ?? currentSnapshot.config;
     const sourceConfig = currentSnapshot.sourceConfig;
     if (
-      !sameDefaultInferenceRoute(await project(config, sourceConfig), baselineRoute) ||
+      !isDeepStrictEqual(await project(config, sourceConfig), baselineRoute) ||
       setupConfigPatchConflicts(source, sourceConfig, createMergePatch(source, sourceCandidate))
     ) {
       throw new SetupInferenceOwnerDriftError(
@@ -503,9 +502,7 @@ async function verifyAndActivateCandidate(
       );
     }
     const next = buildCandidate(config);
-    if (
-      !sameDefaultInferenceRoute(await project(next, buildCandidate(sourceConfig)), verifiedRoute)
-    ) {
+    if (!isDeepStrictEqual(await project(next, buildCandidate(sourceConfig)), verifiedRoute)) {
       throw new SetupInferenceOwnerDriftError(
         "The candidate route changed during verification. Retry setup before selecting it as the default.",
       );
@@ -538,9 +535,7 @@ async function verifyAndActivateCandidate(
       async () => {
         const latest = await readSnapshot();
         const current = latest.runtimeConfig ?? latest.config;
-        if (
-          !sameDefaultInferenceRoute(await project(current, latest.sourceConfig), verifiedRoute)
-        ) {
+        if (!isDeepStrictEqual(await project(current, latest.sourceConfig), verifiedRoute)) {
           throw new SetupInferenceOwnerDriftError(
             "The connection changed before credential activation. Test the saved sign-in again.",
           );

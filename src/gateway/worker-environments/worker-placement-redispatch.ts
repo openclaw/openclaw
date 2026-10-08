@@ -1,25 +1,20 @@
+import { getRuntimeConfig } from "../../config/config.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerDevicePlacementRequirementResolver } from "./placement-dispatch-startup.js";
-import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
-import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { matchesWorkerPlacementTarget } from "./placement-target.js";
+import type {
+  WorkerPlacementDispatchContract,
+  WorkerPlacementRedispatch,
+} from "./service-contract.js";
 import { canRedispatchFailedWorkerPlacement } from "./session-placement-lifecycle.js";
-
-type RedispatchableWorkerPlacement = Extract<
-  WorkerSessionPlacementRecord,
-  { state: "reclaimed" | "failed" }
->;
 
 export function createWorkerPlacementRedispatch(params: {
   placements: Pick<WorkerSessionPlacementStore, "readProjection">;
-  dispatch: WorkerPlacementDispatchService["dispatch"];
+  dispatch: WorkerPlacementDispatchContract["dispatch"];
   resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
-}) {
-  return async (
-    placement: RedispatchableWorkerPlacement,
-    { assertCurrent, signal }: { assertCurrent: () => void; signal?: AbortSignal },
-  ) => {
+}): WorkerPlacementRedispatch {
+  return async (placement, { assertCurrent, signal }) => {
     signal?.throwIfAborted();
     assertCurrent();
     const projection = await params.placements.readProjection([placement.sessionId], {
@@ -59,10 +54,12 @@ export function createWorkerPlacementRedispatch(params: {
       }
       devicePlacement = await params.resolveDevicePlacementRequirement(identity);
     }
+    const requiredProfile = getRuntimeConfig().cloudWorkers?.requiredProfile;
     return await params.dispatch(
       {
         ...identity,
         profileId,
+        ...(requiredProfile ? { requiredProfile } : {}),
         expectedPlacement: {
           state: placement.state,
           generation: placement.generation,

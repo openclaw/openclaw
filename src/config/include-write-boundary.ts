@@ -40,11 +40,13 @@ function collectInto(
     return;
   }
   for (const key of new Set([...Object.keys(base), ...Object.keys(next)])) {
-    if (!Object.hasOwn(base, key) || !Object.hasOwn(next, key)) {
-      output.push([...prefix, key]);
-      continue;
-    }
-    collectInto(base[key], next[key], [...prefix, key], output);
+    // An absent key and an undefined value serialize the same, so they compare equal.
+    collectInto(
+      Object.hasOwn(base, key) ? base[key] : undefined,
+      Object.hasOwn(next, key) ? next[key] : undefined,
+      [...prefix, key],
+      output,
+    );
   }
 }
 

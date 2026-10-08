@@ -26,6 +26,12 @@ runtime-local policy can use `createNodeLlmRuntime`; it preserves that host acro
 provider work without replacing the process default. `createLlmRuntime` continues
 to use the process-default host.
 
+Hosts that attach request state to async contexts should supply
+`runInDetachedAsyncContext` from a context-free root initialized before requests
+start. Retained HTTP continuation timers use it at creation so completed caller
+state can be collected while the response remains reusable for 90 minutes.
+The default host runs the callback directly, including in browsers.
+
 The explicit `@openclaw/ai/internal/anthropic`, `google-model-family`, `openai`,
 `openai-completions-compat`, `openai-responses-payload-policy`, `retry-after`, `runtime`, `shared`, and
 `tool-schema` subpaths exist for the OpenClaw application itself.

@@ -26,6 +26,8 @@ import type { AgentMessage } from "./runtime/index.js";
 // Keep small compactions synchronous; move only starvation-sized plans off-thread.
 const COMPACTION_PLANNING_WORKER_MIN_MESSAGES = 64;
 
+type PlanningParams<T> = T & { signal?: AbortSignal };
+
 function restoreIndexedMessages(source: AgentMessage[], indexes: number[]): AgentMessage[] {
   return indexes.map((index) => {
     const message = source.at(index);
@@ -83,11 +85,9 @@ async function runCompactionPlan<TInput extends CompactionPlanningWorkerInput, T
 }
 
 /** Builds summary chunks, offloading large histories to the planning worker. */
-export async function buildSummaryChunksWithWorker(params: {
-  messages: AgentMessage[];
-  maxChunkTokens: number;
-  signal?: AbortSignal;
-}): Promise<AgentMessage[][]> {
+export async function buildSummaryChunksWithWorker(
+  params: PlanningParams<Parameters<typeof buildSummaryChunks>[0]>,
+): Promise<AgentMessage[][]> {
   const { signal, ...planningInput } = params;
   return runCompactionPlan({
     input: { kind: "summaryChunks", ...planningInput },
@@ -99,11 +99,9 @@ export async function buildSummaryChunksWithWorker(params: {
 }
 
 /** Builds an oversized-message fallback plan, using the worker when worthwhile. */
-export async function buildOversizedFallbackPlanWithWorker(params: {
-  messages: AgentMessage[];
-  contextWindow: number;
-  signal?: AbortSignal;
-}): Promise<OversizedFallbackPlan> {
+export async function buildOversizedFallbackPlanWithWorker(
+  params: PlanningParams<Parameters<typeof buildOversizedFallbackPlan>[0]>,
+): Promise<OversizedFallbackPlan> {
   const { signal, ...planningInput } = params;
   return runCompactionPlan({
     input: { kind: "oversizedFallback", ...planningInput },
@@ -117,13 +115,9 @@ export async function buildOversizedFallbackPlanWithWorker(params: {
 }
 
 /** Builds a staged summarization split plan with worker fallback. */
-export async function buildStageSplitPlanWithWorker(params: {
-  messages: AgentMessage[];
-  maxChunkTokens: number;
-  parts?: number;
-  minMessagesForSplit?: number;
-  signal?: AbortSignal;
-}): Promise<StageSplitPlan> {
+export async function buildStageSplitPlanWithWorker(
+  params: PlanningParams<Parameters<typeof buildStageSplitPlan>[0]>,
+): Promise<StageSplitPlan> {
   const { signal, ...planningInput } = params;
   return runCompactionPlan({
     input: { kind: "stageSplit", ...planningInput },

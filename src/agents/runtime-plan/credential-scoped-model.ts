@@ -177,11 +177,7 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
   providerOwnsDynamicModelRefresh?: boolean;
   /** Optional generation-owned memo; omit to keep run-local caching only. */
   generationRouteModelMemo?: Map<string, Promise<Model>>;
-  resolveModel(request: {
-    config: OpenClawConfig;
-    authProfileId?: string;
-    authProfileMode?: ProviderModelRouteMaterializationAuthMode;
-  }): Promise<{ model?: Model | null; error?: string }>;
+  resolveModel: Parameters<typeof materializePreparedRuntimeModel<Model>>[0]["resolveModel"];
 }) {
   const materializedRouteModels = new WeakMap<AgentRuntimeAuthPlan, Promise<Model>>();
   const materializeUncached = async (

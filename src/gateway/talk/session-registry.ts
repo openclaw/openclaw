@@ -1,7 +1,3 @@
-/**
- * Process-local registry that lets Talk protocol methods resolve opaque
- * `sessionId` values to the concrete relay or managed-room backend.
- */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { createDeferredCore } from "../../shared/deferred.js";

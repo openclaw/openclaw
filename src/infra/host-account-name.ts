@@ -56,6 +56,5 @@ async function readHostAccountName(): Promise<string | null> {
 
 /** Best-effort human name for the gateway host account; never seeds a login name. */
 export function resolveHostAccountName(): Promise<string | null> {
-  cachedName ??= readHostAccountName().catch(() => null);
-  return cachedName;
+  return (cachedName ??= readHostAccountName().catch(() => null));
 }

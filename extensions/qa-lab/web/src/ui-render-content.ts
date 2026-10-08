@@ -57,34 +57,6 @@ function renderMessageAttachments(message: QaBusMessage): string {
   return `<div class="msg-attachments">${items}</div>`;
 }
 
-function deriveSelectedConversation(state: UiState): string | null {
-  const first = state.snapshot?.conversations[0];
-  return state.selectedConversationKey ?? (first ? conversationSelectionKey(first) : null);
-}
-
-function filteredMessages(state: UiState) {
-  const messages = state.snapshot?.messages ?? [];
-  const selectedConversationThreadIds = new Set(
-    (state.snapshot?.threads ?? [])
-      .filter((thread) => threadConversationSelectionKey(thread) === state.selectedConversationKey)
-      .map((thread) => thread.id),
-  );
-  return messages.filter((message) => {
-    if (
-      state.selectedConversationKey &&
-      messageConversationSelectionKey(message) !== state.selectedConversationKey
-    ) {
-      return false;
-    }
-    if (state.selectedThreadId) {
-      return message.threadId === state.selectedThreadId;
-    }
-    // External thread ids have no sidebar record, even when the conversation
-    // also owns navigable threads, so keep their messages in the root view.
-    return !message.threadId || !selectedConversationThreadIds.has(message.threadId);
-  });
-}
-
 function formatConversationLabel(
   conversation: QaBusSnapshotConversation,
   conversations: QaBusSnapshotConversation[],
@@ -118,13 +90,26 @@ export function renderChatView(state: UiState): string {
       !state.selectedConversationKey ||
       threadConversationSelectionKey(thread) === state.selectedConversationKey,
   );
-  const selectedConv = deriveSelectedConversation(state);
+  const selectedConv =
+    state.selectedConversationKey ??
+    (conversations[0] ? conversationSelectionKey(conversations[0]) : null);
   const selectedThread = state.selectedThreadId;
   const activeConversation = findConversationBySelectionKey(conversations, selectedConv);
-  const messages = filteredMessages({
-    ...state,
-    selectedConversationKey: selectedConv,
-    selectedThreadId: selectedThread,
+  const selectedConversationThreadIds = new Set(
+    (state.snapshot?.threads ?? [])
+      .filter((thread) => threadConversationSelectionKey(thread) === selectedConv)
+      .map((thread) => thread.id),
+  );
+  const messages = (state.snapshot?.messages ?? []).filter((message) => {
+    if (selectedConv && messageConversationSelectionKey(message) !== selectedConv) {
+      return false;
+    }
+    if (selectedThread) {
+      return message.threadId === selectedThread;
+    }
+    // External thread ids have no sidebar record, even when the conversation
+    // also owns navigable threads, so keep their messages in the root view.
+    return !message.threadId || !selectedConversationThreadIds.has(message.threadId);
   });
 
   return `

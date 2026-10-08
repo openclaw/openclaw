@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   WebPushDetailLevel,
@@ -62,14 +63,9 @@ function normalizeAgentIds(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  return [
-    ...new Set(
-      value
-        .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0 && entry.length <= 128),
-    ),
-  ].slice(0, 128);
+  return normalizeUniqueTrimmedStringList(value)
+    .filter((entry) => entry.length <= 128)
+    .slice(0, 128);
 }
 
 function normalizeQuietHours(value: unknown) {
@@ -105,23 +101,19 @@ function normalizeQuietHours(value: unknown) {
   };
 }
 
-function normalizeCategoryDefaults(value: unknown): WebPushNotificationPreferences["categories"] {
-  const source = isRecord(value) ? value : {};
-  const categories = { ...DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.categories };
-  for (const key of CATEGORY_KEYS) {
-    if (typeof source[key] === "boolean") {
-      categories[key] = source[key];
-    }
-  }
-  return categories;
-}
-
 export function normalizeWebPushNotificationPreferences(
   value: unknown,
 ): WebPushNotificationPreferences {
   const source = isRecord(value) ? value : {};
+  const categorySource = isRecord(source.categories) ? source.categories : {};
+  const categories = { ...DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.categories };
+  for (const key of CATEGORY_KEYS) {
+    if (typeof categorySource[key] === "boolean") {
+      categories[key] = categorySource[key];
+    }
+  }
   return {
-    categories: normalizeCategoryDefaults(source.categories),
+    categories,
     detailLevel:
       detailLevel(source.detailLevel) ?? DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.detailLevel,
     quietHours:

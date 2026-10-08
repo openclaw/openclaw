@@ -305,9 +305,19 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "configView.appearance.fonts.ui",
       "configView.appearance.fonts.chat",
+      "configView.appearance.fonts.terminal",
+      "configView.appearance.fonts.terminalDefault",
       "configView.appearance.fonts.themeDefault",
     ],
     aliases: "font fonts typeface",
+  },
+  appearanceTabIcon: {
+    routeId: "appearance",
+    labelKey: "configView.appearance.tabIcon.title",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.tabIcon}`,
+    searchKeys: ["configView.appearance.tabIcon.source", "configView.appearance.tabIcon.agent"],
+    aliases: "favicon browser tab icon agent avatar image",
   },
   appearanceTextSize: {
     routeId: "appearance",

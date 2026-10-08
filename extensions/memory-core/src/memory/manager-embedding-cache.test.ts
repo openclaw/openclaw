@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   collectMemoryCachedEmbeddings,
   loadMemoryEmbeddingCache,
+  pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
 
@@ -32,7 +33,6 @@ describe("memory embedding cache", () => {
     try {
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider: { id: "openai", model: "text-embedding-3-small" },
         providerKey: "provider-key",
         entries: () => [
@@ -57,7 +57,6 @@ describe("memory embedding cache", () => {
 
       const cached = loadMemoryEmbeddingCache({
         db,
-        enabled: true,
         providerIdentities: [
           {
             provider: "openai",
@@ -81,8 +80,8 @@ describe("memory embedding cache", () => {
     }
   });
 
-  it.each(["legacy JSON", "legacy import", "binary"] as const)(
-    "regenerates inconsistent declared dimensions from %s caches without losing row identity",
+  it.each(["legacy JSON", "retired import", "binary"] as const)(
+    "handles %s cache storage without losing row identity",
     (format) => {
       const db = new DatabaseSync(":memory:");
       const embedding = [1 + Number.EPSILON, 0.1];
@@ -96,7 +95,8 @@ describe("memory embedding cache", () => {
       ];
       const identity = { provider: "local", model: "fixture", providerKey: "canonical" };
       const alias = { ...identity, providerKey: "alias" };
-      const sourceTable = format === "legacy import" ? "embedding_cache" : "memory_embedding_cache";
+      const sourceTable =
+        format === "retired import" ? "embedding_cache" : "memory_embedding_cache";
       try {
         if (format !== "binary") {
           db.exec(`CREATE TABLE ${sourceTable} (
@@ -107,7 +107,7 @@ describe("memory embedding cache", () => {
         } else {
           ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: false });
         }
-        if (format === "legacy import") {
+        if (format === "retired import") {
           db.exec(`
             CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE files (
@@ -143,19 +143,43 @@ describe("memory embedding cache", () => {
             2,
           );
         }
-        const readIdentity = (table = "memory_embedding_cache", includeRowid = true) => {
-          const statement = db.prepare(`SELECT ${includeRowid ? "rowid," : ""}
+        const readIdentity = (table = "memory_embedding_cache") => {
+          const statement = db.prepare(`SELECT rowid,
             provider, model, provider_key, hash, dims, updated_at
             FROM ${table} ORDER BY provider, model, provider_key, hash`);
           statement.setReadBigInts(true);
           return statement.all();
         };
-        const preservesSourceRowid = format !== "legacy import";
-        const originalIdentity = readIdentity(sourceTable, preservesSourceRowid);
+        if (format === "retired import") {
+          const readLegacyRows = db.prepare("SELECT rowid, * FROM embedding_cache ORDER BY rowid");
+          readLegacyRows.setReadBigInts(true);
+          const originalRows = readLegacyRows.all();
+          const readMutationCounters = () => ({
+            schema: db.prepare("PRAGMA schema_version").get(),
+            rows: db.prepare("SELECT total_changes() AS count").get(),
+          });
+          const originalCounters = readMutationCounters();
+          expect(() =>
+            ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: false }),
+          ).toThrow(/retired memory index.*2026\.9\.7/iu);
+          expect(readMutationCounters()).toEqual(originalCounters);
+          expect(readLegacyRows.all()).toEqual(originalRows);
+          expect(
+            db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'memory_%'").all(),
+          ).toEqual([]);
+          expect(
+            db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name").all(),
+          ).toEqual([
+            { name: "chunks" },
+            { name: "embedding_cache" },
+            { name: "files" },
+            { name: "meta" },
+          ]);
+          return;
+        }
+        const originalIdentity = readIdentity(sourceTable);
         ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: false });
-        expect(readIdentity("memory_embedding_cache", preservesSourceRowid)).toEqual(
-          originalIdentity,
-        );
+        expect(readIdentity()).toEqual(originalIdentity);
         const readMigratedRows = db.prepare(
           "SELECT rowid, * FROM memory_embedding_cache ORDER BY rowid",
         );
@@ -167,7 +191,6 @@ describe("memory embedding cache", () => {
 
         const cached = loadMemoryEmbeddingCache({
           db,
-          enabled: true,
           providerIdentities: [identity, alias],
           hashes: cases.map((row) => row.hash),
         });
@@ -190,7 +213,6 @@ describe("memory embedding cache", () => {
         }
         upsertMemoryEmbeddingCache({
           db,
-          enabled: true,
           provider: { id: identity.provider, model: identity.model },
           providerKey: identity.providerKey,
           entries: () => [
@@ -221,7 +243,6 @@ describe("memory embedding cache", () => {
         });
         const refreshed = loadMemoryEmbeddingCache({
           db,
-          enabled: true,
           providerIdentities: [identity, alias],
           hashes: [...cases.map((row) => row.hash), "new"],
         });
@@ -252,7 +273,6 @@ describe("memory embedding cache", () => {
     try {
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider,
         providerKey: "fixture",
         entries: () => [
@@ -267,7 +287,6 @@ describe("memory embedding cache", () => {
       db.exec("BEGIN IMMEDIATE");
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider,
         providerKey: "fixture",
         maxEntries: 2,
@@ -290,6 +309,147 @@ describe("memory embedding cache", () => {
   });
 
   it.each([
+    { name: "below capacity", maxEntries: 7, oldRows: 2, evicted: 0 },
+    { name: "exact capacity", maxEntries: 6, oldRows: 2, evicted: 0 },
+    { name: "overflow with equal timestamps", maxEntries: 5, oldRows: 2, evicted: 1 },
+    { name: "overflow beyond a prune batch", maxEntries: 5, oldRows: 102, evicted: 101 },
+  ])("reserves only missing capacity: $name", ({ maxEntries, oldRows, evicted }) => {
+    const db = createDb();
+    const provider = { id: "local", model: "fixture" };
+    const readCache = () => db.prepare("SELECT * FROM memory_embedding_cache ORDER BY rowid").all();
+    try {
+      for (const identity of [
+        {
+          ...provider,
+          key: "fixture",
+          hashes: ["a", ...Array.from({ length: oldRows - 1 }, (_, index) => `old-${index}`)],
+        },
+        { ...provider, id: "other", key: "fixture", hashes: ["a"] },
+        { ...provider, model: "other", key: "fixture", hashes: ["a"] },
+        { ...provider, key: "other", hashes: ["a"] },
+      ]) {
+        upsertMemoryEmbeddingCache({
+          db,
+          provider: identity,
+          providerKey: identity.key,
+          entries: () => identity.hashes.map((hash) => ({ hash, embedding: [1] })),
+          now: 1,
+        });
+      }
+      const before = readCache();
+      db.exec(`CREATE TEMP TRIGGER reject_cache_overflow BEFORE INSERT ON memory_embedding_cache
+        WHEN (SELECT COUNT(*) FROM memory_embedding_cache) >= ${maxEntries}
+        BEGIN SELECT RAISE(ABORT, 'cache overflow'); END;`);
+      db.exec("BEGIN IMMEDIATE");
+      const executions = (["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(StatementSync.prototype, method),
+      );
+      let queries: string[];
+      try {
+        upsertMemoryEmbeddingCache({
+          db,
+          provider,
+          providerKey: "fixture",
+          maxEntries,
+          entries: () => [
+            { hash: "a", embedding: [2] },
+            { hash: "c", embedding: [3] },
+            { hash: "a", embedding: [4] },
+          ],
+          now: 2,
+        });
+        queries = executions.flatMap(({ mock }) =>
+          mock.contexts.flatMap((statement) =>
+            statement instanceof StatementSync ? [statement.sourceSQL] : [],
+          ),
+        );
+      } finally {
+        for (const execution of executions) {
+          execution.mockRestore();
+        }
+      }
+      expect(readCache()).toEqual([
+        ...before.slice(1 + evicted),
+        ...[
+          { hash: "c", embedding: encodeMemoryEmbedding([3]) },
+          { hash: "a", embedding: encodeMemoryEmbedding([4]) },
+        ].map(({ hash, embedding }) => ({
+          provider: "local",
+          model: "fixture",
+          provider_key: "fixture",
+          hash,
+          embedding,
+          dims: 1,
+          updated_at: 2,
+        })),
+      ]);
+      const deletes = queries.filter((query) => /^delete\b/iu.test(query));
+      expect(deletes).toHaveLength(evicted > 0 ? 2 : 1);
+      expect(queries.filter((query) => /^insert\b/iu.test(query))).toHaveLength(2);
+      const count = queries.find((query) => /^select count\(\*\)/iu.test(query));
+      expect(count).toBeDefined();
+      expect(db.prepare(`EXPLAIN ${count}`).all()).toEqual(
+        expect.arrayContaining([expect.objectContaining({ opcode: "Count" })]),
+      );
+      if (evicted) {
+        const eviction = deletes.find((query) => /\browid\b/iu.test(query));
+        expect(eviction).toBeDefined();
+        const plan = db.prepare(`EXPLAIN QUERY PLAN ${eviction}`).all(evicted);
+        expect(plan).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              detail: expect.stringContaining(
+                "USING COVERING INDEX idx_memory_embedding_cache_updated_at",
+              ),
+            }),
+          ]),
+        );
+        expect(plan.some((row) => String(row.detail).includes("TEMP B-TREE"))).toBe(false);
+        const opcodes = db
+          .prepare(`EXPLAIN ${eviction}`)
+          .all(evicted)
+          .map((row) => row.opcode);
+        expect(opcodes).toContain("DecrJumpZero");
+        expect(opcodes).not.toContain("OffsetLimit");
+      }
+      db.exec("ROLLBACK");
+      expect(readCache()).toEqual(before);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("prunes at most 100 oldest rows per transaction", () => {
+    const db = createDb();
+    try {
+      upsertMemoryEmbeddingCache({
+        db,
+        provider: { id: "local", model: "fixture" },
+        providerKey: "fixture",
+        entries: () =>
+          Array.from({ length: 103 }, (_, index) => ({ hash: String(index), embedding: [1] })),
+        now: 1,
+      });
+      db.exec("BEGIN IMMEDIATE");
+      pruneMemoryEmbeddingCache(db, 2);
+      expect(db.prepare("SELECT hash FROM memory_embedding_cache ORDER BY rowid").all()).toEqual([
+        { hash: "100" },
+        { hash: "101" },
+        { hash: "102" },
+      ]);
+      db.exec("COMMIT; BEGIN IMMEDIATE");
+      pruneMemoryEmbeddingCache(db, 2);
+      db.exec("COMMIT");
+      expect(db.prepare("SELECT hash FROM memory_embedding_cache ORDER BY rowid").all()).toEqual([
+        { hash: "101" },
+        { hash: "102" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([
     { name: "truncated", embedding: new Uint8Array([1, 2, 3]) },
     { name: "non-finite", embedding: new Uint8Array([0, 0, 0, 0, 0, 0, 240, 127]) },
   ])("regenerates $name cache data while respecting provider alias priority", ({ embedding }) => {
@@ -297,7 +457,6 @@ describe("memory embedding cache", () => {
     try {
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider: { id: "local", model: "hf:owner/default.gguf" },
         providerKey: "provider-key-current",
         entries: () => [
@@ -312,7 +471,6 @@ describe("memory embedding cache", () => {
       );
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider: { id: "local", model: "/cache/default.gguf" },
         providerKey: "provider-key-alias",
         entries: () =>
@@ -323,7 +481,6 @@ describe("memory embedding cache", () => {
       });
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider: { id: "local", model: "/other/default.gguf" },
         providerKey: "provider-key-arbitrary",
         entries: () => [{ hash: "arbitrary", embedding: [0.3, 0.4] }],
@@ -331,7 +488,6 @@ describe("memory embedding cache", () => {
 
       const cached = loadMemoryEmbeddingCache({
         db,
-        enabled: true,
         providerIdentities: [
           {
             provider: "local",
@@ -379,7 +535,6 @@ describe("memory embedding cache", () => {
         for (const [index, identity] of providerIdentities.entries()) {
           upsertMemoryEmbeddingCache({
             db,
-            enabled: true,
             provider: { id: identity.provider, model: identity.model },
             providerKey: identity.providerKey,
             entries: () =>
@@ -408,7 +563,6 @@ describe("memory embedding cache", () => {
 
         const cached = loadMemoryEmbeddingCache({
           db,
-          enabled: true,
           providerIdentities,
           hashes: [...hashes, ...hashes.slice(0, 1), ""],
         });
@@ -431,7 +585,6 @@ describe("memory embedding cache", () => {
       const identity = { provider: "local", model: "fixture", providerKey: "fixture" };
       upsertMemoryEmbeddingCache({
         db,
-        enabled: true,
         provider: { id: identity.provider, model: identity.model },
         providerKey: identity.providerKey,
         entries: () => [
@@ -455,7 +608,6 @@ describe("memory embedding cache", () => {
       const load = () =>
         loadMemoryEmbeddingCache({
           db,
-          enabled: true,
           providerIdentities: [identity],
           hashes: ["first", "second"],
         });

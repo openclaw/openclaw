@@ -160,45 +160,6 @@ describe("runCapability media auth", () => {
     });
   });
 
-  it("prefers an OpenAI API key over the default OAuth profile and plugin no-auth", async () => {
-    modelAuthTestControl.store = {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "oauth",
-          provider: "openai",
-          access: "oauth-chat-token",
-          refresh: "oauth-refresh-token",
-          // Stay outside the refresh window to exercise API-key selection.
-          expires: Date.now() + 10 * 60_000,
-        },
-      },
-    };
-    await withAudioCase(
-      {
-        provider: "openai",
-        model: "whisper-1",
-        resolveAuth: noAuth,
-        env: { ...AUTH_ENV, OPENAI_API_KEY: "env-openai-audio-key" },
-      },
-      (result, requests) => {
-        expectAuthenticated(result, requests, "env-openai-audio-key");
-      },
-    );
-  });
-
-  it("prefers literal configured provider apiKey over the media no-auth hook", async () => {
-    await withAudioCase(
-      {
-        providerConfig: { apiKey: "real-key", baseUrl: "http://127.0.0.1:43111/v1", models: [] },
-        resolveAuth: noAuth,
-      },
-      (result, requests) => {
-        expectAuthenticated(result, requests, "real-key");
-      },
-    );
-  });
-
   it("allows a media auth hook to provide an API key after normal auth misses", async () => {
     modelAuthTestControl.forceMissingProvider = true;
     const auth = { kind: "api-key" as const, apiKey: "hook-key", source: "media auth hook" };

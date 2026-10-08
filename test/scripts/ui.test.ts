@@ -1,5 +1,6 @@
 // Ui tests cover ui script behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,11 @@ import {
   resolveUiBuildEnvironment,
   resolvePnpmSpawnCall,
 } from "../../scripts/ui.mts";
+import {
+  CONTROL_UI_ASSET_MANIFEST_FILENAME,
+  CONTROL_UI_ASSET_MANIFEST_VERSION,
+  hashControlUiAssetManifestEntries,
+} from "../../src/gateway/control-ui-asset-manifest.js";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../../src/gateway/control-ui-root-assets.js";
 import { inspectControlUiRootAssets } from "../../src/infra/control-ui-assets.js";
 import { mergeProcessEnv } from "../../src/infra/process-env.js";
@@ -605,6 +611,7 @@ const fs = require("node:fs");
 const rename = fs.renameSync;
 let remainingDenials = ${publishDenials};
 const waits = [];
+process.umask(0o077);
 Atomics.wait = (_array, _index, _value, delay) => {
   waits.push(delay);
   return "timed-out";
@@ -676,6 +683,18 @@ require("node:module").syncBuiltinESMExports();
         }
       }
       if (expectedExit === 0) {
+        if (process.platform !== "win32") {
+          const published = [
+            output,
+            ...fs
+              .readdirSync(output, { recursive: true, encoding: "utf8" })
+              .map((entry) => path.join(output, entry)),
+          ];
+          for (const entry of published) {
+            const stat = fs.statSync(entry);
+            expect(stat.mode & 0o777, entry).toBe(stat.isDirectory() ? 0o755 : 0o644);
+          }
+        }
         const calls = result.stdout
           .trim()
           .split("\n")
@@ -714,6 +733,26 @@ require("node:module").syncBuiltinESMExports();
       fs.writeFileSync(`${file}.gz`, gzipSync(bytes));
       fs.writeFileSync(`${file}.br`, brotliCompressSync(bytes));
     }
+    // Vite inventories the finalized assets and sidecars before either validator runs.
+    const assets = fs
+      .readdirSync(path.join(staging, "assets"))
+      .toSorted((left, right) => left.localeCompare(right))
+      .map((name) => {
+        const bytes = fs.readFileSync(path.join(staging, "assets", name));
+        return {
+          path: `assets/${name}`,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          size: bytes.byteLength,
+        };
+      });
+    fs.writeFileSync(
+      path.join(staging, CONTROL_UI_ASSET_MANIFEST_FILENAME),
+      JSON.stringify({
+        version: CONTROL_UI_ASSET_MANIFEST_VERSION,
+        generation: hashControlUiAssetManifestEntries(assets),
+        assets,
+      }),
+    );
     for (const [script, ...args] of [
       ["check-control-ui-precompressed-assets.mts", staging],
       ["check-control-ui-performance.mts", "--report-only", "--dist", staging],

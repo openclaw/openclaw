@@ -7,6 +7,8 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { IncognitoSessionEndedError } from "../../state/incognito-session-error.js";
 import {
   createOpenClawAgentDatabaseClaim,
   type OpenClawAgentDatabaseClaim,
@@ -30,6 +32,12 @@ import {
   resolveSqliteSessionKey,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import {
+  captureIncognitoSessionBinding,
+  captureIncognitoSessionTopology,
+} from "./session-incognito-binding.js";
+import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -53,9 +61,13 @@ export async function loadSessionEntryForAdmission(
   preparation: {
     signal?: AbortSignal;
     assertCurrent?: () => void;
+    incognito?: SessionCollaborationScope["incognito"];
   } = {},
 ): Promise<{ entry: SessionEntry | undefined; databaseClaim: SessionAdmissionDatabaseClaim }> {
-  const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
+  const binding = captureIncognitoSessionBinding(input);
+  const env = cloneEnvWithPlatformSemantics(
+    input.env ?? (binding && captureIncognitoSessionTopology()?.env) ?? process.env,
+  );
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const scope = { ...input, env };
   const agentId = scope.agentId
@@ -63,9 +75,107 @@ export async function loadSessionEntryForAdmission(
     : parseAgentSessionKey(scope.sessionKey)?.agentId;
   const assertCurrent = () => {
     preparation.signal?.throwIfAborted();
+    binding?.admissionSignal?.throwIfAborted();
     preparation.assertCurrent?.();
   };
   assertCurrent();
+  const incognitoBinding =
+    preparation.incognito ??
+    (binding && {
+      actor: binding.actor,
+      authority: { assertCurrent: () => binding.actor.assertReadable() },
+    });
+  if (incognitoBinding) {
+    const { actor, authority } = incognitoBinding;
+    const resolved = resolveSqliteScope(scope);
+    const options = toDatabaseOptions(resolved);
+    if (actor.agentId !== resolved.agentId || actor.path !== options.path) {
+      throw new Error("Admission target differs from its captured incognito actor");
+    }
+    const current: IncognitoSessionAuthority = {
+      assertCurrent() {
+        assertCurrent();
+        authority.assertCurrent();
+        actor.assertCurrent();
+      },
+      authorize: (stage, facts) => authority.authorize?.(stage, facts),
+    };
+    current.assertCurrent();
+    const borrowed = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: resolved.agentId,
+      env,
+      authority: current,
+      existingOnly: true,
+      signal: preparation.signal,
+    });
+    if (!borrowed) {
+      throw new IncognitoSessionEndedError();
+    }
+    const releaseGate = createDeferredCore();
+    let held: Promise<void> | undefined;
+    let released = false;
+    let releasing: Promise<void> | undefined;
+    const assertClaimCurrent = () => {
+      if (released) {
+        throw new Error("Incognito admission claim is released");
+      }
+      current.assertCurrent();
+      borrowed.assertCurrent();
+    };
+    const release = () => {
+      released = true;
+      releaseGate.resolve();
+      return (releasing ??= (async () => {
+        // Close may revoke disclosure, but the retained policy lifetime still joins cleanup.
+        if (held) {
+          await Promise.allSettled([held]);
+        }
+        await borrowed.release();
+      })());
+    };
+    let transferred = false;
+    try {
+      current.assertCurrent();
+      if (
+        borrowed.identity.handle !== actor.identity.handle ||
+        borrowed.identity.incarnation !== actor.identity.incarnation
+      ) {
+        throw new IncognitoSessionEndedError();
+      }
+      held = borrowed.sessions.withSharedState(() => releaseGate.promise);
+      void held.catch(() => undefined);
+      const snapshot = await borrowed.sessions.read(
+        current,
+        { sessionKey: resolved.sessionKey },
+        preparation.signal,
+      );
+      current.assertCurrent();
+      snapshot.claim.assertCurrent();
+      snapshot.snapshot.assertCurrent();
+      const databaseClaim: WorkerSessionAdmissionClaim = {
+        kind: "worker",
+        identity: borrowed.identity.handle,
+        incarnation: borrowed.identity.incarnation,
+        assertCurrent: assertClaimCurrent,
+        isCurrent() {
+          try {
+            assertClaimCurrent();
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        release,
+      };
+      transferred = true;
+      return { entry: snapshot.entry, databaseClaim };
+    } finally {
+      if (!transferred) {
+        await release();
+      }
+    }
+  }
   const incognito =
     isIncognitoSessionKey(scope.sessionKey) ||
     Boolean(
@@ -107,22 +217,9 @@ export async function loadSessionEntryForAdmission(
       async (target, owner) => {
         const options = { ...target.database, path: target.sourcePath, env };
         const observed = readDatabasePathIdentitySync(options.path);
-        const assertOriginalTarget = () => {
-          const current = readDatabasePathIdentitySync(options.path);
-          if (
-            current.key !== observed.key ||
-            current.canonicalPath !== observed.canonicalPath ||
-            current.birthtime !== observed.birthtime
-          ) {
-            throw new Error("Session database changed while waiting for admission");
-          }
-        };
         return await runOpenClawAgentWorkerWrite(
           options,
           async () => {
-            await owner.refreshBeforeDispatch(assertOriginalTarget);
-            owner.assertCurrent();
-            assertOriginalTarget();
             // Discovery retains the file while queued; an earlier cancelled open may retire its executor.
             const execution = captureOpenClawAgentDatabaseExecution(
               options,
@@ -145,21 +242,23 @@ export async function loadSessionEntryForAdmission(
             const source: AgentDatabaseRequestExecutionSource = {
               assertCurrent: assertSourceCurrent,
               onRegistryChange: owner.onRegistryChange,
-              createAdmission(binding) {
+              createAdmission(admissionBinding) {
                 return () => ({
-                  nativeLocations: binding.nativeLocations,
+                  nativeLocations: admissionBinding.nativeLocations,
                   admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                    binding.authorize(request);
+                    admissionBinding.authorize(request);
                     assertSourceCurrent();
                     if (!grant()) {
                       throw new Error("Session admission authority expired");
                     }
-                  }, binding.attachment),
+                  }, admissionBinding.attachment),
                 });
               },
             };
             let transferred = false;
             try {
+              await owner.refreshBeforeDispatch(() => execution.assertCurrent());
+              assertSourceCurrent();
               await execution.prepare(source, preparation.signal);
               const entry = await execution.runExisting(source, (worker) =>
                 worker.execute(

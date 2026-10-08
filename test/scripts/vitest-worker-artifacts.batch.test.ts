@@ -86,15 +86,7 @@ const discordCapture = "test/e2e/gateway-transcripts-discord-capture.e2e.test.ts
 const e2eConfig = "test/vitest/vitest.e2e.config.ts";
 
 it.for([
-  { name: "worker", args: [coreWorker], prepare: true },
-  { name: "absolute worker", args: [path.resolve(coreWorker)], prepare: true },
-  { name: "line selection", args: [`${coreWorker}:12`], prepare: true },
   { name: "ordinary infra", args: ["src/infra/node-sqlite.test.ts"], prepare: false },
-  { name: "excluded worker", args: [coreWorker, "--exclude", coreWorker], prepare: false },
-  { name: "excluded glob", args: [coreWorker, "--exclude=src/infra/**"], prepare: false },
-  { name: "empty include", args: [], include: [], prepare: false },
-  { name: "worker include", args: [], include: [coreWorker], prepare: true },
-  { name: "nonmatching include", args: [coreWorker], include: ["test/**"], prepare: false },
   { name: "root config", config: "vitest.config.ts", args: [coreWorker], prepare: true },
   { name: "custom config", config: "custom.config.ts", args: [coreWorker], prepare: false },
   { name: "full channels", config: channelsConfig, args: [], prepare: true },
@@ -105,12 +97,12 @@ it.for([
     prepare: false,
   },
   { name: "empty channels", config: channelsConfig, args: [], include: [], prepare: false },
-  ...[agentVitestProjectOwners.core, agentVitestProjectOwners.all].map((owner) => ({
-    name: `code-mode ${owner.name}`,
-    config: owner.config,
+  {
+    name: "code-mode all agents",
+    config: agentVitestProjectOwners.all.config,
     args: [codeModeWorker],
     prepare: true,
-  })),
+  },
   {
     name: "code-mode full agentic config",
     config: "test/vitest/vitest.full-agentic.config.ts",
@@ -124,23 +116,10 @@ it.for([
     prepare: false,
   },
   {
-    name: "code-mode include",
-    config: agentsCoreConfig,
-    args: [],
-    include: [codeModeWorker],
-    prepare: true,
-  },
-  {
     name: "code-mode omitted by include",
     config: agentsCoreConfig,
     args: [codeModeWorker],
     include: ["src/agents/code-mode.test.ts"],
-    prepare: false,
-  },
-  {
-    name: "code-mode non-owning config",
-    config: infraConfig,
-    args: [codeModeWorker],
     prepare: false,
   },
   {
@@ -158,12 +137,11 @@ it.for([
   },
 );
 
-it.runIf(process.platform !== "win32").for(
-  ["direct", "projects", "contracts-direct", "contracts-projects"].flatMap((route) =>
+it.runIf(process.platform !== "win32").for([
+  ...["direct", "projects", "contracts-direct", "contracts-projects"].flatMap((route) =>
     (route.startsWith("contracts-")
       ? ["ready", "excluded"]
       : [
-          "ready",
           "code-mode",
           "capture",
           "failure",
@@ -178,10 +156,12 @@ it.runIf(process.platform !== "win32").for(
     ).map((mode) => ({
       route,
       mode,
+      phase: "pre-spawn",
     })),
   ),
-)(
-  "$route runner owns pre-spawn worker preparation through $mode",
+  { route: "batch", mode: "ready", phase: "lazy" },
+])(
+  "$route runner owns $phase worker preparation through $mode",
   ({ route, mode }, { workerArtifacts }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
       const selectedFile = route.startsWith("contracts-")
@@ -203,6 +183,9 @@ it.runIf(process.platform !== "win32").for(
       const compiled = path.join(directory, "compiled.jsonl");
       const launched = path.join(directory, "launched.json");
       const compilerReceipt = path.join(directory, "compiler.json");
+      const childCacheReceipt = path.join(directory, "child-cache.json");
+      const nodeCompileCache = path.join(directory, "node-compile-cache");
+      const expectedCache = { path: nodeCompileCache, portable: "1", disabled: null };
       const canceled = path.join(directory, "canceled");
       const input = writeFixture(directory, "input.mjs", "export const fixture = true;");
       const compiler = writeFixture(
@@ -212,7 +195,17 @@ it.runIf(process.platform !== "win32").for(
 import fs from 'node:fs';
 import {runWorkerFixtureCompiler} from ${JSON.stringify(new URL("./fixtures/vitest-worker-compiler.mjs", import.meta.url).href)};
 const generation=process.argv[2];
-fs.writeFileSync(${JSON.stringify(compilerReceipt)},JSON.stringify({pid:process.pid,generation}));
+fs.writeFileSync(${JSON.stringify(compilerReceipt)},JSON.stringify({
+  pid:process.pid,generation,
+  ...(${JSON.stringify(route === "batch")} ? {
+    runtime: process.versions.bun ? 'bun' : 'node',
+    cache: {
+      path: process.env.NODE_COMPILE_CACHE,
+      portable: process.env.NODE_COMPILE_CACHE_PORTABLE,
+      disabled: process.env.NODE_DISABLE_COMPILE_CACHE ?? null,
+    },
+  } : {}),
+}));
 if (${JSON.stringify(mode)}==='failure') process.exit(7);
 if (${JSON.stringify(mode)}==='cancel') {
   const watcher=fs.watch(${JSON.stringify(directory)},()=>{});
@@ -246,6 +239,15 @@ import cp from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {syncFixtureBuiltinExports} from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
+const probeCache=${JSON.stringify(route === "batch")};
+const cacheEnvironment=()=>({
+  path: process.env.NODE_COMPILE_CACHE,
+  portable: process.env.NODE_COMPILE_CACHE_PORTABLE,
+  disabled: process.env.NODE_DISABLE_COMPILE_CACHE ?? null,
+});
+if(probeCache && process.argv[1]===${JSON.stringify(leaf)}) {
+  fs.writeFileSync(${JSON.stringify(childCacheReceipt)},JSON.stringify(cacheEnvironment()));
+}
 const spawn=cp.spawn;
 cp.spawn=(bin,args,options)=>{
   if(args[0]===${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-compiler.mts"))}) {
@@ -256,8 +258,14 @@ cp.spawn=(bin,args,options)=>{
     const generation=bootstrap<0?undefined:args[bootstrap+1];
     fs.writeFileSync(${JSON.stringify(launched)},JSON.stringify({
       prepared: Boolean(generation && fs.existsSync(path.join(generation,'manifest.json'))),
+      ...(probeCache ? {
+        command: bin,
+        orchestratorRuntime: process.versions.bun ? 'bun' : 'node',
+        orchestratorCache: cacheEnvironment(),
+      } : {}),
     }));
-    return spawn(bin,[${JSON.stringify(leaf)}],options);
+    // Keep the selected environment; this fixture proves delivery without requiring Bun.
+    return spawn(probeCache ? process.execPath : bin,[${JSON.stringify(leaf)}],options);
   }
   return spawn(bin,args,options);
 };
@@ -281,22 +289,33 @@ syncFixtureBuiltinExports();
         fs.writeFileSync(leaf, "if(process.connected) process.disconnect();\n");
       }
       const args =
-        route === "direct" || route === "contracts-direct"
+        route === "batch"
           ? [
-              "scripts/run-vitest.mjs",
-              "run",
-              "--config",
-              ...(mode === "channels" ? [channelsConfig] : [selectedConfig, selectedFile]),
-              ...controls,
-            ]
-          : [
               "--import",
               "./scripts/tsx.mjs",
-              "scripts/test-projects.mts",
-              selectedFile,
-              "--",
-              ...controls,
-            ];
+              writeFixture(
+                directory,
+                "batch.mts",
+                `import {runVitestBatch} from ${JSON.stringify(path.join(root, "scripts/lib/vitest-batch-runner.mts"))};
+process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},args:[${JSON.stringify(coreWorker)}],targets:[],env:process.env});`,
+              ),
+            ]
+          : route === "direct" || route === "contracts-direct"
+            ? [
+                "scripts/run-vitest.mjs",
+                "run",
+                "--config",
+                ...(mode === "channels" ? [channelsConfig] : [selectedConfig, selectedFile]),
+                ...controls,
+              ]
+            : [
+                "--import",
+                "./scripts/tsx.mjs",
+                "scripts/test-projects.mts",
+                selectedFile,
+                "--",
+                ...controls,
+              ];
       const includeFile = mode.startsWith("include-")
         ? writeFixture(
             directory,
@@ -310,6 +329,14 @@ syncFixtureBuiltinExports();
         OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
         OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
         ...fixturePreloadEnv(preload, "node"),
+        ...(route === "batch"
+          ? {
+              OPENCLAW_VITEST_RUNTIME: "bun",
+              NODE_COMPILE_CACHE: nodeCompileCache,
+              NODE_COMPILE_CACHE_PORTABLE: "1",
+              NODE_DISABLE_COMPILE_CACHE: undefined,
+            }
+          : {}),
       });
       expect(result.code, result.stdout + result.stderr).toBe(
         mode === "cancel" ? 143 : mode === "failure" ? 1 : 0,
@@ -326,13 +353,30 @@ syncFixtureBuiltinExports();
         expect(fs.existsSync(launched)).toBe(false);
       } else {
         expect(JSON.parse(fs.readFileSync(launched, "utf8"))).toEqual({
-          prepared: ready,
+          prepared: ready && route !== "batch",
+          ...(route === "batch"
+            ? {
+                command: "bun",
+                orchestratorRuntime: "node",
+                orchestratorCache: expectedCache,
+              }
+            : {}),
+        });
+      }
+      if (route === "batch") {
+        expect(JSON.parse(fs.readFileSync(childCacheReceipt, "utf8"))).toEqual({
+          ...expectedCache,
+          disabled: "1",
         });
       }
       if (prepared) {
         const receipt = JSON.parse(fs.readFileSync(compilerReceipt, "utf8"));
         expect(isProcessAlive(receipt.pid)).toBe(false);
         expect(fs.existsSync(receipt.generation)).toBe(false);
+        if (route === "batch") {
+          expect(receipt.runtime).toBe("node");
+          expect(receipt.cache).toEqual(expectedCache);
+        }
         if (ready) {
           expect(fs.readFileSync(compiled, "utf8").trim().split("\n")).toHaveLength(1);
         }

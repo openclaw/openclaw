@@ -29,6 +29,13 @@ describe("diagnostics-prometheus runtime metrics", () => {
             heapUsedBytes: 300,
             externalBytes: 200,
             arrayBuffersBytes: 100,
+            heapSpaces: ["old_space", "future_v8_space"].map((space_name) => ({
+              space_name,
+              space_used_size: 101,
+              space_size: 202,
+              space_available_size: 0,
+              physical_space_size: 303,
+            })),
             workerHeapTotalBytes: 400,
             workerHeapUsedBytes: 250,
             workerCount: 3,
@@ -60,6 +67,22 @@ describe("diagnostics-prometheus runtime metrics", () => {
           trusted,
         );
       }
+      for (const [operation, count] of [
+        ["repository.identities", 4],
+        ["checkout.diff", 2],
+      ] as const) {
+        metrics.record(
+          {
+            ...baseEvent(),
+            type: "diagnostic.child_process.spawn",
+            family: "git",
+            operation,
+            count,
+            intervalMs: 60_000,
+          },
+          trusted,
+        );
+      }
       const rendered = metrics.render();
       for (const [kind, value] of Object.entries({
         rss: 1000,
@@ -72,12 +95,33 @@ describe("diagnostics-prometheus runtime metrics", () => {
       })) {
         expect(rendered).toContain(`openclaw_memory_bytes{kind="${kind}"} ${value}\n`);
       }
+      for (const space of ["old_space", "future_v8_space"]) {
+        for (const [stat, value] of Object.entries({
+          used: 101,
+          size: 202,
+          available: 0,
+          physical: 303,
+        })) {
+          expect(rendered).toContain(
+            `openclaw_heap_space_bytes{space="${space}",stat="${stat}"} ${value}\n`,
+          );
+        }
+      }
+      expect(metrics.render()).toBe(rendered);
       expect(rendered).toContain("openclaw_worker_count 3\n");
       expect(rendered).toContain("openclaw_worker_heap_sampled_count 2\n");
       expect(rendered).toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store.worker.js"} 250\n',
       );
-      expect(rendered).toContain('openclaw_child_process_spawn_total{family="node"} 5\n');
+      expect(rendered).toContain(
+        'openclaw_child_process_spawn_total{family="node",operation="none"} 5\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_child_process_spawn_total{family="git",operation="repository.identities"} 4\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_child_process_spawn_total{family="git",operation="checkout.diff"} 2\n',
+      );
       expect(rendered).toContain(
         'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
       );
@@ -106,6 +150,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
       metrics.record(retiredSample, untrusted);
       expect(metrics.render()).toBe(rendered);
       metrics.record(retiredSample, trusted);
+      expect(metrics.render()).not.toContain("openclaw_heap_space_bytes");
       expect(metrics.render()).not.toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store',
       );
