@@ -29,6 +29,7 @@ import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.ty
 import {
   getPreparedModelFullCatalogAuth,
   getPreparedModelRuntimeAuthMaterializations,
+  setPreparedModelFullCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -363,16 +364,21 @@ describe("catalog publication session rows", () => {
         await settleCatalog();
         const result = await list();
         expect(rows.dirtyRowCount).toBe(0);
-        expect(readCatalog.mock.calls.length).toBeGreaterThan(reads);
+        // A partial refresh that re-discovers rotated auth without changing model facts keeps
+        // the published catalog identity stable: the rotation is already live on the shared
+        // snapshot, so the republication must not fake a facts change and churn the projection
+        // into a pointless re-read. Only a real facts change (the rotated context window) does.
         expect(publication).toHaveBeenCalledWith({
           phase: "catalog-published",
-          modelFactsChanged: true,
+          modelFactsChanged: kind === "token",
           refreshStatusChanged: true,
         });
         if (kind === "oauth") {
+          expect(readCatalog.mock.calls.length).toBe(reads);
           expect(result.sessions).toEqual(initial.sessions);
           expect(rows.materializedCount).toBe(before);
         } else {
+          expect(readCatalog.mock.calls.length).toBeGreaterThan(reads);
           expect(result.sessions.every((row) => row.contextTokens === 64_000)).toBe(true);
           expect(rows.materializedCount - before).toBe(rowCount);
         }
@@ -383,6 +389,159 @@ describe("catalog publication session rows", () => {
       }
     },
   );
+
+  it("stops publishing a scoped provider's auth after an observed logout refresh", async () => {
+    const profile: AuthProfileCredential = {
+      type: "oauth",
+      provider: "custom",
+      access: "synthetic-access-before",
+      refresh: "synthetic-refresh-before",
+      expires: 1_900_000_000_000,
+      accountId: "synthetic-account",
+      email: "synthetic@example.test",
+    };
+    const { currentOwner } = await setup(true, profile);
+    const owner = await currentOwner();
+    expect(
+      getPreparedModelFullCatalogAuth(owner.readFullModelCatalog!()!)?.authStore.profiles[
+        "custom:synthetic"
+      ],
+    ).toEqual(profile);
+    // The worker re-read each scoped provider's credential source and found the
+    // provider gone: the scoped merge must drop the retained entry instead of
+    // republishing the logged-out credential as still available.
+    const loggedOut = catalog();
+    setPreparedModelFullCatalogAuth(loggedOut, {
+      providerAuthLabels: new Map(),
+      authStore: { version: 1, profiles: {} },
+      authModes: {},
+      credentials: {},
+    });
+    mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => loggedOut);
+    await owner.loadFullModelCatalog!({ providerIds: ["custom"], refresh: true });
+    const published = getPreparedModelFullCatalogAuth(owner.readFullModelCatalog!()!);
+    expect(published?.authStore.profiles["custom:synthetic"]).toBeUndefined();
+    expect(published?.credentials?.custom).toBeUndefined();
+    expect(published?.authModes.custom).toBeUndefined();
+  });
+
+  it.each(["unavailable", "omitted"] as const)(
+    "stops publishing a scoped provider's auth when its logout refresh emits an %s outcome",
+    async (outcome) => {
+      const profile: AuthProfileCredential = {
+        type: "oauth",
+        provider: "custom",
+        access: "synthetic-access-before",
+        refresh: "synthetic-refresh-before",
+        expires: 1_900_000_000_000,
+        accountId: "synthetic-account",
+        email: "synthetic@example.test",
+      };
+      const { currentOwner } = await setup(true, profile);
+      const owner = await currentOwner();
+      // The worker re-read the credential source for the whole requested scope
+      // before discovery ran, so an auth omission is a removal observed at that
+      // read regardless of the discovery outcome — including a provider without
+      // a runtime catalog hook whose refresh emits no outcome at all.
+      const loggedOut = catalog();
+      if (outcome === "omitted") {
+        delete (loggedOut as Partial<ModelCatalogSnapshot>).providerOutcomes;
+      } else {
+        loggedOut.providerOutcomes = [{ provider: "custom", status: outcome }];
+      }
+      setPreparedModelFullCatalogAuth(loggedOut, {
+        providerAuthLabels: new Map(),
+        authStore: { version: 1, profiles: {} },
+        authModes: {},
+        credentials: {},
+      });
+      mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => loggedOut);
+      await owner.loadFullModelCatalog!({ providerIds: ["custom"], refresh: true });
+      const published = getPreparedModelFullCatalogAuth(owner.readFullModelCatalog!()!);
+      expect(published?.authStore.profiles["custom:synthetic"]).toBeUndefined();
+      expect(published?.credentials?.custom).toBeUndefined();
+      expect(published?.authModes.custom).toBeUndefined();
+    },
+  );
+
+  it("stops publishing a discovered provider's auth after an observed logout", async () => {
+    const profile: AuthProfileCredential = {
+      type: "oauth",
+      provider: "native-cli",
+      access: "synthetic-access-native",
+      refresh: "synthetic-refresh-native",
+      expires: 1_900_000_000_000,
+      accountId: "synthetic-account",
+      email: "synthetic@example.test",
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "synthetic-native",
+      source: "fixture",
+      harness: {
+        id: "synthetic-native",
+        label: "Synthetic native runtime",
+        supports: () => ({ supported: true }),
+        async runAttempt() {
+          throw new Error("catalog-only fixture");
+        },
+        loadModelCatalog: async () => [
+          {
+            provider: "native-cli",
+            id: "synthetic-native-model",
+            name: "Synthetic native model",
+            contextWindow: 32_000,
+            reasoning: false,
+            input: ["text"],
+          },
+        ],
+      },
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+    mocks.configuredAgentIds = ["default"];
+    mocks.runPreparedModelCatalogWorker.mockImplementation(async () => catalog());
+    mocks.usePersistedAuthProfiles = true;
+    const store = { version: 1, profiles: { "native-cli:synthetic": profile } };
+    mocks.preparedAuthStore = store;
+    mocks.authStorage.getAll.mockReturnValue({
+      "native-cli": {
+        type: "oauth",
+        access: profile.access,
+        refresh: profile.refresh,
+        expires: profile.expires,
+      },
+    });
+    saveAuthProfileStore(store, fixture.state.agentDir("default"));
+    const config: OpenClawConfig = {
+      agents: {
+        entries: { default: {} },
+        defaults: { model: "custom/synthetic-model" },
+      },
+    };
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const owner = await prepareModelRuntimeSnapshot({
+      config,
+      agentId: "default",
+      agentDir: fixture.state.agentDir("default"),
+    });
+    await owner.loadFullModelCatalog!({ refresh: true });
+    // The first acquisition pairs the discovered provider with its credential.
+    const paired = getPreparedModelFullCatalogAuth(owner.readFullModelCatalog!()!);
+    expect(paired?.authStore.profiles["native-cli:synthetic"]).toEqual(profile);
+    // The next acquisition re-reads the same source and finds the provider gone:
+    // the merge must drop the retained entry instead of republishing the
+    // logged-out credential as still available.
+    mocks.preparedAuthStore = { version: 1, profiles: {} };
+    mocks.authStorage.getAll.mockReturnValue({});
+    await owner.loadFullModelCatalog!({ refresh: true });
+    const published = getPreparedModelFullCatalogAuth(owner.readFullModelCatalog!()!);
+    expect(published?.authStore.profiles["native-cli:synthetic"]).toBeUndefined();
+    expect(published?.credentials?.["native-cli"]).toBeUndefined();
+    expect(published?.authModes["native-cli"]).toBeUndefined();
+  });
 
   it("publishes settled attempt status without rebuilding unchanged resident rows", async () => {
     const { rows, list, refresh, initial, readCatalog } = await setup();
