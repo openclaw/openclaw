@@ -2941,7 +2941,7 @@ openclaw-chat-ci-details {
   margin: 0;
 }
 
-.agent-chat__composer-notices > :is(.compaction-indicator, .agent-chat__composer-run-status) {
+.agent-chat__composer-notices > .compaction-indicator {
   margin: 0;
 }
 
@@ -3125,45 +3125,6 @@ openclaw-chat-ci-details {
   border-radius: 999px;
   background: var(--accent);
   opacity: 0.7;
-}
-
-.agent-chat__run-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  max-width: 132px;
-  padding: 0 8px;
-  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-  border-radius: var(--radius-full);
-  background: var(--chat-composer-surface, var(--popover));
-  color: var(--muted);
-  font-size: 0.72rem;
-  line-height: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  flex-shrink: 0;
-  user-select: none;
-}
-
-.agent-chat__run-status svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex-shrink: 0;
-}
-
-.agent-chat__run-status-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.agent-chat__run-status--interrupted {
-  color: var(--warn);
 }
 
 @media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
