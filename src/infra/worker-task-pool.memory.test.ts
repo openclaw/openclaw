@@ -22,10 +22,10 @@ it("collects a completed large payload while keeping the bounded worker warm", a
   const warmPorts = new MessageChannel();
   const { port1, port2 } = new MessageChannel();
   try {
-    // Let the owner reach its idle-GC boundary before measuring the warm baseline.
+    // A disposable payload guarantees collection before measuring the warm baseline.
     const warmed = once(warmPorts.port1, "message");
     const startup = await pool.run(
-      { receipt: warmPorts.port2 },
+      { receipt: warmPorts.port2, allocate: true },
       { transferList: () => [warmPorts.port2] },
     );
     const [warm] = await warmed;
