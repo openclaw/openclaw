@@ -105,7 +105,8 @@ const authProfileStoreMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../agents/auth-profiles.runtime.js", () => ({
+vi.mock("../../agents/auth-profiles.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles.runtime.js")>()),
   ensureAuthProfileStore: authProfileStoreMock.ensureAuthProfileStore,
   prepareAuthProfileProvider: authProfileStoreMock.prepareAuthProfileProvider,
 }));

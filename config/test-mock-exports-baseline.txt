@@ -4191,7 +4191,6 @@
 ["src/auto-reply/reply/mcp-channel-actions.test.ts","../../gateway/mcp-app-channel-action.js","72987e1e05f54cd2268e8686fce06fdbde6484730dc267fb6b6b479157d0485a",1]
 ["src/auto-reply/reply/memory-flush-plan.test.ts","../../plugins/memory-state.js","0b578453737a9142912b751e456f0d03354d00d8afde260a78897824dd85cce1",1]
 ["src/auto-reply/reply/model-selection.resolved-pin.test.ts","../../agents/auth-profiles.runtime.js","ce46e3ac14f3f2e75aafe79caf2f3078596ff077bb05e7693131c31d11eae8bb",1]
-["src/auto-reply/reply/model-selection.test.ts","../../agents/auth-profiles.runtime.js","191821c242b925a0a36b165d9eadc9fb30a143db6f1ba26858015ffc2b1cf123",1]
 ["src/auto-reply/reply/model-selection.test.ts","../../agents/auth-profiles/order.js","8317bb31d21256595a52649e8f65ef7100c4d92f3850b2ad83a942081227a24e",1]
 ["src/auto-reply/reply/model-selection.test.ts","../../agents/model-catalog.runtime.js","a98d2d66a8bf14cb4f4943afd59ea251c8ad91ee6b84aabe7c6dc1f5f1b627fd",1]
 ["src/auto-reply/reply/model-selection.test.ts","../../agents/provider-model-normalization.runtime.js","4a213e154667ea78b1f705978d4be10e0de8a7705c6636ca80797ba944a915cb",1]
