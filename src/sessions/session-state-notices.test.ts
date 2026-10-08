@@ -8,6 +8,7 @@ import {
 } from "./session-state-notices.js";
 
 const mocks = vi.hoisted(() => ({
+  ownerKey: Symbol("session-state-notices-fixture"),
   pending: [] as SystemEvent[],
   capture: vi.fn(async () => ({ sessionId: "original", generation: "current" })),
   enqueue: vi.fn<typeof enqueueSessionEventForHost>(() => ({
@@ -18,6 +19,21 @@ const mocks = vi.hoisted(() => ({
   })),
   acknowledge: vi.fn(async () => {}),
 }));
+// A shared worker may retain an earlier module's owner and its different queue/handoff bindings.
+vi.mock("../shared/global-singleton.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../shared/global-singleton.js")>();
+  return {
+    ...actual,
+    resolveGlobalSingleton: (...args: Parameters<typeof actual.resolveGlobalSingleton>) => {
+      const [key, ...rest] = args;
+      return actual.resolveGlobalSingleton(
+        key === Symbol.for("openclaw.sessionStateNotices") ? mocks.ownerKey : key,
+        ...rest,
+      );
+    },
+  };
+});
+
 // mock-isolation: Exercise the real notice debouncer without starting model or SQLite work.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: mocks.capture,
