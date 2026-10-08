@@ -123,6 +123,7 @@ export async function finalizeAgentRunMedia(
         });
         return {
           ...scope,
+          readSource: source,
           workspace: expected.workspace,
           assertCurrent: () => {
             assertCurrent();
@@ -166,6 +167,7 @@ export async function finalizeAgentRunMedia(
           () =>
             enrichAssistantTranscriptMediaForRun({
               scope,
+              readSource: prepared.readSource,
               runId,
               expectedLifecycleRevision: reply.lifecycleRevision ?? null,
               content,
@@ -192,7 +194,11 @@ export async function finalizeAgentRunMedia(
         ) {
           throw new Error("WebChat final media ownership could not be persisted");
         }
-        await publishAssistantTranscriptRewrite({ scope, rewritten: [rewritten] });
+        await publishAssistantTranscriptRewrite({
+          scope,
+          readSource: prepared.readSource,
+          rewritten: [rewritten],
+        });
       } catch (error) {
         retained ||= hasSqliteWorkerOutcomeUnknown(error);
         throw error;

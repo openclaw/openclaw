@@ -47,6 +47,7 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
+import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   prepareSqliteTargetFromSessionStorePath,
@@ -404,10 +405,15 @@ export function resolveSqliteTranscriptScope(
     SessionTranscriptWriteScope,
     "agentId" | "env" | "sessionId" | "sessionKey" | "storePath"
   >,
+  readSource?: SessionEntryReadSource,
 ): ResolvedTranscriptScope {
   assertSqliteTranscriptWriteIdentity(scope);
   return {
-    ...resolveSqliteScope({ ...scope, sessionKey: scope.sessionKey }),
+    ...resolveSqliteScope(
+      { ...scope, sessionKey: scope.sessionKey },
+      undefined,
+      readSource ? { ...readSource, shared: true } : undefined,
+    ),
     sessionId: scope.sessionId,
   };
 }
