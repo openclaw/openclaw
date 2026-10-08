@@ -633,7 +633,7 @@ extensions/oc-path/src/oc-path/find.ts	9
 extensions/oc-path/src/oc-path/universal.ts	4
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
 extensions/oc-path/src/oc-path/yaml/resolve.ts	4
-extensions/ollama/index.ts	7
+extensions/ollama/index.ts	6
 extensions/ollama/provider-discovery.ts	1
 extensions/ollama/src/config-compat.ts	1
 extensions/ollama/src/discovery-shared.ts	1
