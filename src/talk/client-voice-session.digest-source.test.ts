@@ -19,6 +19,8 @@ import * as voiceSessionReads from "./client-voice-session-read.js";
 import * as voiceSessionStore from "./client-voice-session-store.js";
 import {
   completeRun,
+  createCompletedMutationSession,
+  createVoiceSession,
   recordMutation,
   seedSession,
 } from "./client-voice-session.fixture.test-support.js";
@@ -41,13 +43,7 @@ describe("client voice digest physical sources", () => {
 
   it("records a missing conversation instead of silently completing its digest", async () => {
     const sessionKey = "agent:main:main";
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey,
-      origin: "client",
-    });
-    recordMutation(voiceSessionId);
-    await completeRun(`run-${voiceSessionId}`);
+    const voiceSessionId = await createCompletedMutationSession();
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
@@ -85,13 +81,7 @@ describe("client voice digest physical sources", () => {
       if (defaultRow === "obsolete") {
         await seedSession(sessionKey, { channel: "discord", to: "channel:obsolete-recipient" });
       }
-      const voiceSessionId = createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey,
-        origin: "client",
-      });
-      recordMutation(voiceSessionId);
-      await completeRun(`run-${voiceSessionId}`);
+      const voiceSessionId = await createCompletedMutationSession();
       const write = voiceSessionStore.writeVoiceSessionRecordInTransaction;
       let failMarker = true;
       const marker = vi
@@ -142,13 +132,7 @@ describe("client voice digest physical sources", () => {
     async (replacement, { signal }) => {
       const sessionKey = "agent:main:main";
       await seedSession(sessionKey, { channel: "discord", to: "channel:marker-retry" });
-      const voiceSessionId = createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey,
-        origin: "client",
-      });
-      recordMutation(voiceSessionId);
-      await completeRun(`run-${voiceSessionId}`);
+      const voiceSessionId = await createCompletedMutationSession();
       const metadataPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
       const savedPath = `${metadataPath}.displaced`;
       const sending = createDeferred();
@@ -202,13 +186,7 @@ describe("client voice digest physical sources", () => {
       await withClientVoiceDigestSettlement(async (settle) => {
         const sessionKey = "agent:main:main";
         await seedSession(sessionKey, { channel: "discord", to: "channel:original-store" });
-        const voiceSessionId = createOrResumeClientVoiceSession({
-          agentId: "main",
-          sessionKey,
-          origin: "client",
-        });
-        recordMutation(voiceSessionId);
-        await completeRun(`run-${voiceSessionId}`);
+        const voiceSessionId = await createCompletedMutationSession();
         const originalPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
         const archivedPath = path.join(harness.stateDir, "original-agent.sqlite");
         const otherState =
@@ -237,12 +215,7 @@ describe("client voice digest physical sources", () => {
             setTestEnvValue("OPENCLAW_STATE_DIR", otherState);
           }
           await seedSession(sessionKey);
-          const stale = createOrResumeClientVoiceSession({
-            agentId: "main",
-            sessionKey,
-            origin: "client",
-            now: 1,
-          });
+          const stale = createVoiceSession({ now: 1 });
           expect(
             await closeStaleClientVoiceSessions({
               agentId: "main",
@@ -258,12 +231,7 @@ describe("client voice digest physical sources", () => {
           });
           expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
 
-          createOrResumeClientVoiceSession({
-            agentId: "main",
-            sessionKey,
-            origin: "client",
-            voiceSessionId,
-          });
+          createVoiceSession({ voiceSessionId });
           await expect(
             closeClientVoiceSession({ agentId: "main", sessionKey, voiceSessionId, config: {} }),
           ).rejects.toThrow("physical source");
@@ -370,11 +338,7 @@ describe("client voice digest physical sources", () => {
     async ({ phase, replacement }) => {
       const target = { agentId: "main", sessionKey: "agent:main:main" };
       await seedSession(target.sessionKey);
-      const voiceSessionId = createOrResumeClientVoiceSession({
-        ...target,
-        origin: "client",
-        now: 1,
-      });
+      const voiceSessionId = createVoiceSession({ now: 1 });
       const metadataPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
       const displace = async () => {
         await closeOpenClawAgentDatabasesAsync(harness.stateDir);
