@@ -37,6 +37,8 @@ const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "pinnedAt",
   "label",
   "displayName",
+  "category",
+  "icon",
 ] as const satisfies readonly (keyof SessionEntry)[];
 
 const AMBIENT_SESSION_CONTEXT_FIELDS = [
