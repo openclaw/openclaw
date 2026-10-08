@@ -268,7 +268,7 @@ describe("subagent registry recovery scheduling", () => {
         () => null,
         async () => {
           recoverRow.mockResolvedValue({ status: "ignored" });
-          const gateway = { current: {} as GatewayRecoveryRuntime };
+          const gateway = { current: createMockGatewayRecoveryRuntime() };
           const h = createHarness(gateway);
           const entered = createDeferred();
           const release = createDeferred();
@@ -301,7 +301,7 @@ describe("subagent registry recovery scheduling", () => {
             if (change === "lifecycle") {
               rotateAgentEventLifecycleGeneration();
             } else {
-              gateway.current = {} as GatewayRecoveryRuntime;
+              gateway.current = createMockGatewayRecoveryRuntime();
             }
             release.resolve();
             await pending;
@@ -323,7 +323,7 @@ describe("subagent registry recovery scheduling", () => {
   it.each(["replacement", "publication", "lifecycle", "runtime"] as const)(
     "refuses cleanup when its %s changes during identity preparation",
     async (change) => {
-      const runtime = { current: {} as GatewayRecoveryRuntime };
+      const runtime = { current: createMockGatewayRecoveryRuntime() };
       const { entry, runs, callGateway, sweeper } = createHarness(runtime, archivedRun());
       const entered = createDeferred();
       const release = createDeferred();
@@ -349,7 +349,7 @@ describe("subagent registry recovery scheduling", () => {
         } else if (change === "lifecycle") {
           rotateAgentEventLifecycleGeneration();
         } else {
-          runtime.current = {} as GatewayRecoveryRuntime;
+          runtime.current = createMockGatewayRecoveryRuntime();
         }
         release.resolve();
         const error = await pending;
