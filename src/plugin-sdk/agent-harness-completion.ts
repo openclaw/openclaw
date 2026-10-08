@@ -40,7 +40,18 @@ export type AgentHarnessCompletionStatus = "succeeded" | "failed" | "cancelled";
 /** Delivery result returned after routing a harness task completion announcement. */
 export type AgentHarnessCompletionDelivery = Awaited<
   ReturnType<typeof deliverSubagentAnnouncement>
-> & { recoveryPending?: true; recoveryBlocked?: true };
+> & {
+  recoveryPending?: true;
+  recoveryBlocked?: true;
+  /** Custody evidence was temporarily unreadable; keep the completion and retry later. */
+  recoveryUnavailable?: true;
+};
+
+const MAX_HARNESS_COMPLETION_READMISSIONS = 3;
+
+function harnessCompletionDeliveryKey(baseKey: string, readmission: number): string {
+  return readmission === 0 ? baseKey : `${baseKey}:readmit:${readmission}`;
+}
 
 /** Delivers a completed harness task result back to the requester or parent session. */
 export async function deliverAgentHarnessCompletion(params: {
@@ -126,6 +137,10 @@ export async function deliverAgentHarnessCompletion(params: {
     },
   ];
   const prompt = formatAgentInternalEventsForPrompt(internalEvents);
+  const baseDeliveryKey = buildAnnounceIdempotencyKey(params.announceId);
+  // Selected by reconcile below; a spent (interrupted, uncommitted, unowned)
+  // identity advances to its successor so every layer admits a fresh input.
+  let deliveryKey = baseDeliveryKey;
   const deliver = async (): Promise<AgentHarnessCompletionDelivery> => {
     if (!requesterSessionId || !isRequesterCurrent()) {
       return {
@@ -136,19 +151,45 @@ export async function deliverAgentHarnessCompletion(params: {
       };
     }
     if (requester.agentId && requester.storePath) {
-      const custody = await reconcileHarnessCompletionDelivery({
-        agentId: requester.agentId,
-        storePath: requester.storePath,
-        sessionKey: requester.canonicalKey,
-        sourceRunId: buildAnnounceIdempotencyKey(params.announceId),
-        taskRunId: childSessionKey,
-      });
+      let custody: Awaited<ReturnType<typeof reconcileHarnessCompletionDelivery>> = "orphaned";
+      deliveryKey = baseDeliveryKey;
+      for (
+        let readmission = 0;
+        custody === "orphaned" && readmission <= MAX_HARNESS_COMPLETION_READMISSIONS;
+        readmission += 1
+      ) {
+        deliveryKey = harnessCompletionDeliveryKey(baseDeliveryKey, readmission);
+        custody = await reconcileHarnessCompletionDelivery({
+          agentId: requester.agentId,
+          storePath: requester.storePath,
+          sessionKey: requester.canonicalKey,
+          sourceRunId: deliveryKey,
+          taskRunId: childSessionKey,
+        });
+      }
       if (!isRequesterCurrent()) {
         return {
           delivered: false,
           path: "none",
           recoveryBlocked: true,
           error: "completion requester locator is missing or replaced",
+        };
+      }
+      if (custody === "unavailable") {
+        // Neither spent nor owned is proven: never advance the identity or drop.
+        return {
+          delivered: false,
+          path: "none",
+          recoveryUnavailable: true,
+          error: "completion custody evidence is temporarily unavailable",
+        };
+      }
+      if (custody === "orphaned") {
+        return {
+          delivered: false,
+          path: "none",
+          recoveryBlocked: true,
+          error: "completion readmission limit reached after interrupted admissions",
         };
       }
       if (custody === "delivered") {
@@ -172,7 +213,7 @@ export async function deliverAgentHarnessCompletion(params: {
       {
         scope,
         sourceSessionKey: childSessionKey,
-        sourceRunId: buildAnnounceIdempotencyKey(params.announceId),
+        sourceRunId: deliveryKey,
         requesterSessionId,
         requesterLifecycleRevision,
         isSourceCurrent: isSourceSessionEffectsAllowed,
@@ -194,7 +235,7 @@ export async function deliverAgentHarnessCompletion(params: {
           requesterIsSubagent,
           expectsCompletionMessage: true,
           bestEffortDeliver: true,
-          directIdempotencyKey: buildAnnounceIdempotencyKey(params.announceId),
+          directIdempotencyKey: deliveryKey,
           signal,
         }),
     );

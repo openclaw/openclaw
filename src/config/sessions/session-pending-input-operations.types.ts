@@ -23,6 +23,8 @@ type PendingInputStageRead = PendingInputIdentity & {
 export type PendingInputSourceRead = PendingInputIdentity & {
   kind: "source";
   pendingOnly: boolean;
+  /** Also report whether a found pending row already reached the transcript. */
+  commitEvidence?: true;
 };
 
 export type PendingInputSourceSnapshot = {
@@ -30,6 +32,8 @@ export type PendingInputSourceSnapshot = {
   current: boolean;
   pending?: SessionPendingInputRow;
   committed?: PersistedUserTurnMessage;
+  /** Present only for commitEvidence reads that found a pending row. */
+  pendingCommit?: { transcriptIndexCurrent: boolean; committed: boolean };
 };
 
 export type PendingInputSnapshot = {

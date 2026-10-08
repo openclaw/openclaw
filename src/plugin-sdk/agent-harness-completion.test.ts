@@ -319,3 +319,124 @@ describe("SDK harness completion source admission", () => {
     },
   );
 });
+
+describe("SDK harness completion readmission after interrupted admission", () => {
+  const baseKey = buildAnnounceIdempotencyKey("native-result");
+  const readmitKey = `${baseKey}:readmit:1`;
+
+  it("retries a SESSION_WORK_START_CHANGED admission once under a successor identity", async () => {
+    const { createSessionWorkStartChangedError } =
+      await import("../config/sessions/work-start-error.js");
+    // Attempt 1: base identity is fresh, admission accepts its input then throws.
+    const spent = new Set<string>();
+    mocks.reconcile.mockImplementation((async (request: { sourceRunId: string }) =>
+      spent.has(request.sourceRunId) ? "orphaned" : "unowned") as never);
+    mocks.deliver.mockImplementationOnce(async (request: { directIdempotencyKey: string }) => {
+      spent.add(request.directIdempotencyKey);
+      throw createSessionWorkStartChangedError("main");
+    });
+    mocks.deliver.mockImplementationOnce(async () => {
+      assertHarnessCompletionSourceAdmission({ ...source, sourceRunId: readmitKey });
+      return { delivered: true, path: "direct" };
+    });
+    const { custody } = custodyFixture();
+    await expect(
+      deliverAgentHarnessCompletion({ ...params(), completionCustody: custody }),
+    ).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+
+    // Attempt 2 (the monitor's retry): the spent base advances to its successor.
+    const delivery = await deliverAgentHarnessCompletion({
+      ...params(),
+      completionCustody: custody,
+    });
+    expect(delivery).toMatchObject({ delivered: true, path: "direct" });
+    expect(completionSdk.isDurableAgentHarnessCompletionDelivery(delivery)).toBe(true);
+    expect(mocks.deliver).toHaveBeenCalledTimes(2);
+    expect(mocks.deliver.mock.calls[0]?.[0]).toMatchObject({ directIdempotencyKey: baseKey });
+    expect(mocks.deliver.mock.calls[1]?.[0]).toMatchObject({ directIdempotencyKey: readmitKey });
+
+    // A later retry sees the successor's own custody and never admits a third turn.
+    mocks.reconcile.mockImplementation((async (request: { sourceRunId: string }) =>
+      request.sourceRunId === baseKey ? "orphaned" : "delivered") as never);
+    await expect(
+      deliverAgentHarnessCompletion({ ...params(), completionCustody: custody }),
+    ).resolves.toMatchObject({ delivered: true });
+    expect(mocks.deliver).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the drop path for a blocked identity and bounds readmission", async () => {
+    mocks.reconcile.mockResolvedValue("blocked");
+    await expect(deliverAgentHarnessCompletion(params())).resolves.toMatchObject({
+      delivered: false,
+      recoveryBlocked: true,
+      error: "completion recovery receipt or owner is unresolved",
+    });
+    expect(mocks.reconcile).toHaveBeenCalledTimes(1);
+
+    mocks.reconcile.mockClear();
+    mocks.reconcile.mockResolvedValue("orphaned");
+    await expect(deliverAgentHarnessCompletion(params())).resolves.toMatchObject({
+      delivered: false,
+      recoveryBlocked: true,
+      error: "completion readmission limit reached after interrupted admissions",
+    });
+    expect(mocks.reconcile).toHaveBeenCalledTimes(4);
+    expect((mocks.reconcile.mock.calls.at(-1) as unknown[] | undefined)?.[0]).toMatchObject({
+      sourceRunId: `${baseKey}:readmit:3`,
+    });
+    expect(mocks.deliver).not.toHaveBeenCalled();
+  });
+
+  it("holds unavailable evidence without advancing, then admits exactly one successor", async () => {
+    let evidence: "unavailable" | "unowned" = "unavailable";
+    mocks.reconcile.mockImplementation((async (request: { sourceRunId: string }) =>
+      request.sourceRunId === baseKey ? "orphaned" : evidence) as never);
+    mocks.deliver.mockImplementation(async () => {
+      assertHarnessCompletionSourceAdmission({ ...source, sourceRunId: readmitKey });
+      return { delivered: true, path: "direct" };
+    });
+    await expect(deliverAgentHarnessCompletion(params())).resolves.toEqual({
+      delivered: false,
+      path: "none",
+      recoveryUnavailable: true,
+      error: "completion custody evidence is temporarily unavailable",
+    });
+    expect(mocks.reconcile).toHaveBeenCalledTimes(2);
+    expect((mocks.reconcile.mock.calls.at(-1) as unknown[] | undefined)?.[0]).toMatchObject({
+      sourceRunId: readmitKey,
+    });
+    expect(mocks.deliver).not.toHaveBeenCalled();
+
+    evidence = "unowned";
+    await expect(deliverAgentHarnessCompletion(params())).resolves.toMatchObject({
+      delivered: true,
+      path: "direct",
+    });
+    expect(mocks.deliver).toHaveBeenCalledTimes(1);
+    expect(mocks.deliver.mock.calls[0]?.[0]).toMatchObject({ directIdempotencyKey: readmitKey });
+  });
+
+  it("never advances past an unavailable base identity", async () => {
+    mocks.reconcile.mockResolvedValue("unavailable");
+    await expect(deliverAgentHarnessCompletion(params())).resolves.toMatchObject({
+      delivered: false,
+      recoveryUnavailable: true,
+    });
+    expect(mocks.reconcile).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sourceRunId: baseKey }),
+    );
+    expect(mocks.deliver).not.toHaveBeenCalled();
+  });
+
+  it("stops at a blocked successor without admitting it", async () => {
+    mocks.reconcile.mockImplementation((async (request: { sourceRunId: string }) =>
+      request.sourceRunId === baseKey ? "orphaned" : "blocked") as never);
+    await expect(deliverAgentHarnessCompletion(params())).resolves.toMatchObject({
+      delivered: false,
+      recoveryBlocked: true,
+      error: "completion recovery receipt or owner is unresolved",
+    });
+    expect(mocks.reconcile).toHaveBeenCalledTimes(2);
+    expect(mocks.deliver).not.toHaveBeenCalled();
+  });
+});

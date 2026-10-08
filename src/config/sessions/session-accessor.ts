@@ -10,11 +10,13 @@ export {
   bindSessionPendingInputSources,
   listSessionPendingInputs,
   readSessionPendingInput,
+  readSessionPendingInputInterruption,
   readSessionSubmittedInput,
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
   withSessionPendingInputRelocation,
   type SessionPendingInput,
+  type SessionPendingInputInterruption,
   type SessionPendingInputPage,
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";

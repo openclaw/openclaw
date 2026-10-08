@@ -7,6 +7,7 @@ import {
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import {
   loadExactSessionEntry,
+  readSessionPendingInputInterruption,
   readSessionSubmittedInput,
 } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
@@ -68,7 +69,7 @@ export async function reconcileHarnessCompletionDelivery(
     sourceRunId: string;
     taskRunId?: string;
   },
-): Promise<"unowned" | "pending" | "delivered" | "blocked"> {
+): Promise<"unowned" | "pending" | "delivered" | "blocked" | "orphaned" | "unavailable"> {
   const entry = readCurrent(params);
   if (!entry) {
     // No saved claim means this reconciler owns nothing; normal admission still
@@ -89,21 +90,33 @@ export async function reconcileHarnessCompletionDelivery(
     ) {
       return "blocked";
     }
-    const submitted = await readSessionSubmittedInput(
-      { ...params, sessionId: entry.sessionId },
-      `${params.sourceRunId}:user`,
-    );
+    const inputScope = { ...params, sessionId: entry.sessionId };
+    const inputKey = `${params.sourceRunId}:user`;
+    const submitted = await readSessionSubmittedInput(inputScope, inputKey);
+    // Admission can accept the input and then fail before any claim or transcript
+    // commit (e.g. SESSION_WORK_START_CHANGED). That interrupted, unowned input can
+    // never run: this identity is spent but owns nothing, so the caller may re-admit
+    // the completion under a successor identity. Unreadable evidence is neither
+    // proof of that nor of ownership; the caller must keep custody and retry.
+    const interruption = submitted
+      ? await readSessionPendingInputInterruption(inputScope, inputKey)
+      : "not-orphaned";
     const current = readCurrent(params);
-    return !current ||
+    const changed =
+      !current ||
       current.sessionId !== entry.sessionId ||
       current.lifecycleRevision !== entry.lifecycleRevision ||
       current.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
       current.restartRecoveryHarnessCompletion?.sourceRunId === params.sourceRunId ||
       hasRestartRecoveryTerminalRun(current, params.sourceRunId) ||
-      getRestartRecoveryTerminalDeliveryEvidence(current, params.sourceRunId)?.harnessCompletion ||
-      submitted
-      ? "blocked"
-      : "unowned";
+      getRestartRecoveryTerminalDeliveryEvidence(current, params.sourceRunId)?.harnessCompletion;
+    if (changed) {
+      return "blocked";
+    }
+    if (interruption !== "not-orphaned") {
+      return interruption;
+    }
+    return submitted ? "blocked" : "unowned";
   }
   if (
     claim.sourceRunId !== params.sourceRunId ||
