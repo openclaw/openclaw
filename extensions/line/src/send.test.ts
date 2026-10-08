@@ -882,6 +882,34 @@ describe("LINE send helpers", () => {
     expect(tracked.wasCanceled()).toBe(true);
   });
 
+  it("redacts a reflected Authorization token from LINE error bodies", async () => {
+    const token = "line-channel-access-token-xyz0123456789abcdef";
+    resolveLineChannelAccessTokenMock.mockReturnValue(token);
+    lineFetchMock.mockImplementationOnce(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get("authorization") ?? "";
+        return new Response(
+          `proxy failure reflected Authorization: ${authorization}; request rejected`,
+          {
+            status: 400,
+            statusText: "Bad Request",
+            headers: { "content-type": "text/plain" },
+          },
+        );
+      },
+    );
+
+    const caught = await captureError(() =>
+      sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+    );
+
+    expect(caught).toBeInstanceOf(HTTPFetchError);
+    const body = (caught as HTTPFetchError).body;
+    expect(body).toContain("proxy failure");
+    expect(body).toContain("request rejected");
+    expect(body).not.toContain(token);
+  });
+
   it("preserves reply rejection status when the LINE error body cannot be read", async () => {
     const response = new Response(
       new ReadableStream<Uint8Array>({

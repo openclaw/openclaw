@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -163,9 +164,9 @@ export class UrbitSSEClient {
     try {
       if (!response.ok && response.status !== 204) {
         const errorText = await readResponseTextLimited(response, 16 * 1024).catch(() => "");
-        throw new Error(
-          `Subscribe failed: ${response.status}${errorText ? ` - ${errorText}` : ""}`,
-        );
+        // Ship/proxy error bodies can reflect the session cookie; mask before throwing.
+        const detail = errorText ? redactToolPayloadText(errorText) : "";
+        throw new Error(`Subscribe failed: ${response.status}${detail ? ` - ${detail}` : ""}`);
       }
     } finally {
       await release();

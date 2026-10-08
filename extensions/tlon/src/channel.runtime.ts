@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { monitorTlonProvider } from "./monitor/index.js";
@@ -80,7 +81,8 @@ async function createHttpPokeApi(params: {
       try {
         if (!response.ok && response.status !== 204) {
           const errorText = await readResponseTextLimited(response, 16 * 1024);
-          throw new Error(`Poke failed: ${response.status} - ${errorText}`);
+          // Ship/proxy error bodies can reflect the session cookie; mask before throwing.
+          throw new Error(`Poke failed: ${response.status} - ${redactToolPayloadText(errorText)}`);
         }
 
         return pokeId;

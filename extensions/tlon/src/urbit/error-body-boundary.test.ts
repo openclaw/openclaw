@@ -1,5 +1,6 @@
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { UrbitHttpError } from "./errors.js";
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
@@ -98,6 +99,31 @@ describe("tlon error body boundary", () => {
 
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("session expired");
+  });
+
+  it("redacts a reflected session cookie from poke error bodies", async () => {
+    const cookie = "urbauth-~zod=0v1g.abcde.ijklm.prst";
+    server = http.createServer((req, res) => {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid session", cookie: req.headers.cookie }));
+    });
+    const port = await listen(server);
+
+    const err = await pokeUrbitChannel(
+      {
+        baseUrl: `http://127.0.0.1:${port}`,
+        cookie,
+        ship: "~zod",
+        channelId: "test",
+      },
+      { app: "test", mark: "test", json: {}, auditContext: "test" },
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(UrbitHttpError);
+    const message = (err as Error).message;
+    expect(message).toContain("Poke failed: 500");
+    expect(message).toContain("invalid session");
+    expect(message).not.toContain(cookie);
   });
 
   it("parses a normal scry response over HTTP", async () => {
