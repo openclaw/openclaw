@@ -2,7 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { listRuntimeVisibleChannelPlugins } from "./runtime-visible-channels.js";
 
-const TARGET_KIND_PREFIXES = new Set([
+const TARGET_KIND_PREFIXES: readonly string[] = [
   "channel",
   "conversation",
   "dm",
@@ -10,9 +10,8 @@ const TARGET_KIND_PREFIXES = new Set([
   "room",
   "thread",
   "user",
-]);
-const DEFAULT_TARGET_KINDS = [...TARGET_KIND_PREFIXES];
-const TARGET_KIND_PATTERN = new RegExp(`^(${DEFAULT_TARGET_KINDS.join("|")}):`, "i");
+];
+const TARGET_KIND_PATTERN = new RegExp(`^(${TARGET_KIND_PREFIXES.join("|")}):`, "i");
 
 /** Removes a selected channel/provider prefix from an outbound target string. */
 export function stripTargetProviderPrefix(raw: string, ...providers: string[]): string {
@@ -30,9 +29,9 @@ export function stripTargetProviderPrefix(raw: string, ...providers: string[]): 
 /** Removes generic target-kind prefixes such as room:, thread:, or user:. */
 export function stripOutboundTargetKindPrefix(
   raw: string,
-  kinds: readonly string[] = DEFAULT_TARGET_KINDS,
+  kinds: readonly string[] = TARGET_KIND_PREFIXES,
 ): string {
-  if (kinds === DEFAULT_TARGET_KINDS) {
+  if (kinds === TARGET_KIND_PREFIXES) {
     return raw.replace(TARGET_KIND_PATTERN, "").trim();
   }
   const kindPattern = kinds
@@ -60,7 +59,7 @@ function resolveChannelTargetProviderPrefix(
 ): { prefix: string; channel: string } | undefined {
   const match = /^\s*([a-z][a-z0-9_-]*):/i.exec(raw ?? "");
   const prefix = normalizeOptionalLowercaseString(match?.[1]);
-  if (!prefix || TARGET_KIND_PREFIXES.has(prefix)) {
+  if (!prefix || TARGET_KIND_PREFIXES.includes(prefix)) {
     return undefined;
   }
   for (const plugin of listRuntimeVisibleChannelPlugins()) {

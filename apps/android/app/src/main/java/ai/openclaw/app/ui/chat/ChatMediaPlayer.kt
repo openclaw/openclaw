@@ -102,9 +102,7 @@ internal class ChatMediaPlaybackClaims<T>(
   }
 
   fun releaseActive() {
-    val previous = active ?: return
-    active = null
-    release(previous)
+    releaseIf { true }
   }
 }
 
@@ -477,10 +475,9 @@ internal fun ChatMediaPlayerCard(
     }
   }
 
-  if (kind == GatewayMediaKind.Video) {
-    VideoPlayerSurface(
+  val presentation =
+    MediaPlaybackPresentation(
       content = content,
-      player = player,
       loading = loading,
       preparingPlayback = loading && content.playback == "transcode",
       isPlaying = isPlaying,
@@ -488,17 +485,12 @@ internal fun ChatMediaPlayerCard(
       error = error,
       onToggle = { if (isPlaying) pause() else play() },
     )
+  if (kind == GatewayMediaKind.Video) {
+    presentation.VideoPlayerSurface(player)
   } else {
-    AudioPlayerSurface(
-      content = content,
-      loading = loading,
-      preparingPlayback = loading && content.playback == "transcode",
-      isPlaying = isPlaying,
-      playbackBlocked = playbackBlocked,
-      error = error,
+    presentation.AudioPlayerSurface(
       positionMs = positionMs,
       durationMs = durationMs,
-      onToggle = { if (isPlaying) pause() else play() },
       onSeek = { value ->
         val target = value.toLong().coerceIn(0L, durationMs.coerceAtLeast(0L))
         positionMs = target
@@ -509,17 +501,20 @@ internal fun ChatMediaPlayerCard(
   }
 }
 
+private data class MediaPlaybackPresentation(
+  val content: ChatMessageContent,
+  val loading: Boolean,
+  val preparingPlayback: Boolean,
+  val isPlaying: Boolean,
+  val playbackBlocked: Boolean,
+  val error: String?,
+  val onToggle: () -> Unit,
+)
+
 @Composable
-private fun AudioPlayerSurface(
-  content: ChatMessageContent,
-  loading: Boolean,
-  preparingPlayback: Boolean,
-  isPlaying: Boolean,
-  playbackBlocked: Boolean,
-  error: String?,
+private fun MediaPlaybackPresentation.AudioPlayerSurface(
   positionMs: Long,
   durationMs: Long,
-  onToggle: () -> Unit,
   onSeek: (Float) -> Unit,
   seekEnabled: Boolean,
 ) {
@@ -562,7 +557,7 @@ private fun AudioPlayerSurface(
             style = ClawTheme.type.body,
             color = ClawTheme.colors.text,
           )
-          MediaPlaybackStatus(error, preparingPlayback, playbackBlocked)
+          MediaPlaybackStatus()
         }
       }
       Slider(
@@ -581,16 +576,7 @@ private fun AudioPlayerSurface(
 
 @OptIn(UnstableApi::class)
 @Composable
-private fun VideoPlayerSurface(
-  content: ChatMessageContent,
-  player: ExoPlayer?,
-  loading: Boolean,
-  preparingPlayback: Boolean,
-  isPlaying: Boolean,
-  playbackBlocked: Boolean,
-  error: String?,
-  onToggle: () -> Unit,
-) {
+private fun MediaPlaybackPresentation.VideoPlayerSurface(player: ExoPlayer?) {
   val ratio =
     remember(content.width, content.height) {
       val width = content.width?.takeIf { it > 0 }
@@ -639,16 +625,12 @@ private fun VideoPlayerSurface(
       style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
-    MediaPlaybackStatus(error, preparingPlayback, playbackBlocked)
+    MediaPlaybackStatus()
   }
 }
 
 @Composable
-private fun MediaPlaybackStatus(
-  error: String?,
-  preparingPlayback: Boolean,
-  playbackBlocked: Boolean,
-) {
+private fun MediaPlaybackPresentation.MediaPlaybackStatus() {
   val status =
     when {
       error != null -> error
@@ -702,11 +684,9 @@ private suspend fun writeBufferedMediaFile(
         file.writeBytes(bytes)
       }
     }
-  } catch (error: CancellationException) {
+  } catch (error: Throwable) {
     withContext(NonCancellable + Dispatchers.IO) { created?.delete() }
-    throw error
-  } catch (_: Throwable) {
-    withContext(NonCancellable + Dispatchers.IO) { created?.delete() }
+    if (error is CancellationException) throw error
     null
   }
 }

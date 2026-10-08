@@ -1,5 +1,3 @@
-// Gateway HTTP server routes control UI, OpenAI-compatible APIs, plugin HTTP
-// surfaces, hooks, readiness, auth, and WebSocket upgrades.
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -70,6 +68,7 @@ import {
 } from "./provider-browser-auth.js";
 import type { ControlUiRootState } from "./server-control-ui-root.js";
 import {
+  getNativeHookRelayModule,
   getControlUiModule,
   getControlUiPluginAssetsModule,
   getCanvasServeModule,
@@ -121,7 +120,6 @@ type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Pr
 
 type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 
-/** Creates the gateway HTTP/HTTPS server and ordered request-stage router. */
 export function createGatewayHttpServer(opts: {
   /** Pre-bound listener supplied by the internal test transport. */
   testListener?: HttpServer;
@@ -420,6 +418,9 @@ export function createGatewayHttpServer(opts: {
         clientIp: ingressAttribution.rateLimit.subject.key,
         rateLimiter: joinRateLimiter,
       };
+      addAdmittedStage(scopedRequestPath.startsWith("/__openclaw__/native-hook"), async () =>
+        (await getNativeHookRelayModule()).handleNativeHookRelayHttpRequest(transferRequest),
+      );
       addAdmittedStage(
         classifyWorkerBootstrapArtifactTransferPath(scopedRequestPath) !== "outside",
         () =>

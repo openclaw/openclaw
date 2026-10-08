@@ -308,8 +308,12 @@ const baseConfig: OpenClawConfig = {
 
 const dynamicToolsConfig: OpenClawConfig = {
   ...baseConfig,
-  // Exclude optional media factories before they inspect ambient provider credentials.
-  tools: { deny: ["image_generate", "video_generate", "music_generate", "pdf"] },
+  tools: {
+    // Exclude optional media factories before they inspect ambient provider credentials.
+    deny: ["image_generate", "video_generate", "music_generate", "pdf"],
+    // This happy-path catalog includes search regardless of ambient credentials.
+    web: { search: { provider: "duckduckgo" } },
+  },
   plugins: {
     enabled: true,
     slots: {

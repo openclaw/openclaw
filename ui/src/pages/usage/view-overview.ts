@@ -17,19 +17,21 @@ import {
   formatUsageTokens,
 } from "./metrics.ts";
 import type { UsageInsightStats } from "./metrics.ts";
-import type { UsageAggregates, UsageSessionEntry, UsageTotals, CostDailyEntry } from "./types.ts";
+import type {
+  UsageAggregates,
+  UsageProps,
+  UsageSessionEntry,
+  UsageTotals,
+  CostDailyEntry,
+} from "./types.ts";
 import { renderSessionBarRow } from "./view-session-row.ts";
 
 function renderFilterChips(
-  selectedDays: string[],
-  selectedHours: number[],
-  selectedSessions: string[],
   sessions: UsageSessionEntry[],
-  onClearDays: () => void,
-  onClearHours: () => void,
-  onClearSessions: () => void,
-  onClearFilters: () => void,
+  { filters, callbacks }: Pick<UsageProps, "filters" | "callbacks">,
 ) {
+  const { selectedDays, selectedHours, selectedSessions } = filters;
+  const { onClearDays, onClearHours, onClearSessions, onClearFilters } = callbacks.filters;
   const hasFilters =
     selectedDays.length > 0 || selectedHours.length > 0 || selectedSessions.length > 0;
   if (!hasFilters) {
@@ -501,28 +503,18 @@ function renderUsageInsights(
 
 function renderSessionsCard(
   sessions: UsageSessionEntry[],
-  selectedSessions: string[],
-  selectedDays: string[],
-  isTokenMode: boolean,
-  sessionSort: "tokens" | "cost" | "recent" | "messages" | "errors",
-  sessionSortDir: "asc" | "desc",
-  recentSessions: string[],
-  sessionsTab: "all" | "recent",
-  onSelectSession: (key: string, shiftKey: boolean, orderedKeys: string[]) => void,
-  onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void,
-  onSessionSortDirChange: (dir: "asc" | "desc") => void,
-  onSessionsTabChange: (tab: "all" | "recent") => void,
+  { filters, display, callbacks }: Pick<UsageProps, "filters" | "display" | "callbacks">,
   totalSessions: number,
-  onClearSessions: () => void,
 ) {
-  const formatSessionListLabel = (s: UsageSessionEntry): string => {
-    const raw = s.label || s.key;
-    // Agent session keys often include a token query param; remove it for readability.
-    if (raw.startsWith("agent:") && raw.includes("?token=")) {
-      return raw.slice(0, raw.indexOf("?token="));
-    }
-    return raw;
-  };
+  const { selectedSessions, selectedDays } = filters;
+  const { sessionSort, sessionSortDir, recentSessions, sessionsTab } = display;
+  const { onSelectSession } = callbacks.details;
+  const { onSessionSortChange, onSessionSortDirChange, onSessionsTabChange } = callbacks.display;
+  const { onClearSessions } = callbacks.filters;
+  const isTokenMode = display.chartMode === "tokens";
+  const sortDirectionLabel = t(
+    sessionSortDir === "desc" ? "usage.sessions.descending" : "usage.sessions.ascending",
+  );
   const buildSessionMeta = (session: UsageSessionEntry): string[] =>
     [
       session.channel && `channel:${session.channel}`,
@@ -553,9 +545,15 @@ function renderSessionsCard(
           }
         }
       }
+      const rawLabel = session.label || session.key;
+      // Agent session keys often include a token query param; remove it for readability.
+      const displayLabel =
+        rawLabel.startsWith("agent:") && rawLabel.includes("?token=")
+          ? rawLabel.slice(0, rawLabel.indexOf("?token="))
+          : rawLabel;
       return {
         session,
-        displayLabel: formatSessionListLabel(session),
+        displayLabel,
         value: isTokenMode ? tokens : cost,
         sortValue: {
           recent: session.updatedAt ?? 0,
@@ -668,20 +666,10 @@ function renderSessionsCard(
               )}
             </select>
           </label>
-          <openclaw-tooltip
-            .content=${
-              sessionSortDir === "desc"
-                ? t("usage.sessions.descending")
-                : t("usage.sessions.ascending")
-            }
-          >
+          <openclaw-tooltip .content=${sortDirectionLabel}>
             <button
               class="btn btn--sm"
-              aria-label=${
-                sessionSortDir === "desc"
-                  ? t("usage.sessions.descending")
-                  : t("usage.sessions.ascending")
-              }
+              aria-label=${sortDirectionLabel}
               @click=${() => onSessionSortDirChange(sessionSortDir === "desc" ? "asc" : "desc")}
             >
               ${sessionSortDir === "desc" ? "↓" : "↑"}

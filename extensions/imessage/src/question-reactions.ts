@@ -39,11 +39,7 @@ function reactionCandidates(
     return null;
   }
   const guids = Array.from(
-    new Set(
-      [...(reaction.targetGuids ?? []), reaction.targetGuid ?? ""]
-        .map(normalizeIMessageGuid)
-        .filter(Boolean),
-    ),
+    new Set((reaction.targetGuids ?? []).map(normalizeIMessageGuid).filter(Boolean)),
   );
   return guids.length > 0 ? { action: reaction.action, emoji: reaction.emoji, guids } : null;
 }

@@ -11,13 +11,13 @@ import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginContributionIds } from "../plugins/plugin-registry.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAccountId, normalizeAgentId } from "../routing/session-key.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
 function bindingMatchKey(match: AgentRouteBinding["match"]) {
-  const accountId = normalizeOptionalString(match.accountId) || DEFAULT_ACCOUNT_ID;
+  const accountId = normalizeOptionalString(match.accountId);
   const identityKey = bindingMatchIdentityKey(match);
-  return JSON.stringify([identityKey, accountId]);
+  return JSON.stringify([identityKey, accountId === "*" ? "*" : normalizeAccountId(accountId)]);
 }
 
 function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {

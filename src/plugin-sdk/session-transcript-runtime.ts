@@ -8,14 +8,12 @@ import {
   appendSessionTranscriptReport,
   bindSessionTranscriptStoreScope,
   isSessionTranscriptProjectionUnavailableError,
-  loadSessionEntry,
   loadTranscriptEvents,
   publishTranscriptUpdate,
   persistSessionTranscriptTurn,
   readTranscriptRawDelta,
   readSessionTranscriptVisibleMessageDeltaCore as readVisibleMessageDelta,
   readLatestTranscriptAssistantText,
-  readLatestSessionTranscriptMessageEvent,
   resolveSessionTranscriptRuntimeTarget,
   withTranscriptWriteLock,
   type TranscriptMessageAppendOptions,
@@ -26,11 +24,13 @@ import {
   type SessionTranscriptVisibleMessageDeltaLimits,
 } from "../config/sessions/session-accessor.js";
 import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
+import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import {
   resolveMirroredTranscriptText,
   type SessionTranscriptDeliveryMirror,
@@ -47,7 +47,7 @@ import type {
   SessionTranscriptUpdateMode,
 } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import type { AgentMessage } from "./agent-core.js";
 import { withProjectedSessionTranscriptWriteLock } from "./session-transcript-lock-runtime.js";
@@ -97,7 +97,10 @@ export function composeSessionTranscriptWriteAssertion(
   sources: readonly (SessionSourceAssertion | undefined)[],
   check?: (assertSources: () => void) => void,
 ): SessionSourceAssertion {
-  return composeSessionSourceAssertion(sources.map(captureExternalSessionCommitGuard), check);
+  return composeSessionSourceAssertion(sources.map(captureExternalSessionCommitGuard), check, {
+    // A plugin's wrapper remains opaque even when all of its children are prepared.
+    preparedCheck: (assertSources) => assertSources(),
+  });
 }
 
 export type SessionTranscriptEvent = unknown;
@@ -369,7 +372,7 @@ export async function appendAssistantMirrorMessageByIdentity(
   const scope = bindSessionTranscriptStoreScope(params, params.config);
   return await withTranscriptWriteLock(scope, async (locked) => {
     params.signal?.throwIfAborted();
-    const currentEntry = loadSessionEntry(scope);
+    const currentEntry = await readSessionEntryReadOnlyInWorker(scope);
     if (!currentEntry?.sessionId) {
       return { ok: false, reason: "missing active session", code: "blocked" };
     }
@@ -404,10 +407,11 @@ export async function appendAssistantMirrorMessageByIdentity(
       } else {
         let events: readonly SessionTranscriptEvent[];
         try {
-          const latest = readLatestSessionTranscriptMessageEvent({
+          const latest = await prepareSessionTranscriptHydration({
             ...scope,
+            agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
             sessionId: currentEntry.sessionId,
-          });
+          }).readLatestActiveMessage();
           events = latest ? [latest.event] : [];
         } catch (error) {
           if (!isSessionTranscriptProjectionUnavailableError(error)) {
@@ -445,7 +449,7 @@ export async function appendAssistantMirrorMessageByIdentity(
     }
     if (params.updateMode !== "none" && appendResult.appended) {
       params.signal?.throwIfAborted();
-      await publishTranscriptUpdate(scope, {
+      await locked.publishUpdate({
         messageId: appendResult.messageId,
       });
     }

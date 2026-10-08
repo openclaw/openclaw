@@ -9,15 +9,20 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as executionIdentityContext from "../audit/execution-identity-context.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
+import {
+  CONTENT_VERSION_KEY,
+  readStateSchemaContentVersion,
+} from "./openclaw-state-db-schema-version.js";
 import type {
   OpenClawStateReadOnlyDatabase,
   OpenClawStateReadReply,
@@ -128,13 +133,14 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   }
   expect(prepare).not.toHaveBeenCalled();
   expect(observation.queries.filter((sql) => configSelect.test(sql))).toHaveLength(10);
-  expect(observation.queries.filter((sql) => contentVersionSelect.test(sql))).toHaveLength(10);
+  expect(observation.queries.filter((sql) => contentVersionSelect.test(sql))).toHaveLength(0);
   expect(observation.queries.filter((sql) => dataVersion.test(sql))).toHaveLength(10);
   expect(countOpens()).toBe(1);
   const peer = new native.DatabaseSync(pathname);
   try {
     peer.exec("UPDATE config_machine_state SET value_json = '2', updated_at_ms = 2");
     expect(await value()).toBe(2);
+    expect(observation.queries.filter((sql) => contentVersionSelect.test(sql))).toHaveLength(1);
     expect(prepare.mock.calls.filter(([sql]) => configSelect.test(sql))).toHaveLength(0);
     expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(0);
   } finally {
@@ -152,6 +158,93 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   expect(prepare.mock.calls.filter(([sql]) => contentVersionSelect.test(sql))).toHaveLength(1);
   expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(1);
   observation.restore();
+});
+
+it.each([
+  { change: "insertion", before: undefined, after: "1", expected: 1 },
+  { change: "update", before: "1", after: "2", expected: 2 },
+  { change: "deletion", before: "1", after: undefined, expected: 0 },
+  {
+    change: "newer version",
+    before: "1",
+    after: String(OPENCLAW_STATE_SCHEMA_VERSION + 1),
+    expected: /newer schema version/iu,
+  },
+  {
+    change: "malformed version",
+    before: "1",
+    after: "{",
+    expected: /invalid shared state schema content version/iu,
+  },
+])("observes a foreign content-marker $change after warm reads", ({ before, after, expected }) => {
+  const { pathname, read } = fixture();
+  const { DatabaseSync } = sqlite.requireNodeSqlite();
+  const peer = new DatabaseSync(pathname);
+  const insert = peer.prepare(
+    "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, 1)",
+  );
+  const version = () => read(({ db }) => readStateSchemaContentVersion(db));
+  try {
+    if (before !== undefined) {
+      insert.run(CONTENT_VERSION_KEY, before);
+    }
+    expect(version()).toBe(before === undefined ? 0 : 1);
+    expect(version()).toBe(before === undefined ? 0 : 1);
+    if (after === undefined) {
+      peer.prepare("DELETE FROM config_machine_state WHERE state_key = ?").run(CONTENT_VERSION_KEY);
+    } else if (before === undefined) {
+      insert.run(CONTENT_VERSION_KEY, after);
+    } else {
+      peer
+        .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
+        .run(after, CONTENT_VERSION_KEY);
+    }
+    if (typeof expected === "number") {
+      expect(version()).toBe(expected);
+    } else {
+      expect(version).toThrow(expected);
+    }
+  } finally {
+    peer.close();
+  }
+});
+
+it("keeps content markers current through local writes, rollback, and authorizers", () => {
+  const database = sqlite.openNodeSqliteDatabase(":memory:");
+  const { constants } = sqlite.requireNodeSqlite();
+  database.exec(
+    "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER)",
+  );
+  database.prepare("INSERT INTO config_machine_state VALUES (?, '1', 1)").run(CONTENT_VERSION_KEY);
+  const update = database.prepare(
+    "UPDATE config_machine_state SET value_json = ? WHERE state_key = ?",
+  );
+  admitSqliteSchema(database);
+  const version = () =>
+    runSqliteReadOperationSync(database, () => readStateSchemaContentVersion(database));
+  try {
+    expect(version()).toBe(1);
+    expect(version()).toBe(1);
+    update.run("2", CONTENT_VERSION_KEY);
+    expect(version()).toBe(2);
+    database.exec("BEGIN");
+    update.run("3", CONTENT_VERSION_KEY);
+    expect(version()).toBe(3);
+    database.exec("ROLLBACK");
+    expect(version()).toBe(2);
+    database.setAuthorizer((action, table) =>
+      action === constants.SQLITE_READ && table === "config_machine_state"
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK,
+    );
+    expect(version).toThrowError(
+      expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 23 }),
+    );
+    database.setAuthorizer(null);
+    expect(version()).toBe(2);
+  } finally {
+    database.close();
+  }
 });
 
 it("observes peer commits and closes only the invalidated physical identity", () => {

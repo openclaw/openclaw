@@ -121,15 +121,6 @@ export class PlivoProvider implements VoiceCallProvider {
     );
   }
 
-  private async apiRequest<T = unknown>(params: {
-    method: "GET" | "POST" | "DELETE";
-    endpoint: string;
-    body?: Record<string, unknown>;
-    allowNotFound?: boolean;
-  }): Promise<T> {
-    return this.api.request<T>(params.endpoint, params.body, params);
-  }
-
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
     const result = verifyPlivoWebhook(ctx, this.authToken, {
       publicUrl: this.options.publicUrl,
@@ -321,19 +312,15 @@ export class PlivoProvider implements VoiceCallProvider {
 
     this.callIdToWebhookUrl.set(input.callId, input.webhookUrl);
 
-    const result = await this.apiRequest<PlivoCreateCallResponse>({
-      method: "POST",
-      endpoint: "/Call/",
-      body: {
-        from: PlivoProvider.normalizeNumber(input.from),
-        to: PlivoProvider.normalizeNumber(input.to),
-        answer_url: answerUrl.toString(),
-        answer_method: "POST",
-        hangup_url: hangupUrl.toString(),
-        hangup_method: "POST",
-        // Plivo's API uses `hangup_on_ring` for outbound ring timeout.
-        hangup_on_ring: this.options.ringTimeoutSec ?? 30,
-      },
+    const result = await this.api.request<PlivoCreateCallResponse>("/Call/", {
+      from: PlivoProvider.normalizeNumber(input.from),
+      to: PlivoProvider.normalizeNumber(input.to),
+      answer_url: answerUrl.toString(),
+      answer_method: "POST",
+      hangup_url: hangupUrl.toString(),
+      hangup_method: "POST",
+      // Plivo's API uses `hangup_on_ring` for outbound ring timeout.
+      hangup_on_ring: this.options.ringTimeoutSec ?? 30,
     });
 
     const requestUuid = Array.isArray(result.request_uuid)
@@ -348,16 +335,14 @@ export class PlivoProvider implements VoiceCallProvider {
 
   async hangupCall(input: HangupCallInput): Promise<void> {
     const callUuid = this.requestUuidToCallUuid.get(input.providerCallId);
-    await this.apiRequest({
+    await this.api.request(`/Call/${callUuid || input.providerCallId}/`, undefined, {
       method: "DELETE",
-      endpoint: `/Call/${callUuid || input.providerCallId}/`,
       allowNotFound: true,
     });
     // Without a resolved call UUID, also try canceling the outbound request.
     if (!callUuid) {
-      await this.apiRequest({
+      await this.api.request(`/Request/${input.providerCallId}/`, undefined, {
         method: "DELETE",
-        endpoint: `/Request/${input.providerCallId}/`,
         allowNotFound: true,
       });
     }
@@ -399,14 +384,10 @@ export class PlivoProvider implements VoiceCallProvider {
     transferUrl.searchParams.set("flow", params.flow);
     transferUrl.searchParams.set("callId", params.callId);
 
-    await this.apiRequest({
-      method: "POST",
-      endpoint: `/Call/${params.callUuid}/`,
-      body: {
-        legs: "aleg",
-        aleg_url: transferUrl.toString(),
-        aleg_method: "POST",
-      },
+    await this.api.request(`/Call/${params.callUuid}/`, {
+      legs: "aleg",
+      aleg_url: transferUrl.toString(),
+      aleg_method: "POST",
     });
   }
 

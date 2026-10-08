@@ -170,13 +170,7 @@ async function createSuggestedTaskSession(params: {
       : params.suggestion.prompt;
   const sessionKey = buildDashboardSessionKey(agentId);
   const fail = (key: string, error: NonNullable<Parameters<RespondFn>[2]>) =>
-    failSuggestedTaskSession({
-      taskId: params.taskId,
-      sessionKey: key,
-      agentId,
-      options: params.options,
-      error,
-    });
+    failSuggestedTaskSession({ ...params, sessionKey: key, error });
   const sessionResponse = await captureSuggestedTaskResponse(
     "sessions.create",
     "failed to create suggested task",
@@ -223,13 +217,7 @@ async function createSuggestedTaskSession(params: {
     if (!dispatchResponse.ok) {
       return await fail(key, dispatchResponse.error);
     }
-    const sendError = await sendSuggestedTaskPrompt({
-      taskId: params.taskId,
-      suggestion: params.suggestion,
-      options: params.options,
-      sessionKey: key,
-      agentId,
-    });
+    const sendError = await sendSuggestedTaskPrompt({ ...params, sessionKey: key });
     if (sendError) {
       return await fail(key, sendError);
     }
@@ -245,12 +233,7 @@ async function createSuggestedTaskSession(params: {
       return await fail(key, errorShape(ErrorCodes.UNAVAILABLE, runMessage));
     }
   }
-  return finishSuggestedTaskAcceptance({
-    taskId: params.taskId,
-    sessionKey: key,
-    suggestion: params.suggestion,
-    options: params.options,
-  });
+  return finishSuggestedTaskAcceptance({ ...params, sessionKey: key });
 }
 
 async function deliverSuggestedTaskToSourceSession(params: {
@@ -281,21 +264,16 @@ async function deliverSuggestedTaskToSourceSession(params: {
     return fail(errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
   }
   const sendError = await sendSuggestedTaskPrompt({
-    taskId: params.taskId,
-    suggestion: params.suggestion,
-    options: params.options,
+    ...params,
     sessionKey: params.suggestion.sessionKey,
-    agentId,
     sessionId: source.entry.sessionId,
   });
   if (sendError) {
     return fail(sendError);
   }
   return finishSuggestedTaskAcceptance({
-    taskId: params.taskId,
+    ...params,
     sessionKey: params.suggestion.sessionKey,
-    suggestion: params.suggestion,
-    options: params.options,
   });
 }
 

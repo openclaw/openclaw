@@ -35,15 +35,13 @@ import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./telegram-ingress-
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
-function formatTelegramInboundLogLine(params: {
-  from: string;
-  to: string;
-  chatType: string;
-  body: string;
-  mediaType?: string;
-}): string {
-  const kindLabel = params.mediaType ? `, ${params.mediaType}` : "";
-  return `Inbound message ${params.from} -> ${params.to} (${params.chatType}${kindLabel}, ${params.body.length} chars)`;
+function abortedProcessingResult(
+  signal: AbortSignal,
+  fallback: string,
+): TelegramMessageProcessingResult {
+  return signal.reason === "skipped"
+    ? { kind: "skipped" }
+    : { kind: "failed-retryable", error: signal.reason ?? new Error(fallback) };
 }
 
 type TelegramMessageProcessorDeps = Omit<
@@ -242,16 +240,13 @@ export const createTelegramMessageProcessor = (
         logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
       });
     }
+    const logTo = context.primaryCtx.me?.username
+      ? `@${context.primaryCtx.me.username}`
+      : context.ctxPayload.To;
+    const mediaType = allMedia[0]?.contentType ?? allMedia[0]?.kind;
+    const kindLabel = mediaType ? `, ${mediaType}` : "";
     telegramInboundLog.info(
-      formatTelegramInboundLogLine({
-        from: context.ctxPayload.From,
-        to: context.primaryCtx.me?.username
-          ? `@${context.primaryCtx.me.username}`
-          : context.ctxPayload.To,
-        chatType: context.ctxPayload.ChatType,
-        body: context.ctxPayload.RawBody,
-        mediaType: allMedia[0]?.contentType ?? allMedia[0]?.kind,
-      }),
+      `Inbound message ${context.ctxPayload.From} -> ${logTo} (${context.ctxPayload.ChatType}${kindLabel}, ${context.ctxPayload.RawBody.length} chars)`,
     );
     const spooledReplay =
       options?.spooledReplay === true || isTelegramSpooledReplayUpdate(primaryCtx.update);
@@ -429,16 +424,13 @@ export const createTelegramMessageProcessor = (
           return settledResult;
         }
         if (turnAbortSignal.aborted) {
-          const abortResult: TelegramMessageProcessingResult =
-            turnAbortSignal.reason === "skipped"
-              ? { kind: "skipped" }
-              : {
-                  kind: "failed-retryable",
-                  error:
-                    turnAbortSignal.reason ??
-                    new Error("telegram spooled replay owner cancelled before adoption"),
-                };
-          return await settle(abortResult, "terminal");
+          return await settle(
+            abortedProcessingResult(
+              turnAbortSignal,
+              "telegram spooled replay owner cancelled before adoption",
+            ),
+            "terminal",
+          );
         }
         if (adoptionAttempted && !deferred && result.kind === "completed") {
           runtime.error?.(
@@ -482,16 +474,9 @@ export const createTelegramMessageProcessor = (
             }
           }
           if (turnAbortSignal.aborted && !participant.abortSignal.aborted) {
-            const abortResult: TelegramMessageProcessingResult =
-              turnAbortSignal.reason === "skipped"
-                ? { kind: "skipped" }
-                : {
-                    kind: "failed-retryable",
-                    error:
-                      turnAbortSignal.reason ??
-                      new Error("telegram spooled replay owner cancelled"),
-                  };
-            participant.settle(abortResult);
+            participant.settle(
+              abortedProcessingResult(turnAbortSignal, "telegram spooled replay owner cancelled"),
+            );
           }
           return await participant.task;
         }

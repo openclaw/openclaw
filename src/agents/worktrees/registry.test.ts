@@ -9,25 +9,31 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
-import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
+import {
+  getRegistryWorktreeProvisionedChunk,
+  prepareWorktreeRegistryGuard,
+} from "./registry-read.js";
 import {
   abortWorktreeRemovalRow,
   claimWorktreeRemovalRow,
   clearRegistryWorktreeProvisionedChunks,
   createWorktreeRemovalClaimsGuard,
   deleteRegistryWorktree,
-  findLiveRegistryWorktreeByOwner,
-  findLiveRegistryWorktreeByPath,
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
   listLegacyRegistryWorktreesForMigration,
-  listRegistryWorktrees,
   listRegistryWorktreesForMigration,
   updateRegistryWorktree,
 } from "./registry.js";
+import {
+  findLiveRegistryWorktreeByOwner,
+  findLiveRegistryWorktreeByPath,
+  getRegistryWorktree,
+  listRegistryWorktrees,
+} from "./registry.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 function isolatedWorktreeRecord(root: string): ManagedWorktreeRecord {
@@ -100,7 +106,7 @@ describe("managed worktree registry", () => {
       await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
       await updateRegistryWorktree(env, record.id, { lastActiveAt: 20 });
       expect(getRegistryWorktree(env, record.id)?.lastActiveAt).toBe(20);
-      deleteRegistryWorktree(env, record.id);
+      await deleteRegistryWorktree(env, record.id);
       expect(getRegistryWorktree(env, record.id)).toBeUndefined();
       expect(await getRegistryWorktreeProvisionedChunk(env, chunk)).toBeUndefined();
       expect(listRegistryWorktrees(process.env)).toEqual([]);
@@ -117,12 +123,12 @@ describe("managed worktree registry", () => {
     await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
     const { db } = openOpenClawStateDatabase({ env });
     db.exec(`
-      CREATE TEMP TRIGGER registry_delete_fault BEFORE DELETE ON worktrees
+      CREATE TRIGGER registry_delete_fault BEFORE DELETE ON worktrees
       WHEN OLD.id = 'isolated'
       BEGIN SELECT RAISE(ABORT, 'synthetic worktree deletion failure'); END;
     `);
 
-    expect(() => deleteRegistryWorktree(env, record.id)).toThrow(
+    await expect(deleteRegistryWorktree(env, record.id)).rejects.toThrow(
       "synthetic worktree deletion failure",
     );
     expect(getRegistryWorktree(env, record.id)).toEqual(record);
@@ -135,6 +141,28 @@ describe("managed worktree registry", () => {
     expect(listLegacyRegistryWorktreesForMigration(env)).toEqual([]);
     expect(listRegistryWorktreesForMigration(env)).toEqual([]);
     await expect(fs.stat(env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps retirement preparation read-only and reaps dead consumers when deleting the snapshot", async () => {
+    const record = { ...isolatedWorktreeRecord(root), removedAt: 20 };
+    await insertRegistryWorktree(env, record, { provisionedPaths: [] });
+    const { db } = openOpenClawStateDatabase({ env });
+    const scope = `worktree-run:${record.id}`;
+    db.prepare(`
+      INSERT INTO state_leases (scope, lease_key, owner, payload_json, created_at, updated_at)
+      VALUES (?, 'dead-consumer', 'dead-owner', ?, 1, 1)
+    `).run(scope, JSON.stringify({ pid: 2_147_483_647, starttime: 4242 }));
+    const assertRetirement = await prepareWorktreeRegistryGuard(
+      captureOpenClawStateWorkerContext({ env }),
+      { predicates: [{ kind: "snapshot-retirement", record }] },
+    );
+    assertRetirement();
+    expect(db.prepare("SELECT lease_key FROM state_leases WHERE scope = ?").all(scope)).toEqual([
+      { lease_key: "dead-consumer" },
+    ]);
+    await deleteRegistryWorktree(env, record.id, { expectedRetired: record });
+    expect(getRegistryWorktree(env, record.id)).toBeUndefined();
+    expect(db.prepare("SELECT lease_key FROM state_leases WHERE scope = ?").all(scope)).toEqual([]);
   });
 
   it("persists, orders, updates, and deletes worktree rows through Kysely", async () => {
@@ -212,7 +240,7 @@ describe("managed worktree registry", () => {
       ).toString(),
     ).toBe("snapshot");
 
-    deleteRegistryWorktree(env, "first");
+    await deleteRegistryWorktree(env, "first");
     expect(getRegistryWorktree(env, "first")).toBeUndefined();
     expect(
       await getRegistryWorktreeProvisionedChunk(env, {

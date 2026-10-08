@@ -17,6 +17,7 @@ import { prepareOperatorModelPresentation } from "../operator-model-presentation
 import { authorizeCurrentOperatorRoleScopes } from "../operator-role-policy.js";
 import { READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.js";
 import { projectModelFastModeCatalog } from "../session-fast-mode-presentation.js";
+import { sessionModelRevision } from "../session-model-revision.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
@@ -113,25 +114,22 @@ export const modelsHandlers: GatewayRequestHandlers = {
               client?.connect.caps,
               GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
             );
+            const listParams = () => ({
+              agentId: resolved.agentId,
+              params,
+              includeManualSelection,
+              requesterProfileId: preparedScope.requesterProfileId,
+              readScope: scope,
+            });
             const prepared =
               params.refresh !== true
-                ? await context.readPreparedModelsList?.({
-                    agentId: resolved.agentId,
-                    params,
-                    includeManualSelection,
-                    requesterProfileId: preparedScope.requesterProfileId,
-                    readScope: scope,
-                  })
+                ? await context.readPreparedModelsList?.(listParams())
                 : undefined;
             const result =
               prepared ??
               (await buildModelsListResult({
                 source: { kind: "gateway", context },
-                agentId: resolved.agentId,
-                params,
-                includeManualSelection,
-                requesterProfileId: preparedScope.requesterProfileId,
-                readScope: scope,
+                ...listParams(),
                 publicationScope: preparedScope,
               }));
             const publish = () => {
@@ -141,6 +139,14 @@ export const modelsHandlers: GatewayRequestHandlers = {
                 scope && params.view !== "provider-config"
                   ? {
                       ...result,
+                      ...(scope.sessionKey
+                        ? {
+                            sessionModelRevision: sessionModelRevision(
+                              scope.sessionEntry,
+                              scope.workerInference,
+                            ),
+                          }
+                        : {}),
                       models: projectSessionModelCatalog(scope, result.models, currentConfig),
                     }
                   : result;

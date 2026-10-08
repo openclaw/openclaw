@@ -239,7 +239,7 @@ function loadLocalSkillTiers(
     sourceScope: sourceOptions,
     entries: winners
       .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
-      .map((entry) => ({ skill: entry.skill, skillKey: resolveSkillKey(entry.skill, entry) })),
+      .map((entry) => ({ skill: entry.skill, skillKey: resolveSkillKey(entry) })),
     reconcile: (inputs) => {
       if (inputs) {
         sourceOptions.config = inputs.config;

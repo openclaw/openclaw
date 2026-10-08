@@ -59,16 +59,9 @@ function resolveMemberGuildPermissionBits(params: {
   member: Pick<APIGuildMember, "roles">;
 }) {
   const rolesByIdLocal = rolesById(params.guild);
-  const everyoneRole = rolesByIdLocal.get(params.guild.id);
-  let permissions = 0n;
-  if (everyoneRole?.permissions) {
-    permissions = addPermissionBits(permissions, everyoneRole.permissions);
-  }
+  let permissions = addPermissionBits(0n, rolesByIdLocal.get(params.guild.id)?.permissions);
   for (const roleId of params.member.roles ?? []) {
-    const role = rolesByIdLocal.get(roleId);
-    if (role?.permissions) {
-      permissions = addPermissionBits(permissions, role.permissions);
-    }
+    permissions = addPermissionBits(permissions, rolesByIdLocal.get(roleId)?.permissions);
   }
   return permissions;
 }
@@ -329,14 +322,13 @@ export async function canManageGuildRoleDiscord(
 }
 
 /**
- * Returns true when the user has ADMINISTRATOR or required permission bits
- * matching the provided predicate.
+ * Returns true when the user has ADMINISTRATOR or the required permission bits.
  */
 async function hasGuildPermissionsDiscord(
   guildId: string,
   userId: string,
   requiredPermissions: bigint[],
-  check: (permissions: bigint, requiredPermissions: bigint[]) => boolean,
+  match: "some" | "every",
   opts: DiscordReactOpts,
 ): Promise<boolean> {
   const permissions = await fetchMemberGuildPermissionsDiscord(guildId, userId, opts);
@@ -346,7 +338,7 @@ async function hasGuildPermissionsDiscord(
   if (hasAdministrator(permissions)) {
     return true;
   }
-  return check(permissions, requiredPermissions);
+  return requiredPermissions[match]((permission) => hasPermissionBit(permissions, permission));
 }
 
 /**
@@ -358,14 +350,7 @@ export async function hasAnyGuildPermissionDiscord(
   requiredPermissions: bigint[],
   opts: DiscordReactOpts,
 ): Promise<boolean> {
-  return await hasGuildPermissionsDiscord(
-    guildId,
-    userId,
-    requiredPermissions,
-    (permissions, required) =>
-      required.some((permission) => hasPermissionBit(permissions, permission)),
-    opts,
-  );
+  return await hasGuildPermissionsDiscord(guildId, userId, requiredPermissions, "some", opts);
 }
 
 /**
@@ -377,14 +362,7 @@ export async function hasAllGuildPermissionsDiscord(
   requiredPermissions: bigint[],
   opts: DiscordReactOpts,
 ): Promise<boolean> {
-  return await hasGuildPermissionsDiscord(
-    guildId,
-    userId,
-    requiredPermissions,
-    (permissions, required) =>
-      required.every((permission) => hasPermissionBit(permissions, permission)),
-    opts,
-  );
+  return await hasGuildPermissionsDiscord(guildId, userId, requiredPermissions, "every", opts);
 }
 
 export async function fetchChannelPermissionsDiscord(

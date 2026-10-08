@@ -303,7 +303,7 @@ export async function monitorWebChannel(
                 ? { minutesSinceLastMessage }
                 : {}),
             };
-            statusController.noteTransportActivity(snapshot.lastTransportActivityAt);
+            statusController.noteTransportActivity(snapshot.lastTransportActivityAt, authAgeMs);
 
             if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
               heartbeatLogger.warn(

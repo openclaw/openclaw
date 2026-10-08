@@ -121,23 +121,80 @@ export function validateSessionTranscriptContextAnchor(
   }
 }
 
-/** Unadmitted context must still describe this session when an async read returns. */
+/** Unadmitted context retains the prefix captured by its original read snapshot. */
 export function validateSessionTranscriptContextVersion(
   scope: SessionTranscriptReadScope,
   version: SessionTranscriptContextVersion | undefined,
 ): void {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+    (database) =>
+      runSqliteDeferredTransactionSync(database.db, () =>
+        validateContextVersion(database, resolved.sessionId, version, "prefix"),
+      ),
     toDatabaseOptions(resolved),
   );
-  const current = result.found ? result.value : undefined;
-  if (
-    current?.generation !== version?.generation ||
-    current?.rawSeq !== version?.rawSeq ||
-    current?.updatedAt !== version?.updatedAt
-  ) {
+  if (!result.found && version !== undefined) {
     throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+  }
+}
+
+function validateContextVersion(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  version: SessionTranscriptContextVersion | undefined,
+  consistency: "exact" | "prefix",
+): void {
+  const current = readTranscriptContextVersionInTransaction(database, sessionId);
+  if (
+    current.generation === version?.generation &&
+    current.rawSeq === version?.rawSeq &&
+    current.updatedAt === version?.updatedAt
+  ) {
+    return;
+  }
+  const changed = () =>
+    new SessionTranscriptReadFenceError("Session transcript changed during context read");
+  if (
+    consistency === "exact" ||
+    !version?.generation ||
+    current.generation !== version.generation ||
+    version.rawSeq === null ||
+    current.rawSeq === null ||
+    current.rawSeq <= version.rawSeq
+  ) {
+    throw changed();
+  }
+  // Generation preserves prefix bytes; navigation must also preserve the original path.
+  const entries = Array.from(
+    iterateSqliteQuerySync(
+      database.db,
+      getSessionKysely(database.db)
+        .selectFrom("transcript_events")
+        .select(["seq", transcriptEventModelNavigationSql().as("navigation_json")])
+        .where("session_id", "=", sessionId)
+        .orderBy("seq", "asc"),
+    ),
+    // SAFETY: The codec's navigation projection preserves entry discriminants and tree links.
+    (row) => ({ ...(JSON.parse(row.navigation_json) as SessionTreeEntry), seq: row.seq }),
+  );
+  const headSeq = version.rawSeq;
+  const prefix = scanSessionTranscriptTree(entries.filter((entry) => entry.seq <= headSeq));
+  const tree = scanSessionTranscriptTree(entries);
+  const suffix = tree.nodes.filter(({ entry }) => entry.seq > headSeq);
+  const expected = [...selectSessionTranscriptTreePathNodes(prefix, prefix.leafId), ...suffix];
+  const path = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
+  if (
+    entries.at(-1)?.seq !== current.rawSeq ||
+    suffix.some(({ entry }) =>
+      ["compaction", "reset", "leaf", "branch_summary"].includes(entry.type),
+    ) ||
+    expected.length !== path.length ||
+    expected.some(
+      (node, index) => node.id !== path[index]?.id || node.parentId !== path[index]?.parentId,
+    )
+  ) {
+    throw changed();
   }
 }
 
@@ -172,6 +229,7 @@ export function validateSessionTranscriptContextInDatabase(
     admission?: UserTurnTranscriptAdmissionReceipt;
     through?: TranscriptEntryAnchor;
   },
+  consistency: "exact" | "prefix" = "exact",
 ): void {
   const { version, admission, through } = validation;
   if (admission) {
@@ -185,14 +243,7 @@ export function validateSessionTranscriptContextInDatabase(
       );
     }
   } else if (!through) {
-    const current = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
-    if (
-      current?.generation !== version?.generation ||
-      current?.rawSeq !== version?.rawSeq ||
-      current?.updatedAt !== version?.updatedAt
-    ) {
-      throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
-    }
+    validateContextVersion(database, resolved.sessionId, version, consistency);
   }
   if (through) {
     assertContextAnchor(database, resolved, through);
@@ -388,6 +439,7 @@ export function readSessionTranscriptModelContext(
         ? selectBoundedModelRequests(requests, readModelEntrySizes, limits)
         : requests;
       const payloads = readModelEntries(selected);
+      let contextEntries: SessionTreeEntry[];
       if (limits) {
         const model = entries.findLast(
           (entry) =>
@@ -432,22 +484,15 @@ export function readSessionTranscriptModelContext(
                   entry.type === "branch_summary",
               )?.id ?? boundary.id;
         }
-        return {
-          events: [
-            ...(header ? [header] : []),
-            ...detached.map((entry, index) => {
-              entry.parentId = detached[index - 1]?.id ?? null;
-              return entry;
-            }),
-          ],
-          version,
-        };
+        contextEntries = detached.map((entry, index) => {
+          entry.parentId = detached[index - 1]?.id ?? null;
+          return entry;
+        });
+      } else {
+        contextEntries = entries.map((entry) => payloads.get(entry) ?? entry);
       }
       return {
-        events: [
-          ...(header ? [header] : []),
-          ...entries.map((entry) => payloads.get(entry) ?? entry),
-        ],
+        events: [...(header ? [header] : []), ...contextEntries],
         version,
       };
     },

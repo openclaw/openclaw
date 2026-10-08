@@ -3,7 +3,6 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.accessibility.AccessibilityComponentController
 import ai.openclaw.app.i18n.nativeString
-import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -61,7 +59,7 @@ internal fun FlavorPhoneCapabilitiesSettings(viewModel: MainViewModel) {
         showDisclosure = false
         viewModel.setAccessibilityControlEnabled(true)
         AccessibilityComponentController(context).setEnabled(true)
-        openAccessibilitySettings(context)
+        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
       },
     )
   }
@@ -72,9 +70,12 @@ private fun AccessibilityControlDisclosureDialog(
   onDismiss: () -> Unit,
   onAgree: () -> Unit,
 ) {
-  AppAlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text(nativeString("Allow control of other apps?")) },
+  AppConfirmationDialog(
+    onDismiss = onDismiss,
+    title = nativeString("Allow control of other apps?"),
+    confirmLabel = nativeString("Enable and Open Settings"),
+    dismissLabel = nativeString("Not Now"),
+    onConfirm = onAgree,
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
@@ -84,20 +85,5 @@ private fun AccessibilityControlDisclosureDialog(
         )
       }
     },
-    confirmButton = {
-      TextButton(onClick = onAgree) {
-        Text(nativeString("Enable and Open Settings"))
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss) {
-        Text(nativeString("Not Now"))
-      }
-    },
   )
-}
-
-private fun openAccessibilitySettings(context: Context) {
-  val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-  context.startActivity(intent)
 }

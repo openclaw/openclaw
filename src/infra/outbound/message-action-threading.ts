@@ -67,35 +67,6 @@ export function resolveAndApplyOutboundThreadId(
   return resolvedThreadId ?? undefined;
 }
 
-function isSameConversationTarget(
-  actionParams: Record<string, unknown>,
-  channel: ChannelId,
-  toolContext?: ChannelThreadingToolContext,
-  matchesToolContextTarget?: MatchesToolContextTarget,
-): boolean {
-  const currentChannelId = toolContext?.currentChannelId?.trim();
-  const currentMessagingTarget = toolContext?.currentMessagingTarget?.trim();
-  if (!currentChannelId && !currentMessagingTarget) {
-    return false;
-  }
-  const currentChannelProvider = toolContext?.currentChannelProvider?.trim();
-  if (currentChannelProvider && currentChannelProvider !== channel) {
-    return false;
-  }
-  const explicitTarget =
-    readToolStringParam(actionParams, "target") ??
-    readToolStringParam(actionParams, "to") ??
-    readToolStringParam(actionParams, "channelId");
-  if (!explicitTarget) {
-    return true;
-  }
-  const target = explicitTarget.trim();
-  if (toolContext && matchesToolContextTarget?.({ target, toolContext })) {
-    return true;
-  }
-  return target === currentMessagingTarget || target === currentChannelId;
-}
-
 export function resolveAndApplyOutboundReplyToId(
   actionParams: Record<string, unknown>,
   context: {
@@ -119,17 +90,30 @@ export function resolveAndApplyOutboundReplyToId(
   if (suppressesImplicitThreading(actionParams)) {
     return undefined;
   }
-  if (
-    !isSameConversationTarget(
-      actionParams,
-      context.channel,
-      context.toolContext,
-      context.matchesToolContextTarget,
-    )
-  ) {
+  const { channel, toolContext, matchesToolContextTarget } = context;
+  const currentChannelId = toolContext?.currentChannelId?.trim();
+  const currentMessagingTarget = toolContext?.currentMessagingTarget?.trim();
+  if (!currentChannelId && !currentMessagingTarget) {
     return undefined;
   }
-
+  const currentChannelProvider = toolContext?.currentChannelProvider?.trim();
+  if (currentChannelProvider && currentChannelProvider !== channel) {
+    return undefined;
+  }
+  const explicitTarget =
+    readToolStringParam(actionParams, "target") ??
+    readToolStringParam(actionParams, "to") ??
+    readToolStringParam(actionParams, "channelId");
+  if (explicitTarget) {
+    const target = explicitTarget.trim();
+    if (
+      !(toolContext && matchesToolContextTarget?.({ target, toolContext })) &&
+      target !== currentMessagingTarget &&
+      target !== currentChannelId
+    ) {
+      return undefined;
+    }
+  }
   const currentMessageId = context.toolContext?.currentMessageId;
   if (currentMessageId == null) {
     return undefined;

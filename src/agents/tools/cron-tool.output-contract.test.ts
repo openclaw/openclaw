@@ -31,7 +31,7 @@ const job: CronJob = {
   sessionTarget: "main",
   wakeMode: "next-heartbeat",
   payload: { kind: "systemEvent", text: "Check unpaid invoices" },
-  state: {},
+  state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
 };
 const compactSourceJob: CronJob = {
   ...job,
@@ -87,18 +87,6 @@ function createCronService(storePath: string) {
 
 describe("automations output contract", () => {
   const { makeStorePath } = createCronStoreHarness({ prefix: "cron-code-mode-output-" });
-  it("accepts stored scheduler diagnostics (#157477)", async () => {
-    const tool = createCronTool(undefined, {
-      callGatewayTool: vi.fn().mockResolvedValue({
-        ...job,
-        state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
-      }),
-    });
-    const result = await tool.execute("diagnostics", { action: "get", jobId: job.id });
-    expect(Value.Errors(expectDefined(tool.outputSchema, "output schema"), result.details)).toEqual(
-      [],
-    );
-  });
 
   it.each(["current"] as const)(
     "accepts successful removal with pending %s session cleanup without retrying",
@@ -239,9 +227,10 @@ async function consume() {
   const jobCount = status.jobs;
   const details = await automations({ action: "get", jobId: "invoice-check" });
   const name = details.name;
+  const scheduleErrorCount = details.state.scheduleErrorCount;
   const runs = await automations({ action: "runs", jobId: details.id });
   const summaries = runs.entries.map(entry => entry.summary);
-  return { names, next, enabled, jobCount, name, summaries };
+  return { names, next, enabled, jobCount, name, scheduleErrorCount, summaries };
 }
 `;
     const fileName = "/automations-consumer.ts";
@@ -292,6 +281,7 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
         enabled: true,
         jobCount: 1,
         name: job.name,
+        scheduleErrorCount: 3,
         summaries: ["Three unpaid invoices"],
       },
     });

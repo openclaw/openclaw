@@ -230,6 +230,7 @@ describe("gateway chat metadata refresh", () => {
       expect(onChanged).toHaveBeenCalledExactlyOnceWith({
         modelCatalogChanged: true,
         authChanged: false,
+        commandsChanged: false,
       });
       expect(await harness.runtime.read({ agentId: "main" })).toEqual(original);
       expect(harness.getPreparedOwner()).toBe(owner);
@@ -248,6 +249,7 @@ describe("gateway chat metadata refresh", () => {
       expect(onChanged).toHaveBeenLastCalledWith({
         modelCatalogChanged: true,
         authChanged: false,
+        commandsChanged: false,
       });
       await harness.runtime.read({ agentId: "main" });
       expect(harness.buildCommands).toHaveBeenCalledTimes(2);

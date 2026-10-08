@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { autonomousSkillSizeError } from "../../skills/workshop/collection-contracts.js";
 import {
   readProposalFrontmatter,
@@ -106,13 +105,11 @@ export function proposalResult(
 export async function readProposalForInspect(
   params: Record<string, unknown>,
   workspaceDir: string,
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv | undefined,
-  agentId: string,
+  scope: Parameters<typeof inspectSkillProposal>[1],
 ): Promise<SkillProposalReadResult> {
   const proposalId = readToolStringParam(params, "proposal_id", { label: "proposal_id" });
   if (proposalId) {
-    const proposal = await inspectSkillProposal(proposalId, { agentId, config, env });
+    const proposal = await inspectSkillProposal(proposalId, scope);
     if (!proposal) {
       throw new ToolInputError(`Skill proposal not found: ${proposalId}`);
     }
@@ -121,9 +118,7 @@ export async function readProposalForInspect(
   return await resolvePendingSkillProposal({
     name: readToolStringParam(params, "name", { required: true }),
     workspaceDir,
-    config,
-    env,
-    agentId,
+    ...scope,
   });
 }
 

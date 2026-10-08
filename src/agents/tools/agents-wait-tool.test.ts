@@ -64,9 +64,7 @@ function persistCollectorReadFixture(
   runIds: readonly string[],
 ) {
   saveSubagentRegistryChangesToSqlite(rows, runIds);
-  const events: Array<() => void> = [];
-  state.publishSubagentRunsAfterAtomicStore(rows, runIds, events);
-  events.forEach((publish) => publish());
+  state.publishSubagentRunsAfterAtomicStore(rows, runIds)();
 }
 
 describe("agents_wait", () => {

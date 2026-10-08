@@ -697,15 +697,7 @@ export async function maybeSpawnVisibleSession(params: {
       ...(sessionUrl ? { sessionUrl } : {}),
       publicRead: response.publicRead === true,
       ...(params.label ? { label: params.label } : {}),
-      owner: resolveVisibleSessionOwner(
-        response.entry,
-        {
-          type: "agent",
-          id: requesterAgentId,
-          ...(ownerLabel ? { label: ownerLabel } : {}),
-        },
-        cfg,
-      ),
+      owner: resolveVisibleSessionOwner(response.entry, requesterAgentId, ownerLabel, cfg),
     };
   } finally {
     reservation.release();

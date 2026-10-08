@@ -10,6 +10,7 @@ import * as checkoutInspection from "./checkout-inspection.js";
 import { requireGit } from "./git.js";
 import * as registryRead from "./registry-read.js";
 import * as registry from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import { resolveRepository } from "./service-preparation.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
@@ -17,7 +18,7 @@ import {
   useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixtures,
 } from "./service.test-support.js";
-import { hasTemplates } from "./template-registry.js";
+import { hasTemplatesAsync } from "./template-registry-async.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -112,9 +113,7 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
   expect(measurements[0]!.gitSpawns).toBeLessThanOrEqual(50);
   expect(measurements[1]!.gitSpawns).toBe(0);
   expect(
-    records
-      .slice(0, 9)
-      .every((record) => registry.getRegistryWorktree(env, record.id)?.gcProtection),
+    records.slice(0, 9).every((record) => getRegistryWorktree(env, record.id)?.gcProtection),
   ).toBe(true);
   // A managed owner revision reopens only that record, even if it is still idle.
   await registry.updateRegistryWorktree(env, records[0]!.id, { lastActiveAt: 2 });
@@ -132,7 +131,7 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
   const explicit = new ManagedWorktreeService({ env, now: () => now });
   vi.spyOn(explicit, "remove").mockRejectedValueOnce(new Error("transient removal failure"));
   expect((await explicit.gc({ retryDeferred: true })).outcome).toBe("partial");
-  expect(registry.getRegistryWorktree(env, records[0]!.id)?.gcProtection).toBeUndefined();
+  expect(getRegistryWorktree(env, records[0]!.id)?.gcProtection).toBeUndefined();
   const retried = await new ManagedWorktreeService({ env, now: () => now }).gc();
   expect(retried.removed).toEqual([records[0]!.id]);
   await registry.updateRegistryWorktree(env, records[1]!.id, { lastActiveAt: 3 });
@@ -147,7 +146,7 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
     },
   );
   await new ManagedWorktreeService({ env, now: () => now }).gc();
-  expect(registry.getRegistryWorktree(env, records[1]!.id)?.gcProtection).toBeUndefined();
+  expect(getRegistryWorktree(env, records[1]!.id)?.gcProtection).toBeUndefined();
 });
 
 it("rescans protected checkouts only when their root or HEAD changes", async () => {
@@ -185,13 +184,13 @@ it("rescans protected checkouts only when their root or HEAD changes", async () 
 
   // External repair changes the checkout fingerprint, not its registry revision.
   await fs.rm(path.join(nested!.path, "inner"), { recursive: true });
-  expect(registry.getRegistryWorktree(env, nested!.id)?.lastActiveAt).toBe(1);
+  expect(getRegistryWorktree(env, nested!.id)?.lastActiveAt).toBe(1);
   expect((await service.gc()).removed).toEqual([nested!.id]);
   expect(inspections.mock.calls.length).toBeGreaterThan(0);
   expect(inspections.mock.calls.every(([record]) => record.id === nested!.id)).toBe(true);
   inspections.mockClear();
   await requireGit(moved!.path, ["checkout", moved!.branch]);
-  expect(registry.getRegistryWorktree(env, moved!.id)?.lastActiveAt).toBe(1);
+  expect(getRegistryWorktree(env, moved!.id)?.lastActiveAt).toBe(1);
   expect((await service.gc()).removed).toEqual([moved!.id]);
   expect(inspections.mock.calls.length).toBeGreaterThan(0);
   expect(inspections.mock.calls.every(([record]) => record.id === moved!.id)).toBe(true);
@@ -232,9 +231,8 @@ it("protects a sweep of live leases without writer admission or checkout inspect
     const id = `leased-${index}`;
     await addLeasedWorktree(env, root, id);
   }
-  hasTemplates(env);
+  await hasTemplatesAsync(env);
   const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
-  const lists = vi.spyOn(registry, "listRegistryWorktrees");
   const reads = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
   const cleanupReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   const inspections = vi.spyOn(checkoutInspection, "inspectManagedWorktreeCheckout");
@@ -242,7 +240,6 @@ it("protects a sweep of live leases without writer admission or checkout inspect
   await new ManagedWorktreeService({ env, now: () => IDLE_GC_MS + 2 }).gc();
   expect(inspections).not.toHaveBeenCalled();
   writes.mockClear();
-  lists.mockClear();
   reads.mockClear();
   cleanupReads.mockClear();
   inspections.mockClear();
@@ -251,9 +248,9 @@ it("protects a sweep of live leases without writer admission or checkout inspect
   const measurements = {
     records: count,
     writes: writes.mock.calls.length,
-    registryReads:
-      cleanupReads.mock.calls.filter(([, command]) => command.type === "worktrees.cleanupState")
-        .length + lists.mock.calls.length,
+    registryReads: cleanupReads.mock.calls.filter(
+      ([, command]) => command.type === "worktrees.cleanupState",
+    ).length,
     maintenanceInventoryReads: reads.mock.calls.filter(
       ([, command]) => command.type === "worktrees.list",
     ).length,
@@ -279,7 +276,7 @@ it("protects a late lease without loading removed history for cleanup limits", a
   await addLeasedWorktree(env, root, "initial");
   await addLeasedWorktree(env, root, "second");
   await registry.insertRegistryWorktree(env, {
-    ...registry.getRegistryWorktree(env, "initial")!,
+    ...getRegistryWorktree(env, "initial")!,
     id: "removed-history",
     removedAt: 0,
   });

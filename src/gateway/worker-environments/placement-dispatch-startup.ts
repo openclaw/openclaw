@@ -9,6 +9,7 @@ import {
   type WorkerNodePlacementAuthority,
 } from "./device-placement-eligibility.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { composePlacementAuthorization } from "./placement-authorization.js";
 import type {
   PlacementFailureActions,
   WorkerActivationBarrier,
@@ -141,16 +142,15 @@ export function createWorkerPlacementDispatchStartup(options: {
     request: WorkerPlacementDispatchRequest;
     placement: WorkerDispatchPlacement;
     intent: WorkerProviderPreparedIntent;
-    assertCurrent: () => void;
+    assertCurrent: WorkerPlacementAuthorization;
   }) => {
     const preparation = readWorkerProjectPreparation(params.intent.profileSnapshot.project);
     if (!preparation || params.intent.preparationKey !== preparation.key) {
       return undefined;
     }
-    const assertCurrent = () => {
-      params.assertCurrent();
+    const assertCurrent = composePlacementAuthorization(params.assertCurrent, () => {
       environments.assertPreparedIntentCurrent(params.request.profileId, params.intent);
-    };
+    });
     assertCurrent();
     const expectedBuild = {
       bundleHash: preparation.artifacts.workerBundleHash,
@@ -196,7 +196,7 @@ export function createWorkerPlacementDispatchStartup(options: {
         continue;
       }
       const { node, requirement } = admittedNode;
-      const placement = placements.bindPreparedEnvironment({
+      const placement = await placements.bindPreparedEnvironment({
         sessionId: params.request.sessionId,
         sessionKey: params.request.sessionKey,
         agentId: params.request.agentId,
@@ -210,8 +210,7 @@ export function createWorkerPlacementDispatchStartup(options: {
         nodeDeviceId: environment.nodeDeviceId,
         leaseId: environment.leaseId,
         bundleHash: expectedBuild.bundleHash,
-        assertCurrent: () => {
-          assertCurrent();
+        assertCurrent: composePlacementAuthorization(assertCurrent, () => {
           // Pool policy can change while node admission waits; recheck it at consumption.
           if (!remainsSelectable()) {
             throw new Error("Prepared worker is no longer available under the current pool policy");
@@ -219,7 +218,7 @@ export function createWorkerPlacementDispatchStartup(options: {
           if (!options.isCurrentNodePlacement?.(node, requirement, params.request.executionMode)) {
             throw new Error("Prepared worker lost its current node authority before binding");
           }
-        },
+        }),
       });
       if (placement) {
         return { placement, environment, admittedNode };

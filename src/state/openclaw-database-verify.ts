@@ -11,10 +11,12 @@ type IntegrityCheck = OpenClawDatabaseVerifyTarget["check"];
 type IntegrityCheckRequest = {
   check: IntegrityCheck;
   proof?: { identity: string; complete: (assertCurrent: () => void) => Promise<boolean> };
+  release?: () => Promise<void>;
 };
 type IntegrityCheckQueue = {
   paths: Map<string, IntegrityCheckRequest>;
   subscribers: Set<() => void>;
+  releases: Set<Promise<void>>;
   active?: object;
 };
 const integrityCheckQueues = resolveGlobalSingleton(
@@ -26,7 +28,7 @@ function integrityCheckQueue(env: NodeJS.ProcessEnv): IntegrityCheckQueue {
   const key = path.resolve(resolveOpenClawStateSqlitePath(env));
   let queue = integrityCheckQueues.get(key);
   if (!queue) {
-    queue = { paths: new Map(), subscribers: new Set() };
+    queue = { paths: new Map(), subscribers: new Set(), releases: new Set() };
     integrityCheckQueues.set(key, queue);
   }
   return queue;
@@ -44,8 +46,27 @@ function enqueueCheck(
   request: IntegrityCheckRequest,
 ): void {
   if (request.check === "full" || queue.paths.get(pathname)?.check !== "full") {
+    const previous = queue.paths.get(pathname);
     queue.paths.set(pathname, request);
+    if (previous) {
+      releaseCheck(queue, previous);
+    }
+  } else {
+    releaseCheck(queue, request);
   }
+}
+
+function releaseCheck(queue: IntegrityCheckQueue, request: IntegrityCheckRequest): void {
+  const release = request.release;
+  request.release = undefined;
+  if (!release) {
+    return;
+  }
+  const pending = release().catch((error: unknown) => {
+    log.error("database integrity verification cleanup failed", { error: String(error) });
+  });
+  queue.releases.add(pending);
+  void pending.finally(() => queue.releases.delete(pending));
 }
 
 /** Admitted opens queue work; only the listening Gateway starts the verifier. */
@@ -56,7 +77,11 @@ export function requestOpenClawAgentDatabaseIntegrityCheck(
   },
 ): void {
   const queue = integrityCheckQueue(options.env);
-  enqueueCheck(queue, path.resolve(options.path), { check: options.check, proof: options.proof });
+  enqueueCheck(queue, path.resolve(options.path), {
+    check: options.check,
+    proof: options.proof,
+    release: options.release,
+  });
   wakeSubscribers(queue);
 }
 
@@ -145,7 +170,13 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
       }
     } finally {
       activeWorker = undefined;
+      for (const [pathname, check] of checks) {
+        if (queue.paths.get(pathname) !== check) {
+          releaseCheck(queue, check);
+        }
+      }
       claimedChecks.clear();
+      await Promise.all(queue.releases);
     }
   };
 
@@ -161,6 +192,9 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
       stopped = true;
       queue.subscribers.delete(wake);
       if (queue.subscribers.size === 0) {
+        for (const check of queue.paths.values()) {
+          releaseCheck(queue, check);
+        }
         queue.paths.clear();
       } else {
         // Replay before yielding so a later final stop can still discard this work.
@@ -187,6 +221,7 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
         } finally {
           // Worker exit can precede async confirmation and result application.
           await activeRun;
+          await Promise.all(queue.releases);
         }
       })();
       return stopPromise;

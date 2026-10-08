@@ -242,13 +242,12 @@ function renderQueueResizer(props: SkillWorkshopProps) {
 function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
   const editedAt =
     proposal.updatedAt && proposal.updatedAt > proposal.createdAt ? proposal.updatedAt : null;
-  const createdLabel = editedAt
-    ? t("skillWorkshop.detail.edited", {
-        time: formatRelativeTimestamp(editedAt, { dateFallback: true }),
-      })
-    : t("skillWorkshop.detail.created", {
-        time: formatRelativeTimestamp(proposal.createdAt, { dateFallback: true }),
-      });
+  const createdLabel = t(
+    editedAt ? "skillWorkshop.detail.edited" : "skillWorkshop.detail.created",
+    {
+      time: formatRelativeTimestamp(editedAt || proposal.createdAt, { dateFallback: true }),
+    },
+  );
   const detailLoading = props.inspectingKey === proposal.key && !proposal.bodyLoaded;
   const firstSupportFile = proposal.supportFiles[0];
   return html`
@@ -294,13 +293,11 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
             <h1>${proposal.slug}</h1>
           </div>
           ${
-            proposal.degradedState
+            proposal.degradedState || detailLoading
               ? html`<p class="sw-muted" role="status">
-                  ${t("skillWorkshop.detail.draftMissing")}
+                  ${t(proposal.degradedState ? "skillWorkshop.detail.draftMissing" : "skillWorkshop.detail.loading")}
                 </p>`
-              : detailLoading
-                ? html`<p class="sw-muted" role="status">${t("skillWorkshop.detail.loading")}</p>`
-                : renderSkillDocument(proposal.body)
+              : renderSkillDocument(proposal.body)
           }
         </div>
 

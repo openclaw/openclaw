@@ -1,11 +1,9 @@
-// Restart request parsing keeps restart sentinel payloads limited to resumable
-// session, delivery, thread, and delay fields.
 import {
   asSafeIntegerInRange,
   MAX_TIMER_TIMEOUT_MS,
   resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -15,33 +13,6 @@ type RestartDeliveryContext = {
   to?: string;
   accountId?: string;
 };
-
-function parseRestartDeliveryContext(params: unknown): {
-  deliveryContext: RestartDeliveryContext | undefined;
-  threadId: string | undefined;
-} {
-  const raw = (params as { deliveryContext?: unknown }).deliveryContext;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return { deliveryContext: undefined, threadId: undefined };
-  }
-  const context = raw as {
-    channel?: unknown;
-    to?: unknown;
-    accountId?: unknown;
-    threadId?: unknown;
-  };
-  const deliveryContext: RestartDeliveryContext = {
-    channel: normalizeOptionalString(context.channel),
-    to: normalizeOptionalString(context.to),
-    accountId: normalizeOptionalString(context.accountId),
-  };
-  const normalizedContext =
-    deliveryContext.channel || deliveryContext.to || deliveryContext.accountId
-      ? deliveryContext
-      : undefined;
-  const threadId = stringifyRouteThreadId(context.threadId);
-  return { deliveryContext: normalizedContext, threadId };
-}
 
 // Restart sentinels can resume a channel turn after the gateway comes back.
 // Keep only routable delivery fields plus a normalized thread id so malformed
@@ -54,14 +25,24 @@ export function parseRestartRequestParams(params: unknown): {
   continuationMessage: string | undefined;
   restartDelayMs: number | undefined;
 } {
-  const sessionKey = normalizeOptionalString((params as { sessionKey?: unknown }).sessionKey);
-  const { deliveryContext, threadId } = parseRestartDeliveryContext(params);
-  const note = normalizeOptionalString((params as { note?: unknown }).note);
-  const continuationMessage = normalizeOptionalString(
-    (params as { continuationMessage?: unknown }).continuationMessage,
-  );
-  const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
-  const restartDelayMs = resolveOptionalIntegerOption(restartDelayMsRaw, { min: 0 });
+  const raw = params as Record<string, unknown>;
+  const sessionKey = normalizeOptionalString(raw.sessionKey);
+  const context = asOptionalRecord(raw.deliveryContext);
+  const normalizedContext = context
+    ? {
+        channel: normalizeOptionalString(context.channel),
+        to: normalizeOptionalString(context.to),
+        accountId: normalizeOptionalString(context.accountId),
+      }
+    : undefined;
+  const deliveryContext =
+    normalizedContext?.channel || normalizedContext?.to || normalizedContext?.accountId
+      ? normalizedContext
+      : undefined;
+  const threadId = context ? stringifyRouteThreadId(context.threadId) : undefined;
+  const note = normalizeOptionalString(raw.note);
+  const continuationMessage = normalizeOptionalString(raw.continuationMessage);
+  const restartDelayMs = resolveOptionalIntegerOption(raw.restartDelayMs, { min: 0 });
   return { sessionKey, deliveryContext, threadId, note, continuationMessage, restartDelayMs };
 }
 
@@ -72,15 +53,14 @@ type TargetedGatewayRestart = {
 };
 
 export function parseTargetedGatewayRestart(
-  value: unknown,
+  target: unknown,
 ): TargetedGatewayRestart | null | undefined {
-  if (value === undefined) {
+  if (target === undefined) {
     return undefined;
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(target)) {
     return null;
   }
-  const target = value as { pid?: unknown; ownerId?: unknown; port?: unknown };
   if (
     typeof target.pid !== "number" ||
     !Number.isSafeInteger(target.pid) ||
@@ -105,10 +85,10 @@ export function parseTargetedGatewayRestartIntent(
   value: unknown,
   reason: string | undefined,
 ): GatewayRestartIntent | null {
-  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
+  if (value !== undefined && !isRecord(value)) {
     return null;
   }
-  const raw = (value ?? {}) as { force?: unknown; waitMs?: unknown; drainBudgetMs?: unknown };
+  const raw = value ?? {};
   const force = raw.force === true;
   // Older Gateways ignore this optional field instead of rejecting force + waitMs.
   const budget = force ? raw.drainBudgetMs : raw.waitMs;

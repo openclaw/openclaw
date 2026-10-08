@@ -570,3 +570,42 @@ describe("environment gateway methods", () => {
     expect(service.destroyUnattached).toHaveBeenCalledBefore(reconcileActive);
   });
 });
+
+describe("environments.prepare", () => {
+  const request = { profileId: "development", projectPath: "/projects/app" };
+
+  it("rejects invalid params before preparation", async () => {
+    const service = workerService();
+    const [ok, , error] = await call(
+      "environments.prepare",
+      { profileId: "development" },
+      { service },
+    );
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ code: ErrorCodes.INVALID_REQUEST });
+    expect(service.prepare).not.toHaveBeenCalled();
+  });
+
+  it("returns the admitted preparation", async () => {
+    const result = { environmentId: "worker-1", preparationKey: "project-key", reused: true };
+    const prepare = vi.fn(async () => result);
+    expect(
+      await call("environments.prepare", request, { service: workerService({ prepare }) }),
+    ).toEqual([true, result, undefined]);
+    expect(prepare).toHaveBeenCalledExactlyOnceWith(request, expect.any(Function));
+  });
+
+  it.each([
+    ["profile_not_found", ErrorCodes.INVALID_REQUEST, "unknown worker profile"],
+    ["invalid_profile", ErrorCodes.INVALID_REQUEST, "profile cannot prepare projects"],
+    ["invalid_project", ErrorCodes.INVALID_REQUEST, "project must be a local Git checkout"],
+    ["capacity", ErrorCodes.UNAVAILABLE, "prepared worker pool is full"],
+  ])("preserves actionable %s errors", async (code, rpcCode, message) => {
+    const service = workerService({ prepare: rejectService(code, message) });
+    expect(await call("environments.prepare", request, { service })).toEqual([
+      false,
+      undefined,
+      { code: rpcCode, message, details: { code } },
+    ]);
+  });
+});

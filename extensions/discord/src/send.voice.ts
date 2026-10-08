@@ -10,7 +10,6 @@ import {
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { withTempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
-import type { RequestClient } from "./internal/discord.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import type { sendMessageDiscord } from "./send.outbound.js";
@@ -86,27 +85,20 @@ async function sendVoiceMessageDiscordInternal(
 ): Promise<DiscordSendResult> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord voice send");
   return await withMaterializedVoiceMessageInput(audioPath, opts, async (localInputPath) => {
-    let oggPath: string | null = null;
-    let oggCleanup = false;
-    let token: string | undefined;
-    let rest: RequestClient | undefined;
+    let ogg: Awaited<ReturnType<typeof ensureOggOpus>> | undefined;
+    let client: ReturnType<typeof createDiscordClient> | undefined;
     let channelId: string | undefined;
 
     try {
-      const client = createDiscordClient({ ...opts, cfg });
-      token = client.token;
-      rest = client.rest;
-      const request = client.request;
-      const accountInfo = client.account;
+      client = createDiscordClient({ ...opts, cfg });
+      const { token, rest, request, account: accountInfo } = client;
       const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
       channelId = (await resolveChannelId(rest, recipient, request)).channelId;
 
-      const ogg = await ensureOggOpus(localInputPath);
-      oggPath = ogg.path;
-      oggCleanup = ogg.cleanup;
+      ogg = await ensureOggOpus(localInputPath);
 
-      const metadata = await getVoiceMessageMetadata(oggPath);
-      const audioBuffer = await fs.readFile(oggPath);
+      const metadata = await getVoiceMessageMetadata(ogg.path);
+      const audioBuffer = await fs.readFile(ogg.path);
       const result = await sendDiscordVoiceMessage(
         rest,
         channelId,
@@ -133,18 +125,18 @@ async function sendVoiceMessageDiscordInternal(
         reply: opts.reply,
       });
     } catch (err) {
-      if (channelId && rest && token) {
+      if (channelId && client?.rest && client.token) {
         throw await buildDiscordSendError(err, {
           channelId,
           cfg,
-          rest,
-          token,
+          rest: client.rest,
+          token: client.token,
           hasMedia: true,
         });
       }
       throw err;
     } finally {
-      await unlinkIfExists(oggCleanup ? oggPath : null);
+      await unlinkIfExists(ogg?.cleanup ? ogg.path : null);
     }
   });
 }

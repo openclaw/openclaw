@@ -309,12 +309,6 @@ async function runAcpTurnWithAssistantEvents(chunks: string[]) {
   return { assistantEvents, logLines };
 }
 
-function firstRunTurnInput(runTurn: { mock: { calls: unknown[][] } }) {
-  return runTurn.mock.calls[0]?.[0] as
-    | { mode?: string; sessionKey?: string; text?: string }
-    | undefined;
-}
-
 async function runAcpSessionWithPolicyOverridesAndExpectBlocked(params: {
   acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>;
   resolveSessionAsync?: Parameters<typeof mockAcpManager>[0]["resolveSessionAsync"];
@@ -379,7 +373,7 @@ describe("agentCommand ACP runtime routing", () => {
           const params = input as Parameters<
             ReturnType<typeof acpManagerModule.getAcpSessionManager>["runTurn"]
           >[0];
-          await params.onEvent?.({ type: "text_delta", text: "ACP reply" });
+          await params.onEvent?.({ type: "text_delta", text: "  ACP reply\n" });
           if ("abort" in scenario && scenario.abort === "timeout") {
             controller.abort(new DOMException("deadline", "TimeoutError"));
           }
@@ -422,7 +416,7 @@ describe("agentCommand ACP runtime routing", () => {
 
         const result = await agentCommand(
           {
-            message: "probe",
+            message: "  probe\n",
             sessionKey: "agent:codex:acp:test",
             json: true,
             abortSignal: controller.signal,
@@ -431,7 +425,20 @@ describe("agentCommand ACP runtime routing", () => {
         );
 
         expect(runTurn).toHaveBeenCalledOnce();
+        expect(runTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionKey: "agent:codex:acp:test",
+            text: "  probe\n",
+            mode: "prompt",
+          }),
+        );
         expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
+        expect(attemptExecutionMocks.persistAcpTurnTranscript.mock.calls.at(-1)?.[0]).toMatchObject(
+          {
+            body: "  probe\n",
+            finalText: "  ACP reply\n",
+          },
+        );
         expect(result?.payloads).toEqual([{ text: "ACP reply", mediaUrl: null }]);
         expect(result?.meta.aborted).toBe(
           scenario.status === "cancelled" || ("abort" in scenario && scenario.abort !== "delivery"),
@@ -448,7 +455,7 @@ describe("agentCommand ACP runtime routing", () => {
               type: "message",
               message: expect.objectContaining({
                 role: "assistant",
-                content: [{ type: "text", text: "ACP reply" }],
+                content: [{ type: "text", text: "  ACP reply\n" }],
                 stopReason: "stop",
               }),
             }),
@@ -460,37 +467,6 @@ describe("agentCommand ACP runtime routing", () => {
       });
     },
   );
-
-  it("routes ACP sessions and preserves exact transcript text", async () => {
-    await withAcpSessionEnv(async () => {
-      const runTurn = createRunTurnFromTextDeltas(["  ACP_OK\n"]);
-      mockAcpManager({ runTurn });
-      await agentCommand({ message: "  ping\n", sessionKey: "agent:codex:acp:test" }, runtime);
-      expect(firstRunTurnInput(runTurn)).toMatchObject({
-        sessionKey: "agent:codex:acp:test",
-        text: "  ping\n",
-        mode: "prompt",
-      });
-      expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
-      expect(vi.mocked(runtime.log).mock.calls.flat().join("\n")).toContain("ACP_OK");
-      expect(attemptExecutionMocks.persistAcpTurnTranscript.mock.calls.at(-1)?.[0]).toMatchObject({
-        body: "  ping\n",
-        finalText: "  ACP_OK\n",
-      });
-    });
-  });
-
-  it("streams ACP visible text deltas", async () => {
-    await withAcpSessionEnv(async () => {
-      const repeated = await runAcpTurnWithAssistantEvents(["bo", "ok"]);
-
-      expect(repeated.assistantEvents).toEqual([
-        { text: "bo", delta: "bo" },
-        { text: "book", delta: "ok" },
-      ]);
-      expect(repeated.logLines.join("\n")).toContain("book");
-    });
-  });
 
   it("keeps no-reply ACP turns silent", async () => {
     await withAcpSessionEnv(async () => {
@@ -572,29 +548,6 @@ describe("agentCommand ACP runtime routing", () => {
         "not allowed by policy",
       );
       expect(runTurn).not.toHaveBeenCalled();
-      expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("allows ACP turns for kimi when policy allowlists kimi", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      writeAcpSessionStore(storePath, "kimi");
-      mockConfigWithAcpOverrides(home, storePath, {
-        allowedAgents: ["kimi"],
-      });
-
-      const runTurn = vi.fn(async (_params: unknown) => {});
-      mockAcpManager({
-        runTurn: (params: unknown) => runTurn(params),
-        resolveSessionAsync: async ({ sessionKey }) => resolveReadySession(sessionKey, "kimi"),
-      });
-
-      await agentCommand({ message: "ping", sessionKey: "agent:kimi:acp:test" }, runtime);
-
-      const runTurnInput = firstRunTurnInput(runTurn);
-      expect(runTurnInput?.sessionKey).toBe("agent:kimi:acp:test");
-      expect(runTurnInput?.text).toBe("ping");
       expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
     });
   });

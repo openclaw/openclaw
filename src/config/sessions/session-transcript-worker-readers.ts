@@ -87,6 +87,12 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readBoardSnapshot: reader("board-snapshot", "a Board snapshot", (result) => result.value),
+    readBoardWidgetDocument: reader(
+      "board-widget-document",
+      "a Board document",
+      (result) => result.value,
+    ),
     readBranchSummaries: reader("branch-summaries", "branch summaries", (value) => value.result),
     readMessagePresence: reader(
       "transcript-message-presence",
@@ -254,6 +260,7 @@ export function createSessionHistoryWorkerReaders(
     readTranscript: async (input, signal) => {
       const events: TranscriptEvent[] = [];
       const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
+      const eventSeqs: number[] | undefined = input.includeEventJson ? [] : undefined;
       let parts: string[] = [];
       let text: { encoding: string; decoder: TextDecoder } | undefined;
       const receiveChunk = (value: unknown) => {
@@ -286,6 +293,12 @@ export function createSessionHistoryWorkerReaders(
             const json = parts.join("");
             events.push(JSON.parse(json));
             eventJson?.push(json);
+            if (eventSeqs) {
+              if (typeof frame.seq !== "number" || !Number.isSafeInteger(frame.seq)) {
+                throw new Error("Transcript snapshot omitted its row sequence");
+              }
+              eventSeqs.push(frame.seq);
+            }
             parts = [];
           }
         }
@@ -311,7 +324,11 @@ export function createSessionHistoryWorkerReaders(
           }
           return {
             kind: "full",
-            snapshot: { events, version: value.version, ...(eventJson ? { eventJson } : {}) },
+            snapshot: {
+              events,
+              version: value.version,
+              ...(eventJson ? { eventJson, eventSeqs } : {}),
+            },
           };
         },
         signal,
@@ -342,17 +359,7 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "usage-cache", ...input }),
     ),
     readMembershipFacts: reader("session-membership-facts", "membership facts", (value) => value),
-    readMembers: async (input) =>
-      await runRequest(
-        () => ({ kind: "session-members", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (!Array.isArray(value)) {
-            throw new Error("Session history worker returned another result instead of members");
-          }
-          return value;
-        },
-      ),
+    readMembers: reader("session-members", "members", (value) => value),
     readSuggestions: reader("session-suggestions", "suggestions", (value) => value.suggestions),
     readExactEntries: async (input, signal) => {
       const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };

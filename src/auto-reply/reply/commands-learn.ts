@@ -35,15 +35,11 @@ function parseLearnRequest(raw: string): string | null {
 function resolveWorkshopSurface(
   params: HandleCommandsParams,
 ): "workspace" | "personal" | undefined {
-  if (params.opts?.disableTools) {
-    return undefined;
-  }
-  if (params.opts?.toolsAllow?.length === 0) {
-    return undefined;
-  }
   if (
-    params.opts?.toolsAllow !== undefined &&
-    !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, { allow: params.opts.toolsAllow })
+    params.opts?.disableTools ||
+    params.opts?.toolsAllow?.length === 0 ||
+    (params.opts?.toolsAllow !== undefined &&
+      !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, { allow: params.opts.toolsAllow }))
   ) {
     return undefined;
   }

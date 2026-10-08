@@ -22,7 +22,10 @@ const deliveryMocks = vi.hoisted(() => ({
   routeReply: vi.fn<typeof import("./route-reply.js").routeReply>(),
 }));
 
-vi.mock("./route-reply.runtime.js", () => deliveryMocks);
+vi.mock("./route-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./route-reply.js")>()),
+  ...deliveryMocks,
+}));
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: async ({ payload }: { payload: ReplyPayload }) => payload,
 }));

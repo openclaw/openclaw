@@ -150,8 +150,13 @@ private object SystemPhotosDataSource : PhotosDataSource {
       } else {
         bounds.outWidth
       }
-    val inSampleSize = computeInSampleSize(sourceWidth, maxWidth)
-    val decodeOptions = BitmapFactory.Options().apply { this.inSampleSize = inSampleSize }
+    val decodeOptions =
+      BitmapFactory.Options().apply {
+        inSampleSize = 1
+        while (sourceWidth / inSampleSize / 2 >= maxWidth) {
+          inSampleSize *= 2
+        }
+      }
     val decoded =
       resolver.openInputStream(uri).use { input ->
         if (input == null) return null
@@ -168,17 +173,6 @@ private object SystemPhotosDataSource : PhotosDataSource {
     } finally {
       oriented.recycle()
     }
-  }
-
-  private fun computeInSampleSize(
-    width: Int,
-    maxWidth: Int,
-  ): Int {
-    var sample = 1
-    while (width / sample / 2 >= maxWidth) {
-      sample *= 2
-    }
-    return sample
   }
 
   private fun encodeJpegUnderBudget(

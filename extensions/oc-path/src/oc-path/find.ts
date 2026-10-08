@@ -38,9 +38,6 @@ import type { OcAst, OcMatch } from "./universal.js";
 import { resolveOcPath } from "./universal.js";
 import { resolveYamlPositionalSegment } from "./yaml/resolve.js";
 
-// ---------- Public types ---------------------------------------------------
-
-/** A find result: a concrete (wildcard-free) path plus its match info. */
 interface OcPathMatch {
   readonly path: OcPath;
   readonly match: OcMatch;
@@ -53,8 +50,6 @@ interface SlotSub {
 }
 
 type OnMatch = (subs: readonly SlotSub[]) => void;
-
-// ---------- Public verb ----------------------------------------------------
 
 export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[] {
   const subs = patternSubs(pattern);
@@ -105,8 +100,6 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
   return out;
 }
 
-// ---------- Pattern unpacking ---------------------------------------------
-
 function patternSubs(pattern: OcPath): readonly SlotSub[] {
   const out: SlotSub[] = [];
   // Bracket-aware split so dots inside `[k=1.0]` or `{a.b,c}` aren't
@@ -135,8 +128,6 @@ function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
     ...(pattern.session !== undefined ? { session: pattern.session } : {}),
   };
 }
-
-// ---------- Shared dispatch ----------------------------------------------
 
 // Per-kind ops the dispatcher uses to drive recursion. Each kind's
 // walker fills these in; the dispatcher handles every segment shape.
@@ -231,8 +222,6 @@ function dispatchSeg<T, Child>(
   ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
 }
 
-// ---------- JSONC walker ---------------------------------------------------
-
 function walkJsonc(
   node: JsoncValue,
   subs: readonly SlotSub[],
@@ -297,13 +286,11 @@ const jsoncOps: WalkOps<JsoncValue> = {
   },
   *predicate(node, pred) {
     yield* jsoncOps.enumerate(node, (child) =>
-      evaluatePredicate(jsoncChildFieldText(child, pred.key), pred),
+      evaluatePredicate(jsoncChildFieldText(child, pred.key, "null"), pred),
     );
   },
   walk: walkJsonc,
 };
-
-// ---------- JSONL walker ---------------------------------------------------
 
 // First slot is a line address; subsequent slots descend into its JSONC value.
 function walkJsonl(
@@ -343,10 +330,12 @@ const jsonlOps: WalkOps<JsonlAst, JsonlLine> = {
     return jsonlOps.lookup(ast, seg);
   },
   *predicate(ast, pred) {
+    // JSONL line predicates treat null as absent; JSONC child predicates stringify it.
     yield* jsonlOps.enumerate(
       ast,
       (line) =>
-        line.kind === "value" && evaluatePredicate(topLevelLeafText(line.value, pred.key), pred),
+        line.kind === "value" &&
+        evaluatePredicate(jsoncChildFieldText(line.value, pred.key, null), pred),
     );
   },
   // Union alternatives revisit the file; consumed line slots descend into JSONC.
@@ -365,26 +354,6 @@ const jsonlOps: WalkOps<JsonlAst, JsonlLine> = {
     walkJsonc(child.value, subs, i, walked, onMatch);
   },
 };
-
-function topLevelLeafText(value: JsoncValue, key: string): string | null {
-  if (value.kind !== "object") {
-    return null;
-  }
-  const entry = value.entries.find((e) => e.key === key);
-  if (entry === undefined) {
-    return null;
-  }
-  const v = entry.value;
-  if (v.kind === "string") {
-    return v.value;
-  }
-  if (v.kind === "number" || v.kind === "boolean") {
-    return String(v.value);
-  }
-  return null;
-}
-
-// ---------- YAML walker ----------------------------------------------------
 
 function walkYaml(
   node: Node,
@@ -491,8 +460,6 @@ function yamlScalarToText(value: unknown): string | null {
   }
   return JSON.stringify(scalar) ?? null;
 }
-
-// ---------- Markdown walker -----------------------------------------------
 
 type MdLevel =
   | { readonly kind: "root"; readonly ast: MdAst }
@@ -631,7 +598,6 @@ const mdOps: WalkOps<MdLevel> = {
       return block === undefined ? null : { keySub: key, child: { kind: "block", block } };
     }
     if (level.kind === "block") {
-      // Ordinal `#N` short-circuits slug lookup.
       if (isOrdinalSeg(key)) {
         const n = parseOrdinalSeg(key);
         if (n === null || n < 0 || n >= level.block.items.length) {
@@ -690,7 +656,11 @@ function mdItemMatchesPredicate(item: AstItem, pred: PredicateSpec): boolean {
   return evaluatePredicate(item.kv.value, pred);
 }
 
-function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
+function jsoncChildFieldText(
+  node: JsoncValue,
+  key: string,
+  nullText: "null" | null,
+): string | null {
   if (node.kind !== "object") {
     return null;
   }
@@ -706,7 +676,7 @@ function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
     return String(v.value);
   }
   if (v.kind === "null") {
-    return "null";
+    return nullText;
   }
   return null;
 }

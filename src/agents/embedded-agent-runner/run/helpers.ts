@@ -92,13 +92,9 @@ export function resolveLatestCallUsage(params: {
   latest: NormalizedUsage | undefined;
 } {
   const currentAttempt = params.currentAttemptCandidates.find(hasNonzeroUsage);
-  const carriedUsage = hasNonzeroUsage(params.carriedUsage) ? params.carriedUsage : undefined;
-  const transcriptFallback = hasNonzeroUsage(params.transcriptFallback)
-    ? params.transcriptFallback
-    : undefined;
   return {
     currentAttempt,
-    latest: currentAttempt ?? carriedUsage ?? transcriptFallback,
+    latest: [currentAttempt, params.carriedUsage, params.transcriptFallback].find(hasNonzeroUsage),
   };
 }
 

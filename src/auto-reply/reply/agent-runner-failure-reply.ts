@@ -262,6 +262,19 @@ export function buildExternalRunFailureReply(
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
   const useHeartbeatFailureCopy = options?.useHeartbeatFailureCopy ?? options?.isHeartbeat === true;
+  const buildUnclassifiedReply = (includeHeartbeatDetails: boolean): ExternalRunFailureReply => {
+    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
+    return {
+      text: useHeartbeatFailureCopy
+        ? renderHeartbeatRunFailureCopy(
+            includeHeartbeatDetails ? resolveExternalRunFailureDetail(sanitizedMessage) : undefined,
+          )
+        : options?.includeDetails
+          ? formatForwardedExternalRunFailureText(sanitizedMessage)
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: !options?.isHeartbeat,
+    };
+  };
   const approvalMessage = resolveExecutionApprovalFailureMessage(normalizedMessage);
   if (approvalMessage) {
     return { text: `⚠️ ${approvalMessage}`, isGenericRunnerFailure: false };
@@ -287,15 +300,7 @@ export function buildExternalRunFailureReply(
         isGenericRunnerFailure: false,
       };
     }
-    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
-    return {
-      text: useHeartbeatFailureCopy
-        ? renderHeartbeatRunFailureCopy(resolveExternalRunFailureDetail(sanitizedMessage))
-        : options?.includeDetails
-          ? formatForwardedExternalRunFailureText(sanitizedMessage)
-          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      isGenericRunnerFailure: !options?.isHeartbeat,
-    };
+    return buildUnclassifiedReply(true);
   }
   const failoverFacts =
     options?.failoverFacts ??
@@ -388,19 +393,8 @@ export function buildExternalRunFailureReply(
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
-    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
-    const detail = options.includeDetails
-      ? resolveExternalRunFailureDetail(sanitizedMessage)
-      : undefined;
-    return {
-      text: useHeartbeatFailureCopy
-        ? renderHeartbeatRunFailureCopy(detail)
-        : options.includeDetails
-          ? formatForwardedExternalRunFailureText(sanitizedMessage)
-          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      // Heartbeat-backed event turns must remain visible even when they use generic wording.
-      isGenericRunnerFailure: false,
-    };
+    // Heartbeat-backed event turns remain visible even with generic wording.
+    return buildUnclassifiedReply(options.includeDetails === true);
   }
   const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
   if (codexAppServerFailure) {

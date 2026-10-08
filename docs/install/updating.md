@@ -21,9 +21,29 @@ For Docker, Podman, and Kubernetes image replacements, see
 image entrypoint runs Doctor before starting the Gateway and exits if mounted
 state cannot be repaired safely.
 
+Before upgrading, follow the [preflight checklist](/install/updating/rollback-and-recovery#before-you-upgrade).
 Before a significant update, [create a verified backup](#before-updating-create-a-verified-backup).
 Automatic config copies and migration recovery originals are not a full-state
 backup.
+
+## Retired tenant-container management
+
+The experimental `openclaw fleet` command has been removed. Updating the host
+CLI leaves existing tenant containers, networks, mounted data, and registry
+records untouched; it does not update their container images.
+
+Before updating, back up each tenant and record its container identity, runtime,
+image, ports, mounts, resource limits, and environment. Protect that record as
+credentials: container environments can contain Gateway tokens. Transfer
+lifecycle, image updates, backups, and cleanup to your Docker or Podman deployment
+tooling. Verify each tenant through its existing endpoint before retiring recovery
+copies or removing resources. Keep separate state and credentials for each
+[trust boundary](/gateway/security/trust-model).
+
+See [container image updates](/install/docker#upgrading-container-images),
+[backups](/install/backups), and the
+[downgrade limitation](/install/updating/rollback-and-recovery#downgrade) before
+changing images or restoring an older OpenClaw version.
 
 ## Upgrading very old versions
 
@@ -351,6 +371,20 @@ cannot be updated, OpenClaw continues with the remaining plugins, keeps the prev
 installation where possible, and prints a short next action. A running updated
 Gateway can also report a plugin that did not load without turning the core update
 into a failure. Individual plugin outcomes remain available in `--json` output.
+When ClawHub has not published a version-matched official runtime plugin, the
+updater tries its declared trusted npm source for that same version, honoring
+catalog pins. Security and integrity refusals do not permit a source fallback.
+If neither source can serve the release, a
+compatible working installation stays in place with a version-skew warning and
+an `openclaw plugins update <id>` retry instruction.
+
+Unfinished plugin migrations retain their settings and state inputs while
+`plugins install`, `plugins update`, `doctor --fix`, and `update repair` repair
+the package. A verified replacement can be installed before its remaining data
+migration completes; pending migration still guards runtime activation. Explicit
+`config unset plugins.entries.<id>` can remove that entry, with the normal config
+backup preserved. Removing the entry does not settle its pending data migration.
+
 Failures to install core, repair required configuration or state, or start the
 updated Gateway remain update failures, except for the service-definition refusals
 described above.
@@ -483,6 +517,15 @@ receipt remains in the control directory and is readable through
 `openclaw update status --json` as `packageActivation`, even after helper removal.
 A completed receipt is replaced only when the next update is admitted through
 the same original executor store; it is not authority to mutate an installation.
+
+On Linux, a filesystem remount can change device numbers without moving files.
+Update admission reconciles this change for completed receipts when the recorded
+inodes, installation path, and ownership still match. It refreshes verified
+identities while preserving the original journal format and completion intent,
+so older CLI versions can still read the completed receipt. The warning
+`filesystem device id changed; receipt identities refreshed` reports the repair
+without adding a new persisted intent. Active recovery operations and replaced
+files retain their existing identity checks.
 
 Missing, legacy or identity-mismatched recovery artifacts block the next mutable
 update. They are not silently migrated or deleted. Preserve them and use their

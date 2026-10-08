@@ -17,6 +17,7 @@ import {
   resolveUserProfileGitHubAttribution,
 } from "./user-profile-github-identity.js";
 import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
 import {
   readUserProfileDirectory,
   resolveCanonicalCachedGitHubIdentity,
@@ -28,7 +29,6 @@ import {
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
   getUserProfileDisplay,
-  getUserProfileListItem,
 } from "./user-profiles.js";
 import { userProfileOperations } from "./user-profiles.worker.js";
 

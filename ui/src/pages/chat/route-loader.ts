@@ -317,6 +317,13 @@ export async function loadChatRoute(
   const { target } = resolvedTarget;
   const routeLocation = resolvedTarget.location;
   const preferenceDerived = isPreferenceDerivedFace(routeLocation);
+  const presentation = {
+    context,
+    isResolutionSourceCurrent,
+    location: routeLocation,
+    face,
+    preferenceDerived,
+  };
   const revalidatedResolution =
     revalidation?.sessionKey &&
     (target.kind === "short" || (target.kind === "literal" && target.slugCandidate))
@@ -384,13 +391,9 @@ export async function loadChatRoute(
       );
       if (resolution?.kind === "unique") {
         const resolved = resolvedMainSessionRouteData({
-          context,
-          isResolutionSourceCurrent,
-          location: routeLocation,
-          face,
+          ...presentation,
           row: resolution.session,
           target,
-          preferenceDerived,
         });
         return resolved ?? notFound({ routeId: face });
       }
@@ -444,12 +447,8 @@ export async function loadChatRoute(
             ));
       if (resolution?.kind === "unique") {
         const resolved = resolvedSessionRouteData({
-          context,
-          isResolutionSourceCurrent,
-          location: routeLocation,
-          face,
+          ...presentation,
           row: resolution.session,
-          preferenceDerived,
         });
         return resolved
           ? { ...resolved, ...(cachedRow ? { sessionResolutionFromCache: true as const } : {}) }
@@ -553,10 +552,8 @@ export async function loadChatRoute(
           return null;
         }
         const canonical = resolvedSessionRouteData({
-          context,
+          ...presentation,
           isResolutionSourceCurrent: resolution.isCurrent,
-          location: routeLocation,
-          face,
           row: resolved.session,
           preferenceDerived: false,
           shortId: target.shortId,
@@ -588,12 +585,8 @@ export async function loadChatRoute(
     );
     if (literalResolution?.kind === "unique") {
       const literal = resolvedSessionRouteData({
-        context,
-        isResolutionSourceCurrent,
-        location: routeLocation,
-        face,
+        ...presentation,
         row: literalResolution.session,
-        preferenceDerived,
       });
       return literal ?? notFound({ routeId: face });
     }
@@ -612,13 +605,10 @@ export async function loadChatRoute(
     );
   }
   const resolved = resolvedSessionRouteData({
-    context,
+    ...presentation,
     // RPC resolution owns the connection acquired after a cold route waited for hello.
     isResolutionSourceCurrent: resolution.isCurrent,
-    location: routeLocation,
-    face,
     row: resolution.session,
-    preferenceDerived,
     shortId: target.shortId,
   });
   return resolved

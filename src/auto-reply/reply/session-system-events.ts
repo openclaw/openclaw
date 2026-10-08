@@ -10,7 +10,7 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
+import { isExecCompletionSystemEvent } from "../../infra/heartbeat-events-filter.js";
 import {
   isSystemEventStoreCurrent,
   resolveSystemEventQueueKey,
@@ -80,11 +80,11 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
   if (zone.mode === "utc") {
     return formatUtcTimestamp(date, { displaySeconds: true });
   }
-  if (zone.mode === "local") {
-    return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
-  }
   return (
-    formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ?? "unknown-time"
+    formatZonedTimestamp(date, {
+      ...(zone.mode === "iana" ? { timeZone: zone.timeZone } : {}),
+      displaySeconds: true,
+    }) ?? "unknown-time"
   );
 }
 
@@ -105,7 +105,7 @@ export async function drainFormattedSystemEvents(params: {
   const queued = consumeSelectedSystemEventEntries(
     queueKey,
     (params.events ?? peekSystemEventEntries(queueKey)).filter(
-      (event) => !isExecCompletionEvent(event.text),
+      (event) => !isExecCompletionSystemEvent(event),
     ),
     { deferredEventIds: params.deferredEventIds },
   );

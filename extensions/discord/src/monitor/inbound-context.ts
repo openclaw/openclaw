@@ -81,15 +81,7 @@ export function buildDiscordInboundAccessContext(params: {
     groupSystemPrompt: params.isGuild
       ? buildDiscordGroupSystemPrompt(params.channelConfig)
       : undefined,
-    channelStructuredContext: buildDiscordChannelStructuredContext({
-      isGuild: params.isGuild,
-      channelTopic: params.channelTopic,
-    }),
-    ownerAllowFrom: resolveDiscordOwnerAllowFrom({
-      channelConfig: params.channelConfig,
-      guildInfo: params.guildInfo,
-      sender: params.sender,
-      allowNameMatching: params.allowNameMatching,
-    }),
+    channelStructuredContext: buildDiscordChannelStructuredContext(params),
+    ownerAllowFrom: resolveDiscordOwnerAllowFrom(params),
   };
 }

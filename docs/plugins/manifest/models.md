@@ -124,10 +124,9 @@ Provider fields:
 | `defaultUtilityModel` | `string`                 | Optional provider-recommended small model id for short internal utility tasks (titles, progress narration). Used when `agents.defaults.utilityModel` is unset and this provider serves the agent's primary model. |
 | `models`              | `object[]`               | Required model rows. Rows without an `id` are ignored.                                                                                                                                                            |
 
-`recommendedModels` is an optional ordered shortlist of distinct model
-ids from this provider's `models`. Ids are trimmed and must be non-empty. The field
-is reserved for picker ordering and is not yet used. It is published only in catalog
-v2, never v1. Invalid manifest lists are omitted; invalid remote v2 lists are rejected.
+Manifests do not author recommendations. Catalog v2 derives each provider's
+`recommendedModels` from the [curated recommended models list](/concepts/recommended-models).
+Manifests that still set `recommendedModels` load unchanged; the field is ignored.
 
 The catalog generator opts into local paired output with `--out <v1-file> --out-v2 <v2-file>`.
 It validates both bundles and prepares candidate bytes and previous-file backups

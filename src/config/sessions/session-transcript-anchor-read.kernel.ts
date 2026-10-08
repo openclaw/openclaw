@@ -118,7 +118,13 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       }
       const context = selection.contextValidation;
       if (context) {
-        validateSessionTranscriptContextInDatabase(database, resolved, context);
+        // Appends can supersede or complete a prepared replay; only snapshots retain a prefix.
+        validateSessionTranscriptContextInDatabase(
+          database,
+          resolved,
+          context,
+          replay ? "exact" : "prefix",
+        );
       }
       const validated = {
         ...(contextAuthority ? { contextAuthority } : {}),

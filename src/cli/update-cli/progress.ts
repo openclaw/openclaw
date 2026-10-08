@@ -56,15 +56,6 @@ type ProgressController = {
   dispose: () => void;
 };
 
-function readDisplayRecord(runId: string, env?: NodeJS.ProcessEnv) {
-  try {
-    return getUpdateRun(runId, { env });
-  } catch (error) {
-    defaultRuntime.error(`Update report history unavailable: ${formatErrorMessage(error)}`);
-    return undefined;
-  }
-}
-
 export function createUpdateProgress(
   enabled: boolean,
   run?: UpdateCommandOptions["run"],
@@ -296,7 +287,14 @@ export async function printResult(
   let report: ReturnType<typeof renderUpdateRunReport> | undefined;
   const readRun =
     result.runId && !reportHints.record && reportHints.readHistory !== false
-      ? () => readDisplayRecord(result.runId!, opts.run?.env)
+      ? () => {
+          try {
+            return getUpdateRun(result.runId!, { env: opts.run?.env });
+          } catch (error) {
+            defaultRuntime.error(`Update report history unavailable: ${formatErrorMessage(error)}`);
+            return undefined;
+          }
+        }
       : undefined;
   // The artifact owner reads under its lock and reconciles after publication.
   // Captured and detached reports never reopen retained history.

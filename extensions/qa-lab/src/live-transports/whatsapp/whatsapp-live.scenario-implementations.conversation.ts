@@ -184,7 +184,7 @@ export const whatsappConversationScenarios = {
 
           if (activationProbeError && restoreError) {
             throw new Error(
-              `activation always probe failed; additionally failed to restore mention mode: ${formatErrorMessage(restoreError)}`,
+              `activation always check failed; additionally failed to restore mention mode: ${formatErrorMessage(restoreError)}`,
               { cause: activationProbeError },
             );
           }

@@ -1,5 +1,3 @@
-// Gateway managed media attachment store.
-// Validates, stores, serves, and cleans up outgoing media and document attachments.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";

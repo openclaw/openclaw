@@ -21,7 +21,10 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
   adopt<T>(value: T): T;
-  admitFactory(factory: (...args: never[]) => unknown): void;
+  admitFactory(
+    factory: (...args: never[]) => unknown,
+    resultCallbacks?: readonly PropertyKey[],
+  ): void;
   retainWork(): () => void;
   readonly retainedWorkCount: number;
   readonly ordinaryCallCount: number;

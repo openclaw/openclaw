@@ -47,16 +47,18 @@ export async function auditTelegramGroupMembershipImpl(
     const deadlineMs = Date.now() + timeoutMs;
 
     for (const chatId of params.groupIds) {
+      const entry: TelegramGroupMembershipAuditEntry = {
+        chatId,
+        ok: false,
+        status: null,
+        error: null,
+        matchKey: chatId,
+        matchSource: "id",
+      };
+      groups.push(entry);
       const requestTimeoutMs = Math.max(0, deadlineMs - Date.now());
       if (requestTimeoutMs === 0) {
-        groups.push({
-          chatId,
-          ok: false,
-          status: null,
-          error: `Telegram membership audit timed out after ${timeoutMs}ms`,
-          matchKey: chatId,
-          matchSource: "id",
-        });
+        entry.error = `Telegram membership audit timed out after ${timeoutMs}ms`;
         continue;
       }
       try {
@@ -72,14 +74,7 @@ export async function auditTelegramGroupMembershipImpl(
             isRecord(json) && !json.ok && typeof json.description === "string"
               ? json.description
               : `getChatMember failed (${res.status})`;
-          groups.push({
-            chatId,
-            ok: false,
-            status: null,
-            error: desc,
-            matchKey: chatId,
-            matchSource: "id",
-          });
+          entry.error = desc;
           continue;
         }
         const status =
@@ -87,23 +82,9 @@ export async function auditTelegramGroupMembershipImpl(
             ? json.result.status
             : null;
         const ok = status === "creator" || status === "administrator" || status === "member";
-        groups.push({
-          chatId,
-          ok,
-          status,
-          error: ok ? null : "bot not in group",
-          matchKey: chatId,
-          matchSource: "id",
-        });
+        Object.assign(entry, { ok, status, error: ok ? null : "bot not in group" });
       } catch (err) {
-        groups.push({
-          chatId,
-          ok: false,
-          status: null,
-          error: formatErrorMessage(err),
-          matchKey: chatId,
-          matchSource: "id",
-        });
+        entry.error = formatErrorMessage(err);
       }
     }
 

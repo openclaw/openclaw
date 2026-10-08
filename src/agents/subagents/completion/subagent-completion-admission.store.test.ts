@@ -29,7 +29,7 @@ import { readSubagentRun } from "../registry/subagent-registry.store.sqlite.js";
 import { getSubagentRunRuntimeKey } from "../registry/subagent-run-generation.js";
 import {
   admitSubagentCompletionDelivery,
-  settleRequesterCompletionBatch,
+  mutateRequesterCompletionBatch,
 } from "./subagent-completion-admission.store.js";
 import {
   seedSubagentCompletionDelivery,
@@ -412,10 +412,10 @@ it("settles a requester cohort after concurrently admitted children complete", a
         return { value: undefined, postimages: new Map([[next.runId, next]]) };
       }),
     );
-    const settled = settleRequesterCompletionBatch({
-      entries: inputs.map(({ subagent }) => ({ subagent })),
-      outcome: { delivered: true, path: "direct" },
-      isCurrent: () => true,
+    const settled = mutateRequesterCompletionBatch({
+      entries: inputs.map(({ subagent }) => subagent),
+      operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
+      assertCurrent: () => {},
     });
     try {
       await Promise.race([acknowledged.promise, Promise.all(completions)]);

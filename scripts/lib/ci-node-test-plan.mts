@@ -3447,6 +3447,15 @@ export function createNodeTestShardBundles(
   ).toSorted(compareFullNodeTestAdmissionOrder);
 }
 
+// Unfitted whole rows observed at 41-61 hosted minutes (FRV 37557136793,
+// 37623751955; core-runtime-config was cancelled at the 60-minute cap). Splitting
+// them would exceed the full manual manifest budget, so give them job headroom.
+const LONG_UNFITTED_RELEASE_SHARDS = new Set([
+  "agentic-cli-process",
+  "agentic-control-plane-agent-chat",
+  "core-runtime-config",
+]);
+
 // Full release jobs include setup and can execute both runtimes. Keep their
 // measured walls separate from compact test-group spans and reserve eight minutes
 // of the 20-minute objective for changes in setup and cold-run overhead.
@@ -3528,6 +3537,9 @@ function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
         ...shard,
         timing_key: original.timingKeys[0]!,
         ...(seconds === 0 ? {} : { predictedSeconds: seconds }),
+        ...(LONG_UNFITTED_RELEASE_SHARDS.has(shard.shardName) && seconds === 0
+          ? { timeoutMinutes: Math.max(shard.timeoutMinutes ?? 60, 90) }
+          : {}),
       },
     ];
   }
@@ -4424,7 +4436,12 @@ export function createSelectedNodeTestShardBundles(
           : `changed-${timingParent}`,
         stripes: [includePatterns],
       });
-      const selectedSeconds = Math.max(fallbackSeconds, selectedTimings[timingKeys[0]!] ?? 0);
+      // An older complete-group price cannot cap a known indivisible file's cost.
+      const selectedSeconds = Math.max(
+        fallbackSeconds,
+        ...includePatterns.map(stripeFileWeight),
+        selectedTimings[timingKeys[0]!] ?? 0,
+      );
       retainedSeconds += selectedSeconds;
       const projectedGroup = {
         ...group,

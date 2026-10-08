@@ -95,8 +95,8 @@ export class ClickClackDiscussionService {
     });
     this.provider = {
       id: "clickclack",
-      info: async ({ sessionKey }) => await this.info(sessionKey),
-      open: async ({ sessionKey }) => await this.open(sessionKey),
+      info: ({ sessionKey }) => this.info(sessionKey),
+      open: ({ sessionKey }) => this.open(sessionKey),
     };
   }
 
@@ -234,9 +234,9 @@ export class ClickClackDiscussionService {
         bindingGenerationFactory: this.#bindingGenerationFactory,
         sessionKey,
         ensureTimer: () => this.#ensureTimer(),
-        reconcilePendingOpen: async (pending) =>
-          await this.#reconcilePendingOpen(pending, { allowRetry: false }),
-        withChannelMutationLock: async (run) => await this.#withChannelMutationLock(run),
+        reconcilePendingOpen: (pending) =>
+          this.#reconcilePendingOpen(pending, { allowRetry: false }),
+        withChannelMutationLock: (run) => this.#withChannelMutationLock(run),
         ensureBindingCapacity: (key) => this.#detachedBindings.ensureCapacity(key),
         finalizePendingBinding: (key, nextBinding) =>
           this.#finalizePendingBinding(key, nextBinding),

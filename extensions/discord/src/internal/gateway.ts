@@ -244,12 +244,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
             true,
           );
         } else {
-          void this.identifyWithConcurrency(sourceSocket).catch((error: unknown) => {
-            this.emitter.emit(
-              "error",
-              error instanceof Error ? error : new Error(String(error), { cause: error }),
-            );
-          });
+          void this.identifyWithConcurrency(sourceSocket).catch(this.emitAsyncError);
         }
         break;
       }
@@ -260,12 +255,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
         this.sendHeartbeat();
         break;
       case GatewayOpcodes.Dispatch:
-        void this.handleDispatch(payload).catch((error: unknown) => {
-          this.emitter.emit(
-            "error",
-            error instanceof Error ? error : new Error(String(error), { cause: error }),
-          );
-        });
+        void this.handleDispatch(payload).catch(this.emitAsyncError);
         break;
       case GatewayOpcodes.InvalidSession:
         if (!payload.d) {
@@ -283,6 +273,13 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
         break;
     }
   }
+
+  private emitAsyncError = (error: unknown): void => {
+    this.emitter.emit(
+      "error",
+      error instanceof Error ? error : new Error(String(error), { cause: error }),
+    );
+  };
 
   private startHeartbeat(intervalMs: number): void {
     this.heartbeatTimers.start({
@@ -336,10 +333,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
       throw new Error("Discord gateway socket is not open");
     }
     const serialized = JSON.stringify(payload);
-    const payloadSize =
-      typeof Buffer !== "undefined"
-        ? Buffer.byteLength(serialized, "utf8")
-        : new TextEncoder().encode(serialized).byteLength;
+    const payloadSize = Buffer.byteLength(serialized, "utf8");
     if (payloadSize > DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES) {
       throw new Error(
         `Discord gateway payload exceeds ${DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES}-byte limit`,
@@ -363,11 +357,8 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
       const ready = payload.d as { session_id?: string; resume_gateway_url?: string };
       this.sessionId = ready.session_id ?? null;
       this.resumeGatewayUrl = ready.resume_gateway_url ?? null;
-      this.reconnectAttempts = 0;
-      this.consecutiveResumeFailures = 0;
-      this.isConnected = true;
     }
-    if (payload.t === GatewayDispatchEvents.Resumed) {
+    if (payload.t === GatewayDispatchEvents.Ready || payload.t === GatewayDispatchEvents.Resumed) {
       this.reconnectAttempts = 0;
       this.consecutiveResumeFailures = 0;
       this.isConnected = true;

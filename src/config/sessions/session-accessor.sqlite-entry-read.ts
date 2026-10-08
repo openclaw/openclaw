@@ -254,6 +254,23 @@ function parseReadableSqliteSessionEntryRows(
   );
 }
 
+/** Reuse the caller's admitted connection without reopening its read scope. */
+export function readSessionKeyBySessionIdInDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+): string | undefined {
+  // session_windows.session_id is the primary key; the indexed lookup cannot be ambiguous.
+  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+  return executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_windows")
+      .select("session_key")
+      .where("session_id", "=", sessionId)
+      .limit(1),
+  )?.session_key;
+}
+
 export function readSessionEntryRow(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,

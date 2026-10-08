@@ -76,10 +76,9 @@ export function parseTelegramApprovalCallbackData(
 }
 
 export function rewriteTelegramApprovalDecisionAlias(value: string): string {
-  if (!TELEGRAM_APPROVE_ALLOW_ALWAYS_PATTERN.test(value)) {
-    return value;
-  }
-  return value.slice(0, -"allow-always".length) + "always";
+  return TELEGRAM_APPROVE_ALLOW_ALWAYS_PATTERN.test(value)
+    ? value.slice(0, -"allow-always".length) + "always"
+    : value;
 }
 
 export function sanitizeTelegramCallbackData(value: string): string | undefined {

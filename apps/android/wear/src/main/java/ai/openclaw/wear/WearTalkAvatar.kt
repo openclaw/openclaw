@@ -33,7 +33,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.flow.collect
@@ -287,14 +288,8 @@ internal class AndroidWearAnimatorScaleSource(
         }
       }
     val lifecycleObserver =
-      object : DefaultLifecycleObserver {
-        override fun onStart(owner: LifecycleOwner) {
-          refresh()
-        }
-
-        override fun onResume(owner: LifecycleOwner) {
-          refresh()
-        }
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_RESUME) refresh()
       }
 
     context.registerReceiver(receiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
@@ -350,36 +345,12 @@ private fun DrawScope.drawCanonicalAvatar(
       scale(stretchX, pose.bodyStretch, pivot = Offset(60f, 110f))
       rotate(pose.bodyTilt, pivot = Offset(60f, 60f))
     }) {
-      drawPath(
-        path = BodyPath,
-        brush =
-          Brush.linearGradient(
-            colors = listOf(CoralBright, CoralDark),
-            start = Offset(15f, 10f),
-            end = Offset(105f, 110f),
-          ),
-      )
+      drawCoralPath(BodyPath, Offset(15f, 10f), Offset(105f, 110f))
       withTransform({ rotate(pose.leftClawDegrees, pivot = LeftClawPivot) }) {
-        drawPath(
-          path = LeftClawPath,
-          brush =
-            Brush.linearGradient(
-              colors = listOf(CoralBright, CoralDark),
-              start = Offset(3.125f, 43.67f),
-              end = Offset(26.197f, 65.451f),
-            ),
-        )
+        drawCoralPath(LeftClawPath, Offset(3.125f, 43.67f), Offset(26.197f, 65.451f))
       }
       withTransform({ rotate(pose.rightClawDegrees, pivot = RightClawPivot) }) {
-        drawPath(
-          path = RightClawPath,
-          brush =
-            Brush.linearGradient(
-              colors = listOf(CoralBright, CoralDark),
-              start = Offset(93.803f, 43.67f),
-              end = Offset(116.875f, 65.451f),
-            ),
-        )
+        drawCoralPath(RightClawPath, Offset(93.803f, 43.67f), Offset(116.875f, 65.451f))
       }
 
       val antennaStroke = Stroke(width = 2f, cap = StrokeCap.Round)
@@ -400,6 +371,14 @@ private fun DrawScope.drawCanonicalAvatar(
       drawCanonicalMouth(state, pose.mouthLevel, animationSeconds)
     }
   }
+}
+
+private fun DrawScope.drawCoralPath(
+  path: Path,
+  start: Offset,
+  end: Offset,
+) {
+  drawPath(path, Brush.linearGradient(colors = listOf(CoralBright, CoralDark), start = start, end = end))
 }
 
 private fun DrawScope.drawCanonicalEye(

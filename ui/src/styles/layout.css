@@ -863,11 +863,7 @@ openclaw-settings-save-indicator:empty {
   white-space: nowrap;
 }
 
-.topbar .nav-collapse-toggle__icon {
-  width: 20px;
-  height: 20px;
-}
-
+.topbar .nav-collapse-toggle__icon,
 .topbar .nav-collapse-toggle__icon svg {
   width: 20px;
   height: 20px;

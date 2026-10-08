@@ -134,8 +134,7 @@ async function isPluginConfigured(
       continue;
     }
     try {
-      const configured = (await plugin.config.isConfigured?.(account, cfg)) ?? true;
-      if (configured) {
+      if ((await plugin.config.isConfigured?.(account, cfg)) ?? true) {
         return true;
       }
     } catch (error) {
@@ -157,10 +156,10 @@ async function listConfiguredMessageChannelPlugins(
 ): Promise<ChannelPlugin[]> {
   const plugins: ChannelPlugin[] = [];
   for (const plugin of listRuntimeVisibleChannelPlugins()) {
-    if (!resolveOutboundChannelPlugin({ channel: plugin.id, cfg })) {
-      continue;
-    }
-    if (await isPluginConfigured(plugin, cfg, accountResolution)) {
+    if (
+      resolveOutboundChannelPlugin({ channel: plugin.id, cfg }) &&
+      (await isPluginConfigured(plugin, cfg, accountResolution))
+    ) {
       plugins.push(plugin);
     }
   }
@@ -184,22 +183,15 @@ export async function resolveMessageChannelSelection(params: {
   plugin: ChannelPlugin;
 }> {
   const normalized = normalizeMessageChannel(params.channel);
-  const explicit = resolveAvailableChannel({
-    cfg: params.cfg,
-    channel: normalized,
-    agentId: params.agentId,
-  });
-  if (explicit) {
-    return explicit;
-  }
-
-  const fallback = resolveAvailableChannel({
-    cfg: params.cfg,
-    channel: normalizeMessageChannel(params.fallbackChannel),
-    agentId: params.agentId,
-  });
-  if (fallback) {
-    return fallback;
+  for (const field of ["channel", "fallbackChannel"] as const) {
+    const resolved = resolveAvailableChannel({
+      cfg: params.cfg,
+      channel: field === "channel" ? normalized : normalizeMessageChannel(params[field]),
+      agentId: params.agentId,
+    });
+    if (resolved) {
+      return resolved;
+    }
   }
 
   if (normalized) {

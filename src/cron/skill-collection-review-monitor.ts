@@ -24,7 +24,6 @@ import {
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-runner.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { ManifestModelIdNormalizationSource } from "../plugins/manifest-model-id-normalization.js";
@@ -213,9 +212,9 @@ function hasStoredExecutionPreference(
 export function* resolveSkillCollectionReviewMonitorSpecs(
   cfg: OpenClawConfig,
   jobs: readonly CronJob[],
-  options: { schedulerSeed?: string } = {},
+  options: { schedulerSeed: string },
 ): IterableIterator<{ agentId: string; input: CronJobCreate }> {
-  const schedulerSeed = resolveHeartbeatSchedulerSeed(options.schedulerSeed);
+  const { schedulerSeed } = options;
   const { retained } = partitionSystemMonitors(jobs, skillCollectionReviewMonitorAgentId);
   const workshopEnabled = resolveSkillWorkshopConfig(cfg).autonomous.mode === "auto";
   // Static projection consumes the selected generation, never provider load planning.

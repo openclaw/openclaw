@@ -148,8 +148,7 @@ function waitForLifecycleState<T>(assertion: () => T | Promise<T>): Promise<T> {
 
 const completionDeliveryMocks = vi.hoisted(() => ({
   blockSubagentCompletionDelivery: vi.fn(),
-  settleRequesterCompletionBatch: vi.fn(),
-  mutateRequesterSettleWakeBatch: vi.fn(),
+  mutateRequesterCompletionBatch: vi.fn(),
   ownersByEntry: new Map<object, Pick<SubagentLifecycleOptions, "runs">>(),
 }));
 
@@ -198,8 +197,7 @@ vi.mock("../completion/subagent-completion-admission.store.js", async (importOri
     typeof import("../completion/subagent-completion-admission.store.js")
   >()),
   blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,
-  settleRequesterCompletionBatch: completionDeliveryMocks.settleRequesterCompletionBatch,
-  mutateRequesterSettleWakeBatch: completionDeliveryMocks.mutateRequesterSettleWakeBatch,
+  mutateRequesterCompletionBatch: completionDeliveryMocks.mutateRequesterCompletionBatch,
 }));
 
 vi.mock("../../../sessions/session-lifecycle-events.js", async (importOriginal) => ({
@@ -5080,7 +5078,7 @@ describe("requester settle wake trigger", () => {
     });
     await waitForLifecycleState(() => expect(settleParams).toBeDefined());
     const before = structuredClone(readLifecycleRun(entry));
-    completionDeliveryMocks.settleRequesterCompletionBatch.mockRejectedValueOnce(
+    completionDeliveryMocks.mutateRequesterCompletionBatch.mockRejectedValueOnce(
       new Error("bookkeeping write failed"),
     );
 

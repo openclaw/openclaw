@@ -13,10 +13,13 @@ Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 ## Choose a model route
 
-The model picker can show **Anthropic** and **Claude CLI** separately. These are
+The model picker shows each Claude model once per route. API and Claude CLI are
 not interchangeable billing choices: `anthropic/*` is the canonical model
 identity and can run through either runtime; `claude-cli/*` selects the native
-Claude runtime explicitly.
+Claude runtime explicitly. When a configured `anthropic/*` model already runs
+through Claude CLI, the picker omits its matching `claude-cli/*` entry, unless the
+agent's model policy or a Gateway role allows that `claude-cli/*` entry but not
+the `anthropic/*` one.
 
 - **API / API · OpenClaw** uses the configured Anthropic API connection.
 - **Claude CLI / Claude CLI · native** runs through Claude Code, using its native
@@ -33,6 +36,26 @@ known. Model IDs and explicit runtime choices remain unchanged.
 Check the selected account as well as the runtime. An API key explicitly selected
 for Claude CLI still uses separate API billing. A Claude CLI selection does not
 silently switch to the direct API if the executable cannot run.
+
+## Claude Haiku 5.5
+
+Select `anthropic/claude-haiku-5-5` for API access or
+`claude-cli/claude-haiku-5-5` for an existing Claude Code login. The `haiku`
+alias and Anthropic's default utility model use Haiku 5.5; explicit Haiku 4.5
+refs remain available.
+
+Haiku 5.5 supports text and image input, a 1M context window, and up to 128K
+output tokens. Thinking defaults to adaptive at medium effort. Available levels
+are `off`, `low`, `medium`, `high`, `xhigh`, and `max`; `minimal` maps to `low`.
+OpenClaw omits unsupported sampling parameters and preserves signed thinking
+for same-model replay. It does not enable native fast mode, Priority Tier, or
+server-side fallback for this model.
+
+API pricing is $0.10 / $0.50 per million input / output tokens for prompts up
+to 100K tokens and $0.50 / $2.50 above that threshold. Cache reads and writes
+use the corresponding tier. Claude CLI retains subscription accounting.
+See Anthropic's [Haiku 5.5 migration guide](https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide)
+for the new tokenizer and account-bound thinking requirements.
 
 ## Usage and cost tracking
 
@@ -141,7 +164,9 @@ OpenClaw release:
         native login tokens. Claude owns the login and token refresh lifecycle.
         Gateway startup shares the native login availability check across agent
         workspaces using the same config and environment. Explicit catalog/auth
-        captures recheck availability for their own generation.
+        captures recheck availability for their own generation. Model lists also
+        recheck it in the background at most once a minute, so `claude auth login`
+        or logout after Gateway startup reaches the model picker without a restart.
         New sessions select saved subscription credentials by account order and
         use protected file-descriptor forwarding, including tokens saved with
         `openclaw models auth paste-token --provider anthropic`. API keys saved for
@@ -947,7 +972,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="1M context window">
-    Claude Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Mythos 5, Fable 5.1, and
+    Claude Haiku 5.5, Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Mythos 5, Fable 5.1, and
     Fable 5 have an exact 1,000,000-token input window and support up to 128,000 output tokens.
     Anthropic's 1M context window is also GA on Claude 4.x models with adaptive
     thinking: Opus 4.8,

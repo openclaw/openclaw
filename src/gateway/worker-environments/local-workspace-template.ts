@@ -11,6 +11,7 @@ import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { WORKTREE_SETUP_HEADROOM_BYTES } from "../../agents/worktrees/capacity.js";
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
+import { hasWorktreeUnknownOutcome } from "../../agents/worktrees/errors.js";
 import { detectWorktreeFilesystemBackend } from "../../agents/worktrees/filesystem-backend.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
@@ -60,6 +61,7 @@ async function validateTemplate(
       const result = await git.run(
         directory,
         [
+          "--no-optional-locks",
           "status",
           "--porcelain=v2",
           "--branch",
@@ -137,7 +139,7 @@ type LocalWorkspaceTemplateParams = {
   };
 };
 
-/** Preparation and first use share allocation custody and the same persisted generation. */
+/** The returned template retains its generation until the caller settles its clone. */
 export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTemplateParams) {
   const { guard } = params;
   const backend = await detectWorktreeFilesystemBackend(params.temporaryRoot, guard);
@@ -168,12 +170,12 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     params.source,
     await requireGit(params.source, ["rev-parse", "--git-common-dir"], gitOptions),
   );
-  const prepareSource = async (directory: string) => {
+  const prepareSource = async (directory: string, templateGuard: typeof guard) => {
     await guard.requireDiskSpace(
       [{ path: params.templateRoot, bytes: WORKTREE_SETUP_HEADROOM_BYTES }],
       "sandbox dependency template",
     );
-    await backend.createTemplate(directory, guard);
+    await backend.createTemplate(directory, templateGuard);
     await timeWorktreePreparationPhase("checkout", () =>
       prepareLocalWorkspaceCheckout({
         source: params.source,
@@ -181,8 +183,8 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
         temporaryRoot: params.temporaryRoot,
         baseCommit: params.baseCommit,
         branch: "openclaw-template",
-        signal: guard.signal,
-        assertCurrent: guard.commitGuard,
+        signal: templateGuard.signal,
+        assertCurrent: templateGuard.commitGuard,
       }),
     );
   };
@@ -202,23 +204,32 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
         [{ path: params.templateRoot, bytes: WORKTREE_SETUP_HEADROOM_BYTES }],
         "sandbox dependency template",
       ),
-    validate: (existing) => validateTemplate(existing.path, params.baseCommit, guard),
-    prepare: async (preparing) => {
-      await prepareSource(preparing.path);
+    validate: (existing, templateOptions) =>
+      validateTemplate(existing.path, params.baseCommit, templateOptions),
+    prepare: async (preparing, templateOptions) => {
+      const templateGuard = {
+        ...guard,
+        ...templateOptions,
+        signal: templateOptions.signal ?? guard.signal,
+      };
+      await prepareSource(preparing.path, templateGuard);
       const result = await prepareSandboxDependencyTemplate({
         directory: preparing.path,
         cfg: params.sandbox,
         scopeKey: preparing.id,
         identity,
-        signal: guard.signal,
-        assertCurrent: guard.commitGuard,
-        rollbackGuard: guard.rollbackGuard,
+        signal: templateGuard.signal,
+        assertCurrent: templateGuard.commitGuard,
+        rollbackGuard: templateOptions.rollbackGuard,
       });
       let reason = result.installed ? undefined : result.reason;
       if (result.installed) {
         const contained = await hasContainedVirtualStore(preparing.path, identity.docker.workdir);
-        guard.commitGuard();
-        if (contained && (await validateTemplate(preparing.path, params.baseCommit, guard, true))) {
+        templateGuard.commitGuard();
+        if (
+          contained &&
+          (await validateTemplate(preparing.path, params.baseCommit, templateGuard, true))
+        ) {
           log.info("sandbox dependency template prepared for the selected commit");
           return;
         }
@@ -227,9 +238,9 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
           : "pnpm virtual store is outside node_modules or unavailable";
       }
       log.warn(`sandbox dependency template using source-only fallback: ${reason}`);
-      guard.commitGuard();
+      templateGuard.commitGuard();
       await fs.rm(preparing.path, { recursive: true, force: true });
-      await prepareSource(preparing.path);
+      await prepareSource(preparing.path, templateGuard);
     },
   });
   return record ? { record, backend } : undefined;
@@ -247,33 +258,46 @@ export async function cloneLocalWorkspaceTemplate(
   }
   const { record, backend } = prepared;
   const { guard } = params;
-  guard.commitGuard();
-  await guard.requireDiskSpace(
-    [
-      {
-        path: params.destination,
-        bytes:
-          backend.id === "btrfs" ? backend.estimateCloneBytes(0, 0) : WORKTREE_SETUP_HEADROOM_BYTES,
-      },
-    ],
-    "sandbox workspace clone",
-  );
+  let outcome: unknown;
   try {
-    await timeWorktreePreparationPhase("templateApply", () =>
-      backend.cloneTemplate(record.path, params.destination, guard),
-    );
-  } catch {
     guard.commitGuard();
-    await fs.rm(params.destination, { recursive: true, force: true });
-    log.warn("sandbox dependency snapshot unavailable; using source-only checkout");
-    return false;
+    await guard.requireDiskSpace(
+      [
+        {
+          path: params.destination,
+          bytes:
+            backend.id === "btrfs"
+              ? backend.estimateCloneBytes(0, 0)
+              : WORKTREE_SETUP_HEADROOM_BYTES,
+        },
+      ],
+      "sandbox workspace clone",
+    );
+    try {
+      await timeWorktreePreparationPhase("templateApply", () =>
+        backend.cloneTemplate(record.path, params.destination, guard),
+      );
+    } catch (error) {
+      if (hasWorktreeUnknownOutcome(error)) {
+        throw error;
+      }
+      guard.commitGuard();
+      await fs.rm(params.destination, { recursive: true, force: true });
+      log.warn("sandbox dependency snapshot unavailable; using source-only checkout");
+      return false;
+    }
+    // This .git was host-created and read-only throughout installation; guests only
+    // receive the independent cloned metadata after its session branch is selected.
+    await requireGit(params.destination, ["branch", "-m", params.branch], {
+      signal: guard.signal,
+      beforeRun: guard.commitGuard,
+      killProcessTree: true,
+    });
+    return true;
+  } catch (error) {
+    outcome = error;
+    throw error;
+  } finally {
+    await record.release(outcome);
   }
-  // This .git was host-created and read-only throughout installation; guests only
-  // receive the independent cloned metadata after its session branch is selected.
-  await requireGit(params.destination, ["branch", "-m", params.branch], {
-    signal: guard.signal,
-    beforeRun: guard.commitGuard,
-    killProcessTree: true,
-  });
-  return true;
 }

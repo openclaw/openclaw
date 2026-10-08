@@ -108,6 +108,8 @@ export const SessionRowSchema = Type.Object(
     sessionId: Type.Optional(Type.String()),
     /** Incarnation revision for invalidating session-scoped client caches after resets. */
     lifecycleRevision: Type.Optional(NonEmptyString),
+    /** Opaque saved model-selection inputs, unaffected by activity or display updates. */
+    sessionModelRevision: Type.Optional(NonEmptyString),
     incognito: Type.Optional(Type.Literal(true)),
     kind: Type.Union([
       Type.Literal("direct"),

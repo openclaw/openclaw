@@ -428,14 +428,16 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(
       `bundle MCP skipped unavailable OAuth server ${serverName}: ${formatErrorMessage(error)}`,
     );
-  const resolvedBearerConfig = await resolveMcpBearerBundleConfig({
-    config: mergedConfig,
-    cfg: params.config,
-    agentDir: params.agentDir,
-    env: params.env,
-    omitUnavailableOAuthServers: true,
-    onServerUnavailable: warnUnavailableOAuthServer,
-  });
+  const resolveBearerConfig = (config: BundleMcpConfig) =>
+    resolveMcpBearerBundleConfig({
+      config,
+      cfg: params.config,
+      agentDir: params.agentDir,
+      env: params.env,
+      omitUnavailableOAuthServers: true,
+      onServerUnavailable: warnUnavailableOAuthServer,
+    });
+  const resolvedBearerConfig = await resolveBearerConfig(mergedConfig);
 
   const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
     config: applyMcpServerOverrides(resolvedBearerConfig.config, params.toolOverrides?.mcpServers),
@@ -505,14 +507,9 @@ export async function prepareCliBundleMcpConfig(params: {
 
       // Policy discovery can refresh OAuth. Reproject the final survivors afterward
       // so the external runtime receives the same current credential.
-      const refreshedBearerConfig = await resolveMcpBearerBundleConfig({
-        config: selectBundleMcpServers(mergedConfig, effectiveConfig),
-        cfg: params.config,
-        agentDir: params.agentDir,
-        env: params.env,
-        omitUnavailableOAuthServers: true,
-        onServerUnavailable: warnUnavailableOAuthServer,
-      });
+      const refreshedBearerConfig = await resolveBearerConfig(
+        selectBundleMcpServers(mergedConfig, effectiveConfig),
+      );
       effectiveConfig = selectBundleMcpServers(effectiveConfig, refreshedBearerConfig.config);
       effectiveEnv = refreshedBearerConfig.env;
       retainedServerNames = new Set(Object.keys(effectiveConfig.mcpServers));

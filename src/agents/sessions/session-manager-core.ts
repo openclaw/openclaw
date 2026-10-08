@@ -1,10 +1,7 @@
-import { inspectTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
-import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
 import type {
   SessionTranscriptBoundedActiveContext,
   SessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
-import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { bindCacheTtlProjectionPrefixes } from "../../config/sessions/session-cache-ttl-prefix.js";
 import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
@@ -32,6 +29,7 @@ import {
   installSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
+import { readSessionManagerReload } from "./session-manager-reload.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -109,25 +107,18 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.assertTranscriptViewAvailable();
     this.hydrationRevision++;
     const capturedTarget = captureSessionTranscriptTargetBinding(target);
-    const bounded = this.boundedContextLimits
-      ? readSessionTranscriptBoundedActiveContextCore(capturedTarget, this.boundedContextLimits)
-      : undefined;
-    const snapshot = bounded ? undefined : loadTranscriptReadSnapshotSync(capturedTarget);
-    const entries = (bounded?.events ?? snapshot?.events ?? []) as FileEntry[];
+    const prepared = readSessionManagerReload(capturedTarget, this.boundedContextLimits, false);
+    const bounded = prepared.kind === "bounded" ? prepared.snapshot : undefined;
+    const entries = prepared.snapshot.events as FileEntry[];
     this.boundedContextIncomplete = bounded !== undefined;
     this.persistedBoundaryCount = bounded?.boundaryCount;
     this.persistedSuffixStartSeq = bounded?.persistedSuffixStartSeq;
     this.transcriptMutationAt =
-      bounded !== undefined ? bounded.transcriptMutationAt : snapshot?.version.updatedAt;
+      bounded !== undefined ? bounded.transcriptMutationAt : prepared.snapshot.version.updatedAt;
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    this.setLoadedSessionTarget(
-      capturedTarget,
-      entries,
-      bounded,
-      bounded?.version ?? snapshot?.version,
-    );
+    this.setLoadedSessionTarget(capturedTarget, entries, bounded, prepared.snapshot.version);
     if (header?.cwd) {
       this.cwd = header.cwd;
     }
@@ -347,35 +338,10 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     if (!this.persistenceTarget) {
       return;
     }
-    const target = this.persistenceTarget;
-    if (this.boundedContextLimits) {
-      this.adoptPreparedTranscriptReload(
-        {
-          kind: "bounded",
-          snapshot: readSessionTranscriptBoundedActiveContextCore(target, {
-            ...this.boundedContextLimits,
-            ignoreReadFence: true,
-          }),
-        },
-        { expectedMutationAt, expectedEntryId, admittedUserId },
-      );
-    } else {
-      const inspected = inspectTranscriptEventsSync(target);
-      this.adoptPreparedTranscriptReload(
-        {
-          kind: "full",
-          snapshot: {
-            events: inspected.events,
-            version: {
-              generation: inspected.snapshot.generation,
-              rawSeq: inspected.snapshot.lastSeq,
-              updatedAt: inspected.snapshot.transcriptUpdatedAt,
-            },
-          },
-        },
-        { expectedMutationAt, expectedEntryId, admittedUserId },
-      );
-    }
+    this.adoptPreparedTranscriptReload(
+      readSessionManagerReload(this.persistenceTarget, this.boundedContextLimits, true),
+      { expectedMutationAt, expectedEntryId, admittedUserId },
+    );
   }
 
   /** Adopt owner-prepared bytes without reading SQLite again on the receiving thread. */
@@ -614,14 +580,11 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
         roots.push(node);
       }
     }
-    const stack = [...roots];
-    while (stack.length > 0) {
-      const node = stack.pop()!;
+    for (const node of nodeMap.values()) {
       node.children.sort(
         (left, right) =>
           new Date(left.entry.timestamp).getTime() - new Date(right.entry.timestamp).getTime(),
       );
-      stack.push(...node.children);
     }
     return roots;
   }

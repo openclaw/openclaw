@@ -22,10 +22,10 @@ export function getDispatchTestMocks() {
   return dispatchTestMocks;
 }
 
-vi.mock("../../agents/worktrees/service.js", () => ({
-  managedWorktrees: {
-    findLiveByOwner: dispatchTestMocks.findLiveByOwner,
-  },
+vi.mock("../../agents/worktrees/registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/worktrees/registry-read.js")>()),
+  readLiveRegistryWorktreeByOwner: (_context: unknown, ...args: unknown[]) =>
+    dispatchTestMocks.findLiveByOwner(...args),
 }));
 
 vi.mock("../../process/exec.js", async () => {
@@ -149,6 +149,7 @@ export function makeDispatchTestContext(
           enabled: true,
           capacity: { total: 2, available: 2 },
           capturedExecPolicy: true,
+          promptContext: 1,
         },
         commands: observed?.commands ?? ["system.run", "codex.exec-server.stdio.v1"],
       };

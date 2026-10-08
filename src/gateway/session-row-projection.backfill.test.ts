@@ -1,5 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
@@ -19,10 +20,11 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
-import { create, type Row } from "./session-row-projection-record.js";
+import { create, identity, type EntryRow } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 
@@ -434,12 +436,14 @@ it("fences superseded and disposed background catalog reads", async () => {
   });
 });
 
-it("continues backfill queued as the previous batch settles", async () => {
-  vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields").mockResolvedValue({});
-  const rows = new Map<string, Row>(
-    ["first", "second"].map((key) => {
-      const entry = { sessionId: key, updatedAt: 1 };
-      return [
+it.for(["ready", "readiness failure", "metadata during readiness"])(
+  "continues backfill as the previous batch settles (%s)",
+  async (mode, { signal }) => {
+    const reads = vi
+      .spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields")
+      .mockResolvedValue({});
+    const rows = new Map<string, EntryRow>(
+      ["first", "second"].map((key) => [
         key,
         {
           ...create({
@@ -447,34 +451,68 @@ it("continues backfill queued as the previous batch settles", async () => {
             agentId: "main",
             storeTarget: { agentId: "main", storePath: "unused" },
           }),
-          entry,
+          entry: { sessionId: key, updatedAt: 1 },
         },
-      ];
-    }),
-  );
-  const published: string[] = [];
-  const backfill = createSessionRowProjectionBackfill({
-    ready: async () => {},
-    read: (id) => rows.get(id),
-    current: () => true,
-    publish(row) {
-      published.push(row.key);
-      if (row.key === "first") {
-        queueMicrotask(() => backfill.enqueue("second"));
+      ]),
+    );
+    const published: string[] = [];
+    const paused = createDeferredCore(),
+      resume = createDeferredCore();
+    const completed = createDeferredCore();
+    let rejectNext = mode === "readiness failure",
+      dirtyNext = mode === "metadata during readiness";
+    let materialized = true;
+    const backfill = createSessionRowProjectionBackfill({
+      ready: async () => {
+        if (rejectNext) {
+          rejectNext = false;
+          paused.resolve();
+          throw new Error("Row facts temporarily unavailable");
+        }
+        if (dirtyNext && reads.mock.calls.length > 0) {
+          dirtyNext = false;
+          queueMicrotask(() => {
+            materialized = false;
+            paused.resolve();
+          });
+        } else if (!materialized) {
+          await resume.promise;
+        }
+      },
+      read: (id) => [...rows.values()].find((row) => identity(row) === id),
+      current: () => materialized,
+      publish(row) {
+        published.push(row.key);
+        if (row.key === "first") {
+          queueMicrotask(() => backfill.prepare(rows.get("second")!, undefined));
+        } else {
+          completed.resolve();
+        }
+      },
+    });
+    try {
+      backfill.start();
+      backfill.prepare(rows.get("first")!, undefined);
+      if (mode !== "ready") {
+        await withinTest(paused.promise, signal);
+        await nextTurn();
+        const row = rows.get("first")!;
+        row.entry = { ...row.entry, displayName: "Renamed while waiting" };
+        materialized = true;
+        backfill.prepare(row, undefined);
+        resume.resolve();
+        await nextTurn();
+        expect(published).toContain("first");
       }
-    },
-  });
-  try {
-    backfill.enqueue("first", { all: true, scope: "profiles" });
-    backfill.start();
-    await nextTurn();
-    expect(published).toEqual([]);
-    backfill.enqueue("first");
-    await vi.waitFor(() => expect(published).toEqual(["first", "second"]));
-  } finally {
-    backfill.dispose();
-  }
-});
+      await withinTest(completed.promise, signal);
+      expect(published).toEqual(["first", "second"]);
+      expect(reads).toHaveBeenCalledTimes(2);
+    } finally {
+      resume.resolve();
+      backfill.dispose();
+    }
+  },
+);
 
 it("preserves a stored fallback model without requiring a terminal transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -529,7 +567,9 @@ it("preserves a stored fallback model without requiring a terminal transcript", 
   });
 });
 
-it("backfills terminal fallback models and clears previews when the newest message cannot fit", async () => {
+it("backfills terminal fallback models and clears previews when the newest message cannot fit", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     const target = { agentId: "main", sessionKey: "agent:main:fallback", sessionId: "fallback" };
@@ -562,27 +602,41 @@ it("backfills terminal fallback models and clears previews when the newest messa
       ],
       touchSessionEntry: false,
     });
+    const initial = observeSessionRowBackfill([target.sessionKey]);
+    const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
     const projection = await createSessionRowProjection({ cfg });
     const query = { agentId: "main", key: target.sessionKey };
     try {
       expect(projection.snapshot(query).row?.activeModel).toBeUndefined();
-      await vi.waitFor(() =>
-        expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
-          activeModelProvider: "unit-test",
-          activeModel: "fallback",
-          lastMessagePreview: "Finished",
-        }),
-      );
+      const expected = {
+        activeModelProvider: "unit-test",
+        activeModel: "fallback",
+        lastMessagePreview: "Finished",
+      };
+      await withinTest(initial, signal);
+      expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject(expected);
+      let reads = backfill.mock.calls.length;
+      for (const changed of [{ model: "selected" }, { modelProvider: "recorded-provider" }]) {
+        const published = observeSessionRowBackfill([target.sessionKey]);
+        replaceSessionEntrySync(target, { ...loadSessionEntry(target)!, ...changed });
+        await projection.ensureMaterialized();
+        await nextTurn();
+        expect(backfill.mock.calls.length).toBe(++reads);
+        await withinTest(published, signal);
+        expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject(
+          expected,
+        );
+      }
+      const appended = observeSessionRowBackfill([target.sessionKey]);
       await persistSessionTranscriptTurn(target, {
         messages: [{ message: { role: "assistant", content: "x".repeat(70 * 1024) } }],
         touchSessionEntry: false,
       });
-      await vi.waitFor(() =>
-        expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
-          activeModel: undefined,
-          lastMessagePreview: undefined,
-        }),
-      );
+      await withinTest(appended, signal);
+      expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+        activeModel: undefined,
+        lastMessagePreview: undefined,
+      });
     } finally {
       projection.dispose();
     }

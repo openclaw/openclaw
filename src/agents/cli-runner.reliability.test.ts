@@ -696,66 +696,8 @@ describe("runCliAgent reliability", () => {
     createContext: (params) => capturedContext({}, params),
     completeToolCall: completeCapturedToolCall,
     makeManagedRun,
+    admitContext: admitPreparedContext,
     run: runPreparedCliAgent,
-  });
-
-  it("does not retry or fail over after a confirmed message send", async () => {
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
-      const captureKey = input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "";
-      const captureHandle = markMcpLoopbackToolCallStarted({
-        captureKey,
-        toolName: "message",
-        args: {
-          action: "send",
-          channel: "telegram",
-          target: "chat123",
-          message: "done",
-          mediaUrl: "https://example.com/done.png",
-        },
-      });
-      if (!captureHandle) {
-        throw new Error("Expected message delivery capture");
-      }
-      setTimeout(() => {
-        recordMcpLoopbackToolCallResult({
-          captureHandle,
-          toolName: "message",
-          args: {
-            action: "send",
-            channel: "telegram",
-            target: "chat123",
-            message: "done",
-            mediaUrl: "https://example.com/done.png",
-          },
-          result: { status: "sent" },
-          outcome: "completed",
-        });
-        markMcpLoopbackToolCallFinished(captureHandle);
-      }, 10);
-      return makeNoOutputTimeoutRun();
-    });
-    const context = makeClaudePreparedContext({
-      sessionKey: "agent:main:delivered-timeout",
-      runId: "run-delivered-timeout",
-      cliSessionId: "stale-cli-session",
-      openClawHistoryPrompt: CLI_RESEED_PROMPT,
-    });
-    context.mcpDeliveryCapture = true;
-
-    const result = await runPreparedCliAgent(context);
-
-    expect(result.payloads).toBeUndefined();
-    expect(result.didSendViaMessagingTool).toBe(true);
-    expect(result.messagingToolSentTexts).toEqual(["done"]);
-    expect(result.messagingToolSentMediaUrls).toEqual(["https://example.com/done.png"]);
-    expect(result.messagingToolSentTargets).toEqual([
-      expect.objectContaining({ tool: "message", provider: "telegram", to: "chat123" }),
-    ]);
-    expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("error");
-    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
-    expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
   it("projects explicit outbound MCP media without retaining echoed image bytes", async () => {

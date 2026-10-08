@@ -17,153 +17,70 @@ import { createInvalidConfigError } from "../../config/io.invalid-config.js";
 import { getAgentDir } from "../config.js";
 
 /** OpenClaw-specific key ids added to the shared pi-tui keybinding registry. */
-type AppKeybindings = Record<Exclude<keyof typeof KEYBINDINGS, keyof typeof TUI_KEYBINDINGS>, true>;
+type AppKeybindings = Record<keyof typeof APP_KEYBINDINGS, true>;
 
 declare module "@earendil-works/pi-tui" {
   interface Keybindings extends AppKeybindings {}
 }
 
+/** Application actions with their default keys and display descriptions. */
+const APP_KEYBINDINGS = {
+  "app.interrupt": ["escape", "Cancel or abort"],
+  "app.clear": ["ctrl+c", "Clear editor"],
+  "app.exit": ["ctrl+d", "Exit when editor is empty"],
+  "app.suspend": [process.platform === "win32" ? [] : "ctrl+z", "Suspend to background"],
+  "app.thinking.cycle": ["shift+tab", "Cycle thinking level"],
+  "app.model.cycleForward": ["ctrl+p", "Cycle to next model"],
+  "app.model.cycleBackward": ["shift+ctrl+p", "Cycle to previous model"],
+  "app.model.select": ["ctrl+l", "Open model selector"],
+  "app.tools.expand": ["ctrl+o", "Toggle tool output"],
+  "app.thinking.toggle": ["ctrl+t", "Toggle thinking blocks"],
+  "app.session.toggleNamedFilter": ["ctrl+n", "Toggle named session filter"],
+  "app.editor.external": ["ctrl+g", "Open external editor"],
+  "app.message.followUp": ["alt+enter", "Queue follow-up message"],
+  "app.message.dequeue": ["alt+up", "Restore queued messages"],
+  "app.clipboard.pasteImage": [
+    process.platform === "win32" ? "alt+v" : "ctrl+v",
+    "Paste image from clipboard",
+  ],
+  "app.session.new": [[], "Start a new session"],
+  "app.session.tree": [[], "Open session tree"],
+  "app.session.fork": [[], "Fork current session"],
+  "app.session.resume": [[], "Resume a session"],
+  "app.tree.foldOrUp": [["ctrl+left", "alt+left"], "Fold tree branch or move up"],
+  "app.tree.unfoldOrDown": [["ctrl+right", "alt+right"], "Unfold tree branch or move down"],
+  "app.tree.editLabel": ["shift+l", "Edit tree label"],
+  "app.tree.toggleLabelTimestamp": ["shift+t", "Toggle tree label timestamps"],
+  "app.session.togglePath": ["ctrl+p", "Toggle session path display"],
+  "app.session.toggleSort": ["ctrl+s", "Toggle session sort mode"],
+  "app.session.rename": ["ctrl+r", "Rename session"],
+  "app.session.delete": ["ctrl+d", "Delete session"],
+  "app.session.deleteNoninvasive": ["ctrl+backspace", "Delete session when query is empty"],
+  "app.models.save": ["ctrl+s", "Save model selection"],
+  "app.models.enableAll": ["ctrl+a", "Enable all models"],
+  "app.models.clearAll": ["ctrl+x", "Clear all models"],
+  "app.models.toggleProvider": ["ctrl+p", "Toggle all models for provider"],
+  "app.models.reorderUp": ["alt+up", "Move model up in order"],
+  "app.models.reorderDown": ["alt+down", "Move model down in order"],
+  "app.tree.filter.default": ["ctrl+d", "Tree filter: default view"],
+  "app.tree.filter.noTools": ["ctrl+t", "Tree filter: hide tool results"],
+  "app.tree.filter.userOnly": ["ctrl+u", "Tree filter: user messages only"],
+  "app.tree.filter.labeledOnly": ["ctrl+l", "Tree filter: labeled entries only"],
+  "app.tree.filter.all": ["ctrl+a", "Tree filter: show all entries"],
+  "app.tree.filter.cycleForward": ["ctrl+o", "Tree filter: cycle forward"],
+  "app.tree.filter.cycleBackward": ["shift+ctrl+o", "Tree filter: cycle backward"],
+} as const satisfies Record<string, [KeyId | KeyId[], string]>;
+
 /** Complete keybinding definition map consumed by the TUI keybinding manager. */
 const KEYBINDINGS = {
   ...TUI_KEYBINDINGS,
-  "app.interrupt": { defaultKeys: "escape", description: "Cancel or abort" },
-  "app.clear": { defaultKeys: "ctrl+c", description: "Clear editor" },
-  "app.exit": { defaultKeys: "ctrl+d", description: "Exit when editor is empty" },
-  "app.suspend": {
-    defaultKeys: process.platform === "win32" ? [] : "ctrl+z",
-    description: "Suspend to background",
-  },
-  "app.thinking.cycle": {
-    defaultKeys: "shift+tab",
-    description: "Cycle thinking level",
-  },
-  "app.model.cycleForward": {
-    defaultKeys: "ctrl+p",
-    description: "Cycle to next model",
-  },
-  "app.model.cycleBackward": {
-    defaultKeys: "shift+ctrl+p",
-    description: "Cycle to previous model",
-  },
-  "app.model.select": { defaultKeys: "ctrl+l", description: "Open model selector" },
-  "app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
-  "app.thinking.toggle": {
-    defaultKeys: "ctrl+t",
-    description: "Toggle thinking blocks",
-  },
-  "app.session.toggleNamedFilter": {
-    defaultKeys: "ctrl+n",
-    description: "Toggle named session filter",
-  },
-  "app.editor.external": {
-    defaultKeys: "ctrl+g",
-    description: "Open external editor",
-  },
-  "app.message.followUp": {
-    defaultKeys: "alt+enter",
-    description: "Queue follow-up message",
-  },
-  "app.message.dequeue": {
-    defaultKeys: "alt+up",
-    description: "Restore queued messages",
-  },
-  "app.clipboard.pasteImage": {
-    defaultKeys: process.platform === "win32" ? "alt+v" : "ctrl+v",
-    description: "Paste image from clipboard",
-  },
-  "app.session.new": { defaultKeys: [], description: "Start a new session" },
-  "app.session.tree": { defaultKeys: [], description: "Open session tree" },
-  "app.session.fork": { defaultKeys: [], description: "Fork current session" },
-  "app.session.resume": { defaultKeys: [], description: "Resume a session" },
-  "app.tree.foldOrUp": {
-    defaultKeys: ["ctrl+left", "alt+left"],
-    description: "Fold tree branch or move up",
-  },
-  "app.tree.unfoldOrDown": {
-    defaultKeys: ["ctrl+right", "alt+right"],
-    description: "Unfold tree branch or move down",
-  },
-  "app.tree.editLabel": {
-    defaultKeys: "shift+l",
-    description: "Edit tree label",
-  },
-  "app.tree.toggleLabelTimestamp": {
-    defaultKeys: "shift+t",
-    description: "Toggle tree label timestamps",
-  },
-  "app.session.togglePath": {
-    defaultKeys: "ctrl+p",
-    description: "Toggle session path display",
-  },
-  "app.session.toggleSort": {
-    defaultKeys: "ctrl+s",
-    description: "Toggle session sort mode",
-  },
-  "app.session.rename": {
-    defaultKeys: "ctrl+r",
-    description: "Rename session",
-  },
-  "app.session.delete": {
-    defaultKeys: "ctrl+d",
-    description: "Delete session",
-  },
-  "app.session.deleteNoninvasive": {
-    defaultKeys: "ctrl+backspace",
-    description: "Delete session when query is empty",
-  },
-  "app.models.save": {
-    defaultKeys: "ctrl+s",
-    description: "Save model selection",
-  },
-  "app.models.enableAll": {
-    defaultKeys: "ctrl+a",
-    description: "Enable all models",
-  },
-  "app.models.clearAll": {
-    defaultKeys: "ctrl+x",
-    description: "Clear all models",
-  },
-  "app.models.toggleProvider": {
-    defaultKeys: "ctrl+p",
-    description: "Toggle all models for provider",
-  },
-  "app.models.reorderUp": {
-    defaultKeys: "alt+up",
-    description: "Move model up in order",
-  },
-  "app.models.reorderDown": {
-    defaultKeys: "alt+down",
-    description: "Move model down in order",
-  },
-  "app.tree.filter.default": {
-    defaultKeys: "ctrl+d",
-    description: "Tree filter: default view",
-  },
-  "app.tree.filter.noTools": {
-    defaultKeys: "ctrl+t",
-    description: "Tree filter: hide tool results",
-  },
-  "app.tree.filter.userOnly": {
-    defaultKeys: "ctrl+u",
-    description: "Tree filter: user messages only",
-  },
-  "app.tree.filter.labeledOnly": {
-    defaultKeys: "ctrl+l",
-    description: "Tree filter: labeled entries only",
-  },
-  "app.tree.filter.all": {
-    defaultKeys: "ctrl+a",
-    description: "Tree filter: show all entries",
-  },
-  "app.tree.filter.cycleForward": {
-    defaultKeys: "ctrl+o",
-    description: "Tree filter: cycle forward",
-  },
-  "app.tree.filter.cycleBackward": {
-    defaultKeys: "shift+ctrl+o",
-    description: "Tree filter: cycle backward",
-  },
-} as const satisfies KeybindingDefinitions;
+  ...Object.fromEntries(
+    Object.entries(APP_KEYBINDINGS).map(([action, [defaultKeys, description]]) => [
+      action,
+      { defaultKeys, description },
+    ]),
+  ),
+} satisfies KeybindingDefinitions;
 
 const RETIRED_KEYBINDING_NAMES = {
   cursorUp: "tui.editor.cursorUp",
@@ -225,7 +142,7 @@ const RETIRED_KEYBINDING_NAMES = {
   renameSession: "app.session.rename",
   deleteSession: "app.session.delete",
   deleteSessionNoninvasive: "app.session.deleteNoninvasive",
-} as const satisfies Record<string, keyof typeof KEYBINDINGS>;
+} as const satisfies Record<string, keyof typeof APP_KEYBINDINGS | keyof typeof TUI_KEYBINDINGS>;
 
 /** Validates bindings and orders known entries ahead of unknown extras. */
 function parseKeybindingsConfig(

@@ -37,12 +37,17 @@ import {
   type AcceptedWorkerInferenceSessionDrain,
   type WorkerInferenceSessionDrain,
 } from "../worker-environments/inference-control-internal.js";
-import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import type {
+  WorkerSessionPlacementStore,
+  WorkerSessionPlacementRecord,
+} from "../worker-environments/placement-store.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "../worker-environments/placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "../worker-environments/placement-workspace-result.types.js";
 import {
-  prepareSessionWorkerPlacementArchiveCheck,
-  prepareSessionWorkerPlacementMutationCheck,
+  prepareSessionWorkerPlacementArchiveCheckAsync,
+  prepareSessionWorkerPlacementMutationCheckAsync,
   prepareSessionWorkerPlacementStop,
+  readSessionWorkerPlacementAsync,
 } from "../worker-environments/session-placement-lifecycle.js";
 import { hasGatewaySessionAbortOwner } from "./chat-abort-authorization.js";
 import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
@@ -241,11 +246,24 @@ export async function prepareSessionLifecycleDrain(
     }
 
     params.authorize?.();
+    const placementService: LifecyclePlacementService | undefined =
+      params.context.workerSessionPlacementService;
+    let placement: WorkerSessionPlacementRecord | undefined;
     if (params.sessionId) {
-      const placements = params.context.workerSessionPlacementService;
-      const pending = (await placements?.listPendingWorkspaceResultsAsync?.(params.sessionId))?.[0];
-      params.authorize?.();
-      const placement = placements?.getMany([params.sessionId]).get(params.sessionId);
+      const preparedPlacement = await placementService?.prepareRuntimeRefresh?.(params.sessionId);
+      let pending: WorkerWorkspacePendingResult | undefined;
+      try {
+        pending = preparedPlacement
+          ? preparedPlacement.pendingResult
+          : (await placementService?.listPendingWorkspaceResultsAsync?.(params.sessionId))?.[0];
+        placement = preparedPlacement
+          ? preparedPlacement.placement
+          : await readSessionWorkerPlacementAsync(params);
+        params.authorize?.();
+        preparedPlacement?.assertCurrent();
+      } finally {
+        preparedPlacement?.release();
+      }
       if (
         pending &&
         pending.workspaceAcceptedAtMs === null &&
@@ -285,11 +303,6 @@ export async function prepareSessionLifecycleDrain(
     const embeddedWork = params.sessionId
       ? waitForEmbeddedAgentRunEnd(params.sessionId, timeoutMs)
       : Promise.resolve(true);
-    const placementService: LifecyclePlacementService | undefined =
-      params.context.workerSessionPlacementService;
-    const placement = params.sessionId
-      ? placementService?.getMany([params.sessionId]).get(params.sessionId)
-      : undefined;
     const placementWork = placement?.turnClaim
       ? placementService?.waitForTurnClaimRelease
         ? placementService
@@ -297,14 +310,10 @@ export async function prepareSessionLifecycleDrain(
             .then(() => true)
         : Promise.resolve(false)
       : Promise.resolve(true);
-    const workerWork = workerDrained
-      ? withTimeout(workerDrained, timeoutMs, "worker inference lifecycle drain").then(() => true)
-      : Promise.resolve(true);
-    const terminalWork = terminalDrain
-      ? withTimeout(terminalDrain.drained, timeoutMs, "agent terminal lifecycle drain").then(
-          () => true,
-        )
-      : Promise.resolve(true);
+    const waitForDrain = (work: Promise<void> | undefined, label: string) =>
+      work ? withTimeout(work, timeoutMs, label).then(() => true) : Promise.resolve(true);
+    const workerWork = waitForDrain(workerDrained, "worker inference lifecycle drain");
+    const terminalWork = waitForDrain(terminalDrain?.drained, "agent terminal lifecycle drain");
     const drains = await Promise.all([
       prepared.controllerDrain,
       replyWork,
@@ -325,8 +334,8 @@ export async function prepareSessionLifecycleDrain(
     const placementTarget = { context: params.context, sessionId: params.sessionId };
     const assertPlacementCurrent =
       params.action === "archive"
-        ? prepareSessionWorkerPlacementArchiveCheck(placementTarget).assertCurrent
-        : prepareSessionWorkerPlacementMutationCheck(placementTarget);
+        ? (await prepareSessionWorkerPlacementArchiveCheckAsync(placementTarget)).assertCurrent
+        : await prepareSessionWorkerPlacementMutationCheckAsync(placementTarget);
     return {
       // Only the caller's active mutation may replace this mutex-free ingress lease.
       handoffToMutation: () => releaseAdmissions(),

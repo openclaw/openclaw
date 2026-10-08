@@ -76,7 +76,6 @@ export type SqliteSessionReclamationDiagnostics = {
     | "lifecycle-artifacts"
     | "lifecycle-projection-plan"
     | "lifecycle-projection-commit"
-    | "lifecycle-projection-count"
     | "history-eviction"
     | "historical-generation"
     | "maintenance-plan"

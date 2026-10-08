@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -193,6 +194,55 @@ export type PreparedSessionSharingProfiles = {
     roleProfile: UserProfileIdentity | undefined;
   };
 };
+
+export type PreparedMutationSharing = {
+  target: SessionSharingTarget | null;
+  storageTarget: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "storePath">;
+  members: readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[];
+  isMember?: (identityId: string) => boolean;
+  assertCurrent: () => void;
+};
+
+/** Prepared policy and source facts are borrowed only by one synchronous authority consumer. */
+export function createSessionSharingConsumption(params: {
+  client: GatewayClient | null;
+  sharing: PreparedMutationSharing | undefined;
+  getProfiles: () => PreparedSessionSharingProfiles | undefined;
+}) {
+  const current = { sharing: params.sharing, profiles: params.getProfiles() };
+  return Object.assign(current, {
+    policy: (cfg: OpenClawConfig) =>
+      current.sharing
+        ? prepareProjectedSessionSharing({
+            cfg,
+            client: params.client,
+            profiles: current.profiles,
+            isMember: (_target, id) =>
+              current.sharing!.isMember?.(id) ??
+              current.sharing!.members.some((member) => member.identityId === id),
+          })
+        : undefined,
+    consume: <T>(
+      prepared: PreparedMutationSharing,
+      consume: () => T,
+      profiles: PreparedSessionSharingProfiles | undefined = params.getProfiles(),
+    ): T => {
+      const previous = { sharing: current.sharing, profiles: current.profiles };
+      Object.assign(current, { sharing: prepared, profiles });
+      try {
+        profiles?.readCurrent();
+        prepared.assertCurrent();
+        const result = consume();
+        if (isPromiseLike(result)) {
+          throw new Error("Sharing authorization consumers must remain synchronous");
+        }
+        return result;
+      } finally {
+        Object.assign(current, previous);
+      }
+    },
+  });
+}
 
 /** Worker authorization also serves callers without a connection-owned profile projection. */
 export async function prepareSessionSharingProfiles(

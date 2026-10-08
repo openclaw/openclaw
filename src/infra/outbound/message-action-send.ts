@@ -13,7 +13,6 @@ import {
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
@@ -70,7 +69,6 @@ function resolveReplyMediaAttachmentType(value: unknown): ReplyMediaAttachment["
 }
 
 export async function buildMessagePayload(params: {
-  cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
   input: MessageActionInput;
   channel?: ChannelId;
@@ -137,15 +135,14 @@ export async function buildMessagePayload(params: {
   });
   const topLevelFilename = readToolStringParam(actionParams, "filename");
   const topLevelMimeType = readToolStringParam(actionParams, "contentType");
+  const attachmentEntries = attachmentSources.map((source) => ({
+    url: source.value,
+    filename: source.filename,
+    mimeType: source.contentType,
+    type: resolveReplyMediaAttachmentType(source.attachment.type),
+  }));
   const attachmentByUrl = new Map(
-    attachmentSources.map((source) => [
-      normalizeOptionalString(source.value),
-      {
-        filename: source.filename,
-        mimeType: source.contentType,
-        type: resolveReplyMediaAttachmentType(source.attachment.type),
-      },
-    ]),
+    attachmentEntries.map(({ url, ...metadata }) => [normalizeOptionalString(url), metadata]),
   );
   const mediaEntries: Array<{
     url: string;
@@ -172,12 +169,8 @@ export async function buildMessagePayload(params: {
   for (const mediaUrlHint of mediaUrlHints) {
     pushMedia(mediaUrlHint, attachmentByUrl.get(normalizeOptionalString(mediaUrlHint)));
   }
-  for (const attachmentSource of attachmentSources) {
-    pushMedia(attachmentSource.value, {
-      filename: attachmentSource.filename,
-      mimeType: attachmentSource.contentType,
-      type: resolveReplyMediaAttachmentType(attachmentSource.attachment.type),
-    });
+  for (const { url, ...metadata } of attachmentEntries) {
+    pushMedia(url, metadata);
   }
 
   const normalizedMedia = await Promise.all(
@@ -249,7 +242,7 @@ export async function buildMessagePayload(params: {
       input.messageActionAuthorization?.scheduled ? input.assertDirectAdapterHandoff : undefined,
       () =>
         applyMessageCrossContextMarker({
-          cfg: params.cfg,
+          cfg: input.cfg,
           channel,
           action: "send",
           target,
@@ -374,7 +367,6 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   const action: ChannelMessageActionName = "send";
   const to = readToolStringParam(params, "to", { required: true });
   let sendPayload = await buildMessagePayload({
-    cfg,
     actionParams: params,
     input,
     channel,

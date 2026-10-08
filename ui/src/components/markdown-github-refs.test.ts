@@ -23,6 +23,50 @@ describe("github item references", () => {
     return htmlFragment(toSanitizedMarkdownHtml(source, options));
   }
 
+  it.each([
+    "Posted [the summary](https://github.com/acme/research/pull/24#issuecomment-123) and merged PR #24 into `main`.",
+    "Merged PR **#24**: [the summary](https://github.com/acme/research/pull/24).",
+    "https://github.com/acme/research/pull/24 and PR #24.",
+  ])("uses matching explicit links instead of the checkout in %s", (source) => {
+    for (const html of [
+      toSanitizedMarkdownHtml(source, { githubRepo }),
+      toStreamingMarkdownParts(source, { githubRepo }).join(""),
+    ]) {
+      const fragment = htmlFragment(html);
+      const chip = [...fragment.querySelectorAll("a")].findLast((a) => a.textContent === "#24");
+      expect(chip?.getAttribute("href")).toBe("https://github.com/acme/research/pull/24");
+    }
+  });
+
+  it("leaves a shorthand plain when matching explicit links disagree", () => {
+    const source =
+      "[A](https://github.com/acme/a/pull/24) and " +
+      "[B](https://github.com/acme/b/pull/24): PR #24.";
+    for (const html of [
+      toSanitizedMarkdownHtml(source, { githubRepo }),
+      toStreamingMarkdownParts(source, { githubRepo }).join(""),
+    ]) {
+      const fragment = htmlFragment(html);
+      expect(fragment.querySelectorAll("a")).toHaveLength(2);
+      expect(fragment.textContent?.trim()).toBe("A and B: PR #24.");
+    }
+  });
+
+  it.each([
+    ["[Other](https://github.com/acme/research/pull/25): PR #24.", "openclaw/openclaw/pull/24"],
+    ["[Other](https://github.com/acme/research/issues/24): PR #24.", "openclaw/openclaw/pull/24"],
+    ["[Other](https://github.com/acme/research/pull/24).\n\nPR #24.", "openclaw/openclaw/pull/24"],
+    ["`https://github.com/acme/research/pull/24` PR #24.", "openclaw/openclaw/pull/24"],
+    [
+      "[Other](https://github.com/acme/research/pull/24): ClawSweeper PR #24.",
+      "openclaw/clawsweeper/pull/24",
+    ],
+  ])("keeps unrelated links and explicit qualifiers independent in %s", (source, target) => {
+    const fragment = render(source, { githubRepo, githubRepositories });
+    const chip = [...fragment.querySelectorAll("a")].findLast((a) => a.textContent === "#24");
+    expect(chip?.getAttribute("href")).toBe("https://github.com/" + target);
+  });
+
   it.each<[string, string, MarkdownRenderOptions]>([
     ["Original ClawSweeper PR **#1558 merged**", "openclaw/clawsweeper/pull/1558", resolved],
     ["Release.Tools issue **#42**", "other/release-tools/issues/42", resolved],

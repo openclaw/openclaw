@@ -343,18 +343,13 @@ export async function withGatewayRuntimeArtifactPublication<T>(
     } catch (error) {
       publicationFailures.push(error);
     }
-    try {
-      await maintenance?.close();
-    } catch (error) {
-      if (!publicationFailures.includes(error)) {
-        publicationFailures.push(error);
-      }
-    }
-    try {
-      processOwner?.release();
-    } catch (error) {
-      if (!publicationFailures.includes(error)) {
-        publicationFailures.push(error);
+    for (const close of [() => maintenance?.close(), () => processOwner?.release()]) {
+      try {
+        await close();
+      } catch (error) {
+        if (!publicationFailures.includes(error)) {
+          publicationFailures.push(error);
+        }
       }
     }
     throwSqliteLifecycleErrors(

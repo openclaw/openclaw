@@ -66,17 +66,6 @@ function listProviderAuthStateEntries<T>(
     .toSorted(([left], [right]) => left.localeCompare(right));
 }
 
-function readProviderAuthState<T>(
-  entries: Record<string, T> | undefined,
-  provider: string,
-): T | undefined {
-  const canonicalProvider = resolveProviderIdForAuth(provider);
-  const matches = listProviderAuthStateEntries(entries, canonicalProvider);
-  return (
-    matches.find(([key]) => normalizeProviderId(key) === canonicalProvider)?.[1] ?? matches[0]?.[1]
-  );
-}
-
 function replaceProviderAuthState<T>(
   entries: Record<string, T> | undefined,
   provider: string,
@@ -144,7 +133,9 @@ export async function promoteAuthProfileInOrder(params: {
         return false;
       }
       const matchingOrderEntries = listProviderAuthStateEntries(store.order, providerKey);
-      const existing = readProviderAuthState(store.order, providerKey);
+      const existing =
+        matchingOrderEntries.find(([key]) => normalizeProviderId(key) === providerKey)?.[1] ??
+        matchingOrderEntries[0]?.[1];
       if (!existing?.length && !params.createIfMissing) {
         return false;
       }
@@ -590,12 +581,14 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       params.beforeRemove || params.onIncomplete
         ? await prepareAuthProfileRemovalPeers(targets, params.cfg ?? {})
         : [];
-    const reconcileSurvivors = async () => {
+    const reconcileSurvivors = async (onlyIfPresent = false) => {
       if (!params.onIncomplete) {
         return;
       }
       const surviving = readRemovalProfileState(targets, peers, true);
-      await params.onIncomplete(surviving.profiles, surviving.scopes);
+      if (!onlyIfPresent || surviving.profiles.size > 0) {
+        await params.onIncomplete(surviving.profiles, surviving.scopes);
+      }
     };
     // Config cleanup must not make a later credential generation eligible for this removal.
     let result: AuthProfileRemovalResult;
@@ -610,13 +603,8 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       throw error;
     }
     if (result.kind === "updated") {
-      if (params.onIncomplete) {
-        const surviving = readRemovalProfileState(targets, peers, true);
-        // A captured peer may have reconnected while config cleanup was awaiting I/O.
-        if (surviving.profiles.size > 0) {
-          await params.onIncomplete(surviving.profiles, surviving.scopes);
-        }
-      }
+      // A captured peer may have reconnected while config cleanup was awaiting I/O.
+      await reconcileSurvivors(true);
       return true;
     }
     if (result.kind === "contention" || params.beforeRemove) {

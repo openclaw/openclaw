@@ -345,6 +345,22 @@ export async function hasExactWorktreeIndex(
   return true;
 }
 
+/** Both restore routes verify repository and detached HEAD while retaining native Git locks. */
+export async function withExactSnapshotRestore<T>(
+  record: ManagedWorktreeRecord,
+  metadata: ExactStateSnapshot,
+  options: GitOptions,
+  assertCurrent: () => void,
+  restore: () => Promise<T>,
+): Promise<T> {
+  await requireExactWorktreeRepository(record, record.path, options);
+  const live = { ...record, removedAt: undefined };
+  return await withExactStateGitLocks(live, assertCurrent, async () => {
+    await requireExactManagedWorktreeHead(live, { ...record, ...metadata }, options);
+    return await restore();
+  });
+}
+
 /** Prefer the retained original tree, preserving even writes through old descriptors. */
 export async function restoreRetiredExactWorktree<T>(params: {
   record: ManagedWorktreeRecord;
@@ -394,42 +410,33 @@ export async function restoreRetiredExactWorktree<T>(params: {
       "Retained exact-state source identity or registration changed; source preserved",
     );
   }
-  await requireExactWorktreeRepository(record, sourcePath, options);
-  const archived = { ...record, path: sourcePath, removedAt: undefined };
-  return await withExactStateGitLocks(archived, assertCurrent, async () => {
-    await requireExactManagedWorktreeHead(
-      archived,
-      {
-        ownerKind: record.ownerKind,
-        ownerId: record.ownerId,
-        createdAt: record.createdAt,
-        lastActiveAt: record.lastActiveAt,
-        head: metadata.head,
-        branchHead: metadata.branchHead,
-        indexSha256: metadata.indexSha256,
-      },
-      options,
-    );
-    if (!(await hasExactWorktreeIndex(sourcePath, metadata, options))) {
-      throw new Error("Retained exact-state index missing; source and snapshot preserved");
-    }
-    const beforeMove = () => {
+  return await withExactSnapshotRestore(
+    { ...record, path: sourcePath },
+    metadata,
+    options,
+    assertCurrent,
+    async () => {
+      if (!(await hasExactWorktreeIndex(sourcePath, metadata, options))) {
+        throw new Error("Retained exact-state index missing; source and snapshot preserved");
+      }
+      const beforeMove = () => {
+        assertCurrent();
+        assertExactStateSourceIdentity(sourcePath, metadata);
+      };
+      await params.admitCapacity([record.repoRoot, record.path, sourcePath]);
+      beforeMove();
+      // Native move never overlays a recreated live path. Once admitted, join it;
+      // cancellation must not strand a partially completed filesystem rename.
+      if (!alreadyMoved) {
+        await requireGit(record.repoRoot, ["worktree", "move", "--", retained, record.path], {
+          beforeRun: beforeMove,
+          killProcessTree: true,
+        });
+      }
       assertCurrent();
-      assertExactStateSourceIdentity(sourcePath, metadata);
-    };
-    await params.admitCapacity([record.repoRoot, record.path, sourcePath]);
-    beforeMove();
-    // Native move never overlays a recreated live path. Once admitted, join it;
-    // cancellation must not strand a partially completed filesystem rename.
-    if (!alreadyMoved) {
-      await requireGit(record.repoRoot, ["worktree", "move", "--", retained, record.path], {
-        beforeRun: beforeMove,
-        killProcessTree: true,
-      });
-    }
-    assertCurrent();
-    assertExactStateSourceIdentity(record.path, metadata);
-    // Native writers remain excluded until the registry publishes the restored lifecycle.
-    return await params.finalize();
-  });
+      assertExactStateSourceIdentity(record.path, metadata);
+      // Native writers remain excluded until the registry publishes the restored lifecycle.
+      return await params.finalize();
+    },
+  );
 }

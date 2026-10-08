@@ -21,6 +21,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -632,7 +633,7 @@ it("retains the original transcript and prompt cache facts while claim authority
   const instance = createOperationalRunInstanceRef(claim.runId);
   const delegated = claimAgentRunDelegatedAuthority(instance);
   const expected = {
-    ...sessionTarget,
+    ...captureSessionTranscriptTargetBinding(sessionTarget),
     expectedLifecycleRevision: "original-lifecycle",
     expectedWriterRunId: claim.runId,
   };
@@ -677,6 +678,7 @@ it("retains the original transcript and prompt cache facts while claim authority
   requested.storePath = path.join(root, "replacement.json");
   requested.expectedLifecycleRevision = "replacement-lifecycle";
   requested.expectedWriterRunId = "replacement-run";
+  requested.env = { ...requested.env, OPENCLAW_STATE_DIR: path.join(root, "replacement-state") };
   try {
     const { capability } = await binding;
     expect(capability.sessionTarget).toEqual(expected);

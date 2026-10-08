@@ -535,10 +535,8 @@ export function createTelegramMessagePipeline({
           spooledReplayAbortSignal: params.spooledReplayAbortSignal,
           spooledReplayParticipant: processingParticipant,
           finalizeSpooledReplayResult,
-          completeSpooledReplayAfterIrrevocableAdoption: async () => {
-            const completed = { kind: "completed" } satisfies TelegramMessageProcessingResult;
-            return await finalizeSpooledReplayResult(completed);
-          },
+          completeSpooledReplayAfterIrrevocableAdoption: async () =>
+            await finalizeSpooledReplayResult({ kind: "completed" }),
         },
         options: params.options,
         replyMedia,

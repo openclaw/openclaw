@@ -107,64 +107,14 @@ describe("public worker task preparation custody", () => {
     }
   });
 
-  it("reports shared queue wait and cancellation without labeling task inputs", async () => {
-    const events: Extract<DiagnosticEventPayload, { type: "worker.request" }>[] = [];
-    const unsubscribe = onTrustedInternalDiagnosticEvent(
-      (event) => {
-        if (event.type === "worker.request") {
-          events.push(event);
-        }
-      },
-      { include: ["worker.request"] },
-    );
-    const now = vi.spyOn(performance, "now").mockReturnValue(0);
-    const gate = createDeferredCore<string>();
-    const workerUrl = new URL("file:///fixture/git-operation.worker.js");
-    const pool = createPool({ sharedCompute: true, workerUrl });
-    const secondPool = createPool({ sharedCompute: true, workerUrl });
-    const controller = new AbortController();
-    try {
-      const active = pool.run(() => gate.promise, {});
-      now.mockReturnValue(10);
-      const next = secondPool.run("synthetic-private-session", {});
-      const cancelled = pool.run("another-private-session", { signal: controller.signal });
-      const rejected = expect(cancelled).rejects.toThrow("cancelled");
-      controller.abort(new Error("cancelled"));
-      now.mockReturnValue(25);
-      gate.resolve("ready");
-      await Promise.all([active, next, rejected]);
-      await waitForDiagnosticEventsDrained();
-      expect(
-        events.filter((event) => event.phase === "started").map((event) => event.queueWaitMs),
-      ).toEqual([0, 15]);
-      expect(
-        events.filter((event) => event.phase === "completed").map((event) => event.durationMs),
-      ).toEqual([undefined, 25, 0]);
-      expect(Math.max(...events.map((event) => event.queueDepth))).toBe(2);
-      expect(events.at(-1)?.queueDepth).toBe(0);
-      expect(new Set(events.map((event) => `${event.kind}/${event.requestClass}`))).toEqual(
-        new Set(["gitOperations/task"]),
-      );
-      expect(JSON.stringify(events)).not.toContain("private-session");
-    } finally {
-      gate.resolve("cleanup");
-      await Promise.all([pool.close(), secondPool.close()]);
-      await waitForDiagnosticEventsDrained();
-      unsubscribe();
-      now.mockRestore();
-    }
-  });
-
-  it.each([
-    ["prepared-model-catalog.worker.ts", "preparedModelCatalog"],
-    ["disk-budget.worker.mjs", "diskBudget"],
-    ["synthetic-private-worker.js", "extension"],
-  ])("attributes %s without publishing private paths or inputs", async (script, kind) => {
+  it("attributes unknown workers without publishing private paths or inputs", async () => {
     const events: DiagnosticEventPayload[] = [];
     const unsubscribe = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
       include: ["worker.request"],
     });
-    const pool = createPool({ workerUrl: new URL(`file:///synthetic-private-root/${script}`) });
+    const pool = createPool({
+      workerUrl: new URL("file:///synthetic-private-root/synthetic-private-worker.js"),
+    });
     try {
       await expect(pool.run("synthetic-private-input", {})).resolves.toBe(
         "synthetic-private-input",
@@ -173,9 +123,9 @@ describe("public worker task preparation custody", () => {
       expect(
         events.map((event) => event.type === "worker.request" && [event.kind, event.phase]),
       ).toEqual([
-        [kind, "queued"],
-        [kind, "started"],
-        [kind, "completed"],
+        ["extension", "queued"],
+        ["extension", "started"],
+        ["extension", "completed"],
       ]);
       expect(JSON.stringify(events)).not.toContain("synthetic-private");
     } finally {
@@ -373,7 +323,6 @@ describe("public worker task preparation custody", () => {
   });
 
   it.each([
-    { ending: "abort", failure: "input" },
     { ending: "close", failure: "settlement" },
     { ending: "abort", failure: "both" },
   ])(

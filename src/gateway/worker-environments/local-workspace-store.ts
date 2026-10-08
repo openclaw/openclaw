@@ -8,7 +8,6 @@ import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
-import { verifyOpenClawStateLeaseOwnership } from "../../state/openclaw-state-lease-storage.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
@@ -65,6 +64,7 @@ export function withLocalWorkspaceStore<T>(
   const env = params.env ?? process.env;
   const captured = captureWorktreeRunEndContext(env);
   const inherited = params.workerAuthority?.leaseSet;
+  const mutationWorktreeIds = inherited?.mutationWorktreeIds?.slice();
   const context = inherited?.context ?? captured;
   if (context.admission.coordinationKey !== captured.admission.coordinationKey) {
     throw new Error("Local workspace lease belongs to another database");
@@ -99,16 +99,6 @@ export function withLocalWorkspaceStore<T>(
             assertHost();
             if (pending) {
               throw new Error("Local workspace publication has not settled");
-            }
-            for (const identity of authority.identities) {
-              verifyOpenClawStateLeaseOwnership({
-                ...identity,
-                leaseLabel: "local sandbox workspace",
-                database: {
-                  scope: "shared",
-                  options: { path: context.admission.databasePath, env: context.environment },
-                },
-              });
             }
             params.assertCurrent?.();
           };
@@ -208,7 +198,11 @@ export function withLocalWorkspaceStore<T>(
                   assertCurrent,
                   workerAuthority: {
                     ...params.workerAuthority,
-                    leaseSet: { context, leases },
+                    leaseSet: {
+                      context,
+                      leases,
+                      mutationWorktreeIds,
+                    },
                     assertCurrent: assertHost,
                   },
                   get: () => {

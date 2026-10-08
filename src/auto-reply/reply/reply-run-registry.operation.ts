@@ -7,6 +7,7 @@ import {
 } from "../../agents/run-termination.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { notifyGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -167,6 +168,7 @@ export function createReplyOperation(params: {
     recordActivity();
     phase = next.kind;
     backendReady.resolve();
+    notifyGatewayWorkMetricsChanged();
   };
   const markProgress = (reason: string) => {
     markDiagnosticRunProgress({
@@ -174,6 +176,13 @@ export function createReplyOperation(params: {
       sessionKey: currentSessionKey,
       reason,
     });
+  };
+  const warnForcedRelease = (label: string, reason?: string) => {
+    diag.warn(
+      `reply run ${label}: forced release sessionKey=${currentSessionKey}${reason === undefined ? "" : ` reason=${reason}`} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
+        result,
+      )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
+    );
   };
 
   const clearState = (
@@ -329,12 +338,14 @@ export function createReplyOperation(params: {
       recordActivity();
       phase = next;
       notifyBackendReady();
+      notifyGatewayWorkMetricsChanged();
     },
     markWaitingForDeferredMaintenance() {
       if (result || phase !== "queued") {
         return;
       }
       phase = "waiting_for_deferred_maintenance";
+      notifyGatewayWorkMetricsChanged();
       markProgress("deferred_maintenance:waiting");
     },
     markDeferredMaintenanceWaitEnded() {
@@ -342,6 +353,7 @@ export function createReplyOperation(params: {
         return;
       }
       phase = "queued";
+      notifyGatewayWorkMetricsChanged();
       markProgress("deferred_maintenance:wait_ended");
     },
     markWaitingForGlobalLane() {
@@ -352,6 +364,7 @@ export function createReplyOperation(params: {
       // lets stale recovery silently drop replies while global capacity is busy.
       phaseBeforeGlobalLaneWait = phase;
       phase = "waiting_for_global_lane";
+      notifyGatewayWorkMetricsChanged();
       markProgress("global_lane:waiting");
     },
     markGlobalLaneWaitEnded() {
@@ -361,6 +374,7 @@ export function createReplyOperation(params: {
       phase = phaseBeforeGlobalLaneWait ?? "queued";
       phaseBeforeGlobalLaneWait = undefined;
       notifyBackendReady();
+      notifyGatewayWorkMetricsChanged();
       markProgress("global_lane:wait_ended");
     },
     markTerminalRecovery() {
@@ -405,6 +419,7 @@ export function createReplyOperation(params: {
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
       replyRunState.waitKeysBySessionId.set(currentSessionId, currentSessionKey);
+      notifyGatewayWorkMetricsChanged();
       markProgress("reply_operation:session_updated");
     },
     updateSessionKey(nextSessionKey, agentId) {
@@ -415,6 +430,7 @@ export function createReplyOperation(params: {
       recordActivity();
       currentAgentId = update.agentId;
       if (update.sessionKey === currentSessionKey) {
+        notifyGatewayWorkMetricsChanged();
         return;
       }
       const previousKey = currentSessionKey;
@@ -434,6 +450,7 @@ export function createReplyOperation(params: {
           replyRunState.waitKeysBySessionId.set(ownedSessionId, currentSessionKey);
         }
       }
+      notifyGatewayWorkMetricsChanged();
       // The previous key's slot is idle now; wake turns waiting on it.
       notifyReplyRunEnded(previousKey);
       markProgress("reply_operation:session_key_adopted");
@@ -591,11 +608,7 @@ export function createReplyOperation(params: {
     }
     controller.abort(createAbortError("Reply operation expired as stale"));
     if (stateCleared) {
-      diag.warn(
-        `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
+      warnForcedRelease("stale takeover", reason);
       return true;
     }
     // cancel() only requests shutdown. A missing backend can also be a live
@@ -617,11 +630,7 @@ export function createReplyOperation(params: {
     onActivity: recordActivity,
     onFinalizationProgress: () => markProgress("reply_operation:finalizing_progress"),
     onExpire: () => {
-      diag.warn(
-        `reply run finalization settle: forced release sessionKey=${currentSessionKey} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
+      warnForcedRelease("finalization settle");
       const expired = expireReplyOperationByOperation.get(operation)?.("finalization_stalled");
       if (expired === false && replyRunState.activeRunsByKey.get(currentSessionKey) === operation) {
         // This lease is the finalization owner's bounded shutdown deadline.
@@ -634,11 +643,7 @@ export function createReplyOperation(params: {
     canExpire: () => replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
     onExpire: () => {
       // Retained terminal results get one delivery grace window, not a second lifetime.
-      diag.warn(
-        `reply run terminal settle: forced release sessionKey=${currentSessionKey} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
+      warnForcedRelease("terminal settle");
       clearState();
     },
   });
@@ -667,6 +672,7 @@ export function createReplyOperation(params: {
   replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
   replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
   replyRunState.waitKeysBySessionId.set(currentSessionId, sessionKey);
+  notifyGatewayWorkMetricsChanged();
   markProgress("reply_operation:queued");
   if (upstreamAbortSignal) {
     operationsByUpstreamAbortSignal.set(upstreamAbortSignal, operation);

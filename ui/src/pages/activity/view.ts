@@ -292,30 +292,24 @@ export function renderActivity(props: ActivityProps) {
               total: String(props.entries.length),
             })}
           </span>
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${filtered.length === 0}
-            @click=${props.onExpandAll}
-          >
-            ${t("activity.expandAll")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${props.expandedIds.size === 0}
-            @click=${props.onCollapseAll}
-          >
-            ${t("activity.collapseAll")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm danger"
-            ?disabled=${props.entries.length === 0}
-            @click=${props.onClear}
-          >
-            ${t("activity.clear")}
-          </button>
+          ${[
+            { action: "expandAll", disabled: filtered.length === 0, onClick: props.onExpandAll },
+            {
+              action: "collapseAll",
+              disabled: props.expandedIds.size === 0,
+              onClick: props.onCollapseAll,
+            },
+            { action: "clear", disabled: props.entries.length === 0, onClick: props.onClear },
+          ].map(
+            ({ action, disabled, onClick }) => html`<button
+              type="button"
+              class=${action === "clear" ? "btn btn--sm danger" : "btn btn--sm"}
+              ?disabled=${disabled}
+              @click=${onClick}
+            >
+              ${t(`activity.${action}`)}
+            </button>`,
+          )}
         </div>
       </div>
       <div class="settings-group activity-group">

@@ -185,17 +185,16 @@ export async function prepareSubagentKillSession(
 
 export async function persistSubagentAbortedLastRun(params: {
   childSessionKey: string;
-  storePath: string;
-  hasSessionEntry: boolean;
-  expectedSessionId?: string;
-  expectedLifecycleRevision?: string;
+  session: Pick<SubagentKillSession, "storePath" | "entry">;
   abortedLastRun: boolean;
   isCurrent?: (current: SessionEntry) => boolean;
   assertCommitAllowed?: () => void;
 }): Promise<boolean> {
-  if (!params.hasSessionEntry) {
+  const { storePath, entry } = params.session;
+  if (!entry) {
     return true;
   }
+  const { sessionId, lifecycleRevision } = entry;
   try {
     let selected: SessionEntry | undefined;
     const assertCommitAllowed = () => {
@@ -205,7 +204,7 @@ export async function persistSubagentAbortedLastRun(params: {
       }
     };
     await applySessionEntryExactReplacements({
-      storePath: params.storePath,
+      storePath,
       sessionKeys: [params.childSessionKey],
       activeSessionKey: params.childSessionKey,
       requireWriteSuccess: true,
@@ -216,8 +215,8 @@ export async function persistSubagentAbortedLastRun(params: {
         const current = selected;
         const changed =
           current &&
-          current.sessionId === params.expectedSessionId &&
-          current.lifecycleRevision === params.expectedLifecycleRevision &&
+          current.sessionId === sessionId &&
+          current.lifecycleRevision === lifecycleRevision &&
           params.isCurrent?.(current) !== false;
         if (changed && current.abortedLastRun === params.abortedLastRun) {
           assertCommitAllowed();

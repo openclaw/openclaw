@@ -50,7 +50,10 @@ export type ManagedWorktreeRecord = Omit<
 export type WorktreeRegistryPredicate =
   | { kind: "activity"; id: string; lastActiveAt: number }
   | { kind: "session-owner"; id: string; sessionKey: string }
-  | { kind: "record" | "binding" | "exact-snapshot"; record: ManagedWorktreeRecord }
+  | {
+      kind: "record" | "binding" | "exact-snapshot" | "snapshot-retirement" | "live-binding";
+      record: ManagedWorktreeRecord;
+    }
   | {
       kind: "exact-owner";
       record: Pick<
@@ -80,6 +83,7 @@ export type WorktreeRegistryPredicate =
 export type WorktreeLeaseSet = {
   context: OpenClawStateWorkerContext;
   leases: readonly OpenClawStateAsyncLeaseContext[];
+  mutationWorktreeIds?: readonly string[];
 };
 
 /** Explicit worker authority replaces the native guard, including predicate-only authority. */
@@ -87,6 +91,10 @@ export type WorktreeWorkerAuthority = {
   leaseSet?: WorktreeLeaseSet;
   assertCurrent?: () => void;
   predicates?: readonly WorktreeRegistryPredicate[];
+};
+
+export type WorktreeMutationGuard = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard"> & {
+  workerAuthority?: WorktreeWorkerAuthority;
 };
 
 type WorktreeSourceCurrent = {
@@ -139,6 +147,13 @@ export type ManagedWorktreeCreationOutcome = {
   record: ManagedWorktreeRecord;
   /** This allocation created or restored the checkout instead of reusing a live one. */
   materialized: boolean;
+};
+
+export type WorktreeCreationPublication = {
+  id: string;
+  pending?: ManagedWorktreeRecord;
+  record?: ManagedWorktreeRecord;
+  cleanup?: (assertCurrent: () => void) => Promise<void>;
 };
 
 /** Exact retirement retains the original checkout, not merely its captured bytes. */

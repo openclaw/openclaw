@@ -15,13 +15,13 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { ApnsRegistrationPairingChangedError } from "./push-apns-store.errors.js";
-import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
-import type { ApnsEnvironment, ApnsRegistration } from "./push-apns-store.types.js";
 import {
   normalizeApnsRelayBaseUrl,
   normalizePersistedApnsRelayBaseUrl,
-} from "./push-apns.relay.js";
+} from "./push-apns-relay-url.js";
+import { ApnsRegistrationPairingChangedError } from "./push-apns-store.errors.js";
+import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
+import type { ApnsEnvironment, ApnsRegistration } from "./push-apns-store.types.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 export { ApnsRegistrationPairingChangedError } from "./push-apns-store.errors.js";

@@ -89,10 +89,10 @@ describe("tool-authored source replies at tool completion", () => {
     ]);
   });
 
-  it("queues a final reply from a direct call to a capable tool", async () => {
+  it("queues a final reply from a direct call to a capable mixed-case tool", async () => {
     const ctx = createContext(new Set(["order_status"]));
 
-    await completeTool(ctx, { toolName: "order_status", details: replyDetails });
+    await completeTool(ctx, { toolName: "Order_Status", details: replyDetails });
 
     expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([
       {
@@ -106,14 +106,6 @@ describe("tool-authored source replies at tool completion", () => {
     // Delivery is the host's job here, so message-tool delivery state is untouched.
     expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(false);
     expect(ctx.state.sourceReplyDeliveryState).not.toBe("delivered");
-  });
-
-  it("queues the reply for a capable tool registered with a mixed-case name", async () => {
-    const ctx = createContext(new Set(["order_status"]));
-
-    await completeTool(ctx, { toolName: "Order_Status", details: replyDetails });
-
-    expect(ctx.state.messagingToolSourceReplyPayloads).toHaveLength(1);
   });
 
   it.each([

@@ -1,11 +1,5 @@
-// Gateway node registry.
-// Tracks connected node clients, invoke requests, broadcasts, and system.run approvals.
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  addTimerTimeoutGraceMs,
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
@@ -79,6 +73,10 @@ import {
   selectActiveNodesByProfile,
   type NodePresenceActivityUpdate,
 } from "./node-registry.presence.js";
+import {
+  authorizedSystemRunEventExpiresAt,
+  authorizedSystemRunEventKey,
+} from "./node-registry.system-run.js";
 import { isNodeWorkerHostClientId } from "./node-runner-inventory-runtime.js";
 import type { NodeSession } from "./node-session.types.js";
 import { normalizeNodeSkillDescriptors } from "./node-skill-descriptors.js";
@@ -136,12 +134,10 @@ type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
   expiresAtMs: number | null;
 };
 
-/** Connectivity probe result for a registered node. */
 export type NodeConnectivityResult =
   | { ok: true }
   | { ok: false; error: { code: string; message: string } };
 
-const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
 const FAILED_EVENT_LOG_INTERVAL_MS = 30_000;
 const log = createSubsystemLogger("gateway/nodes");
 const failedEventLogAtByNode = new WeakMap<NodeSession, number>();
@@ -176,7 +172,6 @@ export type NodeRegistryOptions = {
   onDesktopAvailabilityChanged?: (nodeId: string) => void;
 };
 
-/** Registry of currently connected Gateway nodes. */
 export class NodeRegistry {
   private nodesById = new Map<string, PairingBoundNodeSession>();
   private nodesByConn = new Map<string, string>();
@@ -605,7 +600,6 @@ export class NodeRegistry {
     return unregistersCurrentNode ? nodeId : null;
   }
 
-  /** List connected node sessions. */
   listConnected(): NodeSession[] {
     return this.listConnectedSessions();
   }
@@ -720,7 +714,6 @@ export class NodeRegistry {
     return node.client.invalidated === true;
   }
 
-  /** Return a connected node session by node id. */
   get(nodeId: string): NodeSession | undefined {
     return this.getRegisteredSession(nodeId);
   }
@@ -1132,8 +1125,18 @@ export class NodeRegistry {
     sessionKey: string;
     terminal: boolean;
   }): boolean {
+    return this.authorizeSystemRunEventWithState(params) !== null;
+  }
+
+  authorizeSystemRunEventWithState(params: {
+    nodeId: string;
+    connId?: string;
+    runId?: string;
+    sessionKey: string;
+    terminal: boolean;
+  }): Pick<PendingSystemRunEvent, "invocationDeliveryContext"> | null {
     if (!params.connId || !params.sessionKey) {
-      return false;
+      return null;
     }
     const connId = params.connId;
     this.pruneAuthorizedSystemRunEvents();
@@ -1153,12 +1156,13 @@ export class NodeRegistry {
       });
     }
     if (match === null) {
-      return false;
+      return null;
     }
+    const source = this.authorizedSystemRunEvents.get(match)?.invocationDeliveryContext;
     if (params.terminal) {
       this.authorizedSystemRunEvents.delete(match);
     }
-    return true;
+    return source ? { invocationDeliveryContext: { ...source } } : {};
   }
 
   private rememberAuthorizedSystemRunEvent(
@@ -1167,23 +1171,15 @@ export class NodeRegistry {
     this.pruneAuthorizedSystemRunEvents();
     const authorized: AuthorizedSystemRunEvent = {
       ...event,
-      expiresAtMs: this.authorizedSystemRunEventExpiresAt(event.timeoutMs),
+      expiresAtMs: authorizedSystemRunEventExpiresAt(event.timeoutMs),
     };
-    this.authorizedSystemRunEvents.set(this.authorizedSystemRunEventKey(authorized), authorized);
+    this.authorizedSystemRunEvents.set(authorizedSystemRunEventKey(authorized), authorized);
   }
 
   private forgetAuthorizedSystemRunEvent(
     event: Omit<AuthorizedSystemRunEvent, "expiresAtMs">,
   ): void {
-    this.authorizedSystemRunEvents.delete(this.authorizedSystemRunEventKey(event));
-  }
-
-  private authorizedSystemRunEventExpiresAt(timeoutMs: number | null | undefined): number | null {
-    if (typeof timeoutMs !== "number") {
-      return null;
-    }
-    const durationMs = addTimerTimeoutGraceMs(timeoutMs, AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS);
-    return resolveExpiresAtMsFromDurationMs(durationMs) ?? 0;
+    this.authorizedSystemRunEvents.delete(authorizedSystemRunEventKey(event));
   }
 
   private matchAuthorizedSystemRunEvent(params: {
@@ -1232,15 +1228,6 @@ export class NodeRegistry {
         this.authorizedSystemRunEvents.delete(key);
       }
     }
-  }
-
-  private authorizedSystemRunEventKey(params: {
-    nodeId: string;
-    connId: string;
-    runId: string;
-    sessionKey?: string;
-  }): string {
-    return `${params.nodeId}\0${params.connId}\0${params.sessionKey ?? ""}\0${params.runId}`;
   }
 
   handleInvokeResult(params: NodeInvokeResultParams): boolean {

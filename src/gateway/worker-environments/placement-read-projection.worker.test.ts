@@ -31,6 +31,7 @@ import {
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
 import { matchesWorkspaceResultClaim } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
+import { prepareSessionWorkerPlacementMutationCheckAsync } from "./session-placement-lifecycle.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
 const roots = useAutoCleanupTempDirTracker((cleanup) =>
@@ -69,6 +70,48 @@ async function activePlacement(
 }
 
 describe("worker placement read projection", () => {
+  it("prepares native placement lookups off thread and rejects a placement created before mutation", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-native-read-worker-"));
+    const database = openOpenClawStateDatabase();
+    const store = createWorkerSessionPlacementStore({ database });
+    const first = await store.startDispatch({
+      sessionId: "first",
+      sessionKey: "agent:main:first",
+      agentId: "main",
+    });
+    const second = await store.startDispatch({
+      sessionId: "second",
+      sessionKey: "agent:main:second",
+      agentId: "main",
+    });
+    await store.getManyAsync([first.sessionId]);
+    const sql = observeMainThreadSql();
+    let assertCurrent: () => void;
+    try {
+      expect(await store.getManyAsync([" first ", "first", "missing"])).toEqual(
+        new Map([[first.sessionId, first]]),
+      );
+      expect(await store.getAsync(second.sessionId)).toEqual(second);
+      expect(await store.getPlacementMoveAsync(second.sessionId)).toBeUndefined();
+      expect(await store.listAsync()).toEqual([first, second]);
+      expect(await store.listForReconcileAsync(second.sessionKey)).toEqual([second]);
+      assertCurrent = await prepareSessionWorkerPlacementMutationCheckAsync({
+        context: { workerSessionPlacementService: store },
+        sessionId: "late-placement",
+      });
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    assertCurrent();
+    await store.startDispatch({
+      sessionId: "late-placement",
+      sessionKey: "agent:main:late-placement",
+      agentId: "main",
+    });
+    expect(assertCurrent).toThrow("placement late-placement changed before mutation");
+  });
+
   it("publishes node retention without host SQL and refuses a drained placement on the next authority check", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-node-retention-"));
     const database = openOpenClawStateDatabase();
@@ -484,7 +527,7 @@ describe("worker placement read projection", () => {
     const draining = await store.startWorkspaceResultDrain(claim);
     const pendingResult = (await store.listPendingWorkspaceResultsAsync("pending"))[0];
     const moving = await activePlacement(database, "moving");
-    const move = moving.store.beginPlacementMove({
+    const move = await moving.store.beginPlacementMove({
       sessionId: moving.placement.sessionId,
       source: {
         generation: moving.placement.generation,

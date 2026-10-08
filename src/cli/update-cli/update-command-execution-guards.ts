@@ -13,7 +13,10 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import type { UpdateCommandOptions } from "./shared.js";
 import type { UpdateCommandExecutionGuards } from "./update-command-execution.types.js";
 import { captureUpdateCommandExecutorAuthority } from "./update-command-executor.js";
-import { retainMutableUpdateSignalWrite } from "./update-command-mutable-signals.js";
+import {
+  recordMutableUpdateSignalPhase,
+  retainMutableUpdateSignalWrite,
+} from "./update-command-mutable-signals.js";
 import { assertUpdateCommandRecoveryState } from "./update-command-recovery.js";
 
 type PhaseOwner = Readonly<{
@@ -104,6 +107,7 @@ export function createUpdateCommandExecutionGuards(
     if (run) {
       const captured = captureWriteOptions();
       await recordUpdateRunPhaseAsync(run.runId, phase, patch, captured);
+      recordMutableUpdateSignalPhase(run, phase);
       if (phaseOwner?.kind === "current-core-finalization") {
         captured.assertAccepting();
       }

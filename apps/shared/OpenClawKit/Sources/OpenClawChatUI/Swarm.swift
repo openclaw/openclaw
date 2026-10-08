@@ -47,22 +47,13 @@ struct OpenClawChatSwarmActivityState: Equatable {
         }
 
         guard let childKey = ChatPayloadDecoding.trimmedNonEmptyString(event.sessionKey) else { return true }
-        if let phase = ChatPayloadDecoding.trimmedNonEmptyString(event.swarmPhase) {
+        let inheritedPhase = event.reason == "create" && self.phaseByChild[childKey] == nil
+            ? self.currentPhaseByGroup[groupID] : nil
+        if let phase = ChatPayloadDecoding.trimmedNonEmptyString(event.swarmPhase) ?? inheritedPhase {
             Self.setBounded(
                 &self.phaseByChild,
                 key: childKey,
                 value: phase,
-                limit: maxTrackedSwarmChildren)
-            return true
-        }
-        if event.reason == "create",
-           self.phaseByChild[childKey] == nil,
-           let currentPhase = currentPhaseByGroup[groupID]
-        {
-            Self.setBounded(
-                &self.phaseByChild,
-                key: childKey,
-                value: currentPhase,
                 limit: maxTrackedSwarmChildren)
         }
         return true

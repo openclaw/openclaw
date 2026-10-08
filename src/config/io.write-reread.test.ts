@@ -2,18 +2,11 @@ import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  releaseUpdateCommandPreflightForHandoff,
-  withUpdateCommandExecutor,
-} from "../cli/update-cli/update-command-executor.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
-import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-} from "../infra/update-managed-service-handoff-database.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withExecutor } from "./config-executor.test-support.js";
 import { readLatestConfigSnapshotAuditRecordAsync } from "./config-journal-snapshot.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import { createConfigIO } from "./io.factory.js";
@@ -30,29 +23,6 @@ import {
 } from "./runtime-snapshot.js";
 import { withTempHome } from "./test-helpers.js";
 import { withConfigWriteLock } from "./write-lock.js";
-
-async function withConfigExecutor(
-  home: string,
-  operation: (assertCurrent: () => void, revoke: () => void) => Promise<void>,
-) {
-  const root = path.join(await fs.realpath(home), "package");
-  await fs.mkdir(root);
-  const databasePath = path.join(home, "control", "managed-update-handoffs.sqlite");
-  createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
-  await withUpdateCommandExecutor(
-    "config-compensation-fence",
-    async (executor) => {
-      const fence = await executor.enter(root, { preflight: true });
-      await operation(fence.assertCurrent, () => releaseUpdateCommandPreflightForHandoff(fence));
-    },
-    {
-      existingAuthority: {
-        ...captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-        installKey: root,
-      },
-    },
-  );
-}
 
 const original = '{"gateway":{"mode":"local","port":18789}}\n';
 const nextConfig = { gateway: { mode: "local" as const, port: 19001 } };
@@ -166,7 +136,7 @@ describe("writeConfigFile canonical reread", () => {
     "rechecks compensation authority after reading the committed file (existed=$existed, revoke=$revoke)",
     async ({ existed, revoke }) => {
       await withTempHome(async (home) =>
-        withConfigExecutor(home, async (assertCurrent, revokeExecutor) => {
+        withExecutor(home, "config-compensation-fence", async (assertCurrent, revokeExecutor) => {
           const { configPath, env, options } = await prepareWrite(home, existed);
           const auditSnapshot = () =>
             readLatestConfigSnapshotAuditRecordAsync({ env, homedir: () => home });
@@ -300,7 +270,7 @@ describe("writeConfigFile canonical reread", () => {
         if (authority === "ordinary") {
           await write();
         } else {
-          await withConfigExecutor(home, async (assertCurrent) => {
+          await withExecutor(home, "config-compensation-fence", async (assertCurrent) => {
             await withConfigWriteLock(configPath, write, env, assertCurrent);
           });
         }
@@ -314,7 +284,7 @@ describe("writeConfigFile canonical reread", () => {
     "fences direct root compensation after %s",
     async (fault) => {
       await withTempHome(async (home) =>
-        withConfigExecutor(home, async (assertCurrent, revokeExecutor) => {
+        withExecutor(home, "config-compensation-fence", async (assertCurrent, revokeExecutor) => {
           const { configPath, io, options } = await prepareWrite(home);
           const realRename = fsNode.renameSync;
           const rootRenames: string[] = [];

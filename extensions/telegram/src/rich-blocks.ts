@@ -266,44 +266,35 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   return normalizeRichText(root);
 }
 
-function pushParagraph(
-  paragraphs: InputRichBlockParagraph[],
-  ir: MarkdownIR,
-  rangeStart: number,
-  rangeEnd: number,
-): void {
-  // Trim the range (not the rendered text) so style/link offsets stay aligned;
-  // gaps after structural blocks otherwise leak leading newlines into paragraphs.
-  const raw = ir.text.slice(rangeStart, rangeEnd);
-  const leading = raw.length - raw.trimStart().length;
-  const trailing = raw.length - raw.trimEnd().length;
-  const absStart = rangeStart + leading;
-  const absEnd = rangeEnd - trailing;
-  if (absEnd <= absStart) {
-    return;
-  }
-  const text = irRangeToRichText(ir, absStart, absEnd);
-  // Inline island conversion can normalize a leaf to nothing (e.g. an anchor
-  // with empty label); an empty paragraph is invalid wire content.
-  if (text !== "") {
-    paragraphs.push({ type: "paragraph", text });
-  }
-}
-
 function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichBlockParagraph[] {
   if (end <= start) {
     return [];
   }
-  const text = ir.text.slice(start, end);
+  const sourceText = ir.text.slice(start, end);
   const paragraphs: InputRichBlockParagraph[] = [];
+  const pushParagraph = (rangeStart: number, rangeEnd: number) => {
+    // Trim the range so style/link offsets stay aligned with the source.
+    const raw = ir.text.slice(rangeStart, rangeEnd);
+    const absStart = rangeStart + raw.length - raw.trimStart().length;
+    const absEnd = rangeEnd - (raw.length - raw.trimEnd().length);
+    if (absEnd <= absStart) {
+      return;
+    }
+    const text = irRangeToRichText(ir, absStart, absEnd);
+    // Inline island conversion can normalize a leaf to nothing (e.g. an anchor
+    // with empty label); an empty paragraph is invalid wire content.
+    if (text !== "") {
+      paragraphs.push({ type: "paragraph", text });
+    }
+  };
   const blankLine = /\n[ \t]*\n+/g;
   let last = 0;
   let match: RegExpExecArray | null;
-  while ((match = blankLine.exec(text)) !== null) {
-    pushParagraph(paragraphs, ir, start + last, start + match.index);
+  while ((match = blankLine.exec(sourceText)) !== null) {
+    pushParagraph(start + last, start + match.index);
     last = match.index + match[0].length;
   }
-  pushParagraph(paragraphs, ir, start + last, end);
+  pushParagraph(start + last, end);
   return paragraphs;
 }
 
@@ -466,6 +457,12 @@ function emitSegments(
     ];
   }
   preserveLiteralHtmlOwners(ir, segments, htmlNodes);
+  const renderChildren = (
+    children: readonly StructuralSegment[],
+    start: number,
+    end: number,
+    nodes: readonly HtmlNode[] = [],
+  ) => emitSegments(ir, children, start, end, degradationReasons, nodes, depth + 1);
   const containerRank = (segment: StructuralSegment) =>
     segment.kind === "blockquote" ? 0 : segment.kind === "list" ? 1 : 2;
   const orderedSegments = [
@@ -513,6 +510,13 @@ function emitSegments(
       next += 1;
     }
     const children = orderedSegments.slice(index + 1, next);
+    const renderChildRange = (start: number, end: number, nodes: readonly HtmlNode[] = []) =>
+      renderChildren(
+        children.filter((child) => child.start >= start && child.end <= end),
+        start,
+        end,
+        nodes,
+      );
     switch (segment.kind) {
       case "html": {
         blocks.push(
@@ -527,17 +531,7 @@ function emitSegments(
               const end = nodes[last]!.end;
               // Removed summaries, credits, and checkboxes split body ranges.
               // Render the remaining tree with the same Markdown owner as the root.
-              content.push(
-                ...emitSegments(
-                  ir,
-                  children.filter((child) => child.start >= start && child.end <= end),
-                  start,
-                  end,
-                  degradationReasons,
-                  nodes.slice(first, last + 1),
-                  depth + 1,
-                ),
-              );
+              content.push(...renderChildRange(start, end, nodes.slice(first, last + 1)));
               first = last + 1;
             }
             return content;
@@ -562,34 +556,14 @@ function emitSegments(
         break;
       }
       case "blockquote": {
-        const inner = emitSegments(
-          ir,
-          children,
-          segment.start,
-          segment.end,
-          degradationReasons,
-          [],
-          depth + 1,
-        );
+        const inner = renderChildren(children, segment.start, segment.end);
         if (inner.length > 0) {
           blocks.push({ type: "blockquote", blocks: inner });
         }
         break;
       }
       case "list": {
-        blocks.push(
-          renderMarkdownRichListSource(segment.source, (start, end) =>
-            emitSegments(
-              ir,
-              children.filter((child) => child.start >= start && child.end <= end),
-              start,
-              end,
-              degradationReasons,
-              [],
-              depth + 1,
-            ),
-          ),
-        );
+        blocks.push(renderMarkdownRichListSource(segment.source, renderChildRange));
         break;
       }
       case "table": {

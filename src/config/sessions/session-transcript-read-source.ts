@@ -36,7 +36,11 @@ export async function withSessionTranscriptReadSource<T>(
   scope: SessionTranscriptReadScope,
   readInProcess: (scope: SessionTranscriptReadScope) => T | Promise<T>,
   readInWorker: (source: {
-    scope: SessionTranscriptReadScope & { agentId: string; storePath: string };
+    scope: SessionTranscriptReadScope & {
+      agentId: string;
+      storePath: string;
+      env: NodeJS.ProcessEnv;
+    };
     resolved: ResolvedTranscriptReadScope;
     owner: SessionHistoryWorkerDatabase;
     expectedIdentity?: DatabaseFileIdentity;
