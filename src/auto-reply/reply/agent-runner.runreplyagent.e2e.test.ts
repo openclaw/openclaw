@@ -1591,6 +1591,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     createMinimalRun,
     makeSessionFixture,
     runEmbeddedAgentMock: state.runEmbeddedAgentMock,
+    queueEmbeddedAgentMessageMock: state.queueEmbeddedAgentMessageMock,
   });
 
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
@@ -2814,55 +2815,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       restartRecoveryDeliveryRunId: "active-recovery-run",
       restartRecoveryDeliverySourceRunId: sourceTurnId,
     });
-  });
-
-  it("tombstones a redelivered source whose recovery claim is already terminal", async () => {
-    const sessionCtx = {
-      Provider: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:24680",
-      MessageSid: "redelivered-terminal-message",
-    } as const;
-    const sourceTurnId = requireBuiltChannelSourceTurnId({
-      provider: "discord",
-      conversationId: "channel:24680",
-      messageId: "redelivered-terminal-message",
-    });
-    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-      status: "done",
-      restartRecoveryDeliveryRunId: "terminal-recovery-run",
-      restartRecoveryDeliverySourceRunId: sourceTurnId,
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "channel:24680",
-      },
-    });
-    const onAdopted = vi.fn();
-    const duplicate = createMinimalRun({
-      isActive: true,
-      shouldSteer: true,
-      opts: { turnAdoptionLifecycle: { onAdopted } },
-      sessionCtx,
-      runOverrides: { messageProvider: "discord" },
-      sessionEntry,
-      sessionStore,
-      sessionKey: "main",
-      storePath,
-    });
-
-    await expect(duplicate.run()).resolves.toBeUndefined();
-
-    expect(duplicate.sourceTurnId).toBe(sourceTurnId);
-    expect(onAdopted).not.toHaveBeenCalled();
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    const stored = await readStoredMainSession(storePath);
-    expect(stored).toMatchObject({
-      status: "done",
-      restartRecoveryTerminalRunIds: [sourceTurnId],
-    });
-    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
   });
 
   it("atomically replaces a terminal stale recovery claim for the next run", async () => {

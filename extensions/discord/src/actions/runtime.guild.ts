@@ -267,13 +267,6 @@ async function verifySenderGuildAdminPermission(params: {
   }
 }
 
-function readChannelPermissionTarget(params: Record<string, unknown>) {
-  return {
-    channelId: readStringParam(params, "channelId", { required: true }),
-    targetId: readStringParam(params, "targetId", { required: true }),
-  };
-}
-
 export async function handleDiscordGuildAction(
   action: string,
   params: Record<string, unknown>,
@@ -545,8 +538,18 @@ export async function handleDiscordGuildAction(
       );
       return jsonResult({ ok: true });
     }
-    case "channelPermissionSet": {
-      const { channelId, targetId } = readChannelPermissionTarget(params);
+    case "channelPermissionSet":
+    case "channelPermissionRemove": {
+      const channelId = readStringParam(params, "channelId", { required: true });
+      const targetId = readStringParam(params, "targetId", { required: true });
+      if (action === "channelPermissionRemove") {
+        await discordGuildActionRuntime.removeChannelPermissionDiscord(
+          channelId,
+          targetId,
+          withOpts(),
+        );
+        return jsonResult({ ok: true });
+      }
       const targetTypeRaw = readStringParam(params, "targetType", {
         required: true,
       });
@@ -561,15 +564,6 @@ export async function handleDiscordGuildAction(
           allow: allow ?? undefined,
           deny: deny ?? undefined,
         },
-        withOpts(),
-      );
-      return jsonResult({ ok: true });
-    }
-    case "channelPermissionRemove": {
-      const { channelId, targetId } = readChannelPermissionTarget(params);
-      await discordGuildActionRuntime.removeChannelPermissionDiscord(
-        channelId,
-        targetId,
         withOpts(),
       );
       return jsonResult({ ok: true });

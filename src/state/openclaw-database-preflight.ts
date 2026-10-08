@@ -267,8 +267,10 @@ export async function preflightOpenClawDatabaseSchemas(
           supportedVersion: supportedVersions.state,
           ...(writerAppVersion ? { writerAppVersion } : {}),
         });
-        // This build cannot interpret a newer registry or prescribe repairs for it.
-        return result;
+        // An older target does not make this build's readable registry unavailable.
+        if (contentVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
+          return result;
+        }
       }
       const migrationVersion = readStateSchemaContentVersion(stateDatabase);
       if (migrationVersion < supportedVersions.state) {
