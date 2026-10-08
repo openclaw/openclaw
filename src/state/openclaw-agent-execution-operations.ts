@@ -5,6 +5,7 @@ import {
   deferSqliteWorkerCommitReceipt,
   takeSqliteWorkerOperationAdmissionAttachment,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { readTrajectoryRuntimeRetentionLease } from "../trajectory/runtime-retention.contract.js";
 import type { AgentDatabaseMaintenanceOperations } from "./openclaw-agent-execution-maintenance.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
@@ -202,26 +203,20 @@ export async function loadAgentTrajectoryOperations() {
       );
     },
     "trajectory.retention.begin": (_input: undefined, { open }) => {
-      const attachment = takeSqliteWorkerOperationAdmissionAttachment();
-      if (
-        typeof attachment !== "object" ||
-        attachment === null ||
-        !("trajectoryRetentionLease" in attachment) ||
-        !(attachment.trajectoryRetentionLease instanceof SharedArrayBuffer) ||
-        attachment.trajectoryRetentionLease.byteLength !== 4
-      ) {
-        throw new Error("Trajectory retention lease is unavailable");
-      }
       return retention.beginTrajectoryRuntimeRetention(
         open().db,
-        new Int32Array(attachment.trajectoryRetentionLease),
+        readTrajectoryRuntimeRetentionLease(takeSqliteWorkerOperationAdmissionAttachment()),
       );
     },
     "trajectory.retention.delete": (
       input: Parameters<typeof retention.selectTrajectoryRuntimeRetentionBatch>[1],
       { open, writeTransaction, admit },
     ) => {
-      const batch = retention.selectTrajectoryRuntimeRetentionBatch(open().db, input);
+      const database = open();
+      const batch = retention.selectTrajectoryRuntimeRetentionBatch(database.db, input);
+      if (batch.refresh) {
+        return retention.deleteTrajectoryRuntimeRetention(database, batch);
+      }
       return writeTransaction(
         "trajectory.runtime.retention.delete",
         "Trajectory retention",
@@ -389,6 +384,53 @@ export async function loadConversationDeliveryOperations() {
   } satisfies Handlers;
 }
 
+export async function loadConversationRegistryOperations() {
+  const { prepareConversationIdentities, upsertConversationIdentities } =
+    await import("../config/sessions/session-accessor.sqlite-conversation.js");
+  const { selectConversationRowsFromDatabase, resolveConversationInDatabase } =
+    await import("../config/sessions/session-accessor.sqlite-conversation-read.js");
+  const { readConversationDeliveryInDatabase } =
+    await import("../config/sessions/conversation-delivery-store.kernel.js");
+  return {
+    "conversation.register": (
+      input: {
+        identities: Parameters<typeof prepareConversationIdentities>[0];
+        discoveredAt: number;
+        query?: Parameters<typeof selectConversationRowsFromDatabase>[1];
+      },
+      { writeTransaction, admit },
+    ) => {
+      const prepared = prepareConversationIdentities(input.identities);
+      return writeTransaction("conversation.register", "Conversation registration", (database) => {
+        upsertConversationIdentities(database, prepared, input.discoveredAt);
+        const rows = input.query
+          ? selectConversationRowsFromDatabase(database, input.query)
+          : undefined;
+        admit("commit");
+        return rows;
+      });
+    },
+    "conversation.authority": (
+      input: { conversationRef: string } | { operationId: string },
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("conversation.authority", "Conversation authority", (database) => {
+        const operation =
+          "operationId" in input ? readConversationDeliveryInDatabase(database, input) : undefined;
+        const conversationRef =
+          "conversationRef" in input ? input.conversationRef : operation?.conversationRef;
+        const facts = {
+          operation: operation ? { conversationRef: operation.conversationRef } : undefined,
+          conversation: conversationRef
+            ? resolveConversationInDatabase(database, conversationRef)
+            : undefined,
+        };
+        admit("commit", { kind: "conversation-authority", facts });
+        return facts;
+      }),
+  } satisfies Handlers;
+}
+
 export async function loadUsageCacheOperations() {
   const kernel = await import("../infra/session-cost-usage-cache.kernel.js");
   return {
@@ -443,6 +485,7 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentReactionOperations>> &
     Awaited<ReturnType<typeof loadAgentPendingInputOperations>> &
     Awaited<ReturnType<typeof loadAgentArchivePruningOperations>> &
-    Awaited<ReturnType<typeof loadConversationDeliveryOperations>>
+    Awaited<ReturnType<typeof loadConversationDeliveryOperations>> &
+    Awaited<ReturnType<typeof loadConversationRegistryOperations>>
 > &
   AgentDatabaseMaintenanceOperations;

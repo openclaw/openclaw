@@ -295,7 +295,7 @@ export class SystemAgentChatEngine {
       this.wizard.dispose();
     }
     this.history.splice(0);
-    throw new SystemAgentInferenceUnavailableError("conversation", failures);
+    throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
   }
 
   private async verifyConfigAfterWrite(): Promise<string | null> {

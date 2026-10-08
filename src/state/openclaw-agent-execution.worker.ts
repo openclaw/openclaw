@@ -29,7 +29,10 @@ import type {
 } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lease.js";
-import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import {
+  recordOpenClawAgentDatabaseBackgroundVerification,
+  retainAgentDatabase,
+} from "./openclaw-agent-db-lifecycle.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
@@ -72,6 +75,7 @@ import {
   loadAgentProviderReviewOperations,
   loadAgentReactionOperations,
   loadConversationDeliveryOperations,
+  loadConversationRegistryOperations,
   loadAgentPendingInputOperations,
   loadAgentArchivePruningOperations,
   loadUsageCacheOperations,
@@ -399,6 +403,8 @@ function openAgentDatabaseBackend(
     "session.providerReview.compare": loadAgentProviderReviewOperations,
     "session.reaction.set": loadAgentReactionOperations,
     "conversation.delivery.begin": loadConversationDeliveryOperations,
+    "conversation.register": loadConversationRegistryOperations,
+    "conversation.authority": loadConversationRegistryOperations,
     "conversation.delivery.transition": loadConversationDeliveryOperations,
     "session.pendingInputs.withdraw": loadAgentPendingInputOperations,
     "session.pendingInputs.read": loadAgentPendingInputOperations,
@@ -479,6 +485,11 @@ function openAgentDatabaseBackend(
     if (command.type === "database.prepareWrite") {
       openWriter(true);
       return undefined;
+    }
+    if (command.type === "database.recordIntegrity") {
+      const opened = openWriter();
+      admit("transaction");
+      return recordOpenClawAgentDatabaseBackgroundVerification(opened, () => admit("commit"));
     }
     if (command.type === "database.walMaintenance") {
       return (

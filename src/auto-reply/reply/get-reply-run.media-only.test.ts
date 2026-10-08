@@ -1,4 +1,5 @@
 // Tests media-only get-reply runs and sandboxed media attachment handling.
+import "./get-reply-run.runtime-mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -32,7 +33,7 @@ import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admi
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
-import { runReplyAgent } from "./agent-runner.runtime.js";
+import { runReplyAgent } from "./agent-runner-run.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
@@ -109,7 +110,8 @@ vi.mock("../../agents/main-session-recovery/main-session-recovery-owner-release.
   scheduleMainSessionRecoveryPendingTarget: vi.fn(),
 }));
 
-vi.mock("../../agents/main-session-recovery/main-session-recovery-state.js", () => ({
+vi.mock("../../config/sessions/restart-recovery-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/restart-recovery-state.js")>()),
   isMainRestartRecoveryCandidate: vi.fn().mockReturnValue(false),
 }));
 
@@ -311,10 +313,6 @@ vi.mock("../command-detection.js", () => ({
   hasControlCommand: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("./agent-runner.runtime.js", () => ({
-  runReplyAgent: vi.fn().mockResolvedValue({ text: "ok" }),
-}));
-
 const resolveCurrentTurnImagesMock = vi.hoisted(() => vi.fn().mockResolvedValue({}));
 vi.mock("./current-turn-images.js", () => ({
   resolveCurrentTurnImages: resolveCurrentTurnImagesMock,
@@ -339,18 +337,6 @@ vi.mock("./inbound-meta.js", () => ({
 
 vi.mock("./queue/settings-runtime.js", () => ({
   resolveQueueSettings: vi.fn().mockReturnValue({ mode: "steer" }),
-}));
-
-vi.mock("./route-reply.runtime.js", () => ({
-  routeReply: vi.fn(),
-}));
-
-vi.mock("./session-updates.runtime.js", () => ({
-  ensureSkillSnapshot: vi.fn().mockImplementation(async ({ sessionEntry, systemSent }) => ({
-    sessionEntry,
-    systemSent,
-    skillsSnapshot: undefined,
-  })),
 }));
 
 vi.mock("./session-system-events.js", () => ({
@@ -455,11 +441,10 @@ async function useActualSystemEventDrain() {
 }
 
 function requireRunReplyAgentCall(index = 0) {
-  const call = vi.mocked(runReplyAgent).mock.calls.at(index)?.[0];
-  if (!call) {
-    throw new Error(`runReplyAgent call ${index} missing`);
-  }
-  return call;
+  return expectDefined(
+    vi.mocked(runReplyAgent).mock.calls.at(index)?.[0],
+    `runReplyAgent call ${index}`,
+  );
 }
 
 describe("runPreparedReply media-only handling", () => {

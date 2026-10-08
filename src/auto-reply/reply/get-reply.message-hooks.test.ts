@@ -64,13 +64,13 @@ registerGetReplyRuntimeOverrides(mocks);
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let defaultModel: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let runReply: typeof import("./get-reply-run.js").runPreparedReply;
-let stageMedia: typeof import("./stage-sandbox-media.runtime.js").stageSandboxMedia;
+let stageMedia: typeof import("./stage-sandbox-media.js").stageSandboxMedia;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
   ({ resolveDefaultModel: defaultModel } = await import("./directive-handling.defaults.js"));
   ({ runPreparedReply: runReply } = await import("./get-reply-run.js"));
-  ({ stageSandboxMedia: stageMedia } = await import("./stage-sandbox-media.runtime.js"));
+  ({ stageSandboxMedia: stageMedia } = await import("./stage-sandbox-media.js"));
   const scope = await import("../../agents/agent-scope.js");
   const actualScope = await vi.importActual<typeof scope>("../../agents/agent-scope.js");
   vi.mocked(scope.resolveSessionAgentId).mockImplementation(actualScope.resolveSessionAgentId);

@@ -25,6 +25,7 @@ import {
   mockCallArg,
   expectRespondError,
   mockMainSessionEntry,
+  mockSuccessfulAgentCommand,
   buildExistingMainStoreEntry,
   setupNewYorkTimeConfig,
   resetTimeConfig,
@@ -108,10 +109,7 @@ describe("gateway agent handler", () => {
       capturedEntry = result as Record<string, unknown>;
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent({
       message: "recover stale failed",
@@ -208,10 +206,7 @@ describe("gateway agent handler", () => {
       return result;
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -259,10 +254,7 @@ describe("gateway agent handler", () => {
       return result;
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -310,10 +302,7 @@ describe("gateway agent handler", () => {
       return result;
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -483,10 +472,7 @@ describe("gateway agent handler", () => {
       return result;
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -580,10 +566,7 @@ describe("gateway agent handler", () => {
   it("does not bypass image support check for ACP-shaped sessions without ACP metadata", async () => {
     mockMainSessionEntry({ sessionId: "existing-acp-shaped-session" });
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     mocks.agentCommand.mockClear();
     const respond = vi.fn();
 
@@ -712,10 +695,7 @@ describe("gateway agent handler", () => {
       capturedEntry = freshStore["agent:main:subagent:test-uuid"];
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     await invokeAgent(
       {
         message: "hi",
@@ -786,10 +766,7 @@ describe("gateway agent handler", () => {
       capturedEntry = freshStore["agent:main:subagent:test-broader"];
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     await invokeAgent(
       {
         message: "hi",
@@ -834,10 +811,7 @@ describe("gateway agent handler", () => {
       args?.entry?.sendPolicy === "deny" ? "deny" : "allow",
     );
     mocks.agentCommand.mockClear();
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     const respond = vi.fn();
     await invokeAgent(
       {
@@ -924,7 +898,6 @@ describe("gateway agent handler", () => {
         "agent:main:subagent:test-rotation": {
           sessionId: "fresh-session-id",
           updatedAt: Date.now(),
-          status: "running",
           startedAt: 111,
           sessionFile: "/tmp/fresh-session.jsonl",
         },
@@ -933,10 +906,7 @@ describe("gateway agent handler", () => {
       capturedEntry = freshStore["agent:main:subagent:test-rotation"];
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -950,7 +920,7 @@ describe("gateway agent handler", () => {
 
     expectRecordFields(capturedEntry, {
       sessionId: "fresh-session-id",
-      status: "running",
+      status: undefined,
       startedAt: 111,
       sessionStartedAt: undefined,
     });
@@ -994,10 +964,7 @@ describe("gateway agent handler", () => {
       capturedEntry = freshStore["agent:main:subagent:legacy"];
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     await invokeAgent(
       {
         message: "hi",
@@ -1044,10 +1011,7 @@ describe("gateway agent handler", () => {
       capturedEntry = freshStore["agent:main:subagent:concurrent"];
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     await invokeAgent(
       {
         message: "hi",

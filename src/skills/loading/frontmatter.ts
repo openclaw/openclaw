@@ -23,7 +23,6 @@ import type {
   SkillInstallSpec,
   SkillInvocationPolicy,
 } from "../types.js";
-import type { Skill } from "./skill-contract.js";
 
 export function parseSkillFrontmatter(content: string): ParsedSkillFrontmatter {
   const parsed = parseFrontmatterBlockResult(content);
@@ -178,6 +177,6 @@ export function resolveSkillInvocationPolicy(
   };
 }
 
-export function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {
-  return entry?.metadata?.skillKey ?? skill.name;
+export function resolveSkillKey(entry: SkillEntry): string {
+  return entry.metadata?.skillKey ?? entry.skill.name;
 }

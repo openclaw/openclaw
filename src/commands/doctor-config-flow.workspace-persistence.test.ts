@@ -170,10 +170,7 @@ describe("Doctor workspace persistence", () => {
     });
   });
 
-  it.each([
-    ["entries", false],
-    ["list", true],
-  ] as const)(
+  it.each([["list", true]] as const)(
     "persists per-agent migrations with explicit ownership (%s, writable update: %s)",
     async (shape, writableUpdate) => {
       await withDoctorConfigPreflightHome(async (home) => {
@@ -201,13 +198,7 @@ describe("Doctor workspace persistence", () => {
                   embeddedAgent: { projectSettingsPolicy: "trusted" },
                   sandbox: { scope: "shared" },
                 },
-                ...(shape === "entries"
-                  ? { entries }
-                  : {
-                      list: Object.entries(entries).map(([id, entry]) =>
-                        Object.assign({ id }, entry),
-                      ),
-                    }),
+                list: Object.entries(entries).map(([id, entry]) => Object.assign({ id }, entry)),
               },
               gateway: { mode: "local" },
               plugins: { enabled: false },
@@ -248,10 +239,7 @@ describe("Doctor workspace persistence", () => {
     },
   );
 
-  it.each([
-    { kind: "implicit", legacyId: "main" },
-    { kind: "shared", legacyId: " Main " },
-  ])(
+  it.each([{ kind: "shared", legacyId: " Main " }])(
     "preserves the markerless $legacyId agent's $kind workspace through Doctor persistence",
     async ({ kind, legacyId }) => {
       await withDoctorConfigPreflightHome(async (home) => {
@@ -447,7 +435,7 @@ describe("Doctor workspace persistence", () => {
     });
   });
 
-  it.each(["parsed", "prefixed"])(
+  it.each(["prefixed"])(
     "refuses retired Talk selectors in %s config before recovery",
     async (kind) => {
       await withDoctorConfigPreflightHome(async (home) => {

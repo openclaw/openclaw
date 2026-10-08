@@ -5,8 +5,8 @@ import Network
 import Security
 @testable import OpenClawKit
 
-@MainActor
-final class NativeGatewayWebSocketFixture {
+/// Mutable state is confined to queue; test-facing access synchronizes with that queue.
+final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     struct ConnectAuth: Equatable, Sendable {
         let token: String?
         let bootstrapToken: String?
@@ -42,9 +42,24 @@ final class NativeGatewayWebSocketFixture {
         var holdHeaders = false
     }
 
-    var httpResponse: ((Request) -> HTTPResponse)?
-    private(set) var requests: [Request] = []
-    private(set) var roles: [String] = []
+    typealias HTTPResponseHandler = @MainActor @Sendable (Request) -> HTTPResponse
+
+    var httpResponse: HTTPResponseHandler? {
+        get { self.queue.sync { self.httpResponseHandler } }
+        set { self.queue.sync { self.httpResponseHandler = newValue } }
+    }
+
+    var requests: [Request] {
+        self.queue.sync { self.receivedRequests }
+    }
+
+    var roles: [String] {
+        self.queue.sync { self.receivedRoles }
+    }
+
+    private var httpResponseHandler: HTTPResponseHandler?
+    private var receivedRequests: [Request] = []
+    private var receivedRoles: [String] = []
     private var pendingHTTP: [Int: (Request, HTTPResponse)] = [:]
 
     private struct Client {
@@ -62,35 +77,36 @@ final class NativeGatewayWebSocketFixture {
 
     private static let websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     private let listener: NWListener
+    private let queue: DispatchQueue
     private let issuedDeviceTokens: [String?]
     private let connectFailures: [Int: ConnectFailure]
     private var clients: [Int: Client] = [:]
     private var connectAuth: [ConnectAuth] = []
     private var nextConnectionIndex = 0
     private var stopped = false
-    nonisolated let port: UInt16
-    nonisolated let fingerprint: String?
+    let port: UInt16
+    let fingerprint: String?
 
     private init(
         listener: NWListener,
+        queue: DispatchQueue,
         port: UInt16,
         fingerprint: String?,
         issuedDeviceTokens: [String?],
         connectFailures: [Int: ConnectFailure])
     {
         self.listener = listener
+        self.queue = queue
         self.port = port
         self.fingerprint = fingerprint
         self.issuedDeviceTokens = issuedDeviceTokens
         self.connectFailures = connectFailures
         self.listener.newConnectionHandler = { [weak self] connection in
-            Task { @MainActor [weak self] in
-                guard let self else {
-                    connection.cancel()
-                    return
-                }
-                self.accept(connection)
+            guard let self else {
+                connection.cancel()
+                return
             }
+            self.accept(connection)
         }
     }
 
@@ -125,7 +141,8 @@ final class NativeGatewayWebSocketFixture {
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters, on: .any)
         listener.newConnectionHandler = { $0.cancel() }
-        listener.start(queue: DispatchQueue(label: "native-gateway-fixture-listener"))
+        let queue = DispatchQueue(label: "native-gateway-fixture")
+        listener.start(queue: queue)
         do {
             let deadline = ContinuousClock.now + .seconds(5)
             while true {
@@ -135,8 +152,9 @@ final class NativeGatewayWebSocketFixture {
                     guard let port = listener.port, port.rawValue != 0 else {
                         throw URLError(.cannotFindHost)
                     }
-                    let fixture = await NativeGatewayWebSocketFixture(
+                    let fixture = NativeGatewayWebSocketFixture(
                         listener: listener,
+                        queue: queue,
                         port: port.rawValue,
                         fingerprint: fingerprint,
                         issuedDeviceTokens: issuedDeviceTokens,
@@ -168,24 +186,28 @@ final class NativeGatewayWebSocketFixture {
     }
 
     var activeConnectionCount: Int {
-        self.clients.count
+        self.queue.sync { self.clients.count }
     }
 
     func capturedAuth(at index: Int) -> ConnectAuth? {
-        guard self.connectAuth.indices.contains(index) else { return nil }
-        return self.connectAuth[index]
+        self.queue.sync {
+            guard self.connectAuth.indices.contains(index) else { return nil }
+            return self.connectAuth[index]
+        }
     }
 
     func closeConnection(at index: Int) {
-        self.close(index)
+        self.queue.sync { self.close(index) }
     }
 
     func stop() {
-        guard !self.stopped else { return }
-        self.stopped = true
-        self.listener.cancel()
-        for index in Array(self.clients.keys) {
-            self.close(index)
+        self.queue.sync {
+            guard !self.stopped else { return }
+            self.stopped = true
+            self.listener.cancel()
+            for index in Array(self.clients.keys) {
+                self.close(index)
+            }
         }
     }
 
@@ -198,22 +220,20 @@ final class NativeGatewayWebSocketFixture {
         self.nextConnectionIndex += 1
         self.clients[index] = Client(connection: connection)
         connection.stateUpdateHandler = { [weak self] state in
-            MainActor.assumeIsolated {
-                guard let self else {
-                    connection.cancel()
-                    return
-                }
-                switch state {
-                case .ready:
-                    self.receive(index)
-                case .cancelled, .failed:
-                    self.close(index)
-                default:
-                    break
-                }
+            guard let self else {
+                connection.cancel()
+                return
+            }
+            switch state {
+            case .ready:
+                self.receive(index)
+            case .cancelled, .failed:
+                self.close(index)
+            default:
+                break
             }
         }
-        connection.start(queue: .main)
+        connection.start(queue: self.queue)
     }
 
     private func receive(_ index: Int) {
@@ -222,18 +242,16 @@ final class NativeGatewayWebSocketFixture {
             minimumIncompleteLength: 1,
             maximumLength: 65536)
         { [weak self] data, _, complete, error in
-            MainActor.assumeIsolated {
-                guard let self, var client = self.clients[index] else { return }
-                if let data {
-                    client.buffer.append(data)
-                    self.clients[index] = client
-                    self.process(index)
-                }
-                if error != nil || complete {
-                    self.close(index)
-                } else if self.clients[index] != nil {
-                    self.receive(index)
-                }
+            guard let self, var client = self.clients[index] else { return }
+            if let data {
+                client.buffer.append(data)
+                self.clients[index] = client
+                self.process(index)
+            }
+            if error != nil || complete {
+                self.close(index)
+            } else if self.clients[index] != nil {
+                self.receive(index)
             }
         }
     }
@@ -273,13 +291,13 @@ final class NativeGatewayWebSocketFixture {
             }
         }
         let request = Request(method: String(first[0]), target: String(first[1]), headers: headers)
-        self.requests.append(request)
         if !request.isWebSocket {
             client.phase = .http
             self.clients[index] = client
             self.respondHTTP(request, index: index)
             return
         }
+        self.receivedRequests.append(request)
         guard let key = headers["sec-websocket-key"], !key.isEmpty else {
             self.close(index)
             return
@@ -298,28 +316,47 @@ final class NativeGatewayWebSocketFixture {
         client.phase = .connect
         self.clients[index] = client
         client.connection.send(content: Data(response.utf8), completion: .contentProcessed { [weak self] error in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                guard error == nil else {
-                    self.close(index)
-                    return
-                }
-                self.sendChallenge(index)
-                self.processFrames(index)
+            guard let self else { return }
+            guard error == nil else {
+                self.close(index)
+                return
             }
+            self.sendChallenge(index)
+            self.processFrames(index)
         })
     }
 
     func releaseHTTPResponses() {
-        let pending = self.pendingHTTP
-        self.pendingHTTP.removeAll()
-        for (index, response) in pending {
-            self.sendHTTP(response.1, request: response.0, index: index)
+        self.queue.sync {
+            let pending = self.pendingHTTP
+            self.pendingHTTP.removeAll()
+            for (index, response) in pending {
+                self.sendHTTP(response.1, request: response.0, index: index)
+            }
         }
     }
 
     private func respondHTTP(_ request: Request, index: Int) {
-        let response = self.httpResponse?(request) ?? HTTPResponse(status: 404)
+        guard let handler = self.httpResponseHandler else {
+            self.completeHTTPResponse(HTTPResponse(status: 404), request: request, index: index)
+            return
+        }
+        // Test response policies capture MainActor state. Never block the transport queue
+        // on that actor: policies may themselves read the fixture's synchronized snapshots.
+        Task { @MainActor [weak self] in
+            guard let self, self.queue.sync(execute: { self.clients[index] != nil }) else { return }
+            let response = handler(request)
+            self.queue.sync {
+                self.completeHTTPResponse(response, request: request, index: index)
+            }
+        }
+    }
+
+    private func completeHTTPResponse(_ response: HTTPResponse, request: Request, index: Int) {
+        guard self.clients[index] != nil else { return }
+        // Publish arrival only with its captured verdict, so observing a held request
+        // cannot race an account change before the MainActor policy has evaluated it.
+        self.receivedRequests.append(request)
         if response.holdHeaders {
             // The verdict belongs to request arrival, even if credentials change before release.
             self.pendingHTTP[index] = (request, response)
@@ -339,9 +376,7 @@ final class NativeGatewayWebSocketFixture {
         var data = Data(head.utf8)
         if request.method != "HEAD", !response.holdBody { data.append(response.body) }
         client.connection.send(content: data, completion: .contentProcessed { [weak self] error in
-            MainActor.assumeIsolated {
-                if error != nil || !response.holdBody { self?.close(index) }
-            }
+            if error != nil || !response.holdBody { self?.close(index) }
         })
     }
 
@@ -374,7 +409,7 @@ final class NativeGatewayWebSocketFixture {
 
         let params = request["params"] as? [String: Any]
         let auth = params?["auth"] as? [String: Any]
-        self.roles.append(params?["role"] as? String ?? "")
+        self.receivedRoles.append(params?["role"] as? String ?? "")
         self.connectAuth.append(ConnectAuth(
             token: auth?["token"] as? String,
             bootstrapToken: auth?["bootstrapToken"] as? String,
@@ -488,9 +523,7 @@ final class NativeGatewayWebSocketFixture {
         frame.append(payload)
         client.connection.send(content: frame, completion: .contentProcessed { [weak self] error in
             guard error != nil else { return }
-            MainActor.assumeIsolated {
-                self?.close(index)
-            }
+            self?.close(index)
         })
     }
 

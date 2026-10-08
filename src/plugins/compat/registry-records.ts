@@ -9,6 +9,7 @@ import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
+import { PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD } from "./progress-receipt-handoff-record.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
 import { TTS_PREFERENCES_COMPAT_RECORD } from "./tts-preferences-record.js";
 import type { PluginCompatRecord } from "./types.js";
@@ -34,6 +35,7 @@ export const PLUGIN_COMPAT_RECORDS = [
   TTS_PREFERENCES_COMPAT_RECORD,
   ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
   WATCHED_SESSIONS_COMPAT_RECORD,
+  PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD,
   {
     code: "gateway-placement-sync-results",
     status: "deprecated",
@@ -43,10 +45,16 @@ export const PLUGIN_COMPAT_RECORDS = [
     warningStarts: "2026-10-02",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "Await listPendingWorkspaceResultsAsync, getWorkspaceResultReconcilingSessionIdsAsync, and deferOrphanedRequestsAsync on the Gateway context. Released synchronous methods retain their return values and completion timing until the next Plugin SDK major and explicit breaking-release approval.",
+      "Await getManyAsync, retireSessionPlacementAsync, listPendingWorkspaceResultsAsync, getWorkspaceResultReconcilingSessionIdsAsync, getAdmittedDeviceSessionCountsAsync, and deferOrphanedRequestsAsync on the Gateway context. For placement standing-grant preparation, await resolveBindingAsync, retainAsync, and validateAsync; keep consume synchronous at final transport authorization. Released synchronous methods retain their signatures, return values, and completion timing until the next Plugin SDK major and explicit breaking-release approval.",
     docsPath:
       "/plugins/sdk-migration/compatibility-policy#gateway-placement-and-publication-readers",
     surfaces: [
+      "GatewayRequestHandlerOptions.context.workerSessionPlacementService.getMany",
+      "GatewayRequestHandlerOptions.context.workerSessionPlacementService.retireSessionPlacement",
+      "GatewayRequestHandlerOptions.context.workerPlacementDispatchService.getAdmittedDeviceSessionCounts",
+      "GatewayRequestHandlerOptions.context.placementStandingGrants.resolveBinding",
+      "GatewayRequestHandlerOptions.context.placementStandingGrants.retain",
+      "GatewayRequestHandlerOptions.context.placementStandingGrants.validate",
       "GatewayRequestHandlerOptions.context.workerSessionPlacementService.listPendingWorkspaceResults",
       "GatewayRequestHandlerOptions.context.workerSessionPlacementService.getWorkspaceResultReconcilingSessionIds",
       "GatewayRequestHandlerOptions.context.githubPublicationService.deferOrphanedRequests",
@@ -58,12 +66,14 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: [
       "src/plugin-sdk/gateway-placement-compat.test.ts",
       "src/gateway/worker-environments/placement-store.test.ts",
+      "src/gateway/operator-approval-placement-grants.test.ts",
+      "src/gateway/worker-environments/device-placement-demand.test.ts",
       "src/gateway/github-publication-boundaries.test.ts",
       "src/gateway/github-repository-publication.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "Placement result readers and GitHub orphan deferral expose awaited methods while retaining the synchronous Gateway-context contracts shipped to plugins in 2026.9.7. Internal placement readers use the SQLite worker; stored data and update behavior are unchanged.",
+      "Placement reads, retirement, device demand, standing-grant preparation, and GitHub orphan deferral expose awaited methods while retaining the synchronous Gateway-context contracts shipped to plugins in 2026.9.7, 2026.9.8, and 2026.10.1-beta.1. Internal placement operations use the SQLite worker; stored data and update behavior are unchanged.",
   },
   {
     code: "memory-session-sync-inventory",
@@ -127,7 +137,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     warningStarts: "2026-09-20",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "Await getSessionBindingService().inspectByConversationAsync, resolveByConversationAsync, touchAsync, resolveRuntimeConversationBindingRouteAsync, and the Async-suffixed thread-binding lifecycle setters. Project prepared inspection facts with inspectRuntimeConversationBindingRoute. Async dispatch retains an explicit synchronous fallback for legacy external adapters; remaining bind/unbind and other storage operations are separate migration work.",
+      "Await getSessionBindingService().bind, unbind, inspectByConversationAsync, resolveByConversationAsync, touchAsync, resolveRuntimeConversationBindingRouteAsync, and the Async-suffixed thread-binding lifecycle setters. Bundled current-conversation mutations and session listings use the existing worker owner. Project prepared inspection facts with inspectRuntimeConversationBindingRoute. Legacy external adapters retain their synchronous projection contract.",
     docsPath: "/plugins/sdk-runtime/channel#awaited-conversation-binding-mutations",
     surfaces: [
       "SessionBindingService.touch",

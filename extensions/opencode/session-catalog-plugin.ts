@@ -183,8 +183,8 @@ async function createAdoptedOpenCodeSession(params: {
       await importSessionCatalogHistory({
         catalogId: "opencode",
         threadId: params.threadId,
-        read: async ({ cursor, limit }) =>
-          await readLocalOpenCodeTranscriptPage({
+        read: ({ cursor, limit }) =>
+          readLocalOpenCodeTranscriptPage({
             threadId: params.threadId,
             limit,
             ...(cursor ? { cursor } : {}),
@@ -216,8 +216,8 @@ function createOpenCodeNodeHostBindings(api: OpenClawPluginApi) {
     listAvailable: available,
     terminalAvailable: available,
     parseParams: parseNodeParams,
-    list: async (params) =>
-      await listLocalOpenCodeSessionPage(params, {
+    list: (params) =>
+      listLocalOpenCodeSessionPage(params, {
         configIdentity: currentOpenCodeCatalogConfig(api),
       }),
     read: readLocalOpenCodeTranscriptPage,
@@ -246,8 +246,8 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
             pathEnv: process.env.PATH ?? "",
             strategy: "fallback",
           }) !== undefined,
-        list: async (query) =>
-          await listLocalOpenCodeSessionPage(
+        list: (query) =>
+          listLocalOpenCodeSessionPage(
             {
               limit: query.limitPerHost,
               ...(query.search ? { searchTerm: query.search } : {}),
@@ -255,8 +255,8 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
             },
             { configIdentity: currentOpenCodeCatalogConfig(api) },
           ),
-        read: async (request) =>
-          await readLocalOpenCodeTranscriptPage({
+        read: (request) =>
+          readLocalOpenCodeTranscriptPage({
             threadId: request.threadId,
             ...(request.limit ? { limit: request.limit } : {}),
             ...(request.cursor !== undefined ? { cursor: request.cursor } : {}),
@@ -312,11 +312,11 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
           }),
         listAdopted: (agentId, sessionEntries) =>
           listAdoptedOpenCodeSessions(api, agentId, sessionEntries),
-        loadSession: async (threadId) => await loadContinuableOpenCodeSession(api, threadId),
+        loadSession: (threadId) => loadContinuableOpenCodeSession(api, threadId),
         validateSession: () => undefined,
-        create: async (params) => await createAdoptedOpenCodeSession({ api, ...params }),
-        complete: async (continued, threadId) =>
-          await linkContinuedOpenCodeSession(continued.sessionKey, threadId),
+        create: (params) => createAdoptedOpenCodeSession({ api, ...params }),
+        complete: (continued, threadId) =>
+          linkContinuedOpenCodeSession(continued.sessionKey, threadId),
         nodeReadOnlyMessage: "paired-node OpenCode session rows are view-only",
       },
       terminal: {

@@ -481,9 +481,12 @@ export function renderToolCard(
   const workspaceFilePath = toolWorkspacePath(card, view);
   const isFileRow = Boolean(workspaceFilePath);
   const subagent = resolveSpawnedSubagent(card, opts.subagents?.subagentSessions);
-  const subagentKey = subagent?.session?.key;
-  const openSession = opts.subagents?.onOpenSession;
-  const openSubagent = subagentKey && openSession ? () => openSession(subagentKey) : undefined;
+  const subagentSession = subagent?.session;
+  // Only a subagent the panel lists can be shown there; any other opens its session.
+  const onOpenSubagent =
+    (subagentSession?.listed && opts.subagents?.onOpenSubagent) || opts.subagents?.onOpenSession;
+  const openSubagent =
+    subagentSession && onOpenSubagent ? () => onOpenSubagent(subagentSession.key) : undefined;
   // A link inside the row needs the row's own toggle beside it, not around it.
   const linkedRow = isFileRow ? "file" : openSubagent ? "subagent" : null;
   const rowContent = html`

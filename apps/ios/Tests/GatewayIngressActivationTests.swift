@@ -1269,8 +1269,11 @@ extension GatewayIngressControllerTests {
         }
     }
 
-    @Test(arguments: [false, true]) @MainActor
-    func `automatic preflight retries without gaining browser authority`(requiresAccess: Bool) async throws {
+    @Test(arguments: [false, true], [false, true]) @MainActor
+    func `automatic preflight retries without gaining browser authority`(
+        requiresAccess: Bool,
+        configuredManual: Bool) async throws
+    {
         let isolation = await GatewayRegistryTestIsolation()
         defer { isolation.restore() }
         let instanceID = "automatic-ingress-recovery-\(UUID().uuidString)"
@@ -1278,66 +1281,90 @@ extension GatewayIngressControllerTests {
         defer { state.restore() }
         let previousAutoConnect = UserDefaults.standard.object(forKey: "gateway.autoconnect")
         defer { UserDefaults.standard.set(previousAutoConnect, forKey: "gateway.autoconnect") }
-        let fixture = try IngressTestHarness()
-        #expect(try GatewaySettingsStore.upsertGatewayRegistryEntry(
-            #require(fixture.profileRows.first),
-            activate: true))
-        #expect(GatewaySettingsStore.saveGatewayCredentials(
-            token: "gateway-token", bootstrapToken: nil, password: nil,
-            gatewayStableID: fixture.stableID, suppressStoredDeviceAuth: false, instanceId: instanceID))
-        let previousPin = GatewayTLSStore.loadFingerprint(stableID: fixture.stableID)
-        let fingerprint = String(repeating: "ab", count: 32)
-        GatewayTLSStore.saveFingerprint(fingerprint, stableID: fixture.stableID)
-        defer {
-            _ = GatewayTLSStore.clearFingerprint(stableID: fixture.stableID)
-            if let previousPin { GatewayTLSStore.saveFingerprint(previousPin, stableID: fixture.stableID) }
-        }
-        fixture.probeFailure = URLError(.notConnectedToInternet)
-        fixture.preauthenticated = !requiresAccess
-        let ingress = fixture.controller(useSavedProfiles: true)
-        let model = NodeAppModel()
-        defer { model.disconnectGateway() }
-        let delayGate = IngressTestGate()
-        var delays: [Duration] = []
-        UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
-        let controller = GatewayConnectionController(
-            appModel: model, startDiscovery: false,
-            autoConnectRetryDelay: { duration in
-                delays.append(duration)
-                await delayGate.wait()
-                fixture.now.addTimeInterval(Double(duration.components.seconds))
-            }, ingress: ingress, now: { fixture.now })
-        defer { delayGate.release() }
-        await delayGate.waitUntilStarted()
-        let generation = model.gatewayConnectGeneration
-        #expect(controller._test_didAutoConnect())
-        #expect(controller._test_pendingAutoConnectState().pending)
-        #expect(model.activeGatewayConnectConfig == nil)
-        #expect(!model._test_hasGatewayLoopTasks().node)
-        #expect(fixture.requests.count == 1)
-        controller._test_triggerAutoConnect()
-        #expect(model.gatewayConnectGeneration == generation)
-        #expect(delays == [.seconds(1)])
-        fixture.probeFailure = nil
-        delayGate.release()
-        await waitForAutomaticIngressHandoff(controller)
-        #expect(model.gatewayConnectGeneration == generation)
-        #expect(fixture.browser.prepared.isEmpty)
-        #expect(fixture.browser.presented.isEmpty)
-        #expect(delays == [.seconds(1)])
-        if requiresAccess {
+        try await withUserDefaults([
+            "gateway.manual.enabled": configuredManual,
+            "gateway.manual.host": "gateway.example.test",
+            "gateway.manual.port": 8443,
+            // The stored pin must upgrade this legacy preference before preflight sees it.
+            "gateway.manual.tls": false,
+        ]) {
+            let fixture = try IngressTestHarness()
+            if !configuredManual {
+                #expect(try GatewaySettingsStore.upsertGatewayRegistryEntry(
+                    #require(fixture.profileRows.first),
+                    activate: true))
+            }
+            #expect(GatewaySettingsStore.saveGatewayCredentials(
+                token: "gateway-token", bootstrapToken: nil, password: nil,
+                gatewayStableID: fixture.stableID, suppressStoredDeviceAuth: false, instanceId: instanceID))
+            let previousPin = GatewayTLSStore.loadFingerprint(stableID: fixture.stableID)
+            let fingerprint = String(repeating: "ab", count: 32)
+            GatewayTLSStore.saveFingerprint(fingerprint, stableID: fixture.stableID)
+            defer {
+                _ = GatewayTLSStore.clearFingerprint(stableID: fixture.stableID)
+                if let previousPin { GatewayTLSStore.saveFingerprint(previousPin, stableID: fixture.stableID) }
+            }
+            fixture.probeFailure = URLError(.notConnectedToInternet)
+            fixture.preauthenticated = !requiresAccess
+            let ingress = fixture.controller(useSavedProfiles: true, requestFactory: { route in
+                { request, _ in
+                    await MainActor.run {
+                        let selected = GatewaySettingsStore.activeGatewayEntry()
+                        #expect(selected?.stableID == route.stableID)
+                        #expect(selected?.useTLS == true)
+                        #expect(route.tls?.expectedFingerprint == fingerprint)
+                        fixture.record(route)
+                    }
+                    return try await fixture.respond(to: request, stableID: route.stableID)
+                }
+            })
+            let model = NodeAppModel()
+            defer { model.disconnectGateway() }
+            let delayGate = IngressTestGate()
+            var delays: [Duration] = []
+            UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
+            let controller = GatewayConnectionController(
+                appModel: model, startDiscovery: false,
+                autoConnectRetryDelay: { duration in
+                    delays.append(duration)
+                    await delayGate.wait()
+                    fixture.now.addTimeInterval(Double(duration.components.seconds))
+                }, ingress: ingress, now: { fixture.now })
+            defer { delayGate.release() }
+            let selected = try #require(GatewaySettingsStore.activeGatewayEntry())
+            try #require(selected.stableID == fixture.stableID)
+            try #require(selected.useTLS)
+            await delayGate.waitUntilStarted()
+            let generation = model.gatewayConnectGeneration
+            #expect(controller._test_didAutoConnect())
+            #expect(controller._test_pendingAutoConnectState().pending)
             #expect(model.activeGatewayConnectConfig == nil)
-            #expect(model.lastGatewayProblem?.kind == .externalAuthorizationRequired)
-            #expect(ingress.attention?.canSignIn == true)
-        } else {
-            let config = try #require(model.activeGatewayConnectConfig)
-            #expect(config.stableID == fixture.stableID)
-            #expect(config.token == "gateway-token")
-            #expect(config.tls?.expectedFingerprint == fingerprint)
-            #expect(config.ingressAuthorization == nil)
-            #expect(model._test_hasGatewayLoopTasks().node)
-            #expect(model._test_hasGatewayLoopTasks().operator)
-            #expect(fixture.requests.count == 2)
+            #expect(!model._test_hasGatewayLoopTasks().node)
+            #expect(fixture.requests.count == 1)
+            controller._test_triggerAutoConnect()
+            #expect(model.gatewayConnectGeneration == generation)
+            #expect(delays == [.seconds(1)])
+            fixture.probeFailure = nil
+            delayGate.release()
+            await waitForAutomaticIngressHandoff(controller)
+            #expect(model.gatewayConnectGeneration == generation)
+            #expect(fixture.browser.prepared.isEmpty)
+            #expect(fixture.browser.presented.isEmpty)
+            #expect(delays == [.seconds(1)])
+            if requiresAccess {
+                #expect(model.activeGatewayConnectConfig == nil)
+                #expect(model.lastGatewayProblem?.kind == .externalAuthorizationRequired)
+                #expect(ingress.attention?.canSignIn == true)
+            } else {
+                let config = try #require(model.activeGatewayConnectConfig)
+                #expect(config.stableID == fixture.stableID)
+                #expect(config.token == "gateway-token")
+                #expect(config.tls?.expectedFingerprint == fingerprint)
+                #expect(config.ingressAuthorization == nil)
+                #expect(model._test_hasGatewayLoopTasks().node)
+                #expect(model._test_hasGatewayLoopTasks().operator)
+                #expect(fixture.requests.count == 2)
+            }
         }
     }
 

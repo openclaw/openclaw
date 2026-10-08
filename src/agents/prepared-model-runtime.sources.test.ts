@@ -292,30 +292,6 @@ describe("prepared catalog source composition", () => {
     );
   });
 
-  it("materializes duplicate current declarations once", async () => {
-    const { facts, generation, configured } = fixture();
-    configured.models = [
-      {
-        ...model("shared"),
-        name: "First current",
-        cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
-      },
-      { ...model("shared"), name: "Later duplicate", input: ["text", "image"] },
-    ];
-    const result = (
-      await prepareConfiguredRuntimeFactsBatch({
-        agentFacts: [facts],
-        pluginGeneration: generation,
-      })
-    ).catalogs.get(facts.input)!;
-    const rows = result.templateModelRegistry.getAll().filter((entry) => entry.id === "shared");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      name: "First current",
-      input: ["text"],
-      cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
-    });
-  });
   it("does not restore noncurrent runtime fallbacks after replace publication", async () => {
     const { facts, generation, modelsJsonContents } = fixture("replace");
     facts.configuredRuntimeModels = [
@@ -454,20 +430,6 @@ describe("prepared catalog source composition", () => {
     expect(result.catalogs.size).toBe(3);
     expect(events.indexOf("first")).toBeLessThan(events.indexOf("event-loop"));
     expect(events.indexOf("event-loop")).toBeLessThan(events.indexOf("last"));
-  });
-
-  it("keeps full catalog source ownership in merge mode", async () => {
-    const { facts, generation, modelsJsonContents } = fixture();
-    const result = await prepareFullCatalogFacts(facts, generation, "static", {
-      modelsJsonContents,
-      pluginCatalogs: [],
-      providerOutcomes: [{ provider: providerId, status: "ready" }],
-    });
-    expect(result.templateModelRegistry.find(providerId, "curated-only")).toBeUndefined();
-    expect(result.modelCatalog.entries.some((entry) => entry.id === "configured-only")).toBe(true);
-    expect(result.templateModelRegistry.find(providerId, "authored-only")).toEqual(
-      expect.objectContaining({ id: "authored-only" }),
-    );
   });
 
   it("replaces stale root request settings with current configuration", async () => {

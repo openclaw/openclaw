@@ -11,13 +11,7 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import { decodeCustomIdComponent, encodeCustomIdComponent } from "../custom-id-codec.js";
-import {
-  Button,
-  Row,
-  type ButtonInteraction,
-  type CommandInteraction,
-  type ComponentData,
-} from "../internal/discord.js";
+import { Button, Row, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
 import type {
@@ -143,21 +137,19 @@ class DiscordCommandArgButton extends Button {
   }
 }
 
-export function buildDiscordCommandArgMenu(params: {
-  command: ChatCommandDefinition;
-  menu: {
-    arg: CommandArgDefinition;
-    choices: Array<{ value: string; label: string }>;
-    title?: string;
-  };
-  interaction: CommandInteraction;
-  ctx: DiscordCommandArgContext;
-  safeInteractionCall: SafeDiscordInteractionCall;
-  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-}): { content: string; components: Row<Button>[] } {
-  const { command, menu, interaction } = params;
+export function buildDiscordCommandArgMenu(
+  params: DiscordCommandArgButtonParams & {
+    command: ChatCommandDefinition;
+    menu: {
+      arg: CommandArgDefinition;
+      choices: Array<{ value: string; label: string }>;
+      title?: string;
+    };
+    userId: string;
+  },
+): { content: string; components: Row<Button>[] } {
+  const { command, menu, userId, ...buttonContext } = params;
   const commandLabel = command.nativeName ?? command.key;
-  const userId = interaction.user?.id ?? "";
   const rows = chunkItems(menu.choices, 4).map((choices) => {
     const buttons = choices.map(
       (choice) =>
@@ -169,9 +161,7 @@ export function buildDiscordCommandArgMenu(params: {
             value: choice.value,
             userId,
           }),
-          ctx: params.ctx,
-          safeInteractionCall: params.safeInteractionCall,
-          dispatchCommandInteraction: params.dispatchCommandInteraction,
+          ...buttonContext,
         }),
     );
     return new Row(buttons);

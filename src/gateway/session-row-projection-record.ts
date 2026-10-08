@@ -37,6 +37,18 @@ export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
+/** Undefined shared facets await their owner; null is acknowledged absence. */
+export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
+  Partial<Pick<PreparedSessionRowDatabaseFacts, "acpMeta" | "repositoryWorkspace">>;
+
+export function isPreparedSessionRowDatabaseFacts(
+  facts: RetainedSessionRowDatabaseFacts | undefined,
+): facts is PreparedSessionRowDatabaseFacts {
+  return (
+    facts !== undefined && facts.acpMeta !== undefined && facts.repositoryWorkspace !== undefined
+  );
+}
+
 export type SessionRowStore = {
   target: SessionStoreTarget;
   agentId: string;
@@ -54,8 +66,8 @@ export type Row = {
   storedEntry?: SessionEntry;
   /** Accepted under retained database custody; presentation consumes the whole snapshot. */
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
-  /** Catalog changes reuse the accepted snapshot until a data publication or demotion. */
-  retainedDatabaseFacts?: PreparedSessionRowDatabaseFacts;
+  /** Presentation retains certified facets until their owner publishes or the row is demoted. */
+  retainedDatabaseFacts?: RetainedSessionRowDatabaseFacts;
   /** Durable search metadata survives archive demotion, until its owner invalidates it. */
   preparedAcpMeta?: SessionAcpMeta | null;
   databaseFactsRevision: number;
@@ -82,6 +94,7 @@ export type Row = {
   /** Exact private reads retain their session claim only for the consuming frame. */
   privateSource?: { identity: string | symbol; assertCurrent(): void };
   preparedPrivate?: {
+    relatedRows: Record<string, Pick<EntryRow, "key" | "agentId" | "storeTarget" | "entry">>;
     entries: Record<string, SessionEntry>;
     databaseFacts: PreparedSessionRowDatabaseFacts;
     titleFields?: SessionTitleFields;
@@ -240,7 +253,7 @@ export function createIncognitoSessionRow(params: {
   membership?: ReadonlySet<string>;
   source: NonNullable<Row["privateSource"]>;
   prepared?: {
-    relatedEntries?: Record<string, NonNullable<Row["storedEntry"]>>;
+    relatedRows: NonNullable<Row["preparedPrivate"]>["relatedRows"];
     databaseFacts: PreparedSessionRowDatabaseFacts;
     titleFields?: SessionTitleFields;
     terminalModel?: { modelProvider: string; model: string };
@@ -260,7 +273,16 @@ export function createIncognitoSessionRow(params: {
     ...(params.prepared
       ? {
           preparedPrivate: {
-            entries: { ...params.prepared.relatedEntries, [key]: storedEntry },
+            relatedRows: params.prepared.relatedRows,
+            entries: {
+              ...Object.fromEntries(
+                Object.entries(params.prepared.relatedRows).map(([relatedKey, relatedRow]) => [
+                  relatedKey,
+                  relatedRow.entry,
+                ]),
+              ),
+              [key]: storedEntry,
+            },
             databaseFacts: params.prepared.databaseFacts,
             titleFields: params.prepared.titleFields,
             terminalModel: params.prepared.terminalModel,
@@ -423,7 +445,7 @@ export function present(
     sessionId: record.entry.sessionId,
     index: context.projectedAgentRuns!,
   });
-  const active = options.active ?? (live !== undefined || record.entry.status === "running");
+  const active = options.active ?? live !== undefined;
   const row = rowProjection.presentSessionRow(record.materialized, {
     now,
     subagentRuns: options.subagentRuns ?? context.subagentRuns.atTime(now),
@@ -649,7 +671,8 @@ export function acquireSessionRowEntry(params: {
     ...row,
     storedEntry,
     pendingDatabaseFacts: undefined,
-    retainedDatabaseFacts: undefined,
+    retainedDatabaseFacts:
+      row.retainedDatabaseFacts?.entry === storedEntry ? row.retainedDatabaseFacts : undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
     ...lineage,
     sharingEntry: storedEntry,

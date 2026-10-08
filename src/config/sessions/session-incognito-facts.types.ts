@@ -2,6 +2,7 @@ import type { SqliteWorkerEphemeralTarget } from "../../infra/sqlite-worker-cont
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { CommittedSessionSharingFacts } from "./session-accessor.sqlite-sharing-acquisition.js";
 import type { SessionEntryCurrentFacts } from "./session-entry-current.types.js";
+import type { SessionEntry } from "./types.js";
 
 /** Content-free postimage; full entries remain owned by the requesting read. */
 export type IncognitoSessionFacts = {
@@ -10,6 +11,17 @@ export type IncognitoSessionFacts = {
   revision: number;
   sharing: CommittedSessionSharingFacts | undefined;
   capability?: SessionEntryCurrentFacts;
+  steering?: Pick<
+    SessionEntry,
+    | "sessionId"
+    | "updatedAt"
+    | "status"
+    | "restartRecoveryDeliveryRunId"
+    | "restartRecoveryDeliverySourceRunId"
+    | "restartRecoveryDeliveryReceiptState"
+    | "restartRecoveryDeliveryToolCallId"
+    | "restartRecoveryTerminalRunIds"
+  >;
   expiresAt?: number;
 };
 

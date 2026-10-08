@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
   hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
+  isMainRestartRecoveryCandidate,
+  recordLifecycleFence,
 } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
 import {
@@ -16,10 +20,14 @@ import {
   buildRestartRecoveryExpectedState,
   sessionMatchesExpectedTranscriptTurn,
 } from "../../config/sessions/session-transcript-turn-state.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import {
+  isTerminalSessionStatus,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions/types.js";
 import { resolveSessionWorkerPlacementContext } from "../../gateway/session-worker-placement-context.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
+  getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
 import {
@@ -27,6 +35,7 @@ import {
   createRestartRecoveryClaimChangedError,
   isAgentRunStaleLifecycleError,
 } from "../../infra/agent-lifecycle-error.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -78,7 +87,9 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
     (current) => {
       if (
         current.sessionId !== params.sessionId ||
-        current.status === "running" ||
+        !isTerminalSessionStatus(current.status) ||
+        current.status === "interrupted" ||
+        current.abortedLastRun === true ||
         current.restartRecoveryDeliveryReceiptState === "terminal-pending" ||
         !hasRestartRecoverySourceClaim(current, params.sourceTurnId)
       ) {
@@ -101,7 +112,10 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
 
 export function createReplyRestartRecoveryClaimController(params: {
   agentId: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  inputProvenance?: InputProvenance;
   admissionRunId?: unknown;
+  executionRunId?: string;
   lifecycleGeneration: string | undefined;
   getEntry: () => SessionEntry | undefined;
   getSessionId: () => string;
@@ -122,11 +136,23 @@ export function createReplyRestartRecoveryClaimController(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   storePath?: string;
 }): ReplyRestartRecoveryClaimController {
-  let recoveryRunId: string = randomUUID();
+  let recoveryRunId = normalizeOptionalString(params.admissionRunId) ?? randomUUID();
+  const executionRunId = params.executionRunId ?? recoveryRunId;
+  const executionGeneration = params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
   let recoverySourceRunId: string | undefined;
   let trackedSessionId: string | undefined;
   let tracked = false;
   let confirmedArmed = false;
+  const isExecutionFence = (run: NonNullable<SessionEntry["restartRecoveryRuns"]>[number]) =>
+    run.runId === executionRunId && run.lifecycleGeneration === executionGeneration;
+  const isTrackedClaim = (entry: SessionEntry | undefined) =>
+    entry !== undefined &&
+    entry.sessionId === trackedSessionId &&
+    entry.sessionId === params.getSessionId() &&
+    (entry.restartRecoveryDeliveryRunId !== undefined
+      ? entry.restartRecoveryDeliveryRunId === recoveryRunId &&
+        normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) === recoverySourceRunId
+      : entry.restartRecoveryRuns?.some(isExecutionFence) === true);
   const assertReadCurrent = () => {
     if (params.lifecycleGeneration) {
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
@@ -160,7 +186,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       return result.sessionEntry as SessionEntry;
     }
     let didCommit = false;
-    const persisted = await updateSessionEntry(
+    const persisted = await patchSessionEntryCore(
       { agentId: params.agentId, storePath: options.storePath, sessionKey: options.sessionKey },
       (current) => {
         if (
@@ -174,37 +200,12 @@ export function createReplyRestartRecoveryClaimController(params: {
         didCommit = true;
         return options.patch;
       },
+      { workerGuard: { source: params.operatorAuthority?.assertCurrent } },
     );
     if (!didCommit || !persisted) {
       throw createRestartRecoveryClaimChangedError();
     }
     return persisted;
-  };
-
-  const persistUserTurnOnly = async (
-    recorder: UserTurnTranscriptRecorder | undefined,
-    sessionId: string,
-  ): Promise<void> => {
-    if (!recorder || recorder.hasPersisted()) {
-      return;
-    }
-    const entry = params.getEntry();
-    const target =
-      entry && params.sessionKey && params.storePath
-        ? params.resolveUserTurnTarget?.({
-            entry,
-            sessionId,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-          })
-        : undefined;
-    const result = await recorder.persistApproved({ target, expectedSessionId: sessionId });
-    if (!result) {
-      throw new Error("session changed before durable user-turn admission");
-    }
-    if (result.sessionEntry) {
-      params.setEntry(result.sessionEntry as SessionEntry);
-    }
   };
 
   const admitUserTurn: ReplyRestartRecoveryClaimController["admitUserTurn"] = async (recorder) => {
@@ -269,17 +270,15 @@ export function createReplyRestartRecoveryClaimController(params: {
         return "duplicate-source";
       }
       if (!isExactRecoveryClaim && hasRestartRecoverySourceClaim(entry, sourceTurnId)) {
-        if (entry.status !== "running") {
-          const retired = await retireTerminalRestartRecoverySourceClaim({
-            agentId: params.agentId,
-            sessionId,
-            sessionKey: params.sessionKey,
-            sourceTurnId,
-            storePath: params.storePath,
-          });
-          if (retired) {
-            params.setEntry(retired);
-          }
+        const retired = await retireTerminalRestartRecoverySourceClaim({
+          agentId: params.agentId,
+          sessionId,
+          sessionKey: params.sessionKey,
+          sourceTurnId,
+          storePath: params.storePath,
+        });
+        if (retired) {
+          params.setEntry(retired);
         }
         return "duplicate-source";
       }
@@ -290,7 +289,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       return "admitted";
     }
     if (isExactRecoveryClaim) {
-      if (entry.status !== "running" || entry.abortedLastRun === true) {
+      if (isTerminalSessionStatus(entry.status) || entry.abortedLastRun === true) {
         throw createRestartRecoveryClaimChangedError();
       }
       // Clear the retry verifier as the exact admitted claim crosses into execution.
@@ -333,10 +332,24 @@ export function createReplyRestartRecoveryClaimController(params: {
         throw new Error("channel restart recovery requires source-keyed user-turn admission");
       }
     }
-    if (!recoverableDeliveryContext && !activeClaimRunId) {
-      // Source-less scheduled/ambient runs may execute, but cannot own a
-      // channel recovery claim that would be impossible to correlate after restart.
-      await persistUserTurnOnly(recorder, sessionId);
+    const operatorSource =
+      !recoverableDeliveryContext && !sourceTurnId
+        ? createRestartRecoveryOperatorSource({
+            authority: params.operatorAuthority,
+            entry,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            sourceRunId: recoveryRunId,
+            inputProvenance: params.inputProvenance,
+          })
+        : undefined;
+    if (
+      !recoverableDeliveryContext &&
+      !activeClaimRunId &&
+      (!recorder || recorder.hasPersisted()) &&
+      !operatorSource
+    ) {
+      // These turns have no admission write to extend; lifecycle start owns their claim.
       return "admitted";
     }
     const updatedAt = Date.now();
@@ -345,7 +358,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       activeClaimRunId &&
       admissionRunId !== activeClaimRunId &&
       entry.abortedLastRun === true &&
-      entry.status === "running" &&
+      (entry.status === undefined || entry.status === "interrupted") &&
       entry.pendingFinalDelivery === undefined &&
       entry.restartRecoveryBeforeAgentReplyState === undefined &&
       entry.restartRecoveryDeliveryReceiptState === undefined &&
@@ -355,7 +368,8 @@ export function createReplyRestartRecoveryClaimController(params: {
       activeClaimRunId &&
       !canTransferAbortedControlUiClaim &&
       (entry.abortedLastRun === true ||
-        entry.status === "running" ||
+        !isTerminalSessionStatus(entry.status) ||
+        entry.status === "interrupted" ||
         entry.restartRecoveryDeliveryReceiptState === "terminal-pending")
     ) {
       throw createRestartRecoveryClaimChangedError();
@@ -367,45 +381,56 @@ export function createReplyRestartRecoveryClaimController(params: {
           terminalSourceRunId: normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId),
         })
       : {};
-    const nextRecoveryRunId =
-      canTransferAbortedControlUiClaim && !recoverableDeliveryContext
-        ? (admissionRunId ?? recoveryRunId)
-        : recoveryRunId;
-    const patch: SessionTranscriptTurnLifecyclePatch =
-      recoverableDeliveryContext || canTransferAbortedControlUiClaim
-        ? {
-            ...retiredClaim,
-            abortedLastRun: false,
-            endedAt: undefined,
-            restartRecoveryBeforeAgentReplyState: undefined,
-            restartRecoveryDeliveryReceiptState: undefined,
-            restartRecoveryDeliveryToolCallId: undefined,
-            restartRecoveryDeliveryContext: recoverableDeliveryContext,
-            restartRecoveryDeliveryRequestFingerprint: undefined,
-            restartRecoveryDeliveryRunId: nextRecoveryRunId,
-            restartRecoveryDeliverySourceRunId: recoverableDeliveryContext
-              ? sourceTurnId
-              : nextRecoveryRunId,
-            restartRecoveryRequesterAccountId: recoverableDeliveryContext
-              ? normalizeOptionalString(params.requesterAccountId)
-              : undefined,
-            restartRecoveryRequesterSenderId: recoverableDeliveryContext
-              ? normalizeOptionalString(params.requesterSenderId)
-              : undefined,
-            restartRecoverySameChannelThreadRequired:
-              recoverableDeliveryContext && params.sameChannelThreadRequired === true
-                ? true
-                : undefined,
-            restartRecoverySourceIngress: recoverableDeliveryContext ? "channel" : "control-ui",
-            restartRecoverySourceReplyDeliveryMode: recoverableDeliveryContext
-              ? params.sourceReplyDeliveryMode
-              : undefined,
-            runtimeMs: undefined,
-            startedAt: updatedAt,
-            status: "running",
-            updatedAt,
-          }
-        : { ...retiredClaim, updatedAt };
+    const transfersControlUiClaim = canTransferAbortedControlUiClaim && !recoverableDeliveryContext;
+    const hasDeliveryClaim = Boolean(
+      recoverableDeliveryContext || transfersControlUiClaim || operatorSource,
+    );
+    const patch: SessionTranscriptTurnLifecyclePatch = {
+      ...retiredClaim,
+      abortedLastRun: false,
+      endedAt: undefined,
+      restartRecoveryBeforeAgentReplyState: undefined,
+      restartRecoveryDeliveryReceiptState: undefined,
+      restartRecoveryDeliveryToolCallId: undefined,
+      restartRecoveryDeliveryContext: recoverableDeliveryContext,
+      restartRecoveryDeliveryRequestFingerprint: undefined,
+      restartRecoveryDeliveryRunId: hasDeliveryClaim ? recoveryRunId : undefined,
+      restartRecoveryOperatorSource: operatorSource,
+      restartRecoveryDeliverySourceRunId:
+        transfersControlUiClaim || operatorSource
+          ? recoveryRunId
+          : recoverableDeliveryContext
+            ? sourceTurnId
+            : undefined,
+      restartRecoveryRequesterAccountId: transfersControlUiClaim
+        ? undefined
+        : normalizeOptionalString(params.requesterAccountId),
+      restartRecoveryRequesterSenderId: transfersControlUiClaim
+        ? undefined
+        : normalizeOptionalString(params.requesterSenderId),
+      restartRecoverySameChannelThreadRequired:
+        !transfersControlUiClaim && params.sameChannelThreadRequired === true ? true : undefined,
+      restartRecoverySourceIngress: recoverableDeliveryContext
+        ? "channel"
+        : transfersControlUiClaim
+          ? "control-ui"
+          : operatorSource?.snapshot.sourceIngress,
+      restartRecoverySourceReplyDeliveryMode: transfersControlUiClaim
+        ? undefined
+        : params.sourceReplyDeliveryMode,
+      runtimeMs: undefined,
+      startedAt: updatedAt,
+      status: undefined,
+      lastRunError: undefined,
+      updatedAt,
+    };
+    patch.restartRecoveryRuns = entry.restartRecoveryRuns;
+    if (isMainRestartRecoveryCandidate(entry, params.sessionKey)) {
+      recordLifecycleFence(patch, {
+        runId: executionRunId,
+        lifecycleGeneration: executionGeneration,
+      });
+    }
     const persisted = await persistAdmissionPatch({
       entry,
       patch,
@@ -415,10 +440,9 @@ export function createReplyRestartRecoveryClaimController(params: {
       storePath: params.storePath,
     });
     params.setEntry(persisted);
-    recoveryRunId = nextRecoveryRunId;
     recoverySourceRunId = normalizeOptionalString(persisted.restartRecoveryDeliverySourceRunId);
-    tracked = persisted.restartRecoveryDeliveryRunId === recoveryRunId;
-    trackedSessionId = tracked ? persisted.sessionId : undefined;
+    trackedSessionId = persisted.sessionId;
+    tracked = isTrackedClaim(persisted);
     return "admitted";
   };
 
@@ -436,10 +460,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     const persisted = await updateSessionEntry(
       { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
       (current) =>
-        current.sessionId === params.getSessionId() &&
-        current.restartRecoveryDeliveryRunId === recoveryRunId &&
-        current.restartRecoveryDeliverySourceRunId === recoverySourceRunId &&
-        current.restartRecoveryBeforeAgentReplyState === expectedState
+        isTrackedClaim(current) && current.restartRecoveryBeforeAgentReplyState === expectedState
           ? {
               restartRecoveryBeforeAgentReplyState: state,
               ...(pendingFinalDelivery
@@ -491,8 +512,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       (current) => {
         if (
           (current.abortedLastRun === true && current.mainRestartRecovery !== undefined) ||
-          current.sessionId !== params.getSessionId() ||
-          current.restartRecoveryDeliveryRunId !== recoveryRunId
+          !isTrackedClaim(current)
         ) {
           return null;
         }
@@ -506,12 +526,15 @@ export function createReplyRestartRecoveryClaimController(params: {
           current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
           !preservesPendingFinal;
         const endedAt = terminalPending || completesHandledSilent ? Date.now() : undefined;
+        const remainingRuns = current.restartRecoveryRuns?.filter((run) => !isExecutionFence(run));
         return {
           ...buildRestartRecoveryClaimCleanupPatch({
             entry: current,
             recordTerminalSource: true,
             terminalSourceRunId: recoverySourceRunId,
+            terminalRunId: current.restartRecoveryDeliveryRunId ? undefined : executionRunId,
           }),
+          restartRecoveryRuns: remainingRuns?.length ? remainingRuns : undefined,
           ...(terminalPending ? { pendingFinalDelivery: undefined } : {}),
           // Transport settlement owns this final checkpoint. Keep enough provenance for a
           // restart to enforce hook safety until that exact pending intent is resolved.
@@ -574,13 +597,6 @@ export function createReplyRestartRecoveryClaimController(params: {
         assertReadCurrent,
       );
       assertReadCurrent();
-      const isTrackedClaim = (entry: SessionEntry | undefined) =>
-        Boolean(
-          entry &&
-          entry.sessionId === trackedSessionId &&
-          entry.restartRecoveryDeliveryRunId === recoveryRunId &&
-          normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) === recoverySourceRunId,
-        );
       if (!confirmedArmed) {
         const current = params.getEntry();
         confirmedArmed =

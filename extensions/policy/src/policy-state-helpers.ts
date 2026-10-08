@@ -1,4 +1,3 @@
-// Shared policy evidence path and value helpers.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getPolicyPath } from "./policy-value.js";
 

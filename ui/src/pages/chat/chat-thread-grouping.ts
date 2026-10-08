@@ -133,10 +133,8 @@ function stampReplyAttribution(
         : item.kind === "stream"
           ? stateBefore.get(item.key)
           : undefined;
-    states[index] = known ?? next;
-    if (known) {
-      next = known;
-    }
+    next = known ?? next;
+    states[index] = next;
   }
   for (const [index, item] of items.entries()) {
     const { sender, message, turnSource } = states[index]!;

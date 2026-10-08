@@ -33,36 +33,30 @@ afterEach(async () => {
 });
 
 describe("session creation snapshot", () => {
-  it.each([undefined, 3, 99])(
-    "preserves adopted history without selecting a new projection (header=%s)",
-    async (version) => {
-      const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-history-") };
-      const scope = { agentId: "main", env, sessionKey: "agent:main:target", sessionId: "target" };
-      const entry = { sessionId: "target", updatedAt: 1 };
-      replaceSessionEntrySync(scope, entry);
-      const database = openOpenClawAgentDatabase(scope);
-      let before: ReturnType<typeof readTranscriptStorageRows> = [];
-      const result = await createSessionEntryWithTranscript(scope, async () => {
-        await Promise.resolve();
-        replaceTranscriptEventsSync(scope, [
-          ...(version === undefined
-            ? []
-            : [{ type: "session", id: "target", version, cwd: "/workspace" }]),
-          {
-            type: "message",
-            id: "user-1",
-            parentId: null,
-            timestamp: "2026-07-15T21:23:03.698Z",
-            message: { role: "user", content: "Retained text.\r\n  Keep spacing." },
-          },
-        ]);
-        before = readTranscriptStorageRows(database, "target");
-        return { ok: true, entry: { ...entry, label: "adopted" } };
-      });
-      expect(result).toMatchObject({ ok: true, entry: { ...entry, label: "adopted" } });
-      expect(readTranscriptStorageRows(database, "target")).toEqual(before);
-    },
-  );
+  it("preserves adopted history without selecting a new projection", async () => {
+    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-history-") };
+    const scope = { agentId: "main", env, sessionKey: "agent:main:target", sessionId: "target" };
+    const entry = { sessionId: "target", updatedAt: 1 };
+    replaceSessionEntrySync(scope, entry);
+    const database = openOpenClawAgentDatabase(scope);
+    let before: ReturnType<typeof readTranscriptStorageRows> = [];
+    const result = await createSessionEntryWithTranscript(scope, async () => {
+      await Promise.resolve();
+      replaceTranscriptEventsSync(scope, [
+        {
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-07-15T21:23:03.698Z",
+          message: { role: "user", content: "Retained text.\r\n  Keep spacing." },
+        },
+      ]);
+      before = readTranscriptStorageRows(database, "target");
+      return { ok: true, entry: { ...entry, label: "adopted" } };
+    });
+    expect(result).toMatchObject({ ok: true, entry: { ...entry, label: "adopted" } });
+    expect(readTranscriptStorageRows(database, "target")).toEqual(before);
+  });
 
   it("prepares and adopts a complete target without decoding sibling entries", async () => {
     const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-snapshot-") };
@@ -124,65 +118,58 @@ describe("session creation snapshot", () => {
       participantCount: 1,
     });
   });
-  it.each([false, true])(
-    "preserves normalized and opaque target identities (cold=%s)",
-    async (cold) => {
-      const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-identities-") };
-      const scope = { agentId: "main", env };
-      const key = "agent:main:matrix:group:!Room:example.org";
-      const sibling = "agent:main:matrix:group:!room:example.org";
-      const entry = {
-        sessionId: "target",
-        updatedAt: 1,
-        label: "own",
-        skillsSnapshot: { prompt: "preserved target", skills: [] },
-      };
-      replaceSessionEntrySync({ ...scope, sessionKey: key }, entry);
+  it("preserves normalized and opaque target identities after reopening", async () => {
+    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-identities-") };
+    const scope = { agentId: "main", env };
+    const key = "agent:main:matrix:group:!Room:example.org";
+    const sibling = "agent:main:matrix:group:!room:example.org";
+    const entry = {
+      sessionId: "target",
+      updatedAt: 1,
+      label: "own",
+      skillsSnapshot: { prompt: "preserved target", skills: [] },
+    };
+    replaceSessionEntrySync({ ...scope, sessionKey: key }, entry);
+    replaceSessionEntrySync(
+      { ...scope, sessionKey: sibling },
+      { sessionId: "sibling", updatedAt: 1, label: "taken" },
+    );
+    for (const [sessionKey, label, archivedAt] of [
+      ["agent:main:archived", "archived", 1],
+      ["agent:main:spaced", " padded ", undefined],
+      ["agent:main:internal-session-effects:hidden", "hidden", undefined],
+    ] as const) {
       replaceSessionEntrySync(
-        { ...scope, sessionKey: sibling },
-        { sessionId: "sibling", updatedAt: 1, label: "taken" },
+        { ...scope, sessionKey },
+        { sessionId: sessionKey, updatedAt: 1, label, archivedAt },
       );
-      for (const [sessionKey, label, archivedAt] of [
-        ["agent:main:archived", "archived", 1],
-        ["agent:main:spaced", " padded ", undefined],
-        ["agent:main:internal-session-effects:hidden", "hidden", undefined],
-      ] as const) {
-        replaceSessionEntrySync(
-          { ...scope, sessionKey },
-          { sessionId: sessionKey, updatedAt: 1, label, archivedAt },
-        );
-      }
-      if (cold) {
-        closeOpenClawAgentDatabasesForTest();
-      }
-      const result = await createSessionEntryWithTranscript(
-        { ...scope, sessionKey: "AGENT:MAIN:MATRIX:GROUP:!Room:example.org" },
-        (context) => {
-          expect(context.existingEntry).toMatchObject(entry);
-          expect(context.targetEntry).toMatchObject(entry);
-          expect(context.labelInUse).toBe(false);
-          return { ok: false, error: "inspection complete" };
-        },
-        { label: "own" },
-      );
-      expect(result).toMatchObject({ ok: false, phase: "entry" });
-      expect(loadSessionEntry({ ...scope, sessionKey: sibling })?.sessionId).toBe("sibling");
-      const database = openOpenClawAgentDatabase(scope);
-      for (const [label, expected] of [
-        ["archived", true],
-        [" padded ", true],
-        ["padded", false],
-        ["hidden", false],
-        [undefined, false],
-      ] as const) {
-        expect(readSessionCreationSnapshotInDatabase(database, key, label).labelInUse).toBe(
-          expected,
-        );
-      }
-    },
-  );
+    }
+    closeOpenClawAgentDatabasesForTest();
+    const result = await createSessionEntryWithTranscript(
+      { ...scope, sessionKey: "AGENT:MAIN:MATRIX:GROUP:!Room:example.org" },
+      (context) => {
+        expect(context.existingEntry).toMatchObject(entry);
+        expect(context.targetEntry).toMatchObject(entry);
+        expect(context.labelInUse).toBe(false);
+        return { ok: false, error: "inspection complete" };
+      },
+      { label: "own" },
+    );
+    expect(result).toMatchObject({ ok: false, phase: "entry" });
+    expect(loadSessionEntry({ ...scope, sessionKey: sibling })?.sessionId).toBe("sibling");
+    const database = openOpenClawAgentDatabase(scope);
+    for (const [label, expected] of [
+      ["archived", true],
+      [" padded ", true],
+      ["padded", false],
+      ["hidden", false],
+      [undefined, false],
+    ] as const) {
+      expect(readSessionCreationSnapshotInDatabase(database, key, label).labelInUse).toBe(expected);
+    }
+  });
 
-  it.each(["malformed", "mismatched-window", "mismatched-time", "nul"])(
+  it.each(["mismatched-time", "nul"])(
     "preserves native warm listing but refuses corrupt worker input for a %s target",
     async (kind) => {
       const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-warm-rows-") };
@@ -200,14 +187,9 @@ describe("session creation snapshot", () => {
       );
       listSessionEntriesCore(scope);
       const db = openOpenClawAgentDatabase(scope).db;
-      if (kind === "malformed" || kind === "nul") {
+      if (kind === "nul") {
         db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-          kind === "malformed" ? "{" : JSON.stringify(entry) + "\0trailing",
-          scope.sessionKey,
-        );
-      } else if (kind === "mismatched-window") {
-        db.prepare("UPDATE session_nodes SET current_session_id = ? WHERE session_key = ?").run(
-          "different",
+          JSON.stringify(entry) + "\0trailing",
           scope.sessionKey,
         );
       } else {

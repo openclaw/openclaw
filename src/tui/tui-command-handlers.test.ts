@@ -1318,7 +1318,7 @@ describe("tui command handlers", () => {
     selector.handleInput("\u001b[B");
     expect(selector.render(100).join("\n")).toContain("fixture/known-b");
     known = [{ provider: "signed-in", id: "known-new", name: "New provider" }, ...known];
-    harness.client.onModelsChanged?.("main");
+    harness.client.onModelsChanged?.({ agentId: "main", sessionKey: "agent:main:main" });
     expect(selector.render(100).join("\n")).toContain("signed-in/known-new");
     expect(selector.render(100).join("\n")).not.toContain("fixture/unrelated");
     selector.handleInput("\r");

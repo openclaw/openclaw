@@ -311,6 +311,16 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     !sourceReplyPolicy.suppressAutomaticSourceDelivery ||
     explicitCommandTurnCtx ||
     (ctx.InboundEventKind !== "room_event" && !unauthorizedTextSlashSourceReplyCtx);
+  const skipDuplicate = () => {
+    recordProcessed("skipped", { reason: "duplicate" });
+    return {
+      status: "complete" as const,
+      result: attachSourceReplyDeliveryMode({
+        queuedFinal: false,
+        counts: dispatcher.getQueuedCounts(),
+      }),
+    };
+  };
 
   const durableSourceTurnId =
     readChannelSourceTurnId(ctx) ??
@@ -331,14 +341,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   if (isDuplicateRestartRecoverySource(sessionStoreEntry.entry, durableSourceTurnId)) {
     // Process-local inbound dedupe cannot see provider redelivery after restart.
     // Drop durable duplicates before any plugin dispatch hook can repeat effects.
-    recordProcessed("skipped", { reason: "duplicate" });
-    return {
-      status: "complete" as const,
-      result: attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      }),
-    };
+    return skipDuplicate();
   }
 
   const sourceRunId = normalizeOptionalString(ctx.MessageSid);
@@ -373,14 +376,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       ? await recorder.withPendingInputCurrent(claimInput)
       : claimInput();
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
-    recordProcessed("skipped", { reason: "duplicate" });
-    return {
-      status: "complete" as const,
-      result: attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      }),
-    };
+    return skipDuplicate();
   }
   const commitInboundDedupeIfClaimed = () => inboundDedupeClaim.commit?.();
   const releaseInboundDedupeIfClaimed = () => inboundDedupeClaim.release?.();

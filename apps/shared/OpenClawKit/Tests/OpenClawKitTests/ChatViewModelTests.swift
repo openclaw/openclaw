@@ -764,38 +764,133 @@ struct TestSessionListQuery: Equatable, Sendable {
 }
 
 private actor TestChatTransportState {
-    var historyCallCount: Int = 0 { didSet { self.wake() } }
-    var sessionsCallCount: Int = 0 { didSet { self.wake() } }
-    var modelsCallCount: Int = 0 { didSet { self.wake() } }
-    var modelAgentIDs: [String?] = [] { didSet { self.wake() } }
-    var commandsCallCount: Int = 0 { didSet { self.wake() } }
-    var healthCallCount: Int = 0 { didSet { self.wake() } }
-    var activeSessionKeys: [String] = [] { didSet { self.wake() } }
-    var createdSessionKeys: [String] = [] { didSet { self.wake() } }
-    var createdParentSessionKeys: [String?] = [] { didSet { self.wake() } }
-    var resetSessionKeys: [String] = [] { didSet { self.wake() } }
-    var compactSessionKeys: [String] = [] { didSet { self.wake() } }
-    var sentSessionKeys: [String] = [] { didSet { self.wake() } }
-    var sentAgentIDs: [String?] = [] { didSet { self.wake() } }
-    var sentRoutingContracts: [String?] = [] { didSet { self.wake() } }
-    var sentSettingsExpectations: [OpenClawChatSessionSettingsExpectation?] = [] { didSet { self.wake() } }
-    var sentMessages: [String] = [] { didSet { self.wake() } }
-    var sentRunIds: [String] = [] { didSet { self.wake() } }
-    var commandSessionKeys: [String] = [] { didSet { self.wake() } }
-    var sentThinkingLevels: [String] = [] { didSet { self.wake() } }
-    var abortedRunIds: [String] = [] { didSet { self.wake() } }
-    var waitCompletionRunIds: [String] = [] { didSet { self.wake() } }
-    var patchedModels: [String?] = [] { didSet { self.wake() } }
-    var patchedModelTargets: [(sessionKey: String, agentID: String?)] = [] { didSet { self.wake() } }
-    var patchedThinkingLevels: [String] = [] { didSet { self.wake() } }
-    var sessionSettingsPatches: [OpenClawChatSessionSettingsPatch] = [] { didSet { self.wake() } }
-    var sessionSettingsTargets: [(sessionKey: String, agentID: String?)] = [] { didSet { self.wake() } }
-    var listSessionsQueries: [TestSessionListQuery] = [] { didSet { self.wake() } }
-    var renamedLabelsByKey: [(key: String, label: String)] = [] { didSet { self.wake() } }
-    var pinnedChanges: [(key: String, pinned: Bool)] = [] { didSet { self.wake() } }
-    var archivedChanges: [(key: String, expectedSessionID: String?, archived: Bool)] = [] { didSet { self.wake() } }
-    var sessionSettingsRouteGeneration: UInt64 = 0 { didSet { self.wake() } }
-    var capturedSessionSettingsRouteGenerations: [UInt64] = [] { didSet { self.wake() } }
+    var historyCallCount: Int = 0 {
+        didSet { self.wake() }
+    }
+
+    var sessionsCallCount: Int = 0 {
+        didSet { self.wake() }
+    }
+
+    var modelsCallCount: Int = 0 {
+        didSet { self.wake() }
+    }
+
+    var modelAgentIDs: [String?] = [] {
+        didSet { self.wake() }
+    }
+
+    var commandsCallCount: Int = 0 {
+        didSet { self.wake() }
+    }
+
+    var healthCallCount: Int = 0 {
+        didSet { self.wake() }
+    }
+
+    var activeSessionKeys: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var createdSessionKeys: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var createdParentSessionKeys: [String?] = [] {
+        didSet { self.wake() }
+    }
+
+    var resetSessionKeys: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var compactSessionKeys: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentSessionKeys: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentAgentIDs: [String?] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentRoutingContracts: [String?] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentSettingsExpectations: [OpenClawChatSessionSettingsExpectation?] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentMessages: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentRunIds: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var commandSessionKeys: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentThinkingLevels: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var abortedRunIds: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var waitCompletionRunIds: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var patchedModels: [String?] = [] {
+        didSet { self.wake() }
+    }
+
+    var patchedModelTargets: [(sessionKey: String, agentID: String?)] = [] {
+        didSet { self.wake() }
+    }
+
+    var patchedThinkingLevels: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var sessionSettingsPatches: [OpenClawChatSessionSettingsPatch] = [] {
+        didSet { self.wake() }
+    }
+
+    var sessionSettingsTargets: [(sessionKey: String, agentID: String?)] = [] {
+        didSet { self.wake() }
+    }
+
+    var listSessionsQueries: [TestSessionListQuery] = [] {
+        didSet { self.wake() }
+    }
+
+    var renamedLabelsByKey: [(key: String, label: String)] = [] {
+        didSet { self.wake() }
+    }
+
+    var pinnedChanges: [(key: String, pinned: Bool)] = [] {
+        didSet { self.wake() }
+    }
+
+    var archivedChanges: [(key: String, expectedSessionID: String?, archived: Bool)] = [] {
+        didSet { self.wake() }
+    }
+
+    var sessionSettingsRouteGeneration: UInt64 = 0 {
+        didSet { self.wake() }
+    }
+
+    var capturedSessionSettingsRouteGenerations: [UInt64] = [] {
+        didSet { self.wake() }
+    }
 
     private var waiters = StateWaiters()
 
@@ -4309,7 +4404,7 @@ struct ChatViewModelTests {
         #expect(vm.messages.first?.content.first?.text == "new scope")
     }
 
-    @Test @MainActor func `unscoped agent update replaces an active bootstrap`() async throws {
+    @Test @MainActor func `unscoped agent update replaces an active bootstrap`() async {
         let firstHistoryGate = SessionSubscribeGate()
         let historyCalls = AsyncCounter()
         let firstHistory = historyPayload(
@@ -4341,7 +4436,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.messages.first?.content.first?.text } == "new agent")
     }
 
-    @Test @MainActor func `intermediate session message preserves pending recovery snapshot`() async throws {
+    @Test @MainActor func `intermediate session message preserves pending recovery snapshot`() async {
         let historyGate = AsyncGate()
         let historyCalls = AsyncCounter()
         let activeHistory = historyPayload(

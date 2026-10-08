@@ -18,7 +18,6 @@ import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
-  resolveGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity,
 } from "./github-publication-availability.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
@@ -133,7 +132,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
   ) => Promise<SessionGitHubPublicationResult>;
   sameWorktree: (
     row: PublicationRow,
-    worktree: ReturnType<typeof resolveGitHubPublicationWorktreeOwner>["worktree"],
+    worktree: Awaited<ReturnType<typeof readGitHubPublicationWorktreeOwner>>["worktree"],
   ) => boolean;
   processRow: (
     initial: PublicationRow,
@@ -197,7 +196,6 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         sessionKey: input.sessionKey,
         agentId: input.agentId,
       });
-      assertRequester();
       const loaded = initialAuthority.loaded;
       const lifecycleRevision = loaded.entry?.lifecycleRevision ?? null;
       const session = {
@@ -206,7 +204,8 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         agentId: input.agentId,
         lifecycleRevision,
       };
-      const placement = params.placements.get(sessionId);
+      const placement = await params.placements.getAsync(sessionId);
+      assertRequester();
       const validateLocalExecution = () => {
         const current = params.placements.get(sessionId);
         return (!current || current.state === "local") && !current?.turnClaim;
@@ -220,7 +219,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         : null;
       const assertCaptureAuthority = () => {
         assertRequester();
-        resolveGitHubPublicationWorktreeOwner(session);
+        initialAuthority.assertCurrent();
         const current = params.placements.get(sessionId);
         const unchanged = capturePlacement
           ? current?.state === capturePlacement.state &&
@@ -266,16 +265,12 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         );
       }
       const deferred = placement !== undefined && placement.state !== "local";
-      const { worktree } = await readGitHubPublicationWorktreeOwner({
+      const worktreeOwner = await readGitHubPublicationWorktreeOwner({
         sessionId,
         sessionKey: session.sessionKey,
         agentId: session.agentId,
       });
-      const expectedWorktree = {
-        worktreeId: worktree.id,
-        repositoryFingerprint: worktree.repoFingerprint,
-        branch: worktree.branch,
-      };
+      const { worktree } = worktreeOwner;
       assertRequester();
       const requestDigest = digestRequest({
         sessionId,
@@ -352,10 +347,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
               requester: input.requester.snapshot,
               assertCurrent: () => {
                 assertRequester();
-                resolveGitHubPublicationWorktreeOwner({
-                  ...session,
-                  expected: expectedWorktree,
-                });
+                worktreeOwner.assertCurrent();
               },
               snapshot,
             });
@@ -365,13 +357,11 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         );
       };
       if (deferred) {
-        resolveGitHubPublicationWorktreeOwner({
-          ...session,
-          expected: expectedWorktree,
-        });
+        worktreeOwner.assertCurrent();
         return publicationResult(insertSessionRequest());
       }
-      const current = params.placements.get(sessionId);
+      const current = await params.placements.getAsync(sessionId);
+      assertRequester();
       if ((current && current.state !== "local") || current?.turnClaim) {
         throw new Error("GitHub publication session authority changed after verification.");
       }
@@ -387,12 +377,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
               assertCurrent: assertCaptureAuthority,
             });
       assertCaptureAuthority();
-      resolveGitHubPublicationWorktreeOwner({
-        sessionId,
-        sessionKey: loaded.canonicalKey,
-        agentId: input.agentId,
-        expected: expectedWorktree,
-      });
+      worktreeOwner.assertCurrent();
       const row = insertSessionRequest(snapshot);
       return await processRow(row, validateLocalExecution, input.requester.assertInvocationCurrent);
     },
@@ -418,11 +403,12 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       );
       const failures: Error[] = [];
       const blockedWorktrees = new Set<string>();
+      const placements = await params.placements.getManyAsync(rows.map((row) => row.session_id));
       for (const row of rows) {
         if (
           blockedWorktrees.has(row.worktree_id) ||
           pending.has(row.session_id) ||
-          params.placements.get(row.session_id)?.turnClaim
+          placements.get(row.session_id)?.turnClaim
         ) {
           continue;
         }

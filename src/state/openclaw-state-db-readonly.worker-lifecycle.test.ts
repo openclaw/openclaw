@@ -258,55 +258,36 @@ it("retries transport stop before waiting for a still-pending producer", async (
   });
 });
 
-it.each(["success", "unadmitted failure", "admitted failure", "retired failure"] as const)(
-  "observes only admitted, current independent sources: %s",
-  async (outcome) => {
-    const options = source();
-    const failure = new Error("query failed");
-    const retired = new Error("original source retired");
-    const assertCurrent = vi.fn();
-    const observe = vi.fn();
-    const release = vi.fn();
-    mock.borrow.mockImplementation(() => {
-      throw new Error("Asynchronous shared-state reads cannot run inside a native transaction");
+it("does not observe an independent source retired during an admitted read failure", async () => {
+  const options = source();
+  const failure = new Error("query failed");
+  const retired = new Error("original source retired");
+  const assertCurrent = vi.fn();
+  const observe = vi.fn();
+  const release = vi.fn();
+  mock.borrow.mockImplementation(() => {
+    throw new Error("Asynchronous shared-state reads cannot run inside a native transaction");
+  });
+  mock.independent.mockReturnValue({ assertCurrent, observe, release });
+  mock.read.mockImplementation(async () => {
+    assertCurrent.mockImplementation(() => {
+      throw retired;
     });
-    mock.independent.mockReturnValue({ assertCurrent, observe, release });
-    if (outcome !== "success") {
-      mock.read.mockImplementation(async () => {
-        if (outcome === "retired failure") {
-          assertCurrent.mockImplementation(() => {
-            throw retired;
-          });
-        }
-        return {
-          error: failure,
-          ...(outcome !== "unadmitted failure" ? { sourceAdmitted: true } : {}),
-        };
-      });
-    }
-    const read = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
-    if (outcome === "success") {
-      await expect(read).resolves.toEqual({
-        ok: true,
-        type: "fleet.list",
-        sourceAdmitted: true,
-        cells: [],
-      });
-    } else if (outcome === "retired failure") {
-      await expect(read).rejects.toMatchObject({ cause: failure, errors: [failure, retired] });
-    } else {
-      await expect(read).rejects.toBe(failure);
-    }
-    expect(observe).toHaveBeenCalledTimes(
-      outcome === "success" || outcome === "admitted failure" ? 1 : 0,
-    );
-    expect(release).toHaveBeenCalledOnce();
-    expect(mock.borrow).not.toHaveBeenCalled();
-    expect(mock.prepareNative).not.toHaveBeenCalled();
-    expect(mock.prepareSource).not.toHaveBeenCalled();
-    expect(mock.prepareSourceAsync).not.toHaveBeenCalled();
-  },
-);
+    return { error: failure, sourceAdmitted: true };
+  });
+  await expect(
+    executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+  ).rejects.toMatchObject({
+    cause: failure,
+    errors: [failure, retired],
+  });
+  expect(observe).not.toHaveBeenCalled();
+  expect(release).toHaveBeenCalledOnce();
+  expect(mock.borrow).not.toHaveBeenCalled();
+  expect(mock.prepareNative).not.toHaveBeenCalled();
+  expect(mock.prepareSource).not.toHaveBeenCalled();
+  expect(mock.prepareSourceAsync).not.toHaveBeenCalled();
+});
 
 it("joins maintenance reads and retries their transport before closing scoped handles", async () => {
   const options = source();

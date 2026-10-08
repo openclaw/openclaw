@@ -1,11 +1,18 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { isMainThread } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
-import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import {
+  admitSqliteSchema,
+  getAdmittedSqliteSchemaFacts,
+  getSqliteReadScopeRevision,
+  runSqliteReadOperationSync,
+} from "../infra/sqlite-schema-facts.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -20,6 +27,7 @@ import {
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-read.js";
 import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
+import { hasOpenClawAgentCanonicalValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -68,6 +76,26 @@ function hasAdmittedAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase)
   assertExistingAgentSchemaOwner(schemaMeta, database.agentId, database.path);
   assertCanonicalSessionValidationSchema(database.db);
   return true;
+}
+
+/** Retained grants reuse their fresh read scope without re-admitting changed schema under a lock. */
+export function captureOpenClawAgentReadOnlyAdmission(database: OpenClawAgentReadOnlyDatabase) {
+  const changed = () =>
+    new SqliteSchemaMismatchError(
+      `OpenClaw agent database ${database.path} schema admission changed; retry the request.`,
+    );
+  const schema = getAdmittedSqliteSchemaFacts(database.db);
+  if (!schema) {
+    throw changed();
+  }
+  return () => {
+    if (
+      getSqliteReadScopeRevision(database.db)?.schema !== schema ||
+      !hasAdmittedAgentReadOnlySchema(database)
+    ) {
+      throw changed();
+    }
+  };
 }
 
 /** Recheck committed admission facts before using an existing read-only connection. */
@@ -154,6 +182,10 @@ export function openOpenClawAgentDatabaseReadOnly(
     if (!hasSchema) {
       close();
       return { found: false, reason: "schema-missing" };
+    }
+    // Worker admission loads file-bound proof before a read transaction prevents it.
+    if (!isMainThread) {
+      hasOpenClawAgentCanonicalValidation(database);
     }
     return { found: true, database };
   } catch (error) {

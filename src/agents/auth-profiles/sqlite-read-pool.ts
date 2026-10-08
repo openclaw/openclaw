@@ -62,22 +62,17 @@ export function closeAuthProfileReadPool(scope?: AuthProfileReadPoolCloseScope):
     closeAuthProfileReadDatabase(scope.databasePath);
     return;
   }
-  if (scope?.kind === "root") {
-    for (const pathname of authProfileReadDatabases.keys()) {
-      if (isPathInside(scope.rootPath, pathname)) {
-        closeAuthProfileReadDatabase(pathname);
-      }
-    }
-    return;
-  }
   for (const pathname of authProfileReadDatabases.keys()) {
-    closeAuthProfileReadDatabase(pathname);
+    if (scope?.kind !== "root" || isPathInside(scope.rootPath, pathname)) {
+      closeAuthProfileReadDatabase(pathname);
+    }
   }
 }
 
-registerAgentDatabaseReaderCloser((candidates) => {
+registerAgentDatabaseReaderCloser((candidates, retainedPaths) => {
   for (const pathname of authProfileReadDatabases.keys()) {
     if (
+      !retainedPaths?.has(pathname) &&
       candidates.some((candidate) => matchesAgentDatabaseReadCandidatePath(candidate, pathname))
     ) {
       closeAuthProfileReadDatabase(pathname);

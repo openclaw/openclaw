@@ -17,7 +17,6 @@ import {
   type ChannelSetupWizard,
   type ChannelSetupWizardTextInput,
   type OpenClawConfig,
-  type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -107,48 +106,40 @@ function buildIMessageSetupPatch(input: IMessageSetupInput) {
   };
 }
 
-async function promptIMessageAllowFrom(params: {
-  cfg: OpenClawConfig;
-  prompter: WizardPrompter;
-  accountId?: string;
-}): Promise<OpenClawConfig> {
-  return promptParsedAllowFromForAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    defaultAccountId: resolveDefaultIMessageAccountId(params.cfg),
-    prompter: params.prompter,
-    noteTitle: "iMessage allowlist",
-    noteLines: [
-      "Allowlist iMessage DMs by sender handle.",
-      "Examples:",
-      "- +15555550123",
-      "- user@example.com",
-      "Multiple entries: comma-separated.",
-      `Docs: ${formatDocsLink("/imessage", "imessage")}`,
-    ],
-    message: "iMessage allowFrom (sender handle)",
-    placeholder: "+15555550123, user@example.com",
-    parseEntries: parseIMessageAllowFromEntries,
-    getExistingAllowFrom: ({ cfg, accountId }) =>
-      resolveIMessageAccount({ cfg, accountId }).config.allowFrom ?? [],
-    applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
-      setAccountAllowFromForChannel({
-        cfg,
-        channel,
-        accountId,
-        allowFrom,
-        setupSurface: imessageSetupAdapter,
-      }),
-  });
-}
-
 export const imessageDmPolicy = createChannelDmPolicy({
   label: "iMessage",
   channel,
-  resolveAccount: (cfg, accountId) =>
-    resolveIMessageAccount({ cfg, accountId: accountId ?? resolveDefaultIMessageAccountId(cfg) }),
+  resolveAccount: (cfg, accountId) => resolveIMessageAccount({ cfg, accountId }),
   setupSurface: () => imessageSetupAdapter,
-  promptAllowFrom: promptIMessageAllowFrom,
+  promptAllowFrom: async (params) =>
+    promptParsedAllowFromForAccount({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      defaultAccountId: resolveDefaultIMessageAccountId(params.cfg),
+      prompter: params.prompter,
+      noteTitle: "iMessage allowlist",
+      noteLines: [
+        "Allowlist iMessage DMs by sender handle.",
+        "Examples:",
+        "- +15555550123",
+        "- user@example.com",
+        "Multiple entries: comma-separated.",
+        `Docs: ${formatDocsLink("/imessage", "imessage")}`,
+      ],
+      message: "iMessage allowFrom (sender handle)",
+      placeholder: "+15555550123, user@example.com",
+      parseEntries: parseIMessageAllowFromEntries,
+      getExistingAllowFrom: ({ cfg, accountId }) =>
+        resolveIMessageAccount({ cfg, accountId }).config.allowFrom ?? [],
+      applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
+        setAccountAllowFromForChannel({
+          cfg,
+          channel,
+          accountId,
+          allowFrom,
+          setupSurface: imessageSetupAdapter,
+        }),
+    }),
 });
 
 export function createIMessageCliPathTextInput(

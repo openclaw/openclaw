@@ -107,10 +107,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     : undefined;
 
   const runResult = execution.result;
-  const fallbackProvider = execution.resolved.provider;
-  const fallbackModel = execution.resolved.model;
-  const fallbackExhausted = execution.fallback.exhausted;
-  const fallbackAttempts = execution.fallback.attempts;
+  const { provider: fallbackProvider, model: fallbackModel } = execution.resolved;
+  const { exhausted: fallbackExhausted, attempts: fallbackAttempts } = execution.fallback;
   const hasDirectlySentBlockReply = execution.hasDirectlySentBlockReply;
   const directBlockDeliveries = execution.directBlockDeliveries;
   const terminalFailurePayload = execution.terminalFailurePayload;
@@ -200,10 +198,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     requestedModel: followupRun.run.model,
     durationMs: Date.now() - runStartedAt,
     compactionCount: typeof compactions === "number" ? compactions : undefined,
-    contextTokenBudget:
-      typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
-    contextUsedTokens:
-      typeof promptTokens === "number" && Number.isFinite(promptTokens) ? promptTokens : undefined,
+    contextTokenBudget: ctxTokens,
+    contextUsedTokens: promptTokens,
     promptTokens,
     usage,
     lastCallUsage,

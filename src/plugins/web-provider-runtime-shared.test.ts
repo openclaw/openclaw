@@ -1,6 +1,10 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-state.js";
 import type { WebProviderRuntimeResolution } from "./web-provider-runtime-shared.js";
 
 const mocks = vi.hoisted(() => ({
@@ -31,7 +35,8 @@ vi.mock("./loader.js", () => ({
   resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
 }));
 
-vi.mock("./active-runtime-registry.js", () => ({
+vi.mock("./active-runtime-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./active-runtime-registry.js")>()),
   getLoadedRuntimePluginRegistry: mocks.getLoadedRuntimePluginRegistry,
 }));
 
@@ -58,10 +63,11 @@ function resolution(
     Pick<WebProviderRuntimeResolution<string>, "mapRegistryProviders">,
 ): WebProviderRuntimeResolution<string> {
   return {
-    resolveBundledResolutionConfig: () => ({
+    resolveBundledResolutionConfig: ({ manifestRecords }) => ({
       config: {},
       activationSourceConfig: {},
       autoEnabledReasons: {},
+      manifestRecords,
     }),
     resolveCandidatePluginIds: () => ["brave"],
     ...overrides,
@@ -307,6 +313,87 @@ describe("web-provider-runtime-shared", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     expect(mapRegistryProviders).toHaveBeenCalledTimes(2);
   });
+
+  it("retains an empty request-owned web provider selection without registering plugins again", () => {
+    const registry = createEmptyPluginRegistry();
+    const mapRegistryProviders = vi.fn(() => []);
+
+    const result = withPluginRuntimeRegistryScope(registry, () =>
+      resolvePluginWebProviders(
+        { config: {}, manifestRecords: [] },
+        resolution({ resolveCandidatePluginIds: () => undefined, mapRegistryProviders }),
+      ),
+    );
+
+    expect(result).toEqual([]);
+    expect(mapRegistryProviders).toHaveBeenCalledExactlyOnceWith({
+      registry,
+      onlyPluginIds: undefined,
+    });
+    expect(mocks.getLoadedRuntimePluginRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, ["external-search"]])(
+    "retains an exact generation's empty selection with candidates %j",
+    (candidates) => {
+      const registry = createEmptyPluginRegistry();
+      const requestRegistry = createEmptyPluginRegistry();
+      const mapRegistryProviders = vi.fn(() => []);
+
+      const result = withPluginRuntimeRegistryScope(requestRegistry, () =>
+        withPluginRuntimeGenerationRegistryScope(registry, () =>
+          resolvePluginWebProviders(
+            { config: {} },
+            resolution({ resolveCandidatePluginIds: () => candidates, mapRegistryProviders }),
+          ),
+        ),
+      );
+
+      expect(result).toEqual([]);
+      expect(mapRegistryProviders).toHaveBeenCalledExactlyOnceWith({
+        registry,
+        onlyPluginIds: candidates,
+      });
+      expect(mocks.getLoadedRuntimePluginRegistry).not.toHaveBeenCalled();
+      expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: "unknown inventory", manifestRecords: undefined, scopedProviders: [] },
+    {
+      name: "an uninspected provider",
+      manifestRecords: [createPluginManifestRecordFixture({ id: "external-search" })],
+      scopedProviders: [],
+    },
+    {
+      name: "an uninspected provider alongside another provider",
+      manifestRecords: [createPluginManifestRecordFixture({ id: "external-search" })],
+      scopedProviders: ["scoped-search"],
+    },
+  ])(
+    "discovers undeclared providers from a request scope with $name",
+    ({ manifestRecords, scopedProviders }) => {
+      const registry = createEmptyPluginRegistry();
+      const fallbackRegistry = createEmptyPluginRegistry();
+      const mapRegistryProviders = vi.fn(({ registry: selected }) =>
+        selected === fallbackRegistry ? ["external-search", "scoped-search"] : scopedProviders,
+      );
+      mocks.loadOpenClawPlugins.mockReturnValue(fallbackRegistry);
+
+      const result = withPluginRuntimeRegistryScope(registry, () =>
+        resolvePluginWebProviders(
+          { config: {}, manifestRecords },
+          resolution({ resolveCandidatePluginIds: () => undefined, mapRegistryProviders }),
+        ),
+      );
+
+      expect(result).toEqual(["external-search", "scoped-search"]);
+      expect(mocks.getLoadedRuntimePluginRegistry).not.toHaveBeenCalled();
+      expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not treat an active registry missing declared candidates as authoritative", () => {
     // Regression: an active registry with SOME web providers used to win even when a

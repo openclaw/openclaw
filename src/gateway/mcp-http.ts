@@ -18,14 +18,18 @@ import {
   sendHttpRequestRejection,
 } from "../infra/http-request-lifecycle.js";
 import { logDebug, logWarn } from "../logger.js";
-import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
-import { AsyncWorkScope, runWithTrackedCancellation } from "../shared/async-work-scope.js";
+import { runWithTrackedCancellation } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   registerMcpLoopbackClientGrantRevocationListener,
   revokeMcpLoopbackClientGrantsForRuntime,
@@ -51,7 +55,7 @@ import {
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
 } from "./mcp-http.request.js";
-import { runOutsideOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
+import { GatewayConnectionWork } from "./server-connection-work.js";
 
 // Loopback MCP server exposes gateway-scoped tools to local MCP clients over a
 // bearer-token HTTP endpoint bound to 127.0.0.1. Only one active server/runtime
@@ -133,7 +137,7 @@ function jsonRpcInternalError(parsed: unknown) {
 /** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
 async function startMcpLoopbackServer(
   port: number,
-  work: AsyncWorkScope,
+  work: GatewayConnectionWork,
 ): Promise<() => Promise<void>> {
   // Shutdown preloads this module even when no MCP listener is needed.
   const [
@@ -289,14 +293,8 @@ async function startMcpLoopbackServer(
                 messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
                 cfg,
                 signal: requestAbort.signal,
-                ...(boundClientGrant?.toolAuth
-                  ? {
-                      authProfileStore: boundClientGrant.toolAuth.store,
-                      ...(boundClientGrant.toolAuth.agentDir
-                        ? { authProfileStoreAgentDir: boundClientGrant.toolAuth.agentDir }
-                        : {}),
-                    }
-                  : {}),
+                authProfileStore: boundClientGrant?.toolAuth?.store,
+                authProfileStoreAgentDir: boundClientGrant?.toolAuth?.agentDir || undefined,
                 ...(boundGrantToken ? { grantToken: boundGrantToken } : {}),
                 // Same liveness check `authorizeToolCall` applies after the hook,
                 // handed to run-contract tools so a revocation that lands while a
@@ -433,9 +431,15 @@ async function startMcpLoopbackServer(
             if (callerIdentity && boundClientGrant?.personalToolParticipants) {
               callerIdentity.personalToolParticipants = boundClientGrant.personalToolParticipants;
             }
-            response = await withGatewayToolCallerIdentity(callerIdentity, () =>
-              runWithTrackedCancellation(requestAbort.signal, handleRequest),
-            );
+            // The grant's caller supplies the permission ceiling and live connection check.
+            const runRequestScope = boundClientGrant?.requestScope;
+            const handleAsCaller = () =>
+              withGatewayToolCallerIdentity(callerIdentity, () =>
+                runWithTrackedCancellation(requestAbort.signal, handleRequest),
+              );
+            response = await (runRequestScope
+              ? withPluginRuntimeGatewayRequestScope(runRequestScope, handleAsCaller)
+              : handleAsCaller());
           } finally {
             markMcpLoopbackToolCallFinished(cliCaptureHandle);
           }
@@ -568,13 +572,14 @@ export async function ensureMcpLoopbackServer(port = 0): Promise<void> {
     return;
   }
   if (!activeMcpLoopbackServerPromise) {
-    // The process-owned listener must outlive its creator's work, generation, and authority.
-    const work = new AsyncWorkScope();
-    activeMcpLoopbackServerPromise = runOutsideOperatorToolGatewayAuthority(() =>
-      runOutsidePluginRuntimeGenerationScope(() =>
-        runOutsideGatewayRootWorkAdmission(() =>
-          work.run(() => startMcpLoopbackServer(port, work)),
-        ),
+    // Retain Gateway workers through the work owner; HTTP callbacks must not inherit the turn.
+    const work = new GatewayConnectionWork();
+    const resolveGatewayContext = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+    activeMcpLoopbackServerPromise = runInDetachedAsyncContext(() =>
+      withPluginRuntimeGatewayContextResolver(
+        resolveGatewayContext,
+        () => work.run(() => startMcpLoopbackServer(port, work)),
+        { inheritRequestScope: false },
       ),
     )
       .then((close) => {

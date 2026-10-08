@@ -120,6 +120,7 @@ type MessageToolOptions = {
   sandboxWorkspaceMediaReadAllowed?: boolean;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  inputProvenance?: import("../../sessions/input-provenance.js").InputProvenance;
   /** Process-local completion authority: send only to the current source route. */
   sourceReplyOnly?: boolean;
   inboundEventKind?: InboundEventKind;
@@ -585,6 +586,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
                 sandboxRoot: options?.sandboxRoot,
                 sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
                 sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
+                sourceReplyTranscriptOnly: options?.inputProvenance?.kind === "inter_session",
                 // Only an admitted channel source can arm terminal restart reconciliation.
                 // Source-less scheduled and ambient sends remain ordinary message actions.
                 sourceReplyFinal: hasExactSourceTurn

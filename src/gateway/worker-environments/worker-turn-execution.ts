@@ -135,7 +135,7 @@ export async function executeWorkerTurn(
   const [github, githubPublicationAvailable] = await raceNodeWorkerOperation(
     Promise.all([
       prepareWorkerGitHubBinding(githubContext),
-      prepareGitHubPublicationAvailability(githubContext),
+      prepareGitHubPublicationAvailability({ ...githubContext, sessionTarget: turn.sessionTarget }),
     ]),
     turn.abortSignal,
   );

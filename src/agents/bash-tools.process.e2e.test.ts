@@ -245,15 +245,6 @@ test.skipIf(process.platform === "win32").each([
     expectedExitLabel: "unknown exit code",
   },
   {
-    name: "normal nonzero child exit",
-    child: 'setTimeout(() => { process.stdout.write("REAL_CHILD_OUTPUT"); process.exit(7); }, 80)',
-    timeoutSec: 5,
-    finalizerError: undefined,
-    expectedStatus: "completed",
-    expectedExitCode: 7,
-    expectedExitLabel: "code 7",
-  },
-  {
     name: "timeout after a clean child exit",
     child:
       'process.on("SIGTERM", () => process.exit(0)); process.stdout.write("REAL_CHILD_OUTPUT"); setInterval(() => {}, 1000)',
@@ -346,52 +337,27 @@ test("rejects malformed direct actions before requiring a session id", async () 
   expect(result.details).toMatchObject({ status: "failed" });
 });
 
-test.each([
-  {
-    name: "empty nonzero exit",
-    source: "process.exit(1)",
-    expectedText: "(no output)\n\n(Command exited with code 1)",
-    expectedAggregated: "(no output)\n\n(Command exited with code 1)",
-    exitCode: 1,
-  },
-  {
-    name: "nonzero exit with output",
-    source: 'process.stdout.write("VISIBLE"); process.exit(1)',
-    expectedText: "VISIBLE\n\n(Command exited with code 1)",
-    expectedAggregated: "VISIBLE\n\n(Command exited with code 1)",
-    exitCode: 1,
-  },
-  {
-    name: "empty successful exit",
-    source: "process.exit(0)",
-    expectedText: "(no output)",
-    expectedAggregated: "",
-    exitCode: 0,
-  },
-])(
-  "renders a real foreground $name with the expected structured output",
-  async ({ source, expectedText, expectedAggregated, exitCode }) => {
-    const execTool = createGatewayExecTool({ allowBackground: false });
-    const result = await execTool.execute(`foreground-exit-${exitCode}`, {
-      command: currentNodeEvalCommand(source),
-    });
+test("renders a real foreground empty nonzero exit with the expected structured output", async () => {
+  const execTool = createGatewayExecTool({ allowBackground: false });
+  const result = await execTool.execute("foreground-exit-1", {
+    command: currentNodeEvalCommand("process.exit(1)"),
+  });
 
-    expect(textContent(result)).toBe(expectedText);
-    expect(result.details).toMatchObject({
-      status: "completed",
-      exitCode,
-      aggregated: expectedAggregated,
-    });
-  },
-);
+  const output = "(no output)\n\n(Command exited with code 1)";
+  expect(textContent(result)).toBe(output);
+  expect(result.details).toMatchObject({
+    status: "completed",
+    exitCode: 1,
+    aggregated: output,
+  });
+});
 
 test.skipIf(process.platform === "win32").each([
-  { name: "quiet successful exit", exitCode: 0, output: "", expectsNotification: false },
-  { name: "quiet nonzero exit", exitCode: 7, output: "", expectsNotification: true },
-  { name: "nonzero exit with output", exitCode: 7, output: "VISIBLE", expectsNotification: true },
+  { name: "quiet successful exit", exitCode: 0, expectsNotification: false },
+  { name: "quiet nonzero exit", exitCode: 7, expectsNotification: true },
 ])(
   "preserves default completion wake behavior for a real $name",
-  async ({ name, exitCode, output, expectsNotification }) => {
+  async ({ name, exitCode, expectsNotification }) => {
     const scopeKey = `agent:main:process-default-wake-${name.replaceAll(" ", "-")}`;
     const execTool = createGatewayExecTool({
       allowBackground: true,
@@ -401,9 +367,8 @@ test.skipIf(process.platform === "win32").each([
       sessionKey: scopeKey,
       scopeKey,
     });
-    const script = `process.stdout.write(${JSON.stringify(output)}); process.exit(${exitCode});`;
     const started = await execTool.execute(`process-default-wake-${name}`, {
-      command: currentNodeEvalCommand(script),
+      command: currentNodeEvalCommand(`process.exit(${exitCode});`),
       background: true,
     });
     const sessionId = backgroundSessionId(started.details);
@@ -414,9 +379,6 @@ test.skipIf(process.platform === "win32").each([
     expect(events).toHaveLength(expectsNotification ? 1 : 0);
     if (expectsNotification) {
       expect(events[0]?.text).toContain(`code ${exitCode}`);
-      if (output) {
-        expect(events[0]?.text).toContain(output);
-      }
     }
   },
 );

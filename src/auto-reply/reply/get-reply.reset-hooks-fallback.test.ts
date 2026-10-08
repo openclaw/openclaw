@@ -21,7 +21,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./commands-core.js", () => ({
   emitResetCommandHooks: (...args: unknown[]) => mocks.emitResetCommandHooks(...args),
 }));
-vi.mock("./commands-core.runtime.js", () => ({
+vi.mock("./commands-reset-hooks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./commands-reset-hooks.js")>()),
   emitResetCommandHooks: (...args: unknown[]) => mocks.emitResetCommandHooks(...args),
 }));
 registerGetReplyRuntimeOverrides(mocks);

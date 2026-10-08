@@ -72,6 +72,10 @@ async function handleSessionGoalMutation(
       );
       return;
     }
+    const sessionChanged = () =>
+      new SessionMutationAuthorizationChangedError(
+        errorShape(ErrorCodes.INVALID_REQUEST, "Session changed before its Goal update; retry."),
+      );
     const assertTarget = (current: ReturnType<typeof resolveSessionSharingTarget>) => {
       // Reset can keep the same session ID. Fence the lifecycle and resolved store as well.
       if (
@@ -82,9 +86,7 @@ async function handleSessionGoalMutation(
         current.entry.sessionId !== target.entry.sessionId ||
         current.entry.lifecycleRevision !== target.entry.lifecycleRevision
       ) {
-        throw new SessionMutationAuthorizationChangedError(
-          errorShape(ErrorCodes.INVALID_REQUEST, "Session changed before its Goal update; retry."),
-        );
+        throw sessionChanged();
       }
       const ownershipError = resolvePluginSessionOwnershipError({
         action: "patch",
@@ -111,9 +113,10 @@ async function handleSessionGoalMutation(
     const identity = {
       operationId: request.operationId,
       issuedAtMs: request.issuedAtMs,
-      requestFingerprint: fingerprintSessionGoalRequest({ method, ...request }),
+      requestFingerprint: await fingerprintSessionGoalRequest({ method, ...request }),
       goalId: request.goalId,
     };
+    assertCurrent();
     if (request.action === "resume") {
       const { handleSessionGoalResumeChat } = await import("./chat-send-handler.js");
       await handleSessionGoalResumeChat(
@@ -147,13 +150,7 @@ async function handleSessionGoalMutation(
             ...("note" in request && request.note ? { note: request.note } : {}),
           }
     ) satisfies SessionGoalOperation;
-    const assertRouting = captureSessionMutationRouting(
-      cfg,
-      () =>
-        new SessionMutationAuthorizationChangedError(
-          errorShape(ErrorCodes.INVALID_REQUEST, "Session changed before its Goal update; retry."),
-        ),
-    );
+    const assertRouting = captureSessionMutationRouting(cfg, sessionChanged);
     const source: SessionSourceAssertion = Object.assign(assertCurrent, {
       async prepareSessionSource() {
         const authority = await prepareSessionSourceAuthority(

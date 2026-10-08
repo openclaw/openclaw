@@ -14,6 +14,12 @@ title: "Database layout"
 | Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
+On Windows, plain drive/UNC paths and their extended-length (`\\?\`) spellings
+identify the same shared-state database owner. Opens, write admission, retained
+connections, and cleanup use the same path identity; native SQLite opens still
+support long filenames. This requires no schema or stored-data migration and
+does not change update backups or rollback.
+
 The shared-state database retains `task_runs`, `task_delivery_state`, and `flow_runs`, including their existing columns and indexes. The Tasks and TaskFlow runtime, tools, and UI are removed; their non-Cron rows remain untouched and unused by the runtime. Cron owns only the `runtime = 'cron'` rows in `task_runs` through its history store. It does not move history to another table. Native execution and completion remain with the subagent registry and harness-binding owners; native Codex pending assignments use metadata in the existing parent binding, not a new table. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
 In agent schema 23, `transcript_events` retains original event JSON as either
@@ -73,6 +79,30 @@ Rows cascade with their session node, and reads select the transcript session ID
 so reactions from a previous reset instance remain inert.
 The table is not secret storage. See the
 [same-version contract](/reference/database-schemas/versioning#versioning-contract).
+
+### Session run outcomes and liveness
+
+The canonical session entry's optional `status` stores only `done`, `failed`,
+`killed`, `timeout`, or `interrupted`. Starting a run clears the previous outcome.
+`GatewaySessionRow.status` may also expose `running` or `queued`, derived from the
+run registry and queue owner rather than durable session metadata. Storage workers
+receive live session keys from their scheduling owner and revalidate protection
+before committing maintenance or cold-storage changes.
+
+Restart and crash recovery use the existing recovery claim, run-fence, reply-phase,
+and delivery fields. Eligible admissions arm their claim with the user-turn write,
+including turns without a channel route. An interrupted outcome alone does not
+authorize resumption or delivery. See [Restart recovery](/gateway/restart-recovery).
+
+Doctor and startup share a one-time normalization of legacy persisted `running`
+and `queued` entries to `interrupted`, before canonical session reads; verified legacy
+yields retain an unset outcome so their child continuation keeps ownership. Eligible
+legacy `running` entries acquire recovery custody if they lack a claim; existing
+claims, transcripts, and activity timestamps remain intact. This changes no table or schema
+version: the existing SQL status index still projects `interrupted` as `failed`;
+canonical entry JSON retains the distinct outcome. Older releases still infer
+activity from their persisted flag, so they cannot provide the new liveness or
+claim-only recovery behavior when reopened on these entries.
 
 ### Activity session recaps
 
@@ -439,7 +469,7 @@ This change requires no schema migration. See the
 
 [Managed worktree acceleration](/concepts/managed-worktrees#filesystem-acceleration) uses the first-use `worktree_templates` table in the shared state database. Each row records a reconstructible source template: repository and Git common directory, destination root, filesystem backend, artifact path, source commit, checkout content key, preparation status, and creation and last-use timestamps. The cache key allows one template per repository and destination root. The template contains no provisioned ignored files or repository setup output.
 
-The worktree service owns template creation, reuse, invalidation, and cleanup under its existing allocation lease. It reserves a `preparing` row before creating the artifact and publishes `ready` only after preparation completes. Durable mutations recheck the lease inside synchronous state transactions; filesystem work runs outside those transactions. Cleanup uses the reserved template ID so an old operation cannot delete its replacement. Templates are replaced when the commit or checkout policy changes and retired after seven days without use.
+The worktree service owns template creation, reuse, invalidation, and cleanup under a mutation lease for each template cache key. It reserves a `preparing` row before creating the artifact and publishes `ready` only after preparation completes. Persisted readers retain the generation while checkouts clone independently; cleanup and replacement defer while readers remain. Durable mutations recheck custody inside synchronous state transactions; filesystem work runs outside those transactions. Cleanup uses the reserved template ID so an old operation cannot delete its replacement. Templates are replaced when the commit or checkout policy changes and retired after seven days without use.
 
 The additive table is ensured on first use and does not change the numeric database schema version. Existing worktree and snapshot records retain their meaning; no existing checkout is migrated or moved. Template artifacts are reconstructible, while registered worktree contents and recovery snapshots retain their existing preservation rules.
 

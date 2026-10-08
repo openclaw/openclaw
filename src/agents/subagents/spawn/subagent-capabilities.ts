@@ -70,16 +70,6 @@ function isDashboardSessionKey(sessionKey: string): boolean {
   return parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
 }
 
-function canInspectStoredSubagentEnvelope(
-  sessionKey: string,
-  store?: SessionCapabilityStore,
-): boolean {
-  return (
-    shouldInspectStoredSubagentEnvelope(sessionKey) ||
-    (Boolean(store) && isDashboardSessionKey(sessionKey))
-  );
-}
-
 function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string): boolean {
   const leftAgentId = normalizeOptionalLowercaseString(
     parseAgentSessionKey(leftSessionKey)?.agentId,
@@ -367,7 +357,8 @@ function resolveStoredSubagentToolPolicy(
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (
     !normalizedSessionKey ||
-    !canInspectStoredSubagentEnvelope(normalizedSessionKey, opts?.store)
+    (!shouldInspectStoredSubagentEnvelope(normalizedSessionKey) &&
+      !(opts?.store && isDashboardSessionKey(normalizedSessionKey)))
   ) {
     return undefined;
   }

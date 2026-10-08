@@ -36,10 +36,7 @@ import {
   prepareGatewaySkillAuthoring,
   invalidateSkillAuthoringForOtherRequester,
 } from "../skill-library-authoring.js";
-import {
-  terminalizeRestartSafeChatAdmission,
-  type RestartSafeChatTerminalState,
-} from "./chat-restart-recovery.js";
+import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import {
   bindChatSendPreparedMediaCustody,
@@ -86,7 +83,6 @@ async function handleChatSendWithOptions(
 ): Promise<void> {
   const {
     req,
-    params,
     respond,
     context,
     client,
@@ -99,7 +95,7 @@ async function handleChatSendWithOptions(
   const isDirectExternalUser =
     externalAuthorityAdmission !== undefined && isDirectGatewayUserClient(client);
   const setup = await prepareAndAdmitChatSend(
-    { params, respond, context, client, hasCurrentClientAuthority, sessionMutationAuthorization },
+    handlerOptions,
     onAdmissionOwned,
     { ...options, isDirectExternalUser },
     diagnostics,
@@ -207,17 +203,8 @@ async function handleChatSendWithOptions(
     : undefined;
 
   const admissionStartedAt = Date.now();
-  const terminalizeRestartSafeAdmission = async (
-    terminalState: RestartSafeChatTerminalState,
-  ): Promise<boolean> =>
-    await terminalizeRestartSafeChatAdmission({
-      admittedSessionId,
-      clientRunId,
-      sessionKey,
-      startedAt: admissionStartedAt,
-      storePath,
-      ...terminalState,
-    });
+  const terminalizeRestartSafeAdmission = (terminalState: RestartSafeChatTerminalState) =>
+    admission.settleTerminal({ ...terminalState, startedAt: admissionStartedAt });
   let pendingStageAttempted = false;
   let replyAdmissionTicket: ReturnType<typeof reserveReplyAdmissionTicket>;
   try {
@@ -252,10 +239,13 @@ async function handleChatSendWithOptions(
       goalCommitGuard,
     });
     const {
-      persist: persistGatewayUserTurnTranscript,
+      persist: persistUserTurnTranscript,
       recorder: userTurnRecorder,
       replyContextFieldsPromise,
     } = userTurn;
+    const persistGatewayUserTurnTranscript = (
+      ...args: Parameters<typeof persistUserTurnTranscript>
+    ) => admission.withInputCommitPublication(() => persistUserTurnTranscript(...args));
     bindPreparedMediaRecorder(userTurnRecorder);
     phase?.mark("preparation");
     const preparedUserTurn = prepareChatSendUserTurn({
@@ -310,10 +300,11 @@ async function handleChatSendWithOptions(
       userTurn.baseInput.display !== false &&
       (!systemInputProvenance || systemInputProvenance.kind === "external_user") &&
       !isInternalTextSlashCommandTurn &&
-      !request.goalOperation
+      !request.goalOperation &&
+      !restartSafeAdmission?.retryExpectedState
     ) {
       // ACK transfers input custody. Persist approved source bytes before
-      // either a direct runtime or the in-memory collector can accept them.
+      // dispatch; a validated durable retry already owns its transcript input.
       pendingStageAttempted = true;
       const assertCustodyLifetimeCurrent = () => {
         admission.assertWorkAdmissionCurrent();
@@ -438,8 +429,8 @@ async function handleChatSendWithOptions(
       // retries adopt the durable turn without submitting it twice.
       if (
         !persistedUserTurn ||
-        persistedUserTurn.sessionEntry?.status !== "running" ||
-        persistedUserTurn.sessionEntry.restartRecoveryDeliveryRunId !== clientRunId
+        persistedUserTurn.sessionEntry?.restartRecoveryDeliveryRunId !== clientRunId ||
+        persistedUserTurn.sessionEntry.restartRecoveryDeliverySourceRunId !== clientRunId
       ) {
         throw new Error("chat turn was not durably admitted");
       }
@@ -450,6 +441,7 @@ async function handleChatSendWithOptions(
         activeRunAbort.controller.abort(createAgentRunRestartAbortError());
       }
       if (activeRunAbort.controller.signal.aborted) {
+        // No runtime adopted this durable input; retain its same-ID restart retry.
         if (
           !(await terminalizeRestartSafeAdmission({
             retryable: activeRunAbort.entry?.abortStopReason === "restart",

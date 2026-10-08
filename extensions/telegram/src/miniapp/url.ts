@@ -1,4 +1,3 @@
-// Telegram Mini App published URL resolution.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveTailnetHostWithRunner,

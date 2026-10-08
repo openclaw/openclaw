@@ -64,21 +64,17 @@ export async function resolvePrivateCommandRouteTargets(params: {
       candidate.channel === originChannel
         ? (params.commandParams.ctx.AccountId ?? undefined)
         : undefined;
-    const capabilities = native.describeDeliveryCapabilities({
+    const approvalContext = () => ({
       cfg: params.commandParams.cfg,
       accountId,
-      approvalKind: "exec",
+      approvalKind: "exec" as const,
       request,
     });
+    const capabilities = native.describeDeliveryCapabilities(approvalContext());
     if (!capabilities.enabled || !capabilities.supportsApproverDmSurface) {
       continue;
     }
-    const resolvedTargets = await native.resolveApproverDmTargets({
-      cfg: params.commandParams.cfg,
-      accountId,
-      approvalKind: "exec",
-      request,
-    });
+    const resolvedTargets = await native.resolveApproverDmTargets(approvalContext());
     for (const target of resolvedTargets) {
       targets.push({
         channel: candidate.channel,

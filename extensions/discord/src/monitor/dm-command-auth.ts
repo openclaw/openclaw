@@ -25,6 +25,20 @@ type DiscordIngressSender = {
   authorKind?: "user" | "bot";
 };
 
+type DiscordCommandAccessParams = {
+  accountId: string;
+  sender: DiscordIngressSender;
+  allowNameMatching: boolean;
+  cfg?: OpenClawConfig;
+  token?: string;
+  rest?: RequestClient;
+  conversationId?: string;
+  conversationParentId?: string;
+  conversationThreadId?: string;
+  contextBinding?: ChannelIngressContextBinding;
+  minIdentifierAuthentication?: IdentifierAuthentication;
+};
+
 function createDiscordDmIngressSubject(
   sender: DiscordIngressSender,
 ): ChannelIngressIdentitySubjectInput {
@@ -101,53 +115,44 @@ function createDiscordIngressResolver(params: {
   });
 }
 
-function syntheticAccessGroupMembership(
-  groupName: string,
-  allowed: boolean,
-): AccessGroupMembershipFact {
-  return allowed
-    ? {
-        kind: "matched",
-        groupName,
-        source: "dynamic",
-        matchedEntryIds: [groupName],
-      }
-    : {
-        kind: "not-matched",
-        groupName,
-        source: "dynamic",
-      };
-}
-
-export async function resolveDiscordDmCommandAccess(params: {
-  accountId: string;
-  dmPolicy: DiscordDmPolicy;
-  configuredAllowFrom: string[];
-  sender: DiscordIngressSender;
-  allowNameMatching: boolean;
-  cfg?: OpenClawConfig;
-  token?: string;
-  rest?: RequestClient;
-  readStoreAllowFrom?: ResolveChannelMessageIngressParams["readStoreAllowFrom"];
-  eventKind?: ChannelIngressEventInput["kind"];
-  conversationId?: string;
-  conversationParentId?: string;
-  conversationThreadId?: string;
-  contextBinding?: ChannelIngressContextBinding;
-  minIdentifierAuthentication?: IdentifierAuthentication;
-}) {
-  return await createDiscordIngressResolver({
-    ...params,
-    useDefaultPairingStore: params.readStoreAllowFrom == null,
-  }).message({
+function createDiscordCommandContext(
+  params: DiscordCommandAccessParams,
+  kind: "direct" | "channel",
+  defaultId: string,
+) {
+  return {
     subject: createDiscordDmIngressSubject(params.sender),
     conversation: {
-      kind: "direct",
-      id: params.conversationId ?? params.sender.id,
+      kind,
+      id: params.conversationId ?? defaultId,
       parentId: params.conversationParentId,
       threadId: params.conversationThreadId,
     },
     ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
+    policy: {
+      mutableIdentifierMatching: params.allowNameMatching
+        ? ("enabled" as const)
+        : ("disabled" as const),
+      ...(params.minIdentifierAuthentication
+        ? { minIdentifierAuthentication: params.minIdentifierAuthentication }
+        : {}),
+    },
+  };
+}
+
+export async function resolveDiscordDmCommandAccess(
+  params: DiscordCommandAccessParams & {
+    dmPolicy: DiscordDmPolicy;
+    configuredAllowFrom: string[];
+    readStoreAllowFrom?: ResolveChannelMessageIngressParams["readStoreAllowFrom"];
+    eventKind?: ChannelIngressEventInput["kind"];
+  },
+) {
+  return await createDiscordIngressResolver({
+    ...params,
+    useDefaultPairingStore: params.readStoreAllowFrom == null,
+  }).message({
+    ...createDiscordCommandContext(params, "direct", params.sender.id),
     event: {
       kind: params.eventKind ?? "native-command",
       authMode: "inbound",
@@ -155,12 +160,6 @@ export async function resolveDiscordDmCommandAccess(params: {
     },
     dmPolicy: params.dmPolicy,
     groupPolicy: "disabled",
-    policy: {
-      mutableIdentifierMatching: params.allowNameMatching ? "enabled" : "disabled",
-      ...(params.minIdentifierAuthentication
-        ? { minIdentifierAuthentication: params.minIdentifierAuthentication }
-        : {}),
-    },
     allowFrom: params.configuredAllowFrom,
     command: {
       hasControlCommand: false,
@@ -169,48 +168,34 @@ export async function resolveDiscordDmCommandAccess(params: {
   });
 }
 
-export async function resolveDiscordTextCommandAccess(params: {
-  accountId: string;
-  sender: DiscordIngressSender;
-  ownerAllowFrom?: string[];
-  memberAccessConfigured: boolean;
-  memberAllowed: boolean;
-  allowNameMatching: boolean;
-  allowTextCommands: boolean;
-  hasControlCommand: boolean;
-  cfg?: OpenClawConfig;
-  token?: string;
-  rest?: RequestClient;
-  conversationId?: string;
-  conversationParentId?: string;
-  conversationThreadId?: string;
-  contextBinding?: ChannelIngressContextBinding;
-  minIdentifierAuthentication?: IdentifierAuthentication;
-}) {
+export async function resolveDiscordTextCommandAccess(
+  params: DiscordCommandAccessParams & {
+    ownerAllowFrom?: string[];
+    memberAccessConfigured: boolean;
+    memberAllowed: boolean;
+    allowTextCommands: boolean;
+    hasControlCommand: boolean;
+  },
+) {
   const ownerAllowFrom = (params.ownerAllowFrom ?? []).filter((entry) => entry.trim() !== "*");
   const memberAccessGroup = "discord-member-access";
   const commandGroup = params.memberAccessConfigured ? [`accessGroup:${memberAccessGroup}`] : [];
-  const accessGroupMembership = params.memberAccessConfigured
-    ? [syntheticAccessGroupMembership(memberAccessGroup, params.memberAllowed)]
+  const accessGroupMembership: AccessGroupMembershipFact[] = params.memberAccessConfigured
+    ? [
+        {
+          groupName: memberAccessGroup,
+          source: "dynamic",
+          ...(params.memberAllowed
+            ? ({ kind: "matched", matchedEntryIds: [memberAccessGroup] } as const)
+            : ({ kind: "not-matched" } as const)),
+        },
+      ]
     : [];
   return await createDiscordIngressResolver(params).command({
-    subject: createDiscordDmIngressSubject(params.sender),
-    conversation: {
-      kind: "channel",
-      id: params.conversationId ?? "discord-command",
-      parentId: params.conversationParentId,
-      threadId: params.conversationThreadId,
-    },
-    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
+    ...createDiscordCommandContext(params, "channel", "discord-command"),
     accessGroupMembership,
     dmPolicy: "allowlist",
     groupPolicy: "allowlist",
-    policy: {
-      mutableIdentifierMatching: params.allowNameMatching ? "enabled" : "disabled",
-      ...(params.minIdentifierAuthentication
-        ? { minIdentifierAuthentication: params.minIdentifierAuthentication }
-        : {}),
-    },
     allowFrom: ownerAllowFrom,
     groupAllowFrom: commandGroup,
     command: {

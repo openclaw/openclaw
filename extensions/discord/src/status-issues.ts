@@ -9,6 +9,7 @@ import {
   resolveEnabledConfiguredAccountId,
 } from "openclaw/plugin-sdk/status-helpers";
 import {
+  asFiniteNumber,
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -21,10 +22,7 @@ function readDiscordPermissionsAuditSummary(value: unknown) {
   if (!isRecord(value)) {
     return {};
   }
-  const unresolvedChannels =
-    typeof value.unresolvedChannels === "number" && Number.isFinite(value.unresolvedChannels)
-      ? value.unresolvedChannels
-      : undefined;
+  const unresolvedChannels = asFiniteNumber(value.unresolvedChannels);
   const channelsRaw = value.channels;
   const channels = Array.isArray(channelsRaw)
     ? channelsRaw
@@ -68,6 +66,7 @@ export function collectDiscordStatusIssues(
     if (!accountId) {
       continue;
     }
+    const scope = { channel: "discord", accountId } as const;
 
     if (account.groupPolicy === "allowlist" && account.guildsConfigured === 0) {
       const guildGuidance =
@@ -75,8 +74,7 @@ export function collectDiscordStatusIssues(
           ? "Add your server under channels.discord.guilds. If channels.discord.accounts.default.guilds is set, add it there instead."
           : `Add your server under channels.discord.accounts.${accountId}.guilds.`;
       issues.push({
-        channel: "discord",
-        accountId,
+        ...scope,
         kind: "config",
         message:
           'Discord guild messages are blocked: effective groupPolicy is "allowlist", but no guilds are configured.',
@@ -86,8 +84,7 @@ export function collectDiscordStatusIssues(
 
     if (isDiscordMessageContentIntentDisabled(account.application)) {
       issues.push({
-        channel: "discord",
-        accountId,
+        ...scope,
         kind: "intent",
         message: "Message Content Intent is disabled. Bot may not see normal channel messages.",
         fix: "Enable Message Content Intent in Discord Dev Portal → Bot → Privileged Gateway Intents, or require mention-only operation.",
@@ -97,8 +94,7 @@ export function collectDiscordStatusIssues(
     const audit = readDiscordPermissionsAuditSummary(account.audit);
     if (audit.unresolvedChannels && audit.unresolvedChannels > 0) {
       issues.push({
-        channel: "discord",
-        accountId,
+        ...scope,
         kind: "config",
         message: `Some configured guild channels are not numeric IDs (unresolvedChannels=${audit.unresolvedChannels}). Permission audit can only check numeric channel IDs.`,
         fix: "Use numeric channel IDs as keys in channels.discord.guilds.*.channels (then rerun channels status --probe).",
@@ -112,8 +108,7 @@ export function collectDiscordStatusIssues(
       const error = channel.error ? `: ${channel.error}` : "";
       const baseMessage = `Channel ${channel.channelId} permission check failed.${missing}${error}`;
       issues.push({
-        channel: "discord",
-        accountId,
+        ...scope,
         kind: "permissions",
         message: appendMatchMetadata(baseMessage, {
           matchKey: channel.matchKey,

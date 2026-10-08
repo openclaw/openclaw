@@ -39,13 +39,14 @@ export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
     if (capabilities.openDmRequiresAllowFromWildcard === false) {
       continue;
     }
-    const mode = capabilities.dmAllowFromMode;
-    ensureOpenDmPolicyAllowFromWildcard({
-      entry: channelConfig,
-      mode,
-      pathPrefix: `channels.${channelName}`,
-      changes,
-    });
+    const repair = (entry: Record<string, unknown>, pathPrefix: string) =>
+      ensureOpenDmPolicyAllowFromWildcard({
+        entry,
+        mode: capabilities.dmAllowFromMode,
+        pathPrefix,
+        changes,
+      });
+    repair(channelConfig, `channels.${channelName}`);
 
     const accounts = asNullableRecord(channelConfig.accounts);
     if (!accounts) {
@@ -53,12 +54,10 @@ export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
     }
     for (const [accountName, accountConfig] of Object.entries(accounts)) {
       if (accountConfig && typeof accountConfig === "object") {
-        ensureOpenDmPolicyAllowFromWildcard({
-          entry: accountConfig as Record<string, unknown>,
-          mode,
-          pathPrefix: `channels.${channelName}.accounts.${accountName}`,
-          changes,
-        });
+        repair(
+          accountConfig as Record<string, unknown>,
+          `channels.${channelName}.accounts.${accountName}`,
+        );
       }
     }
   }

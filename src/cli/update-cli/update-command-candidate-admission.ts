@@ -281,14 +281,13 @@ export async function withUpdateCandidateAdmission<T>(
       defaultRuntime.error(
         "Warning: Configuration changed after candidate admission; rechecking the retained candidate.",
       );
-      if (params.stagedPackage) {
-        return await inspect(params.stagedPackage);
-      }
     }
+    const recheckStaged = params.candidateAdmission && params.stagedPackage;
     if (
-      target.packageAlreadyCurrent ||
-      !usesCandidateUpdateAdmission(opts, prepared.installKind) ||
-      target.updateInstallKind !== "package"
+      !recheckStaged &&
+      (target.packageAlreadyCurrent ||
+        !usesCandidateUpdateAdmission(opts, prepared.installKind) ||
+        target.updateInstallKind !== "package")
     ) {
       applyUpdateCandidateAdmission({
         target,

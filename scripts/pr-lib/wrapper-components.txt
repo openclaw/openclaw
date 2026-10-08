@@ -35,6 +35,7 @@ packages/gateway-protocol/src/schema/worker-computer.ts
 packages/gateway-protocol/src/schema/worker-gateway-tool.ts
 packages/gateway-protocol/src/schema/worker-protocol-primitives.ts
 packages/gateway-protocol/src/schema/worker-session-tools.ts
+packages/gateway-protocol/src/schema/worktrees.ts
 packages/gateway-protocol/src/secret-ref-contract.ts
 packages/gateway-protocol/src/session-agent-status.ts
 packages/gateway-protocol/src/svg-image.ts
@@ -72,6 +73,7 @@ packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts
 packages/memory-host-sdk/src/host/sqlite-vec-platform-variant.ts
 packages/memory-host-sdk/src/host/sqlite-vec.ts
 packages/model-catalog-core/package.json
+packages/model-catalog-core/src/canonical-model-key.ts
 packages/model-catalog-core/src/configured-model-refs.ts
 packages/model-catalog-core/src/index.ts
 packages/model-catalog-core/src/model-catalog-context-windows.ts
@@ -110,6 +112,7 @@ packages/normalization-core/src/promise-like.ts
 packages/normalization-core/src/record-coerce.ts
 packages/normalization-core/src/response-bytes.ts
 packages/normalization-core/src/result.ts
+packages/normalization-core/src/stable-node-path.ts
 packages/normalization-core/src/stable-stringify.ts
 packages/normalization-core/src/string-coerce.ts
 packages/normalization-core/src/string-normalization.ts
@@ -321,6 +324,8 @@ src/agents/worktrees/git-worktree-operations.runtime.ts
 src/agents/worktrees/git.ts
 src/agents/worktrees/name.ts
 src/agents/worktrees/owner.ts
+src/agents/worktrees/pending-slots.ts
+src/agents/worktrees/pending-slots.worker.ts
 src/agents/worktrees/preparation-timing.ts
 src/agents/worktrees/provisioned-file-inspection.ts
 src/agents/worktrees/provisioned-snapshot-store.ts
@@ -580,7 +585,6 @@ src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
 src/config/sessions/auth-profile-override-provenance.ts
-src/config/sessions/conversation-link.ts
 src/config/sessions/goals-operations.types.ts
 src/config/sessions/migration-required.ts
 src/config/sessions/model-override-provenance.ts
@@ -784,7 +788,9 @@ src/infra/agent-run-registry.ts
 src/infra/agent-run-usage.ts
 src/infra/approval-resolution-ref.ts
 src/infra/backoff.ts
+src/infra/backup-audit-paths.ts
 src/infra/backup-scratch.ts
+src/infra/backup-volatile-filter.ts
 src/infra/boundary-file-read.ts
 src/infra/boundary-path.ts
 src/infra/bun-sqlite-close-probe.ts
@@ -830,6 +836,7 @@ src/infra/ed25519-signature.ts
 src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
+src/infra/child-runtime-viability.ts
 src/infra/error-graph-internal.ts
 src/infra/errors.ts
 src/infra/exec-allowlist-pattern.ts
@@ -1034,6 +1041,7 @@ src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-retirement.ts
 src/infra/sqlite-snapshot-single-flight.ts
+src/infra/sqlite-temp-generation-schema.ts
 src/infra/sqlite-snapshot-source.ts
 src/infra/sqlite-snapshot-staging-allocation.ts
 src/infra/sqlite-snapshot-staging-error.ts
@@ -1069,6 +1077,7 @@ src/infra/sqlite-worker-request-class.ts
 src/infra/sqlite-worker-state-context.ts
 src/infra/sqlite-worker-store.ts
 src/infra/sqlite-worker-transfer.ts
+src/infra/stable-node-path.ts
 src/infra/stale-lock-file.ts
 src/infra/startup-maintenance-required.ts
 src/infra/startup-migration-checkpoint.ts
@@ -1086,6 +1095,7 @@ src/infra/tmp-openclaw-dir.ts
 src/infra/update-channels.ts
 src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-result.ts
+src/infra/update-failure-facts-format.ts
 src/infra/update-failure-facts.ts
 src/infra/update-failure-public-codes.ts
 src/infra/update-failure-public-identifiers.ts
@@ -1169,6 +1179,7 @@ src/logging/redact-internal.ts
 src/logging/redact-json-tokens.ts
 src/logging/redact-json.ts
 src/logging/redact-linear-matchers.ts
+src/logging/redact-mask.ts
 src/logging/redact-pattern-runtime.ts
 src/logging/redact-patterns.ts
 src/logging/redact-pem.ts
@@ -1228,6 +1239,7 @@ src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/mention-inbox-record.ts
 src/plugins/compat/model-account-connect-record.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
+src/plugins/compat/progress-receipt-handoff-record.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/reply-tool-authority-record.ts
@@ -1580,6 +1592,7 @@ src/skills/skill-library-error.ts
 src/skills/lifecycle/upload-store-error.ts
 src/skills/runtime/refresh-watch-targets.types.ts
 src/state/agent-creation-claim.ts
+src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
 src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup.ts
@@ -1602,6 +1615,7 @@ src/state/openclaw-agent-context-engine-turn-outbox-schema.ts
 src/state/openclaw-agent-db-additive-columns.ts
 src/state/openclaw-agent-db-admission.ts
 src/state/openclaw-agent-db-contract.ts
+src/state/openclaw-agent-db-discovery-paths.ts
 src/state/openclaw-agent-db-disposal.ts
 src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts
@@ -1636,9 +1650,11 @@ src/state/openclaw-agent-db.paths.ts
 src/state/openclaw-agent-db.ts
 src/state/openclaw-agent-db.wal.ts
 src/state/openclaw-agent-execution-cleanup.ts
+src/state/openclaw-agent-execution-config.ts
 src/state/openclaw-agent-execution-contract.ts
 src/state/openclaw-agent-execution-incognito.ts
 src/state/openclaw-agent-execution-native.ts
+src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-message-tool-outcome-schema.ts

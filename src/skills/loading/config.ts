@@ -93,7 +93,7 @@ export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: ReadonlySet
   if (!BUNDLED_SOURCES.has(resolveSkillSource(entry.skill))) {
     return true;
   }
-  const key = resolveSkillKey(entry.skill, entry);
+  const key = resolveSkillKey(entry);
   return allowlist.has(key) || allowlist.has(entry.skill.name);
 }
 
@@ -106,7 +106,7 @@ export function shouldIncludeSkill(params: {
   platform?: string;
 }): boolean {
   const { entry, config, bundledAllowlist, eligibility } = params;
-  const skillKey = resolveSkillKey(entry.skill, entry);
+  const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
 
   if (skillConfig?.enabled === false) {
@@ -165,7 +165,7 @@ export async function prepareSkillBinaryProbe(
         entry.skill.name,
         opts?.skillFilter,
         opts?.skillOverrides,
-        resolveSkillKey(entry.skill, entry),
+        resolveSkillKey(entry),
       )
     ) {
       continue;

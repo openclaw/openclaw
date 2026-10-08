@@ -16,7 +16,7 @@ type FollowupQueueState = {
   items: FollowupRun[];
   draining: boolean;
   /** Exact operational drain generation; recovery may retire only this owner. */
-  drainOwner?: object;
+  drainOwner?: { rescheduleRequested: boolean };
   /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
   inFlight: Set<FollowupRun>;
   lastEnqueuedAt: number;
@@ -69,10 +69,7 @@ export function* followupQueueSources(
 
 export function getExistingFollowupQueue(key: string): FollowupQueueState | undefined {
   const cleaned = key.trim();
-  if (!cleaned) {
-    return undefined;
-  }
-  return FOLLOWUP_QUEUES.get(cleaned);
+  return cleaned ? FOLLOWUP_QUEUES.get(cleaned) : undefined;
 }
 
 export function hasPendingFollowupQueueWork(keys: Iterable<string | undefined>): boolean {
@@ -131,16 +128,7 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
 
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
-  if (existing) {
-    applyQueueRuntimeSettings({
-      target: existing,
-      settings,
-    });
-    trimSummaryElisionsToCap(existing);
-    return existing;
-  }
-
-  const created: FollowupQueueState = {
+  const queue: FollowupQueueState = existing ?? {
     abortController: new AbortController(),
     items: [],
     draining: false,
@@ -159,11 +147,15 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     evictedSummaryCount: 0,
   };
   applyQueueRuntimeSettings({
-    target: created,
+    target: queue,
     settings,
   });
-  FOLLOWUP_QUEUES.set(key, created);
-  return created;
+  if (existing) {
+    trimSummaryElisionsToCap(queue);
+  } else {
+    FOLLOWUP_QUEUES.set(key, queue);
+  }
+  return queue;
 }
 
 export function clearFollowupQueue(key: string): number {

@@ -211,9 +211,8 @@ internal class WearRealtimeTalkClient(
             }
           }
           handleChannelFailure(attempt)
-        } catch (err: CancellationException) {
-          throw err
-        } catch (_: Throwable) {
+        } catch (err: Throwable) {
+          if (err is CancellationException) throw err
           handleChannelFailure(attempt)
         }
       }
@@ -252,14 +251,8 @@ internal class WearRealtimeTalkClient(
       AudioRecord
         .Builder()
         .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-        .setAudioFormat(
-          AudioFormat
-            .Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ)
-            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-            .build(),
-        ).setBufferSizeInBytes(maxOf(minimumBuffer * 2, frameBytes * 4))
+        .setAudioFormat(audioFormat(AudioFormat.CHANNEL_IN_MONO))
+        .setBufferSizeInBytes(maxOf(minimumBuffer * 2, frameBytes * 4))
         .build()
     audioRecord = recorder
     check(recorder.state == AudioRecord.STATE_INITIALIZED)
@@ -285,11 +278,17 @@ internal class WearRealtimeTalkClient(
               yield()
               continue
             }
-            sendInputFrame(attempt, buffer.copyOf(evenBytes))
+            val payload = buffer.copyOf(evenBytes)
+            channelLock.withLock {
+              if (isCurrent(attempt)) {
+                withContext(Dispatchers.IO) {
+                  WearRealtimeAudioFraming.write(attempt.resources.output, WearRealtimeAudioFrameType.INPUT_PCM, payload)
+                }
+              }
+            }
           }
-        } catch (err: CancellationException) {
-          throw err
-        } catch (_: Throwable) {
+        } catch (err: Throwable) {
+          if (err is CancellationException) throw err
           handleChannelFailure(attempt)
         } finally {
           synchronized(audioLock) {
@@ -302,18 +301,6 @@ internal class WearRealtimeTalkClient(
           }
         }
       }
-  }
-
-  private suspend fun sendInputFrame(
-    attempt: ActiveAttempt,
-    payload: ByteArray,
-  ) {
-    channelLock.withLock {
-      if (!isCurrent(attempt)) return
-      withContext(Dispatchers.IO) {
-        WearRealtimeAudioFraming.write(attempt.resources.output, WearRealtimeAudioFrameType.INPUT_PCM, payload)
-      }
-    }
   }
 
   private fun writeOutput(
@@ -387,18 +374,20 @@ internal class WearRealtimeTalkClient(
     return AudioTrack
       .Builder()
       .setAudioAttributes(wearSpeechAudioAttributes)
-      .setAudioFormat(
-        AudioFormat
-          .Builder()
-          .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-          .setSampleRate(WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ)
-          .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-          .build(),
-      ).setTransferMode(AudioTrack.MODE_STREAM)
+      .setAudioFormat(audioFormat(AudioFormat.CHANNEL_OUT_MONO))
+      .setTransferMode(AudioTrack.MODE_STREAM)
       .setBufferSizeInBytes(maxOf(minimumBuffer * 2, frameBytes * 4))
       .build()
       .also { check(it.state == AudioTrack.STATE_INITIALIZED) }
   }
+
+  private fun audioFormat(channelMask: Int): AudioFormat =
+    AudioFormat
+      .Builder()
+      .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+      .setSampleRate(WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ)
+      .setChannelMask(channelMask)
+      .build()
 
   private fun schedulePlaybackIdle(attempt: ActiveAttempt) {
     playbackIdleJob?.cancel()
@@ -553,15 +542,13 @@ internal class Pcm16MouthLevelAccumulator(
   fun append(pcm: ByteArray): List<Float> {
     require(pcm.size % PCM_BYTES_PER_SAMPLE == 0)
     return buildList {
-      var byteIndex = 0
-      while (byteIndex < pcm.size) {
+      for (byteIndex in pcm.indices step PCM_BYTES_PER_SAMPLE) {
         val low = pcm[byteIndex].toInt() and 0xff
         val high = pcm[byteIndex + 1].toInt()
         val sample = ((high shl 8) or low).toShort().toInt()
         val normalized = sample / 32_768.0
         squareSum += normalized * normalized
         sampleCount += 1
-        byteIndex += PCM_BYTES_PER_SAMPLE
         if (sampleCount == samplesPerFrame) add(finishFrame())
       }
     }
@@ -574,12 +561,7 @@ internal class Pcm16MouthLevelAccumulator(
     sampleCount = 0
   }
 
-  fun pendingFrameDurationMillis(): Long =
-    if (sampleCount == 0) {
-      0L
-    } else {
-      ceil(sampleCount * 1_000.0 / sampleRateHz).toLong()
-    }
+  fun pendingFrameDurationMillis(): Long = ceil(sampleCount * 1_000.0 / sampleRateHz).toLong()
 
   private fun finishFrame(): Float {
     val rms = sqrt(squareSum / sampleCount)

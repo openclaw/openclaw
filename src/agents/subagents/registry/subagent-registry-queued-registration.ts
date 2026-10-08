@@ -11,7 +11,6 @@ import {
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
 import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
-import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import {
   getCurrentSubagentRunOwner,
   hasPendingSubagentRetirementPublication,
@@ -25,6 +24,7 @@ import {
 } from "./subagent-registry-persistence.js";
 import { waitForQueuedSubagentClaim } from "./subagent-registry-queued-registration-wait.js";
 import { createQueuedRegistrationSettlement } from "./subagent-registry-queued-settlement.js";
+import { createFailedQueuedRun } from "./subagent-registry-run-launch-record.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -303,22 +303,7 @@ export function registerRequiredQueuedSubagent(params: {
         assertRegistryCurrent,
       );
       const published = await settlement.publish("terminal", (current, ownedSession) => {
-        const terminal = structuredClone(current);
-        terminal.endedReason = SUBAGENT_ENDED_REASON_ERROR;
-        terminal.execution = {
-          ...terminal.execution,
-          status: "terminal",
-          endedAt,
-          outcome: { status: "error", error: message, endedAt },
-          ...(!ownedSession ? { suppressSessionEffects: true } : {}),
-        };
-        terminal.queuedLaunch = undefined;
-        terminal.collectorLaunchCleanupPending = true;
-        terminal.completion = {
-          required: false,
-          resultText: message,
-          capturedAt: endedAt,
-        };
+        const terminal = createFailedQueuedRun(current, message, endedAt, ownedSession);
         updateSwarmCollectorCompletion(terminal, manager.getRuntimeConfig(), prepared);
         return terminal;
       });

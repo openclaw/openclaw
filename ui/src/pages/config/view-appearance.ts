@@ -8,6 +8,7 @@ import {
   type TextScaleStop,
 } from "../../app/settings.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { normalizeTerminalFontFamily } from "../../app/terminal-font.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
   loadTypefaceSpecimens,
@@ -142,6 +143,43 @@ function renderTypography(props: ConfigProps, theme: { id: ThemeName; label: str
                 (isUi ? props.setFontUi : props.setFontChat)(normalizeTypefaceOverride(value)),
             }),
           });
+        })}
+        ${renderSettingsRow({
+          title: t("configView.appearance.fonts.terminal"),
+          description: html`${t("configView.appearance.fonts.terminalHint")}<br />${t("configView.appearance.fonts.terminalLigatures")}`,
+          stacked: true,
+          control: html`
+            <input
+              class="settings-input"
+              data-settings-terminal-font
+              aria-label=${t("configView.appearance.fonts.terminal")}
+              placeholder=${t("configView.appearance.fonts.terminalDefault")}
+              maxlength="100"
+              spellcheck="false"
+              .value=${props.terminalFontFamily ?? ""}
+              @input=${(event: Event & { currentTarget: HTMLInputElement }) => event.currentTarget.setCustomValidity("")}
+              @change=${(event: Event & { currentTarget: HTMLInputElement }) => {
+                const input = event.currentTarget;
+                const family = normalizeTerminalFontFamily(input.value);
+                if (input.value.trim() && !family) {
+                  input.setCustomValidity(t("configView.appearance.fonts.terminalInvalid"));
+                  input.reportValidity();
+                  return;
+                }
+                input.setCustomValidity("");
+                input.value = family ?? "";
+                props.setTerminalFontFamily(family);
+              }}
+            />
+            <button
+              class="btn btn--sm"
+              type="button"
+              ?disabled=${!props.terminalFontFamily}
+              @click=${() => props.setTerminalFontFamily(undefined)}
+            >
+              ${t("configView.appearance.fonts.terminalReset")}
+            </button>
+          `,
         })}
         <div class="settings-row settings-row--stacked">
           <div class="settings-typography-preview">

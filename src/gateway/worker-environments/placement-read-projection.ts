@@ -62,6 +62,7 @@ type ProjectionSchema = {
 };
 
 const projectionSchemas = new WeakMap<SqliteSchemaFacts, ProjectionSchema>();
+const PROJECTION_BATCH_SIZE = 250;
 
 function readProjectionSchema(db: DatabaseSync): ProjectionSchema {
   const schema = getAdmittedSqliteSchemaFacts(db);
@@ -259,7 +260,7 @@ export function readWorkerSessionPlacementProjectionInDatabase(
   sessionIds: readonly string[],
   conflictBindings: readonly WorkerPlacementConflictBinding[],
 ): WorkerSessionPlacementReadResult {
-  return runSqliteDeferredTransactionSync(db, () => {
+  const read = () => {
     const schema = readProjectionSchema(db);
     const placements = new Map<string, WorkerSessionPlacementRecord>();
     const moves = new Map<string, WorkerPlacementMoveIntent>();
@@ -268,8 +269,12 @@ export function readWorkerSessionPlacementProjectionInDatabase(
     const workspaceRecoveryPendingSessionIds = new Set<string>();
     const workspaceJournalOwnerSessionIds = new Set<string>();
     const environments = new Map<string, WorkerEnvironmentPlacementFacts>();
-    for (let offset = 0; offset < sessionIds.length; offset += 250) {
-      const rows = readProjectionRows(db, sessionIds.slice(offset, offset + 250), schema);
+    for (let offset = 0; offset < sessionIds.length; offset += PROJECTION_BATCH_SIZE) {
+      const rows = readProjectionRows(
+        db,
+        sessionIds.slice(offset, offset + PROJECTION_BATCH_SIZE),
+        schema,
+      );
       // SAFETY: jsonArrayFrom serializes the $assertType-checked placement selection; fromRow validates its domain shape.
       for (const row of JSON.parse(rows.placements, reviveProjectionInteger) as Selectable<
         StateDatabase["worker_session_placements"]
@@ -361,7 +366,11 @@ export function readWorkerSessionPlacementProjectionInDatabase(
       }
     }
     return { projection, conflictSessionIds };
-  });
+  };
+  // One SELECT has its own snapshot; multiple batches must retain the same read transaction.
+  return sessionIds.length <= PROJECTION_BATCH_SIZE
+    ? read()
+    : runSqliteDeferredTransactionSync(db, read);
 }
 
 export function readWorkerPlacementRecoveryCandidatesInDatabase(

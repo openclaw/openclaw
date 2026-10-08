@@ -12,6 +12,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { getOpenClawStateWorkerOwner } from "../../../state/openclaw-state-worker-owner.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
@@ -19,7 +20,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { scheduleResumeSubagentRun } from "./subagent-registry-lifecycle-attempt.js";
+import { scheduleResumeSubagentRun } from "./subagent-registry-lifecycle-cleanup.js";
 import {
   readLifecycleRun,
   type createRunEntry as createLifecycleRunEntry,
@@ -308,6 +309,12 @@ export function registerDeliveryRetryOwnerTests({
   helperMocks: { safeRemoveAttachmentsDir: Mock<() => Promise<void>> };
   waitForLifecycleState: (assertion: () => void) => Promise<void>;
 }) {
+  async function useRetryTimers() {
+    // Earlier real reads must retire their idle maintenance before the fake clock starts.
+    await getOpenClawStateWorkerOwner().close();
+    vi.useFakeTimers();
+  }
+
   function createAttachmentCleanupFixture(
     beforeWrite?: LifecycleControllerFixtureOptions["beforeWrite"],
   ) {
@@ -328,7 +335,7 @@ export function registerDeliveryRetryOwnerTests({
   }
 
   it("retries a detached cleanup failure and completes on the next attempt", async () => {
-    vi.useFakeTimers();
+    await useRetryTimers();
     helperMocks.safeRemoveAttachmentsDir.mockRejectedValueOnce(new Error("cleanup failed"));
     const { entry, controller, resumeSubagentRun } = createAttachmentCleanupFixture();
 
@@ -352,7 +359,7 @@ export function registerDeliveryRetryOwnerTests({
   });
 
   it("keeps the current retry when a stale cleanup continuation schedules late", async () => {
-    vi.useFakeTimers();
+    await useRetryTimers();
     const entry = createRunEntry({ endedAt: Date.now(), expectsCompletionMessage: true });
     const resumeSubagentRun = vi.fn();
     const controller = createLifecycleController({ entry, resumeSubagentRun });
@@ -375,7 +382,7 @@ export function registerDeliveryRetryOwnerTests({
   it.each(["current", "completed cleanup", "replaced", "cancelled", "restart"] as const)(
     "resumes one scheduled delivery only for its current owner (%s)",
     async (state) => {
-      vi.useFakeTimers();
+      await useRetryTimers();
       const entry = createRunEntry({
         endedAt: Date.now(),
         expectsCompletionMessage: true,
@@ -426,7 +433,7 @@ export function registerDeliveryRetryOwnerTests({
   ] as const)(
     "keeps a required final scheduled after detached cleanup failures (%s)",
     async (outcome) => {
-      vi.useFakeTimers();
+      await useRetryTimers();
       const entry = createRunEntry({
         endedAt: Date.now(),
         expectsCompletionMessage: true,
@@ -509,7 +516,7 @@ export function registerDeliveryRetryOwnerTests({
   );
 
   it("stops retrying detached cleanup failures and leaves the run durably unlocked", async () => {
-    vi.useFakeTimers();
+    await useRetryTimers();
     const persist = vi.fn();
     helperMocks.safeRemoveAttachmentsDir.mockRejectedValue(new Error("cleanup failed"));
     const { entry, controller } = createAttachmentCleanupFixture(persist);

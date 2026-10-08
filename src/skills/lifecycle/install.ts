@@ -491,7 +491,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     );
   }
   const request = {
-    skillKey: resolveSkillKey(entry.skill, entry),
+    skillKey: resolveSkillKey(entry),
     spec,
     preferences: resolveSkillsInstallPreferences(params.config),
     timeoutMs,

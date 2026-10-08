@@ -226,6 +226,45 @@ private func expectRetiredIngress(_ result: Result<some Any, Error>) {
 
 extension GatewayIngressControllerTests {
     @Test @MainActor
+    func `native HTTP policy can read queue snapshots and holds its arrival verdict`() async throws {
+        let server = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [], tls: true)
+        defer { server.stop() }
+        let arrivals = AsyncStream<Void>.makeStream()
+        defer { arrivals.continuation.finish() }
+        var arrival = arrivals.stream.makeAsyncIterator()
+        var status = 200
+        var policyCalls = 0
+        server.httpResponse = { [weak server] _ in
+            policyCalls += 1
+            let connections = server?.activeConnectionCount ?? 0
+            arrivals.continuation.yield()
+            return .init(
+                status: status,
+                headers: ["X-Fixture-Connections": String(connections)],
+                holdHeaders: true)
+        }
+        let origin = try CloudflareAccessOrigin(server.url())
+        let request = GatewayIngressController.request(for: .init(
+            url: server.url(),
+            stableID: "native-http-policy",
+            tls: .init(required: true, expectedFingerprint: server.fingerprint, allowTOFU: false, storeKey: nil)))
+        let pending = Task {
+            defer { arrivals.continuation.finish() }
+            return try await request(URLRequest(url: origin.url), 1024)
+        }
+        defer { pending.cancel() }
+        _ = await arrival.next()
+        #expect(server.requests.count == 1)
+        #expect(policyCalls == 1)
+        status = 403
+        server.releaseHTTPResponses()
+        let (_, response) = try await pending.value
+        #expect(response.statusCode == 200)
+        #expect(response.value(forHTTPHeaderField: "X-Fixture-Connections") == "1")
+        #expect(policyCalls == 1)
+    }
+
+    @Test @MainActor
     func `managed to ordinary native reconnect restores Share metadata without sharing Access auth`() async throws {
         let isolation = await GatewayRegistryTestIsolation()
         defer { isolation.restore() }

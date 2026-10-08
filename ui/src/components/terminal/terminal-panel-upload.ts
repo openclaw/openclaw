@@ -396,6 +396,7 @@ export function renderTerminalPanelActions(params: {
   fullscreen: boolean;
   embedded?: boolean;
   dock: "bottom" | "right" | "main";
+  dockDisabled?: boolean;
   upload: TerminalPanelUploadController;
   sessionPicker: unknown;
   onDock: (dock: "bottom" | "right" | "main") => void;
@@ -423,10 +424,12 @@ export function renderTerminalPanelActions(params: {
                   className: "rail-header__action tp-icon",
                   label: t("terminal.dockBottom"),
                   icon: icons.panelBottomOpen,
+                  disabled: params.dockDisabled,
                   onClick: () => params.onDock("bottom"),
                 })
               : html`${renderDockDestinations({
                   current: params.dock,
+                  disabled: params.dockDisabled,
                   groupClass: "tp-dock-modes",
                   groupLabel: t("terminal.dockMode"),
                   destinations: [

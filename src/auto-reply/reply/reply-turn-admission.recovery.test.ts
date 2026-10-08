@@ -38,6 +38,7 @@ afterEach(async () => {
 });
 function createRecoveryGatewayContext() {
   const recoveryRuntime: GatewayRecoveryRuntime = {
+    prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: vi.fn(),
     waitForAgent: vi.fn(),
@@ -74,7 +75,7 @@ function recoveryFixture(overrides: Partial<SessionEntry> = {}) {
   const entry: SessionEntry = {
     sessionId,
     updatedAt: 100,
-    status: "running",
+    status: "interrupted",
     abortedLastRun: true,
     ...overrides,
   };
@@ -209,7 +210,9 @@ it("keeps deferred owner release retries from retaining a successor", async () =
 });
 
 it("settles a committed recovery claim without replay when preparation changes", async () => {
-  const f = recoveryFixture();
+  const f = recoveryFixture({
+    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+  });
   const predecessor = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
   const claimed = createDeferred();
   const release = createDeferred();
@@ -376,7 +379,9 @@ it.each([
 it.each(["started", "cancelled", "replaced"] as const)(
   "waits for reserved startup recovery before visible input: %s",
   async (outcome) => {
-    const f = recoveryFixture();
+    const f = recoveryFixture({
+      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+    });
     const owner = await f.begin({ owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER });
     const admission = f.wait({ waitForActive: false });
     await setImmediate();

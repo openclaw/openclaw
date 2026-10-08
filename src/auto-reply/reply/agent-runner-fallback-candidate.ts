@@ -53,7 +53,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     readSourceReplyDeliveryRuntime(turn.followupRun.run) ??
     createSourceReplyDeliveryRuntime({
       origin: sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin ?? "stable_policy",
-      initialMode: turn.followupRun.run.sourceReplyDeliveryMode ?? "automatic",
+      initialMode:
+        turn.followupRun.run.sourceReplyDeliveryMode ??
+        turn.opts?.sourceReplyDeliveryMode ??
+        "automatic",
       projections: [turn.followupRun.run, ...(turn.opts ? [turn.opts] : [])],
       promptComponentByMode: { automatic: "", message_tool_only: "" },
       promptComponentOffset: undefined,
@@ -102,7 +105,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     });
     return {
       candidateRun,
-      sessionRuntimeOverride,
       ...resolveRunEntryCliRuntime({
         config: params.runtimeConfig,
         provider,
@@ -237,7 +239,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
           sessionEntry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
-          agentRuntime: runtime.sessionRuntimeOverride,
+          agentRuntime: runOptions.agentHarnessRuntimeOverride,
         });
         const candidateThinkLevel = resolveRunThinkingLevelForFallbackCandidate({
           cfg: params.runtimeConfig,

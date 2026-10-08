@@ -356,7 +356,7 @@ it.skipIf(process.platform !== "linux")(
             }
             const entry: unknown = JSON.parse(row.entry_json);
             expect(entry).toMatchObject({
-              status: "running",
+              status: "interrupted",
               abortedLastRun: true,
               mainRestartRecovery: {
                 cycleId: expect.any(String),

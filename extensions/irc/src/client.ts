@@ -91,8 +91,7 @@ function toIrcError(err: unknown): Error {
 let nickCollisionFallbackSeq = 0;
 
 function buildFallbackNick(nick: string): string {
-  const normalized = nick.replace(/\s+/g, "");
-  const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
+  const safe = nick.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
   const seq = ++nickCollisionFallbackSeq;
   const suffix = seq === 1 ? "_" : `_${seq}`;
@@ -226,7 +225,6 @@ export async function connectIrcClient(options: IrcClientOptions) {
     }
     const lineOverheadBytes = Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
-    // Encode the original text with the reference so escapes are not decoded twice.
     let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
     const chunks: string[] = [];
     while (remaining.length > 0) {
@@ -416,8 +414,15 @@ export async function connectIrcClient(options: IrcClientOptions) {
 
   socket.once("connect", () => {
     try {
-      if (options.password && options.password.trim()) {
-        sendRaw(`PASS ${options.password.trim()}`);
+      const password = options.password?.trim();
+      if (password) {
+        // Servers read only the first word of a middle parameter, so a passphrase
+        // with spaces or a leading ":" must go in the trailing parameter.
+        sendRaw(
+          password.includes(" ") || password.startsWith(":")
+            ? `PASS :${password}`
+            : `PASS ${password}`,
+        );
       }
       sendRaw(`NICK ${options.nick.trim()}`);
       sendRaw(`USER ${options.username.trim()} 0 * :${sanitizeIrcOutboundText(options.realname)}`);

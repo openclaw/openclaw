@@ -588,6 +588,10 @@ export function hasLiveAgentRunContext(runId: string): boolean {
   );
 }
 
+export function listLiveAgentRunIds(): string[] {
+  return [...getAgentRunRegistryState().contexts.keys()].filter(hasLiveAgentRunContext);
+}
+
 export function recordAgentRunModel(runId: string, model: AgentRunModel | undefined): void {
   const context = getAgentRunContext(runId);
   if (!context || context.lifecycleGeneration !== getAgentRunLifecycleGeneration()) {

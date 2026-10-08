@@ -925,8 +925,8 @@ extension SettingsProTab {
             // Fixtures never load the saved manual Gateway, so a credential edit would overwrite
             // its pair with blank fields and headers would target the wrong identity.
             if !self.appModel.isLocalGatewayFixtureEnabled {
-                self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
-                self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
+                self.gatewaySecureField("Gateway Auth Token", text: self.gatewayCredentialBinding(\.token))
+                self.gatewaySecureField("Gateway Password", text: self.gatewayCredentialBinding(\.password))
                 if let headersStableID = self.gatewayCustomHeadersTargetStableID {
                     NavigationLink {
                         GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)

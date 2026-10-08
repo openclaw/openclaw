@@ -30,12 +30,13 @@ it.each(["active", "failed"] as const)(
     const barriers = createGatewayWorkerPlacementReclaimBarriers({
       placements: {
         get: () => ({ state, sessionId }) as never,
+        getAsync: async () => ({ state, sessionId }) as never,
         waitForTurnClaimRelease: vi.fn(),
       },
       loadSessionRuntime: async () =>
         ({
           managedWorktrees: {
-            findLiveByOwner: () => ({
+            findLiveByOwner: async () => ({
               id: "cancel-failure-worktree",
               ownerId: sessionKey,
               path: "/fixture/workspace",

@@ -107,11 +107,24 @@ opening timestamp. A process killed during a required full gate therefore cannot
 lend restart provenance, even when its host, boot, and WAL match. Updates, rollback, canaries, Doctor, and copied-file verification retain
 their existing strict checks.
 
-The deferred open lends only revocable runtime admission and does not publish
-durable verification or a clean-close receipt. Background success is logged;
-it does not independently certify the writer's checkpoint/close. If no full
-admission has established durable verification, even a subsequent graceful
-restart retains the full gate. Confirmed background corruption drains existing
+The deferred open lends only revocable runtime admission. A successful background
+full check can establish durable verification through that same admitted writer.
+The queued check retains an executor borrow through scanning and proof publication,
+so idle retirement and opening another agent cannot close its original writer.
+Completion, failure, cancellation, and superseded requests release that borrow;
+explicit close and revocation still prevent stale publication.
+The verifier must check the admitted physical file, and the original writer must
+still hold valid admission with an unchanged connection-local `data_version`
+since admission. Its own writes preserve that value; a commit from any other
+connection, file replacement, revoked admission, or retired writer prevents
+publication. The writer excludes foreign commits while checking continuity and
+recording verification. This adds no schema or configuration and changes no
+update or rollback contract.
+
+Verification remains dirty until the last lease completes its normal checkpoint
+and native close. A successful background check therefore lets the next orderly
+restart reuse a clean-close receipt, but never certifies a crash or unfinished
+shutdown. Quick checks cannot establish full verification. Confirmed background corruption drains existing
 agent actors, reconfirms the current file generation in a child, latches refusal,
 drains any intervening actor, and records the existing durable quarantine. New
 opens and retained actors then refuse writes until Doctor repair. Transient I/O

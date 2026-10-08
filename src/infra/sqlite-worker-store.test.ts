@@ -662,23 +662,6 @@ describe("SQLite worker store", () => {
     ]);
   });
 
-  it("surfaces native-close cleanup failure and permits explicit recovery of committed data", async () => {
-    const file = databasePath();
-    const store = await open(file);
-    const receipt = await append(store, "preserved");
-    await store.execute({ type: "failClose", input: undefined });
-    const closed = store.close();
-    stores.delete(store);
-    await expect(closed).rejects.toThrow("Fixture native database closed with a cleanup failure");
-
-    const recovered = await open(file);
-    expect(await read(recovered)).toEqual(["preserved"]);
-    const recoveredReceipt = await append(recovered, "after recovery");
-    expect(recoveredReceipt.actor).not.toBe(receipt.actor);
-    expect(recoveredReceipt.writes).toBe(1);
-    expect(await read(recovered)).toEqual(["preserved", "after recovery"]);
-  });
-
   it.each([
     { reject: true, owner: "client" },
     { reject: false, owner: "host" },

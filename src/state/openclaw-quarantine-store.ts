@@ -179,10 +179,10 @@ export function recordOpenClawAgentIntegrityVerification(
   pathname: string,
   env: NodeJS.ProcessEnv,
   identity: string,
-): void {
+): boolean {
   const current = statSync(pathname, { bigint: true, throwIfNoEntry: false });
   if (!current || identity !== `${current.dev}:${current.ino}`) {
-    return;
+    return false;
   }
   const dev = String(current.dev);
   const ino = String(current.ino);
@@ -211,6 +211,7 @@ export function recordOpenClawAgentIntegrityVerification(
         ),
     );
   });
+  return true;
 }
 
 /** Unclean disposal removes the proof that any surviving last closer could certify. */
@@ -326,7 +327,6 @@ function ensureQuarantineStoreDirectory(storePath: string): void {
 
 function configureQuarantineWriter(database: DatabaseSync, storePath: string): void {
   database.exec(`
-    PRAGMA busy_timeout = ${OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS};
     PRAGMA journal_mode = DELETE;
     PRAGMA synchronous = FULL;
   `);
@@ -378,7 +378,9 @@ function withQuarantineWriter<T>(env: NodeJS.ProcessEnv, operation: (db: Databas
   const storePath = resolveQuarantineStorePath(env);
   const existed = existsSync(storePath);
   ensureQuarantineStoreDirectory(storePath);
-  const database = openNodeSqliteDatabase(storePath);
+  const database = openNodeSqliteDatabase(storePath, {
+    timeout: OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS,
+  });
   let completed = false;
   try {
     if (!existed) {
@@ -414,7 +416,9 @@ function readOpenClawDatabaseQuarantine(
   if (!existsSync(storePath)) {
     return undefined;
   }
-  const database = openNodeSqliteDatabase(storePath);
+  const database = openNodeSqliteDatabase(storePath, {
+    timeout: OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS,
+  });
   let outcome: { value: OpenClawDatabaseQuarantine | undefined } | { error: unknown };
   try {
     outcome = { value: readQuarantineDecision(database, pathname, storePath) };
@@ -440,7 +444,6 @@ function readQuarantineDecision(
   pathname: string,
   storePath: string,
 ): OpenClawDatabaseQuarantine | undefined {
-  database.exec(`PRAGMA busy_timeout = ${OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS};`);
   const userVersion = readQuarantineSchemaVersion(database, storePath);
   if (userVersion === 0) {
     return undefined;

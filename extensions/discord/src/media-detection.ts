@@ -18,9 +18,8 @@ function normalizeMediaPathForExtension(mediaUrl: string): string {
       return normalizeLowercaseStringOrEmpty(fileName);
     }
   } catch {
-    const withoutHash = trimmed.split("#", 1)[0] ?? trimmed;
-    const withoutQuery = withoutHash.split("?", 1)[0] ?? withoutHash;
-    return normalizeLowercaseStringOrEmpty(withoutQuery);
+    const withoutSuffix = trimmed.split(/[?#]/, 1)[0] ?? trimmed;
+    return normalizeLowercaseStringOrEmpty(withoutSuffix);
   }
 }
 

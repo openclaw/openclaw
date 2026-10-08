@@ -14,10 +14,8 @@ type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
-type CacheTtlEntryData = {
+type CacheTtlEntryData = CacheTtlContext & {
   timestamp: number;
-  provider?: string;
-  modelId?: string;
 };
 
 type CacheTtlContext = {

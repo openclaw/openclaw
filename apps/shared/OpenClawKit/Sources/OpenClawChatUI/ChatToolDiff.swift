@@ -48,13 +48,24 @@ enum ChatToolDiff {
         let sourcePath: String
         var path: String
         var lines: [ChatToolDiffLine] = []
-        var added = 0
-        var removed = 0
     }
 
     private struct PatchHunk {
         var oldLine: Int?
         var newLine: Int?
+
+        mutating func consume(_ raw: String) -> ChatToolDiffLine {
+            let kind: ChatToolDiffLineKind = raw.hasPrefix("+") ? .add : raw.hasPrefix("-") ? .del : .ctx
+            let lineNo = kind == .del ? self.oldLine : self.newLine
+            // Hunk coordinates come from tool output; an unrepresentable next line has no display number.
+            if kind != .add {
+                self.oldLine = self.oldLine.flatMap { $0 == .max ? nil : $0 + 1 }
+            }
+            if kind != .del {
+                self.newLine = self.newLine.flatMap { $0 == .max ? nil : $0 + 1 }
+            }
+            return ChatToolDiffLine(kind: kind, lineNo: lineNo, text: String(raw.dropFirst()))
+        }
     }
 
     private static let maxInputLines = 600
@@ -152,14 +163,8 @@ enum ChatToolDiff {
                 newIndex += 1
             }
         }
-        while oldIndex < oldCount {
-            lines.append(ChatToolDiffLine(kind: .del, text: oldLines[oldIndex]))
-            oldIndex += 1
-        }
-        while newIndex < newCount {
-            lines.append(ChatToolDiffLine(kind: .add, text: newLines[newIndex]))
-            newIndex += 1
-        }
+        lines.append(contentsOf: oldLines[oldIndex...].map { ChatToolDiffLine(kind: .del, text: $0) })
+        lines.append(contentsOf: newLines[newIndex...].map { ChatToolDiffLine(kind: .add, text: $0) })
         return self.compact(lines, inputTruncated: inputTruncated)
     }
 
@@ -296,22 +301,21 @@ enum ChatToolDiff {
                 hunk = self.parsePatchHunk(raw)
             } else if section.operation == .add, raw.hasPrefix("+") {
                 self.pushPatchLine(
-                    ChatToolDiffLine(kind: .add, lineNo: section.added + 1, text: String(raw.dropFirst())),
+                    ChatToolDiffLine(kind: .add, lineNo: section.lines.count + 1, text: String(raw.dropFirst())),
                     section: &section,
                     storedRows: &storedRows,
                     clipped: &clipped)
             } else if section.operation == .delete, raw.hasPrefix("-") {
                 self.pushPatchLine(
-                    ChatToolDiffLine(kind: .del, lineNo: section.removed + 1, text: String(raw.dropFirst())),
+                    ChatToolDiffLine(kind: .del, lineNo: section.lines.count + 1, text: String(raw.dropFirst())),
                     section: &section,
                     storedRows: &storedRows,
                     clipped: &clipped)
             } else if section.operation == .update,
                       raw.isEmpty || raw.hasPrefix("+") || raw.hasPrefix("-") || raw.hasPrefix(" ")
             {
-                self.pushPatchHunkLine(
-                    raw,
-                    hunk: &hunk,
+                self.pushPatchLine(
+                    hunk.consume(raw),
                     section: &section,
                     storedRows: &storedRows,
                     clipped: &clipped)
@@ -344,14 +348,6 @@ enum ChatToolDiff {
         storedRows: inout Int,
         clipped: inout Bool)
     {
-        switch line.kind {
-        case .add:
-            section.added += 1
-        case .del:
-            section.removed += 1
-        case .ctx, .file, .skip:
-            break
-        }
         if storedRows < self.maxRenderLines {
             section.lines.append(line)
             storedRows += 1
@@ -374,29 +370,6 @@ enum ChatToolDiff {
         }
         guard let oldLine = line(old), let newLine = line(new) else { return PatchHunk() }
         return PatchHunk(oldLine: oldLine, newLine: newLine)
-    }
-
-    private static func pushPatchHunkLine(
-        _ raw: String,
-        hunk: inout PatchHunk,
-        section: inout PatchSection,
-        storedRows: inout Int,
-        clipped: inout Bool)
-    {
-        let kind: ChatToolDiffLineKind = raw.hasPrefix("+") ? .add : raw.hasPrefix("-") ? .del : .ctx
-        let lineNo = kind == .del ? hunk.oldLine : hunk.newLine
-        // Hunk coordinates come from tool output; an unrepresentable next line has no display number.
-        if kind != .add {
-            hunk.oldLine = hunk.oldLine.flatMap { $0 == .max ? nil : $0 + 1 }
-        }
-        if kind != .del {
-            hunk.newLine = hunk.newLine.flatMap { $0 == .max ? nil : $0 + 1 }
-        }
-        self.pushPatchLine(
-            ChatToolDiffLine(kind: kind, lineNo: lineNo, text: String(raw.dropFirst())),
-            section: &section,
-            storedRows: &storedRows,
-            clipped: &clipped)
     }
 
     private static func finishPatch(

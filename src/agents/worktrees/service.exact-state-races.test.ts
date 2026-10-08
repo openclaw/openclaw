@@ -15,7 +15,8 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { updateRegistryWorktreeInDatabase } from "./registry-run-end.worker.js";
 import * as registry from "./registry.js";
-import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
+import { updateRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import * as leases from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import {

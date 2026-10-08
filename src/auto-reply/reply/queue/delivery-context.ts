@@ -42,6 +42,17 @@ export function hasExclusiveTurnAdmission(
   return lifecycle?.admission === "exclusive";
 }
 
+export function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
+  const owners = new Set(
+    items.flatMap((item) =>
+      hasExclusiveTurnAdmission(item.turnAdoptionLifecycle) ? [item.turnAdoptionLifecycle] : [],
+    ),
+  );
+  if (owners.size > 1) {
+    throw new Error("followup queue cannot aggregate distinct admission lifecycles");
+  }
+}
+
 function resolveTurnAdoptionLifecycleDeliveryKey(
   lifecycle: FollowupRun["turnAdoptionLifecycle"],
 ): string {
@@ -292,14 +303,6 @@ type FollowupRuntimeMetadata = Pick<
   | "runObservers"
 >;
 
-function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
-  return (
-    item.currentInboundEventKind === "room_event" ||
-    item.currentInboundAudio === true ||
-    Boolean(item.currentInboundContext)
-  );
-}
-
 function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
@@ -379,7 +382,12 @@ export function collectRuntimeMetadata(
   items: FollowupRun[],
   abortSignal?: AbortSignal,
 ): FollowupRuntimeMetadata {
-  const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
+  const currentTurnSource = items.find(
+    (item) =>
+      item.currentInboundEventKind === "room_event" ||
+      item.currentInboundAudio === true ||
+      Boolean(item.currentInboundContext),
+  );
   // Delivery-key equality proves every source has the same turn authority.
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);

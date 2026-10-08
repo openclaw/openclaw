@@ -144,7 +144,11 @@ guarantee must select a runtime that provides it.
 
 Each new isolated completion uses the configuration and agent/workspace directories
 of its admitted runtime generation. Explicit model, auth-profile, and runtime
-selections remain fixed while that generation is prepared.
+selections remain fixed while that generation is prepared. Registry preparation
+selects provider and harness owners, including their declared harness dependencies.
+Preparation does not add memory or context-engine plugins merely because the
+agent selects them, or unrelated startup plugins, and does not adopt Gateway
+agent capabilities.
 
 Host-authorized calls must use the supplied model and credential without substitution.
 Harnesses using the shared host-prepared completion helper

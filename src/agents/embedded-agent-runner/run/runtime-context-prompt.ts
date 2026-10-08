@@ -79,40 +79,33 @@ export function buildCurrentInboundPrompt(params: {
   return [prefix, params.prompt].filter(Boolean).join(params.context?.promptJoiner ?? "\n\n");
 }
 
-/** Attach context to this queued turn, not the active run's original prompt owner. */
-function buildCurrentInboundRuntimeContext(
-  context: CurrentInboundPromptContext | undefined,
-): RuntimeContextCustomMessage | undefined {
-  if (!context) {
-    return undefined;
-  }
-  const fragments = (
-    context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }]
-  ).filter((fragment) => fragment.text.trim());
-  return buildRuntimeContextCustomMessage(projectRuntimeContextFragments(fragments), fragments);
-}
-
 /** Bind context to its queued user turn without changing user-authored bytes. */
 export function attachSteeringRuntimeContext(
   message: AgentMessage,
   context: CurrentInboundPromptContext | undefined,
 ): void {
-  const runtimeContext = buildCurrentInboundRuntimeContext(context);
+  if (!context) {
+    return;
+  }
+  const fragments = (
+    context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }]
+  ).filter((fragment) => fragment.text.trim());
+  const runtimeContext = buildRuntimeContextCustomMessage(
+    projectRuntimeContextFragments(fragments),
+    fragments,
+  );
   if (!runtimeContext) {
     return;
   }
   // The enumerable symbol survives in-memory message copies but never enters
   // transcript JSON or provider payloads. Queue cancellation stays atomic.
-  Object.defineProperty(runtimeContext, STEERING_RUNTIME_CONTEXT, {
-    configurable: true,
-    enumerable: true,
-    value: runtimeContext,
-  });
-  Object.defineProperty(message, STEERING_RUNTIME_CONTEXT, {
-    configurable: true,
-    enumerable: true,
-    value: runtimeContext,
-  });
+  for (const target of [runtimeContext, message]) {
+    Object.defineProperty(target, STEERING_RUNTIME_CONTEXT, {
+      configurable: true,
+      enumerable: true,
+      value: runtimeContext,
+    });
+  }
 }
 
 /** Materialize an attached carrier immediately before its owning user turn. */
@@ -258,9 +251,5 @@ export function prependRuntimeContextForModel(
               ? Object.assign({}, part, { text: prepend(part.text) })
               : part,
           );
-  const updated = {
-    ...carrier,
-    content: updatedContent,
-  };
-  return messages.with(carrierIndex, updated);
+  return messages.with(carrierIndex, { ...carrier, content: updatedContent });
 }

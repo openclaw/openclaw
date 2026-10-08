@@ -72,6 +72,7 @@ export async function startNostrGatewayAccount(
   ctx.setStatus({
     accountId: account.accountId,
     publicKey: account.publicKey,
+    profile: account.profile,
     lifecycle: "starting",
   });
   ctx.log?.info?.(`[${account.accountId}] starting Nostr provider (pubkey: ${account.publicKey})`);

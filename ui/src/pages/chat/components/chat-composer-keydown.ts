@@ -78,18 +78,12 @@ export function createComposerKeyDownHandler({
       return;
     }
 
-    if (props.connected && handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate)) {
-      return;
-    }
-
     if (
       props.connected &&
-      handleInlineSlashArgKeydown(event, state, slashMenuHost, requestUpdate, sendShortcut)
+      (handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate) ||
+        handleInlineSlashArgKeydown(event, state, slashMenuHost, requestUpdate, sendShortcut) ||
+        handleSlashMenuKeydown(event, state, slashMenuHost, requestUpdate))
     ) {
-      return;
-    }
-
-    if (props.connected && handleSlashMenuKeydown(event, state, slashMenuHost, requestUpdate)) {
       return;
     }
 

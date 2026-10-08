@@ -611,6 +611,25 @@ protection.
 Session edits and deletions made after the core import remain authoritative when
 the plugin migration resumes.
 
+Doctor settles an unavailable plugin's old obligation when its protected config
+is empty or absent and it carries no outstanding state-migration or inspection
+requirement. The existing migration receipt records that there was nothing to
+migrate. A known official replacement can supersede the old obligation after
+its migration completes and no old plugin settings remain to transfer. Stored
+plugin data is kept; these outcomes do not enable plugins or widen allowlists.
+Legacy fields excluded from validation remain protected even when their value is
+an empty object or array; their owner must interpret or remove them.
+An explicitly enabled plugin that passes activation policy keeps its package
+obligation until it becomes available, even when it has no custom settings.
+Update rehearsals leave unavailable-owner settlement to live update finalization.
+
+If retained settings or an explicit state/inspection requirement remain, Doctor
+keeps the obligation pending and names the plugin to install or enable. A retired
+plugin may need its maintainer's supported recovery path. Disabling or uninstalling
+the plugin does not by itself complete its migration. Update status and startup
+read the same settled receipts after Doctor finishes; an updating parent that
+still owns plugin installation continues to defer the work.
+
 While a migration is pending, explicit config edits that would change or remove
 its retained inputs are refused with the recovery command. Unrelated settings
 remain writable. Complete the plugin migration before editing those inputs.
@@ -697,8 +716,17 @@ their exact child and turn locators. A persisted terminal summary, status, and
 completion time remain available when native history no longer contains the
 result.
 
-Terminal deliveries marked `failed` after exhausting their retry budget remain
-historical and are not automatically restarted.
+Terminal deliveries marked `failed` remain historical and are not automatically
+restarted. Doctor also settles a pending delivery as `failed` when its task has
+finished (`succeeded`, `failed`, or `cancelled`) and its original requester binding
+is missing, cleared, or no longer matches the recorded session, lifecycle, or
+connection. It appends an `Undeliverable historical delivery` reason to the task's
+existing `error` field and preserves any previous error, execution status, result,
+native locator, and ownership facts. This does not claim successful delivery or
+import the result into a replacement parent. The row remains available for
+inspection, and subsequent migration passes leave it historical. If no other
+Codex migration is pending, the normal plugin lifecycle confirms data readiness
+and resumes full settings validation.
 
 The migration writes `nativeSubagentAssignments` and the per-source Task ID
 marker `nativeSubagentTaskImport` together in one compare-and-apply operation on
@@ -706,14 +734,17 @@ the existing `app-server-thread-bindings` plugin state. A changed binding is
 preserved and reported for retry. Acknowledgement can consume the assignment,
 while the import marker survives acknowledgement, native rotation, clear, and
 reset so unchanged legacy rows cannot resurrect completed work. The shared
-database is declared in the migration's backup inventory; every source Task row
-remains byte-identical. There is no new SQL table, schema-version bump, Tasks
+database is declared in the migration's backup inventory, so the pre-migration
+backup also restores delivery settlement on rollback. Imported source Task rows
+remain byte-identical; historical settlement changes only delivery status and
+the recorded error. There is no new SQL table, schema-version bump, Tasks
 runtime reader, or replacement Task ledger. Native execution and completion
 delivery continue to require current requester authority.
 
 Unstamped records, including 2026.9.2-era rows, cannot establish the missing
 physical requester and connection history. Doctor also preserves ambiguous
-duplicate run IDs and records whose ownership no longer matches. It emits a
+duplicate run IDs, malformed records, and unfinished work whose ownership no
+longer matches. It emits a
 recoverable warning identifying the Task and native run, without disabling the
 Gateway or unrelated sessions. Inspect the child in its original native Codex
 account, or restore the pre-update backup with its matching OpenClaw version to

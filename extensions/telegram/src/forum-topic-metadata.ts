@@ -13,19 +13,24 @@ export async function resolveTelegramForumTopicMetadata(params: {
 }): Promise<{ topicName: string | undefined; creatorUserId: number | undefined }> {
   const { msg, threadId, scope } = params;
   const chatId = msg.chat.id;
-  const created = msg.forum_topic_created;
-  if (created?.name) {
-    await recordTopicCreation(
+  const recordCreation = (
+    creation: NonNullable<Message["forum_topic_created"]>,
+    creatorUserId?: number,
+  ) =>
+    recordTopicCreation(
       chatId,
       threadId,
       {
-        name: created.name,
-        creatorUserId: msg.from?.id,
-        iconColor: created.icon_color,
-        iconCustomEmojiId: created.icon_custom_emoji_id,
+        name: creation.name,
+        creatorUserId,
+        iconColor: creation.icon_color,
+        iconCustomEmojiId: creation.icon_custom_emoji_id,
       },
       scope,
     );
+  const created = msg.forum_topic_created;
+  if (created?.name) {
+    await recordCreation(created, msg.from?.id);
   }
   const edited = msg.forum_topic_edited;
   const patch = edited?.name
@@ -46,17 +51,7 @@ export async function resolveTelegramForumTopicMetadata(params: {
   if (reply && replyCreated?.name) {
     const replyCreatorUserId = reply.message_id === threadId ? reply.from?.id : undefined;
     if (!topicName || (creatorUserId === undefined && replyCreatorUserId !== undefined)) {
-      await recordTopicCreation(
-        chatId,
-        threadId,
-        {
-          name: replyCreated.name,
-          iconColor: replyCreated.icon_color,
-          iconCustomEmojiId: replyCreated.icon_custom_emoji_id,
-          creatorUserId: replyCreatorUserId,
-        },
-        scope,
-      );
+      await recordCreation(replyCreated, replyCreatorUserId);
       topicName ??= replyCreated.name;
       creatorUserId ??= replyCreatorUserId;
     }

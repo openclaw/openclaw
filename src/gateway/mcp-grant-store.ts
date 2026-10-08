@@ -24,6 +24,8 @@ import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-polic
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
@@ -144,6 +146,8 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   admittedRunContext?: AdmittedRunContext;
   /** Live reply participants remain host-owned across CLI fallback and HTTP callbacks. */
   personalToolParticipants?: ReplyTurnParticipants;
+  /** The minting run's Gateway request scope; the process-owned listener has none of its own. */
+  requestScope?: PluginRuntimeGatewayRequestScope;
   /** Trusted source-turn authority retained only by the host. */
   messageActionTurnCapability?: string;
   /** Original native creator scope, kept outside all child-visible context. */
@@ -255,15 +259,12 @@ export function revokeAttachGrantsForSession(sessionKey: string): number {
   return removed;
 }
 
-function sweepExpiredAttachGrants(nowMs: number = Date.now()): number {
-  let removed = 0;
+function sweepExpiredAttachGrants(nowMs: number = Date.now()): void {
   for (const [token, grant] of grantsByToken) {
     if (nowMs >= grant.expiresAtMs) {
       grantsByToken.delete(token);
-      removed += 1;
     }
   }
-  return removed;
 }
 
 export function mintMcpLoopbackClientGrant(
@@ -281,24 +282,17 @@ export function mintMcpLoopbackClientGrant(
     token: crypto.randomBytes(32).toString("hex"),
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
-    ...(params.admittedRunContext ? { admittedRunContext: params.admittedRunContext } : {}),
-    ...(params.personalToolParticipants
-      ? { personalToolParticipants: params.personalToolParticipants }
-      : {}),
-    ...(params.messageActionTurnCapability
-      ? { messageActionTurnCapability: params.messageActionTurnCapability }
-      : {}),
-    ...(params.cronRequesterGrantIssuer
-      ? { cronRequesterGrantIssuer: params.cronRequesterGrantIssuer }
-      : {}),
-    ...(params.cronAuthorityCheck ? { cronAuthorityCheck: params.cronAuthorityCheck } : {}),
+    admittedRunContext: params.admittedRunContext,
+    personalToolParticipants: params.personalToolParticipants,
+    requestScope: getPluginRuntimeGatewayRequestScope(),
+    messageActionTurnCapability: params.messageActionTurnCapability || undefined,
+    cronRequesterGrantIssuer: params.cronRequesterGrantIssuer,
+    cronAuthorityCheck: params.cronAuthorityCheck,
     abortSignal: params.abortSignal,
     assertCurrent: params.assertCurrent,
     bindQuestionAnswerAuthority: params.bindQuestionAnswerAuthority,
-    ...(params.skillLibraryAuthoring
-      ? { skillLibraryAuthoring: params.skillLibraryAuthoring }
-      : {}),
-    ...(params.rootedExecution ? { rootedExecution: params.rootedExecution } : {}),
+    skillLibraryAuthoring: params.skillLibraryAuthoring,
+    rootedExecution: params.rootedExecution,
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
@@ -489,6 +483,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       captureKey: string;
       admittedRunContext: AdmittedRunContext;
       personalToolParticipants?: ReplyTurnParticipants;
+      requestScope?: PluginRuntimeGatewayRequestScope;
       messageActionTurnCapability?: string;
       mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
       cronAuthorityCheck?: () => boolean;
@@ -531,27 +526,22 @@ export function resolveMcpLoopbackClientGrant(params: {
     context: structuredClone(grant.context),
     captureKey: grant.activeCaptureKey,
     admittedRunContext,
-    ...(grant.personalToolParticipants
-      ? { personalToolParticipants: grant.personalToolParticipants }
-      : {}),
-    ...(grant.messageActionTurnCapability
-      ? { messageActionTurnCapability: grant.messageActionTurnCapability }
-      : {}),
-    ...(grant.cronAuthorityCheck ? { cronAuthorityCheck: grant.cronAuthorityCheck } : {}),
-    ...(issueCronRequesterGrant
-      ? {
-          mintCronRequesterGrant: (signal?: AbortSignal) => {
-            if (!isCurrent()) {
-              throw new Error("cron requester MCP grant is no longer active");
-            }
-            return issueCronRequesterGrant(delegatedAuthority, signal, isCurrent);
-          },
+    personalToolParticipants: grant.personalToolParticipants,
+    requestScope: grant.requestScope,
+    messageActionTurnCapability: grant.messageActionTurnCapability || undefined,
+    cronAuthorityCheck: grant.cronAuthorityCheck,
+    mintCronRequesterGrant: issueCronRequesterGrant
+      ? (signal?: AbortSignal) => {
+          if (!isCurrent()) {
+            throw new Error("cron requester MCP grant is no longer active");
+          }
+          return issueCronRequesterGrant(delegatedAuthority, signal, isCurrent);
         }
-      : {}),
+      : undefined,
     questionAnswerAuthority,
-    ...(grant.skillLibraryAuthoring ? { skillLibraryAuthoring: grant.skillLibraryAuthoring } : {}),
+    skillLibraryAuthoring: grant.skillLibraryAuthoring,
     isCurrent,
-    ...(grant.rootedExecution ? { rootedExecution: grant.rootedExecution } : {}),
+    rootedExecution: grant.rootedExecution,
     ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),
   };
 }

@@ -59,11 +59,7 @@ final class GatewayConnectionController {
     private var preconnectRetryContext: PreconnectRetryContext?
     private var trustProbeGeneration: UInt64 = 0
     private var connectAttemptGeneration: UInt64 = 0
-    private var autoConnectSuppressionGeneration: UInt64?
-    private var autoConnectSuppressionBaseline: (
-        autoReconnectEnabled: Bool,
-        restoresAutoReconnect: Bool,
-        suspendedConfig: GatewayConnectConfig?)?
+    private var autoConnectSuppression: AutoConnectSuppressionLease?
     @ObservationIgnored private var pendingAutoConnectTask: Task<Void, Never>?
     @ObservationIgnored var operatorFleetReconcileTask: Task<Void, Never>?
     private var pendingAutoConnectGeneration: UInt64?
@@ -793,35 +789,23 @@ extension GatewayConnectionController {
     }
 
     private func beginAutoConnectSuppression(restoresAutoReconnect: Bool) -> AutoConnectSuppressionLease {
-        let baseline = if self.autoConnectSuppressionGeneration != nil,
-                          let baseline = self.autoConnectSuppressionBaseline
-        {
-            (
-                autoReconnectEnabled: baseline.autoReconnectEnabled,
-                restoresAutoReconnect: baseline.restoresAutoReconnect || restoresAutoReconnect,
-                suspendedConfig: baseline.suspendedConfig ??
-                    (restoresAutoReconnect ? self.appModel?.activeGatewayConnectConfig : nil))
-        } else {
-            (
-                autoReconnectEnabled: self.appModel?.gatewayAutoReconnectEnabled ?? false,
-                restoresAutoReconnect: restoresAutoReconnect,
-                suspendedConfig: restoresAutoReconnect ? self.appModel?.activeGatewayConnectConfig : nil)
-        }
+        let lease = AutoConnectSuppressionLease(
+            generation: self.connectAttemptGeneration &+ 1,
+            previousAutoReconnectEnabled: self.autoConnectSuppression?.previousAutoReconnectEnabled ??
+                self.appModel?.gatewayAutoReconnectEnabled ?? false,
+            restoresAutoReconnect: self.autoConnectSuppression?.restoresAutoReconnect == true || restoresAutoReconnect,
+            suspendedConfig: self.autoConnectSuppression?.suspendedConfig ??
+                (restoresAutoReconnect ? self.appModel?.activeGatewayConnectConfig : nil))
         self.connectAttemptGeneration &+= 1
         self.preconnectRetryContext = nil
-        self.autoConnectSuppressionGeneration = self.connectAttemptGeneration
-        self.autoConnectSuppressionBaseline = baseline
+        self.autoConnectSuppression = lease
         self.clearPendingTrustPrompt()
-        return AutoConnectSuppressionLease(
-            generation: self.connectAttemptGeneration,
-            previousAutoReconnectEnabled: baseline.autoReconnectEnabled,
-            restoresAutoReconnect: baseline.restoresAutoReconnect,
-            suspendedConfig: baseline.suspendedConfig)
+        return lease
     }
 
     func resumeAutoConnect(after lease: AutoConnectSuppressionLease) {
         // A dismissed older target must not release suppression owned by its replacement.
-        guard self.autoConnectSuppressionGeneration == lease.generation else { return }
+        guard self.autoConnectSuppression?.generation == lease.generation else { return }
         self.clearAutoConnectSuppression(generation: lease.generation)
         if lease.restoresAutoReconnect {
             let currentPreference = UserDefaults.standard.bool(forKey: "gateway.autoconnect")
@@ -842,9 +826,8 @@ extension GatewayConnectionController {
     }
 
     private func clearAutoConnectSuppression(generation: UInt64) {
-        guard self.autoConnectSuppressionGeneration == generation else { return }
-        self.autoConnectSuppressionGeneration = nil
-        self.autoConnectSuppressionBaseline = nil
+        guard self.autoConnectSuppression?.generation == generation else { return }
+        self.autoConnectSuppression = nil
     }
 
     func acceptPendingTrustPrompt(_ expectedPrompt: TrustPrompt?) async {
@@ -1045,7 +1028,7 @@ extension GatewayConnectionController {
     }
 
     private func maybeAutoConnect() {
-        guard self.autoConnectSuppressionGeneration == nil else { return }
+        guard self.autoConnectSuppression == nil else { return }
         guard !self.didAutoConnect else { return }
         guard let appModel else { return }
         guard appModel.gatewayServerName == nil else { return }
@@ -1125,41 +1108,23 @@ extension GatewayConnectionController {
 
         let configuredPort = defaults.integer(forKey: "gateway.manual.port")
         guard let port = Self.resolvedManualPort(host: host, port: configuredPort) else { return }
-        let stableID = self.manualStableID(host: host, port: port)
-        guard let route = self.manualGatewayRoute(
-            host: host,
-            port: port,
-            useTLS: defaults.bool(forKey: "gateway.manual.tls"),
-            stableID: stableID)
-        else { return }
-
-        let registryEntry = GatewaySettingsStore.GatewayRegistryEntry(
-            stableID: stableID,
-            kind: .manual,
-            name: "\(host):\(port)",
-            host: host,
-            port: port,
-            useTLS: route.tls?.required == true,
-            lastConnectedAtMs: nil)
-        guard self.persistActiveGateway(registryEntry) else { return }
-
-        let credentials = GatewaySettingsStore.loadGatewayCredentials(
+        _ = self.startActiveGatewayAutoConnect(
+            GatewaySettingsStore.GatewayRegistryEntry(
+                stableID: self.manualStableID(host: host, port: port),
+                kind: .manual,
+                name: "\(host):\(port)",
+                host: host,
+                port: port,
+                useTLS: defaults.bool(forKey: "gateway.manual.tls"),
+                lastConnectedAtMs: nil),
             instanceId: instanceId,
-            gatewayStableID: stableID)
-        self.didAutoConnect = true
-        self.startAutoConnect(
-            url: route.url,
-            gatewayStableID: stableID,
-            tls: route.tls,
-            token: credentials.token,
-            bootstrapToken: credentials.bootstrapToken,
-            password: credentials.password,
-            allowStoredDeviceAuth: !credentials.suppressStoredDeviceAuth)
+            persistSelection: true)
     }
 
     private func startActiveGatewayAutoConnect(
         _ active: GatewaySettingsStore.GatewayRegistryEntry,
-        instanceId: String) -> Bool
+        instanceId: String,
+        persistSelection: Bool = false) -> Bool
     {
         guard active.kind == .manual,
               let host = active.host, let port = active.port,
@@ -1170,6 +1135,13 @@ extension GatewayConnectionController {
                   stableID: active.stableID,
                   contextPath: active.contextPath)
         else { return false }
+        if persistSelection {
+            // Preflight and automatic retry must observe the selected profile with the same
+            // resolved TLS policy as the route, including an existing pin or Tailnet HTTPS.
+            var selected = active
+            selected.useTLS = route.tls?.required == true
+            guard self.persistActiveGateway(selected) else { return false }
+        }
         let credentials = GatewaySettingsStore.loadGatewayCredentials(
             instanceId: instanceId,
             gatewayStableID: active.stableID)
@@ -1188,7 +1160,7 @@ extension GatewayConnectionController {
     private func attemptAutoReconnectIfNeeded() {
         guard let appModel else { return }
         guard appModel.gatewayAutoReconnectEnabled else { return }
-        guard self.autoConnectSuppressionGeneration == nil else { return }
+        guard self.autoConnectSuppression == nil else { return }
         // Avoid starting duplicate connect loops while a prior config is active.
         guard appModel.activeGatewayConnectConfig == nil else { return }
         guard UserDefaults.standard.bool(forKey: "gateway.autoconnect") else { return }
@@ -1289,7 +1261,7 @@ extension GatewayConnectionController {
                     }
                 }
                 if let suppressionGeneration,
-                   self.autoConnectSuppressionGeneration == suppressionGeneration
+                   self.autoConnectSuppression?.generation == suppressionGeneration
                 {
                     self.clearAutoConnectSuppression(generation: suppressionGeneration)
                 }
@@ -1630,7 +1602,7 @@ extension GatewayConnectionController {
     }
 
     func _test_isAutoConnectSuppressed() -> Bool {
-        self.autoConnectSuppressionGeneration != nil
+        self.autoConnectSuppression != nil
     }
 
     func _test_hasOperatorFleetReconcileTask() -> Bool {

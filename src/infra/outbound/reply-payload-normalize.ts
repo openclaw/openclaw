@@ -39,7 +39,6 @@ export function normalizeOutboundReplyPayloadCore(
   const sensitiveMedia = payload.sensitiveMedia === true ? true : undefined;
   const replyToId = readStringValue(payload.replyToId);
   const location = normalizeOutboundLocation(payload.location);
-  const videoAsNote = payload.videoAsNote === true ? true : undefined;
   return {
     text,
     mediaUrls,
@@ -51,6 +50,6 @@ export function normalizeOutboundReplyPayloadCore(
     sensitiveMedia,
     replyToId,
     ...(location ? { location } : {}),
-    ...(videoAsNote ? { videoAsNote: true } : {}),
+    ...(payload.videoAsNote === true ? { videoAsNote: true } : {}),
   };
 }

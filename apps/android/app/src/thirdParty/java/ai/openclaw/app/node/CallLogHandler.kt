@@ -60,47 +60,20 @@ private object SystemCallLogDataSource : CallLogDataSource {
         CallLog.Calls.TYPE,
       )
 
-    val selections = mutableListOf<String>()
-    val selectionArgs = mutableListOf<String>()
+    val filters =
+      listOfNotNull(
+        request.cachedName?.let { buildCallLogCachedNameLikeSelection() to buildCallLogLikeArg(it) },
+        request.number?.let { buildCallLogNumberLikeSelection() to buildCallLogLikeArg(it) },
+        request.dateStart?.let { "${CallLog.Calls.DATE} >= ?" to it.toString() },
+        request.dateEnd?.let { "${CallLog.Calls.DATE} <= ?" to it.toString() },
+        // Compatible with the old date parameter (exact match) when neither range bound is present.
+        request.date?.takeIf { request.dateStart == null && request.dateEnd == null }?.let { "${CallLog.Calls.DATE} = ?" to it.toString() },
+        request.duration?.let { "${CallLog.Calls.DURATION} = ?" to it.toString() },
+        request.type?.let { "${CallLog.Calls.TYPE} = ?" to it.toString() },
+      ).takeIf { it.isNotEmpty() }
 
-    request.cachedName?.let {
-      selections.add(buildCallLogCachedNameLikeSelection())
-      selectionArgs.add(buildCallLogLikeArg(it))
-    }
-
-    request.number?.let {
-      selections.add(buildCallLogNumberLikeSelection())
-      selectionArgs.add(buildCallLogLikeArg(it))
-    }
-
-    if (request.dateStart != null && request.dateEnd != null) {
-      selections.add("${CallLog.Calls.DATE} >= ? AND ${CallLog.Calls.DATE} <= ?")
-      selectionArgs.add(request.dateStart.toString())
-      selectionArgs.add(request.dateEnd.toString())
-    } else if (request.dateStart != null) {
-      selections.add("${CallLog.Calls.DATE} >= ?")
-      selectionArgs.add(request.dateStart.toString())
-    } else if (request.dateEnd != null) {
-      selections.add("${CallLog.Calls.DATE} <= ?")
-      selectionArgs.add(request.dateEnd.toString())
-    } else if (request.date != null) {
-      // Compatible with the old date parameter (exact match)
-      selections.add("${CallLog.Calls.DATE} = ?")
-      selectionArgs.add(request.date.toString())
-    }
-
-    request.duration?.let {
-      selections.add("${CallLog.Calls.DURATION} = ?")
-      selectionArgs.add(it.toString())
-    }
-
-    request.type?.let {
-      selections.add("${CallLog.Calls.TYPE} = ?")
-      selectionArgs.add(it.toString())
-    }
-
-    val selection = if (selections.isNotEmpty()) selections.joinToString(" AND ") else null
-    val selectionArgsArray = if (selectionArgs.isNotEmpty()) selectionArgs.toTypedArray() else null
+    val selection = filters?.joinToString(" AND ") { it.first }
+    val selectionArgsArray = filters?.map { it.second }?.toTypedArray()
 
     val sortOrder = "${CallLog.Calls.DATE} DESC"
 
@@ -168,30 +141,16 @@ class CallLogHandler internal constructor(
   private fun parseSearchRequest(paramsJson: String?): CallLogSearchRequest? {
     val params = if (paramsJson.isNullOrBlank()) JsonObject(emptyMap()) else parseJsonParamsObject(paramsJson) ?: return null
 
-    val limit =
-      ((params["limit"] as? JsonPrimitive)?.content?.toIntOrNull() ?: DEFAULT_CALL_LOG_LIMIT)
-        .coerceIn(1, 200)
-    val offset =
-      ((params["offset"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0)
-        .coerceAtLeast(0)
-    val cachedName = (params["cachedName"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
-    val number = (params["number"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
-    val date = (params["date"] as? JsonPrimitive)?.content?.toLongOrNull()
-    val dateStart = (params["dateStart"] as? JsonPrimitive)?.content?.toLongOrNull()
-    val dateEnd = (params["dateEnd"] as? JsonPrimitive)?.content?.toLongOrNull()
-    val duration = (params["duration"] as? JsonPrimitive)?.content?.toLongOrNull()
-    val type = (params["type"] as? JsonPrimitive)?.content?.toIntOrNull()
-
     return CallLogSearchRequest(
-      limit = limit,
-      offset = offset,
-      cachedName = cachedName,
-      number = number,
-      date = date,
-      dateStart = dateStart,
-      dateEnd = dateEnd,
-      duration = duration,
-      type = type,
+      limit = ((params["limit"] as? JsonPrimitive)?.content?.toIntOrNull() ?: DEFAULT_CALL_LOG_LIMIT).coerceIn(1, 200),
+      offset = ((params["offset"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0).coerceAtLeast(0),
+      cachedName = (params["cachedName"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() },
+      number = (params["number"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() },
+      date = (params["date"] as? JsonPrimitive)?.content?.toLongOrNull(),
+      dateStart = (params["dateStart"] as? JsonPrimitive)?.content?.toLongOrNull(),
+      dateEnd = (params["dateEnd"] as? JsonPrimitive)?.content?.toLongOrNull(),
+      duration = (params["duration"] as? JsonPrimitive)?.content?.toLongOrNull(),
+      type = (params["type"] as? JsonPrimitive)?.content?.toIntOrNull(),
     )
   }
 }

@@ -9,11 +9,9 @@ export function normalizeCodexServiceTier(value: unknown): CodexServiceTier | un
     return undefined;
   }
   const normalized = trimmed.toLowerCase();
-  if (normalized === "fast" || normalized === "priority") {
-    return "priority";
-  }
-  if (normalized === "flex") {
-    return "flex";
-  }
-  return trimmed;
+  return normalized === "fast" || normalized === "priority"
+    ? "priority"
+    : normalized === "flex"
+      ? "flex"
+      : trimmed;
 }

@@ -15,6 +15,7 @@ export type IncognitoSessionClaim = {
 /** Claims consume the actor's live projection; they never own a second copy of its state. */
 export function createIncognitoSessionClaims(owner: {
   identity: IncognitoSessionFacts["identity"];
+  assertReadable(this: void): void;
   current(this: void, sessionKey: string): IncognitoSessionFacts | undefined;
   readTopologyRevision(this: void): number;
   readSnapshotRevision(this: void): number;
@@ -88,6 +89,10 @@ export function createIncognitoSessionClaims(owner: {
           assertReadable();
           return structuredClone(current(sessionKey)?.sharing);
         },
+        readSteering(this: void, sessionKey: string) {
+          assertReadable();
+          return structuredClone(current(sessionKey)?.steering);
+        },
         readCapability(this: void, sessionKey: string) {
           assertReadable();
           return structuredClone(current(sessionKey)?.capability);
@@ -131,12 +136,21 @@ export function createIncognitoSessionClaims(owner: {
       assertBorrowed();
       const observed = current(sessionKey)?.revision;
       const held = claim(sessionKey, assertBorrowed);
+      const settled = claim(sessionKey, owner.assertReadable);
+      const assertRevision = () => {
+        if (current(sessionKey)?.revision !== observed) {
+          throw new Error("Incognito session snapshot changed; prepare it again");
+        }
+      };
       return {
         assertCurrent(this: void) {
           held.assertCurrent();
-          if (current(sessionKey)?.revision !== observed) {
-            throw new Error("Incognito session snapshot changed; prepare it again");
-          }
+          assertRevision();
+        },
+        /** Validate consumed facts after borrow cleanup; this grants no further reads. */
+        assertSettledCurrent(this: void) {
+          settled.assertCurrent();
+          assertRevision();
         },
       };
     },

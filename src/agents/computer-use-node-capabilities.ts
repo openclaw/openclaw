@@ -74,7 +74,7 @@ export async function loadPairedComputerUseAvailabilityForSurface(params: {
       advertised.add(action);
     }
   }
-  if (gateway.available) {
+  if (gateway.configured && gateway.computerUse) {
     for (const action of gateway.computerUse.actions) {
       advertised.add(action);
     }
@@ -85,13 +85,14 @@ export async function loadPairedComputerUseAvailabilityForSurface(params: {
       actions: COMPUTER_USE_V2_ACTION_NAMES.filter((action) => advertised.has(action)),
       gateway,
       // Per-provider guidance is only exact when there is one possible target.
-      guidanceCapabilities: gateway.available
-        ? eligible.length === 0
-          ? gateway.computerUse
-          : undefined
-        : eligible.length === 1
-          ? eligible[0]?.computerUse
-          : undefined,
+      guidanceCapabilities:
+        gateway.configured && gateway.computerUse
+          ? eligible.length === 0
+            ? gateway.computerUse
+            : undefined
+          : eligible.length === 1
+            ? eligible[0]?.computerUse
+            : undefined,
     },
   };
 }

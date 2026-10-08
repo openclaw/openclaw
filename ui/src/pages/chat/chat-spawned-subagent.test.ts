@@ -64,7 +64,7 @@ describe("a launched subagent", () => {
   const running = { status: "running", hasActiveRun: true } satisfies Partial<GatewaySessionRow>;
 
   it("is named by its launch and finds its session from the result", () => {
-    const finished = { key: story.key, running: false, runtimeMs: 42_000 };
+    const finished = { key: story.key, listed: true, running: false, runtimeMs: 42_000 };
     const roster = [child("other", { label: "Other" }), story];
     // History keeps the result as text; a live result still carries details.
     for (const result of [
@@ -79,7 +79,7 @@ describe("a launched subagent", () => {
         resolveSpawnedSubagent(launch({ outputText: accepted(story.key) }), [
           { ...story, ...active },
         ])?.session,
-      ).toEqual({ key: story.key, running: true, runtimeMs: null });
+      ).toEqual({ key: story.key, listed: true, running: true, runtimeMs: null });
     }
   });
 
@@ -181,6 +181,7 @@ describe("a launched subagent", () => {
   });
 
   it("shows its name and duration, and opens its session without toggling the row", () => {
+    const onOpenSubagent = vi.fn();
     const onOpenSession = vi.fn();
     const onToggleExpanded = vi.fn();
     const mount = (subagentSessions: GatewaySessionRow[]) => {
@@ -190,7 +191,7 @@ describe("a launched subagent", () => {
           messageKey: "message",
           expanded: false,
           onToggleExpanded,
-          subagents: { subagentSessions, onOpenSession },
+          subagents: { subagentSessions, onOpenSubagent, onOpenSession },
         }),
         container,
       );
@@ -205,8 +206,14 @@ describe("a launched subagent", () => {
       /Reply with the result|demo-mini-story|180/u,
     );
     link.click();
-    expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(story.key);
+    expect(onOpenSubagent).toHaveBeenCalledExactlyOnceWith(story.key);
     expect(onToggleExpanded).not.toHaveBeenCalled();
+    // The Subagents panel does not list a swarm's workers, so one still opens as a session.
+    mount([{ ...story, swarmGroupId: "parallel-audit" }])
+      .querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!
+      .click();
+    expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(story.key);
+    expect(onOpenSubagent).toHaveBeenCalledOnce();
     row
       .querySelector<HTMLButtonElement>(".chat-tool-row--subagent > .chat-tool-row__toggle")!
       .click();

@@ -58,10 +58,6 @@ const TELEGRAM_TIMEOUT_FALLBACK_METHODS = new Set([
   "setwebhook",
 ]);
 
-function shouldRetryTimedOutTelegramControlRequest(method: string | null): boolean {
-  return method !== null && TELEGRAM_TIMEOUT_FALLBACK_METHODS.has(method);
-}
-
 export function createTelegramClientFetch(params: {
   fetchImpl: TelegramClientFetch;
   timeoutSeconds?: unknown;
@@ -167,15 +163,11 @@ export function createTelegramClientFetch(params: {
         throw err;
       }
       if (
-        requestTimeoutMs &&
-        shouldRetryTimedOutTelegramControlRequest(method) &&
-        canForceTransportFallback("request-timeout")
-      ) {
-        return await runFetch();
-      }
-      if (
-        isTelegramMisdirectedRequestError(err) &&
-        canForceTransportFallback("misdirected-request")
+        (requestTimeoutMs &&
+          method !== null &&
+          TELEGRAM_TIMEOUT_FALLBACK_METHODS.has(method) &&
+          canForceTransportFallback("request-timeout")) ||
+        (isTelegramMisdirectedRequestError(err) && canForceTransportFallback("misdirected-request"))
       ) {
         return await runFetch();
       }

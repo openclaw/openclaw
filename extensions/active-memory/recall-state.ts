@@ -203,11 +203,7 @@ export function getCachedResult(cacheKey: string): ActiveRecallResult | undefine
     return undefined;
   }
   const now = asDateTimestampMs(Date.now());
-  if (
-    now === undefined ||
-    asDateTimestampMs(cached.expiresAt) === undefined ||
-    cached.expiresAt <= now
-  ) {
+  if (now === undefined || cached.expiresAt <= now) {
     activeRecallCache.delete(cacheKey);
     return undefined;
   }
@@ -253,7 +249,7 @@ function sweepExpiredCacheEntries(now = asDateTimestampMs(Date.now())): void {
     return;
   }
   for (const [cacheKey, cached] of activeRecallCache.entries()) {
-    if (asDateTimestampMs(cached.expiresAt) === undefined || cached.expiresAt <= now) {
+    if (cached.expiresAt <= now) {
       activeRecallCache.delete(cacheKey);
     }
   }

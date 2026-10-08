@@ -3,6 +3,7 @@ import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import * as skillSelection from "../../skills/library/selection.js";
 import * as skillService from "../../skills/library/service.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -14,6 +15,55 @@ import type { RespondFn } from "./types.js";
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createFixture = useBrowserFollowupFixture();
+
+it("acknowledges durable chat input while unrelated history cannot dispatch", async ({
+  signal,
+}) => {
+  const fixture = await createFixture({ active: false });
+  const profile = ensureProfileForEmail("history-independent-ack@example.test");
+  fixture.client.authenticatedUserProfile = {
+    profileId: profile.id,
+    displayName: "History contention fixture",
+    hasAvatar: false,
+    updatedAt: profile.updatedAt,
+  };
+  const releaseHistory = createDeferred();
+  const acknowledged = createDeferred();
+  const runHistory = historyLane.pool.run.bind(historyLane.pool);
+  const blockedHistory = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+    await releaseHistory.promise;
+    return runHistory(...args);
+  });
+  const respond = vi.fn<RespondFn>(() => acknowledged.resolve());
+  const sending = fixture.send(respond, {});
+  try {
+    await withinTest(acknowledged.promise, signal);
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      true,
+      expect.objectContaining({
+        runId: fixture.params.idempotencyKey,
+        status: "started",
+        messageSeq: 2,
+      }),
+      undefined,
+      expect.anything(),
+    );
+    const transcript = loadTranscriptEventsSync(fixture.scope);
+    expect(transcript).toHaveLength(fixture.activeTranscript.length + 1);
+    expect(transcript.at(-1)).toMatchObject({
+      message: {
+        role: "user",
+        content: fixture.params.message,
+        idempotencyKey: `${fixture.params.idempotencyKey}:user`,
+      },
+    });
+  } finally {
+    releaseHistory.resolve();
+    blockedHistory.mockRestore();
+    await sending;
+    await fixture.cleanup();
+  }
+});
 
 it.for([
   { preparation: "selection", outcome: "dispatch" },

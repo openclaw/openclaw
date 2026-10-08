@@ -369,7 +369,6 @@ async function resumeMainSessionWithinAdmission(
           (harnessCompletion &&
             (entry.lifecycleRevision !== harnessCompletion.lifecycleRevision ||
               entry.restartRecoveryHarnessCompletion?.taskId !== harnessCompletion.taskId)) ||
-          entry.status !== "running" ||
           entry.abortedLastRun !== true ||
           normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== claimedRunId ||
           normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
@@ -399,7 +398,6 @@ async function resumeMainSessionWithinAdmission(
       }
       const current = rollback?.entry;
       return current?.sessionId === params.entry.sessionId &&
-        current.status === "running" &&
         current.abortedLastRun === true &&
         !current.mainRestartRecovery?.reservation &&
         !current.mainRestartRecovery?.tombstone
@@ -476,6 +474,21 @@ async function resumeMainSessionWithinAdmission(
     const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
       agentParams,
       gatewayRuntime: params.gatewayRuntime,
+      ...(sourceRunId && params.entry.restartRecoveryOperatorSource
+        ? {
+            restartRecoveryOperatorTarget: {
+              ...target,
+              sessionId: params.entry.sessionId,
+              sourceRunId,
+              recoveryRunId,
+            },
+          }
+        : {}),
+      assertAdmissionCurrent: () => {
+        if (params.shouldContinue?.() === false || !taskRemainsOwed()) {
+          throw new Error("Restart recovery admission is no longer current.");
+        }
+      },
       onSettled: () => {
         dispatchSettled = true;
         stopTyping?.();

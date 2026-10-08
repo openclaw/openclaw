@@ -21,56 +21,45 @@ function diagnosticToolIdentity(params: DynamicToolDiagnosticContext) {
   };
 }
 
-export function emitDynamicToolStartedDiagnostic(params: DynamicToolDiagnosticContext): void {
-  emitTrustedDiagnosticEvent({
-    type: "tool.execution.started",
-    ...diagnosticToolIdentity(params),
-  });
-}
-
-export function emitDynamicToolErrorDiagnostic(
-  params: DynamicToolDiagnosticContext & {
-    durationMs: number;
-    terminalReason?: "failed" | "cancelled" | "timed_out";
-  },
-): void {
-  emitTrustedDiagnosticEvent({
-    type: "tool.execution.error",
-    ...diagnosticToolIdentity(params),
-    durationMs: params.durationMs,
-    errorCategory: "codex_dynamic_tool_error",
-    terminalReason: params.terminalReason ?? "failed",
-  });
-}
-
-/** Emits the terminal event matching a dynamic tool response's diagnostic type. */
-export function emitDynamicToolTerminalDiagnostic(
-  params: DynamicToolDiagnosticContext & {
-    response: CodexDynamicToolRuntimeResponse;
-    durationMs: number;
-  },
-): void {
-  const terminalType =
-    params.response.diagnosticTerminalType ?? (params.response.success ? "completed" : "error");
-  if (terminalType === "completed") {
+export function createCodexDynamicToolDiagnostics(params: DynamicToolDiagnosticContext) {
+  const error = (
+    durationMs: number,
+    terminalReason: "failed" | "cancelled" | "timed_out" = "failed",
+  ) => {
     emitTrustedDiagnosticEvent({
-      type: "tool.execution.completed",
+      type: "tool.execution.error",
       ...diagnosticToolIdentity(params),
-      durationMs: params.durationMs,
+      durationMs,
+      errorCategory: "codex_dynamic_tool_error",
+      terminalReason,
     });
-    return;
-  }
-  if (terminalType === "blocked") {
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.blocked",
-      ...diagnosticToolIdentity(params),
-      deniedReason: "plugin-before-tool-call",
-      reason: "Tool call blocked",
-    });
-    return;
-  }
-  emitDynamicToolErrorDiagnostic({
-    ...params,
-    terminalReason: params.response.diagnosticTerminalReason ?? "failed",
-  });
+  };
+  return {
+    started() {
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.started",
+        ...diagnosticToolIdentity(params),
+      });
+    },
+    error,
+    terminal(response: CodexDynamicToolRuntimeResponse, durationMs: number) {
+      const type = response.diagnosticTerminalType ?? (response.success ? "completed" : "error");
+      if (type === "completed") {
+        emitTrustedDiagnosticEvent({
+          type: "tool.execution.completed",
+          ...diagnosticToolIdentity(params),
+          durationMs,
+        });
+      } else if (type === "blocked") {
+        emitTrustedDiagnosticEvent({
+          type: "tool.execution.blocked",
+          ...diagnosticToolIdentity(params),
+          deniedReason: "plugin-before-tool-call",
+          reason: "Tool call blocked",
+        });
+      } else {
+        error(durationMs, response.diagnosticTerminalReason ?? "failed");
+      }
+    },
+  };
 }

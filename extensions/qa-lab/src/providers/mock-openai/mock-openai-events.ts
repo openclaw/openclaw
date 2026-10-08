@@ -1,5 +1,3 @@
-// QA Lab mock provider output event builders.
-
 import { stripInboundMetadata } from "openclaw/plugin-sdk/qa-runtime";
 import {
   type MockAssistantMessageSpec,

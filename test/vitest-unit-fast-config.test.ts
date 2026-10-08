@@ -101,8 +101,10 @@ describe("unit-fast vitest lane", () => {
           gitLsFilesCalls += 1;
           const stdout = [
             "src/agents/agent-tools.deferred-followup-guidance.test.ts",
+            "src/agents/session-maintenance/coordinator.test.ts",
             "src/hooks/frontmatter.test.ts",
             "src/media-generation/runtime-shared.test.ts",
+            "src/routing/account-lookup.test.ts",
           ].join("\\0") + "\\0";
           return {
             pid: 0,
@@ -199,6 +201,25 @@ describe("unit-fast vitest lane", () => {
         );
         const fullUnitConfig = createUnitVitestConfigWithOptions({}, { argv: ["node", "vitest", "run"] });
         console.log("UNIT_FULL_EXCLUSION_PROBE", fullUnitConfig.test.exclude.includes("src/hooks/frontmatter.test.ts"));
+        delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+        process.argv = ["node", "vitest", "run"];
+        const { createVitestRunSpecs } = await import("./scripts/test-projects.test-support.mts");
+        const lifecycleFiles = ["src/agents/session-maintenance/coordinator.test.ts", "src/routing/account-lookup.test.ts"];
+        const lifecycleRuns = [];
+        for (const [index, spec] of createVitestRunSpecs(lifecycleFiles, { baseEnv: {} }).entries()) {
+          const selectedFile = path.join(directory, "lifecycle-" + index + ".json");
+          fs.writeFileSync(selectedFile, JSON.stringify(spec.includePatterns));
+          process.env.OPENCLAW_VITEST_INCLUDE_FILE = selectedFile;
+          const { default: { test } } = await import("./" + spec.config + "?lifecycle-probe=" + index);
+          const directoryPrefix = path.relative(process.cwd(), test.dir ?? process.cwd());
+          const admitted = lifecycleFiles.filter((file) => {
+            const relative = path.relative(directoryPrefix || ".", file).replaceAll("\\\\", "/");
+            return test.include.some((pattern) => path.matchesGlob(relative, pattern))
+              && !test.exclude.some((pattern) => path.matchesGlob(relative, pattern));
+          });
+          lifecycleRuns.push({ config: spec.config, admitted, runner: test.runner ? path.basename(test.runner) : null });
+        }
+        console.log("UNIT_LIFECYCLE_ROUTING_PROBE", JSON.stringify(lifecycleRuns.sort((a, b) => a.config.localeCompare(b.config))));
       } finally {
         fs.rmSync(directory, { recursive: true, force: true });
       }
@@ -289,6 +310,24 @@ describe("unit-fast vitest lane", () => {
       { include, excluded },
     ]);
     expect(configProbeResult.stdout).toContain("UNIT_FULL_EXCLUSION_PROBE true");
+  });
+
+  it("keeps lifecycle drains in their reset-capable owner without dropping test coverage", () => {
+    expect(configProbeResult.status, configProbeResult.stderr).toBe(0);
+    const routing = configProbeResult.stdout.match(/UNIT_LIFECYCLE_ROUTING_PROBE (.+)/u);
+    expect(routing, configProbeResult.stdout).not.toBeNull();
+    expect(JSON.parse(routing?.[1] ?? "null")).toEqual([
+      {
+        config: "test/vitest/vitest.agents-support.config.ts",
+        admitted: ["src/agents/session-maintenance/coordinator.test.ts"],
+        runner: "non-isolated-runner.ts",
+      },
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        admitted: ["src/routing/account-lookup.test.ts"],
+        runner: null,
+      },
+    ]);
   });
 
   it("keeps untracked tests in their planned fast lane and execution include list", () => {

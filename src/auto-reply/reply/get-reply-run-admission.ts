@@ -41,7 +41,6 @@ import {
   REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
   waitForPreparedReplyQueue,
 } from "./get-reply-run-queue.js";
-import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { hasPendingFollowupQueueWork } from "./queue/state.js";
@@ -67,18 +66,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     params,
     traceRunPhase,
     inboundEventKind,
-    sourceReplyDeliveryMode,
     useFastReplyRuntime,
     thinkingRuntime,
     isFirstTurnInSession,
-    baseBodyFinal,
-    hasUserBody,
-    isBareSessionReset,
-    startupAction,
-    startupContextPrelude,
-    softResetTail,
     isMainSession,
-    inboundUserContextPromptJoiner,
     effectiveQueueMode,
     effectiveResetTriggered,
     explicitThinkingLevelOverride,
@@ -178,29 +169,13 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       }
     }
   };
-  const rebuildPromptBodies = () => {
-    const { activeGoalContext, inboundUserContext } = context.getInboundContext();
-    return buildReplyPromptEnvelope({
-      ctx,
-      sessionCtx,
-      baseBody: baseBodyFinal,
+  const rebuildPromptBodies = () =>
+    context.buildPromptBodies({
       prefixedBody: prefixedBodyCore,
-      hasUserBody,
-      inboundUserContext,
-      activeGoalContext,
-      inboundUserContextPromptJoiner,
-      isBareSessionReset,
-      startupAction,
-      startupContextPrelude,
-      softResetTail,
-      isHeartbeat: context.isHeartbeat,
-      inboundEventKind,
-      sourceReplyDeliveryMode,
       threadContextNote,
       systemEventBlocks: drainedSystemEventBlocks,
       media: opts?.media,
     });
-  };
   const skillResult = isFastTestRuntimeEnv()
     ? {
         sessionEntry,
@@ -250,13 +225,15 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   }
   const allowedThinkingCatalog = modelState.allowedModelCatalog ?? [];
   let thinkingCatalog = allowedThinkingCatalog.length > 0 ? allowedThinkingCatalog : undefined;
-  let thinkingSelection = resolveThinkingSelectionForModel({
-    provider,
-    model,
-    level: resolvedThinkLevel,
-    catalog: thinkingCatalog,
-    agentRuntime: thinkingRuntime,
-  });
+  const resolveCurrentThinkingSelection = () =>
+    resolveThinkingSelectionForModel({
+      provider,
+      model,
+      level: resolvedThinkLevel,
+      catalog: thinkingCatalog,
+      agentRuntime: thinkingRuntime,
+    });
+  let thinkingSelection = resolveCurrentThinkingSelection();
   const shouldHydrateThinkingCatalog =
     !thinkingSelection.supported ||
     (resolvedThinkLevel !== "off" &&
@@ -269,13 +246,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     thinkingCatalog = await traceRunPhase("reply.resolve_thinking_catalog", () =>
       modelState.resolveThinkingCatalog({ provider, model }),
     );
-    thinkingSelection = resolveThinkingSelectionForModel({
-      provider,
-      model,
-      level: resolvedThinkLevel,
-      catalog: thinkingCatalog,
-      agentRuntime: thinkingRuntime,
-    });
+    thinkingSelection = resolveCurrentThinkingSelection();
   }
   if (!thinkingSelection.supported) {
     const explicitThink =
@@ -648,15 +619,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     promptBodies = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   }
 
-  const {
-    prefixedCommandBody,
-    queuedBody,
-    transcriptBody,
-    transcriptCommandBody,
-    media: promptMedia,
-    inboundMediaIndexes,
-    currentInboundContext,
-  } = promptBodies;
   return {
     kind: "ready",
     context,
@@ -664,13 +626,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     thinkLevelOverride,
     thinkingCatalog,
     skillsSnapshot,
-    prefixedCommandBody,
-    queuedBody,
-    transcriptBody,
-    transcriptCommandBody,
-    promptMedia,
-    inboundMediaIndexes,
-    currentInboundContext,
+    promptBodies,
     isRoomEvent,
     providedReplyOperation,
     preparedSessionState,

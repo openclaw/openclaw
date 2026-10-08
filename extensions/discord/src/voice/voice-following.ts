@@ -37,34 +37,25 @@ type FollowUserReconcileUserSelection = {
 export function normalizeVoiceChannelResidencies(
   entries: Array<{ guildId?: string; channelId?: string; whenOccupied?: boolean }> | undefined,
 ): VoiceChannelResidency[] {
-  const normalized: VoiceChannelResidency[] = [];
-  for (const entry of entries ?? []) {
+  return Array.from(entries ?? [], (entry) => {
     const guildId = entry.guildId?.trim();
     const channelId = entry.channelId?.trim();
-    if (guildId && channelId) {
-      normalized.push({
-        guildId,
-        channelId,
-        ...(entry.whenOccupied === true ? { whenOccupied: true } : {}),
-      });
-    }
-  }
-  return normalized;
+    return guildId && channelId
+      ? [{ guildId, channelId, ...(entry.whenOccupied === true ? { whenOccupied: true } : {}) }]
+      : [];
+  }).flat();
 }
 
 function normalizeDiscordUserIds(entries: string[] | undefined): Set<string> {
-  const ids = new Set<string>();
-  for (const entry of entries ?? []) {
-    const id = entry
-      .trim()
-      .replace(/^discord:/, "")
-      .replace(/^user:/, "")
-      .trim();
-    if (id) {
-      ids.add(id);
-    }
-  }
-  return ids;
+  return new Set(
+    Array.from(entries ?? [], (entry) =>
+      entry
+        .trim()
+        .replace(/^discord:/, "")
+        .replace(/^user:/, "")
+        .trim(),
+    ).filter(Boolean),
+  );
 }
 
 function logFollowUserReconcileVerbose(reason: string, message: string): void {
@@ -73,6 +64,10 @@ function logFollowUserReconcileVerbose(reason: string, message: string): void {
     return;
   }
   logVoiceVerbose(message);
+}
+
+function cyclicId(ids: string[], index: number, label: string): string {
+  return expectDefined(ids[index % ids.length], label);
 }
 
 export class DiscordVoiceFollowing {
@@ -334,23 +329,7 @@ export class DiscordVoiceFollowing {
     const plans = this.selectFollowUserReconcilePlans(guildIds, reason);
     for (const plan of plans) {
       for (const userId of plan.userIds) {
-        const voiceState = await getGuildVoiceState(
-          this.params.client.rest,
-          plan.guildId,
-          userId,
-        ).catch((err: unknown) => {
-          if (!isUnknownDiscordVoiceStateError(err)) {
-            logger.warn(
-              `follow-user reconcile skipped (transient voice-state error) guild=${plan.guildId} user=${userId} trigger=${reason}: ${formatErrorMessage(err)}`,
-            );
-            return "transient-error" as const;
-          }
-          logFollowUserReconcileVerbose(
-            reason,
-            `follow user reconcile reason=${reason}: no voice state guild ${plan.guildId} user ${userId}: ${formatErrorMessage(err)}`,
-          );
-          return undefined;
-        });
+        const voiceState = await this.readReconcileVoiceState(plan.guildId, userId, reason);
         if (this.scheduler.signal.aborted) {
           return;
         }
@@ -390,10 +369,7 @@ export class DiscordVoiceFollowing {
       if (this.params.botUserId() && remainingLookups === 1) {
         break;
       }
-      const guildId = expectDefined(
-        guildIds[(start + offset) % guildIds.length],
-        "voice reconciliation guild index",
-      );
+      const guildId = cyclicId(guildIds, start + offset, "voice reconciliation guild index");
       let userLimit = Math.min(followedUserIds.length, remainingLookups);
       if (this.params.botUserId() && followedUserIds.length > userLimit && remainingLookups > 1) {
         userLimit = remainingLookups - 1;
@@ -437,10 +413,7 @@ export class DiscordVoiceFollowing {
     let scanned = 0;
     let assigned = 0;
     for (; scanned < guildIds.length && assigned < remainingLookups; scanned += 1) {
-      const guildId = expectDefined(
-        guildIds[(start + scanned) % guildIds.length],
-        "bot voice reconciliation guild index",
-      );
+      const guildId = cyclicId(guildIds, start + scanned, "bot voice reconciliation guild index");
       const plan = plansByGuild.get(guildId);
       if (!plan?.checkedAllUsers) {
         continue;
@@ -456,20 +429,14 @@ export class DiscordVoiceFollowing {
     followedUserIds: string[],
     limit: number,
   ): FollowUserReconcileUserSelection {
-    if (followedUserIds.length <= limit) {
-      this.followUsersReconcileUserCursors.set(guildId, 0);
-      return { userIds: followedUserIds, completedCycle: true };
-    }
-    const start = this.followUsersReconcileUserCursors.get(guildId) ?? 0;
-    const selected: string[] = [];
-    for (let offset = 0; offset < limit; offset += 1) {
-      selected.push(
-        expectDefined(
-          followedUserIds[(start + offset) % followedUserIds.length],
-          "followed user selection index",
-        ),
-      );
-    }
+    const start =
+      followedUserIds.length <= limit
+        ? 0
+        : (this.followUsersReconcileUserCursors.get(guildId) ?? 0);
+    const selected = Array.from(
+      { length: Math.min(Math.ceil(limit), followedUserIds.length) },
+      (_, offset) => cyclicId(followedUserIds, start + offset, "followed user selection index"),
+    );
     const completedCycle = start + selected.length >= followedUserIds.length;
     this.followUsersReconcileUserCursors.set(
       guildId,
@@ -555,23 +522,7 @@ export class DiscordVoiceFollowing {
     if (!botUserId) {
       return;
     }
-    const botVoiceState = await getGuildVoiceState(
-      this.params.client.rest,
-      guildId,
-      botUserId,
-    ).catch((err: unknown) => {
-      if (!isUnknownDiscordVoiceStateError(err)) {
-        logger.warn(
-          `discord voice: follow reconcile skipped transient bot voice state error guild=${guildId} reason=${reason}: ${formatErrorMessage(err)}`,
-        );
-        return "transient-error" as const;
-      }
-      logFollowUserReconcileVerbose(
-        reason,
-        `follow user reconcile reason=${reason}: no bot voice state guild ${guildId}: ${formatErrorMessage(err)}`,
-      );
-      return undefined;
-    });
+    const botVoiceState = await this.readReconcileVoiceState(guildId, botUserId, reason, true);
     if (this.scheduler.signal.aborted || botVoiceState === "transient-error") {
       return;
     }
@@ -615,5 +566,25 @@ export class DiscordVoiceFollowing {
     return guildAllowed.length === 1
       ? expectDefined(guildAllowed.at(0), "single allowed guild voice channel")
       : null;
+  }
+
+  private readReconcileVoiceState(guildId: string, userId: string, reason: string, isBot = false) {
+    return getGuildVoiceState(this.params.client.rest, guildId, userId).catch((err: unknown) => {
+      if (!isUnknownDiscordVoiceStateError(err)) {
+        logger.warn(
+          isBot
+            ? `discord voice: follow reconcile skipped transient bot voice state error guild=${guildId} reason=${reason}: ${formatErrorMessage(err)}`
+            : `follow-user reconcile skipped (transient voice-state error) guild=${guildId} user=${userId} trigger=${reason}: ${formatErrorMessage(err)}`,
+        );
+        return "transient-error" as const;
+      }
+      logFollowUserReconcileVerbose(
+        reason,
+        isBot
+          ? `follow user reconcile reason=${reason}: no bot voice state guild ${guildId}: ${formatErrorMessage(err)}`
+          : `follow user reconcile reason=${reason}: no voice state guild ${guildId} user ${userId}: ${formatErrorMessage(err)}`,
+      );
+      return undefined;
+    });
   }
 }

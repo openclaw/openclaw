@@ -1,7 +1,6 @@
 import {
   mkdir as fsMkdir,
   readFile as fsReadFile,
-  stat as fsStat,
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -19,7 +18,11 @@ import {
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
 import { planFileWriteDiff } from "./file-tool-planning.js";
-import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
+import {
+  type PersistedFileStat,
+  readPersistedFileStat,
+  verifyPersistedUtf8File,
+} from "./file-write-verification.js";
 import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   invalidArgText,
@@ -54,21 +57,7 @@ const defaultWriteOperations: WriteOperations = {
   writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
   mkdir: (dir) => fsMkdir(dir, { recursive: true }).then(() => {}),
   readFile: (path) => fsReadFile(path),
-  statFile: async (path) => {
-    try {
-      const stat = await fsStat(path);
-      return {
-        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      } as const;
-    } catch (error) {
-      if (isMissingPathError(error)) {
-        return null;
-      }
-      throw error;
-    }
-  },
+  statFile: (path) => readPersistedFileStat(path, isMissingPathError),
 };
 
 export interface WriteToolOptions {

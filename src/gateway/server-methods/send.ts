@@ -650,20 +650,15 @@ export const sendHandlers: GatewayRequestHandlers = {
               normalizeOptionalLowercaseString(providedSessionBaseKey) &&
             normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
           // Message-scoped threads can refine an existing base session only after target lookup.
-          const outboundRoute = derivedRoute
-            ? providedSessionKey
-              ? shouldUseDerivedThreadSessionKey
-                ? {
-                    ...derivedRoute,
-                    baseSessionKey: derivedRoute.baseSessionKey ?? providedSessionKey,
-                  }
-                : {
-                    ...derivedRoute,
-                    sessionKey: providedSessionKey,
-                    baseSessionKey: providedSessionKey,
-                  }
-              : derivedRoute
-            : null;
+          const outboundRoute =
+            derivedRoute && providedSessionKey
+              ? {
+                  ...derivedRoute,
+                  ...(shouldUseDerivedThreadSessionKey
+                    ? { baseSessionKey: derivedRoute.baseSessionKey ?? providedSessionKey }
+                    : { sessionKey: providedSessionKey, baseSessionKey: providedSessionKey }),
+                }
+              : (derivedRoute ?? null);
           const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
           if (outboundSessionKey) {
             const agentAccessError = authorizeGatewaySessionCreation({
@@ -846,31 +841,22 @@ export const sendHandlers: GatewayRequestHandlers = {
         const { cfg, channel } = resolved;
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         const outbound = plugin?.outbound;
-        if (
-          request.durationSeconds !== undefined &&
-          outbound?.supportsPollDurationSeconds !== true
-        ) {
-          // Duration support is channel-specific; reject before normalizing to avoid silent truncation.
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `durationSeconds is not supported for ${channel} polls`,
-            ),
-          );
-          return undefined;
-        }
-        if (request.isAnonymous !== undefined && outbound?.supportsAnonymousPolls !== true) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `isAnonymous is not supported for ${channel} polls`,
-            ),
-          );
-          return undefined;
+        // Reject channel-specific options before normalization can silently truncate them.
+        for (const [parameter, capability] of [
+          ["durationSeconds", "supportsPollDurationSeconds"],
+          ["isAnonymous", "supportsAnonymousPolls"],
+        ] as const) {
+          if (request[parameter] !== undefined && outbound?.[capability] !== true) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `${parameter} is not supported for ${channel} polls`,
+              ),
+            );
+            return undefined;
+          }
         }
         if (!plugin || !outbound?.sendPoll) {
           respond(

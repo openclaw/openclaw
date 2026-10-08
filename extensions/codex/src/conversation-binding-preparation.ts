@@ -211,20 +211,11 @@ export async function resolveConversationAppServerRuntime(params: {
 export const CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS =
   "This Codex thread is bound to an OpenClaw conversation. Answer normally; OpenClaw will deliver your final response back to the conversation.";
 
-type CodexThreadBindingParams = {
-  pluginConfig?: unknown;
+type CodexThreadBindingParams = Parameters<typeof resolveConversationAppServerRuntime>[0] & {
   bindingStore: CodexAppServerBindingStore;
   identity: CodexAppServerBindingIdentity;
-  workspaceDir: string;
-  agentDir?: string;
-  model?: string;
-  modelProvider?: string;
   authProfileId?: string;
   serviceTier?: CodexServiceTier;
-  config?: CodexAppServerAuthProfileLookup["config"];
-  agentId?: string;
-  sessionKey?: string;
-  source?: CodexAppServerConversationBindingData["source"];
   incognito: boolean;
 };
 
@@ -233,10 +224,7 @@ type ConversationAppServerRuntime = Awaited<ReturnType<typeof resolveConversatio
 type CodexThreadBindingRuntime = Awaited<ReturnType<typeof resolveThreadBindingRuntime>>;
 
 async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
-  const agentLookup = buildCodexConversationAgentLookup({
-    agentDir: params.agentDir,
-    config: params.config,
-  });
+  const agentLookup = buildCodexConversationAgentLookup(params);
   const modelProvider = resolveThreadRequestModelProvider({
     authProfileId: params.authProfileId,
     modelProvider: params.modelProvider,
@@ -256,15 +244,8 @@ async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
     ...agentLookup,
   });
   const { runtime, workspaceDir } = await resolveConversationAppServerRuntime({
-    pluginConfig: params.pluginConfig,
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    source: params.source,
-    workspaceDir: params.workspaceDir,
+    ...params,
     modelProvider: reviewerModelProvider,
-    model: params.model,
-    agentDir: params.agentDir,
   });
   assertNativeConversationApprovalPolicySupported(runtime);
   const clientOptions = {

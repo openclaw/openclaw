@@ -24,7 +24,11 @@ export type SessionWorkerPlacementContext = {
     Partial<
       Pick<
         WorkerSessionPlacementStore,
-        "retireSessionPlacement" | "listForReconcile" | "prepareRuntimeRefresh"
+        | "getManyAsync"
+        | "retireSessionPlacement"
+        | "listForReconcile"
+        | "retireSessionPlacementAsync"
+        | "prepareRuntimeRefresh"
       >
     >;
 };
@@ -172,6 +176,21 @@ function readSessionWorkerPlacement(params: {
     : undefined;
 }
 
+export async function readSessionWorkerPlacementAsync(params: {
+  context: SessionWorkerPlacementContext;
+  sessionId?: string;
+}): Promise<Placement | undefined> {
+  const service = params.context.workerSessionPlacementService;
+  if (!params.sessionId || !service) {
+    return undefined;
+  }
+  // Released Gateway contexts may supply only the synchronous placement reader.
+  const placements = service.getManyAsync
+    ? await service.getManyAsync([params.sessionId])
+    : service.getMany([params.sessionId]);
+  return placements.get(params.sessionId);
+}
+
 function samePlacementOwner(
   expected: PlacementOwner | undefined,
   current: PlacementOwner | undefined,
@@ -186,13 +205,12 @@ function samePlacementOwner(
 }
 
 /** Retain the exact stopped placement across fallible workspace or session mutations. */
-export function prepareSessionWorkerPlacementMutationCheck(
+function createSessionWorkerPlacementMutationCheck(
   params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+  expected: Placement | undefined,
   operation: "mutation" | "retirement" = "mutation",
 ) {
-  const expected = readSessionWorkerPlacement(params);
-  const assertCurrent = () => {
-    const current = readSessionWorkerPlacement(params);
+  const assertPlacement = (current: Placement | undefined) => {
     if (
       !samePlacementOwner(expected, current) ||
       current?.turnClaim ||
@@ -201,30 +219,51 @@ export function prepareSessionWorkerPlacementMutationCheck(
       throw new Error(`Worker session placement ${params.sessionId} changed before ${operation}`);
     }
   };
-  assertCurrent();
-  return assertCurrent;
+  assertPlacement(expected);
+  // SDK and foreign writers can bypass retained owner observations. Keep the
+  // existing exact native predicate immediately before downstream effects.
+  return () => assertPlacement(readSessionWorkerPlacement(params));
+}
+
+export function prepareSessionWorkerPlacementMutationCheck(
+  params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+  operation: "mutation" | "retirement" = "mutation",
+) {
+  return createSessionWorkerPlacementMutationCheck(
+    params,
+    readSessionWorkerPlacement(params),
+    operation,
+  );
+}
+
+export async function prepareSessionWorkerPlacementMutationCheckAsync(
+  params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+) {
+  return createSessionWorkerPlacementMutationCheck(
+    params,
+    await readSessionWorkerPlacementAsync(params),
+  );
 }
 
 /** Archive visibility can change while a failed placement retains its physical cleanup. */
-export function prepareSessionWorkerPlacementArchiveCheck(
+function createSessionWorkerPlacementArchiveCheck(
   params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+  expected: Placement | undefined,
 ): { assertCurrent: () => void; cleanupPending: boolean } {
-  const expected = readSessionWorkerPlacement(params);
   if (expected?.state !== "failed") {
     return {
-      assertCurrent: prepareSessionWorkerPlacementMutationCheck(params),
+      assertCurrent: createSessionWorkerPlacementMutationCheck(params, expected),
       cleanupPending: false,
     };
   }
-  const assertCurrent = () => {
-    const current = readSessionWorkerPlacement(params);
+  const assertPlacement = (current: Placement | undefined) => {
     if (!samePlacementOwner(expected, current) || current?.turnClaim) {
       throw new Error(`Worker session placement ${params.sessionId} changed before archive`);
     }
   };
-  assertCurrent();
+  assertPlacement(expected);
   return {
-    assertCurrent,
+    assertCurrent: () => assertPlacement(readSessionWorkerPlacement(params)),
     cleanupPending: !isFailedWorkerPlacementEnvironmentGone({
       environmentService: params.context.workerEnvironmentService,
       placement: expected,
@@ -232,27 +271,37 @@ export function prepareSessionWorkerPlacementArchiveCheck(
   };
 }
 
+export async function prepareSessionWorkerPlacementArchiveCheckAsync(
+  params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+): Promise<{ assertCurrent: () => void; cleanupPending: boolean }> {
+  return createSessionWorkerPlacementArchiveCheck(
+    params,
+    await readSessionWorkerPlacementAsync(params),
+  );
+}
+
 /** Capture retirement without erasing cloud affinity before fallible session cleanup. */
-export function prepareSessionWorkerPlacementRetirement(
+export async function prepareSessionWorkerPlacementRetirement(
   params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
 ) {
-  const expected = readSessionWorkerPlacement(params);
-  const assertCurrent = prepareSessionWorkerPlacementMutationCheck(params, "retirement");
-  const retire = params.context.workerSessionPlacementService?.retireSessionPlacement;
+  const expected = await readSessionWorkerPlacementAsync(params);
+  const assertCurrent = createSessionWorkerPlacementMutationCheck(params, expected, "retirement");
+  const service = params.context.workerSessionPlacementService;
+  const retire = service?.retireSessionPlacementAsync ?? service?.retireSessionPlacement;
   if (expected && !retire) {
     throw new Error("Worker session placement retirement service is unavailable");
   }
   return {
     assertCurrent,
-    retire: () => {
+    retire: async () => {
       // Called only after confirmed deletion; orphan reconciliation may have
       // retired this placement while transcript archive publication awaited.
-      if (!readSessionWorkerPlacement(params)) {
+      if (!(await readSessionWorkerPlacementAsync(params))) {
         return;
       }
       assertCurrent();
       if (expected && retire && isWorkerPlacementSafeForMutation(params.context, expected)) {
-        retire({
+        await retire({
           sessionId: expected.sessionId,
           expectedState: expected.state,
           expectedGeneration: expected.generation,

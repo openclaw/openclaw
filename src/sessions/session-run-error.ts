@@ -6,11 +6,7 @@ import {
   appendSessionTranscriptReport,
   type SessionTranscriptWriteScope,
 } from "../config/sessions/session-accessor.js";
-import { settleStartupSession } from "../config/sessions/session-accessor.sqlite-transcript-reports.js";
-import type {
-  StartupSessionObservation,
-  CustomMessageReportAppend,
-} from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
+import type { CustomMessageReportAppend } from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -29,29 +25,13 @@ type GatewaySessionRunFailure = {
   runId: string;
   error: unknown;
   errorKind?: "state_contention";
-} & (
-  | {
-      startupInterruption: StartupSessionObservation;
-      assertCommitAllowed: () => void;
-      sessionEntryCurrent?: never;
-    }
-  | {
-      startupInterruption?: undefined;
-      assertCommitAllowed?: () => void;
-      sessionEntryCurrent?: SessionEntryCurrentCheck;
-    }
-);
+  assertCommitAllowed?: () => void;
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
+};
 
-export function recordGatewaySessionRunFailure(
-  params: GatewaySessionRunFailure & { startupInterruption?: undefined },
-): Promise<void>;
-export function recordGatewaySessionRunFailure(
-  params: GatewaySessionRunFailure,
-): Promise<void | "retained">;
-/** Shared failure receipt; startup interruption is an atomic worker-owned entry/report command. */
 export async function recordGatewaySessionRunFailure(
   params: GatewaySessionRunFailure,
-): Promise<void | "retained"> {
+): Promise<void> {
   const { runId } = params;
   const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
   const report: CustomMessageReportAppend = {
@@ -63,42 +43,27 @@ export async function recordGatewaySessionRunFailure(
     display: true,
     details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
   };
-  const result = params.startupInterruption
-    ? await settleStartupSession(
+  const result = await withSessionTranscriptWriteAssertion(
+    params.target,
+    () => params.assertCommitAllowed?.(),
+    () =>
+      appendSessionTranscriptReport(
         params.target,
         {
-          kind: "interrupt",
-          observation: params.startupInterruption,
-          runId,
-          error,
-          report,
+          kind: "custom",
+          customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
+          suppressWhenAssistantRun: runId,
+          selectReport: (latest) => {
+            params.assertCommitAllowed?.();
+            return isRecord(latest?.details) && latest.details.runId === runId ? undefined : report;
+          },
         },
-        params.assertCommitAllowed,
-      )
-    : await withSessionTranscriptWriteAssertion(
-        params.target,
-        () => params.assertCommitAllowed?.(),
-        () =>
-          appendSessionTranscriptReport(
-            params.target,
-            {
-              kind: "custom",
-              customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
-              suppressWhenAssistantRun: runId,
-              selectReport: (latest) => {
-                params.assertCommitAllowed?.();
-                return isRecord(latest?.details) && latest.details.runId === runId
-                  ? undefined
-                  : report;
-              },
-            },
-            { sessionEntryCurrent: params.sessionEntryCurrent },
-          ),
-      );
+        { sessionEntryCurrent: params.sessionEntryCurrent },
+      ),
+  );
   if (!result.ok) {
     throw new Error(`Failed run notice could not be appended: ${result.error.code}`);
   }
-  return result.value === "retained" ? "retained" : undefined;
 }
 
 export function resolveSessionRunError(

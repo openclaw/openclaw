@@ -22,6 +22,8 @@ export type PreparedSessionSourceAuthority = {
   /** Process-held sources require native atomicity when writing a durable target. */
   nativeSource?: boolean;
   assertCurrent: () => void;
+  /** Prepared components only; opaque callbacks still require the full native fence. */
+  assertPreparedCurrent?: () => void;
   checks: {
     predicate: SessionSourcePredicate;
     refuse: (facts: SessionSourcePredicateFacts) => never;
@@ -88,6 +90,7 @@ export function createDynamicSessionSourceAssertion(
 export function composeSessionSourceAssertion(
   sources: readonly (SessionSourceAssertion | undefined)[],
   check: (assertSources: () => void) => void = (assertSources) => assertSources(),
+  options?: { preparedCheck: (assertSources: () => void) => void },
 ): SessionSourceAssertion {
   return Object.assign(() => check(() => sources.forEach((source) => source?.())), {
     async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
@@ -100,6 +103,16 @@ export function composeSessionSourceAssertion(
         return {
           nativeSource: prepared.some((source) => source.nativeSource),
           assertCurrent: () => check(() => prepared.forEach((source) => source.assertCurrent())),
+          assertPreparedCurrent: () =>
+            (options?.preparedCheck ?? check)(() => {
+              for (const source of prepared) {
+                if (source.assertPreparedCurrent) {
+                  source.assertPreparedCurrent();
+                } else if (!source.nativeSource) {
+                  source.assertCurrent();
+                }
+              }
+            }),
           checks: prepared.flatMap((source, index) =>
             source.checks.map(({ predicate, refuse }) => ({
               predicate,

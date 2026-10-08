@@ -60,9 +60,6 @@ export function resolveSlackRoutingContext(params: {
   // Keep ordinary top-level room messages on the per-channel session for
   // continuity, but preserve Slack thread identity when the event already has
   // one or when an actionable app mention will seed a reply thread.
-  // This keeps a thread root and its later replies on one parent session
-  // without returning to the old "every channel message is its own thread"
-  // behavior (regression from #10686).
   const seedCandidateThreadId = threadContext.incomingThreadTs ?? threadContext.messageTs;
   const seededRoomThreadId =
     !isThreadReply &&

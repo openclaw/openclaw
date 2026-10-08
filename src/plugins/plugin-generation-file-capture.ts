@@ -4,7 +4,10 @@ import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { createPluginNativeAdmission } from "./plugin-native-admission.js";
 import type { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
-import { copyPluginSourceFile } from "./plugin-source-file.js";
+import {
+  copyPluginSourceFile,
+  pluginSourceIdentityChangedOnlyByCtime,
+} from "./plugin-source-file.js";
 import {
   readPluginSourceDirectory,
   pluginSourceInputIdentity,
@@ -147,12 +150,24 @@ export function createPluginGenerationFileCapture({
         nativeAdmission.reconcileSourceInputs(inputs);
       } else if (captured) {
         // A second filename for a prefetched entry retains its first bytes and source identity.
-        fs.copyFileSync(captured, target, fs.constants.COPYFILE_FICLONE);
+        copiedContent = copyPluginSourceFile(captured, directory, target, {
+          hashCopiedContent: true,
+          preserveSourceMode: true,
+        });
       } else {
         copiedContent = copyPluginSourceFile(real, inputBoundary, target, {
           hashCopiedContent: true,
         });
-        fs.chmodSync(target, 0o600 | Number(stat.mode & 0o100n));
+        const identity = pluginSourceInputIdentity(stat);
+        if (
+          copiedContent &&
+          copiedContent.sourceIdentity !== identity &&
+          !pluginSourceIdentityChangedOnlyByCtime(identity, copiedContent.sourceIdentity)
+        ) {
+          throw new Error(
+            "Plugin source changed while preparing its reload; retry after the edit finishes.",
+          );
+        }
       }
       receipt.file({
         target: native?.path ?? target,
@@ -166,7 +181,7 @@ export function createPluginGenerationFileCapture({
             content.contentHash,
             content.sizeBytes,
             native !== undefined,
-            native?.sourceIdentity,
+            native?.sourceIdentity ?? (captured ? undefined : copiedContent?.sourceIdentity),
             native?.sourceBoundary ?? inputBoundary,
           );
         },

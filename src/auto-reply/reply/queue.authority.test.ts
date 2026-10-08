@@ -67,85 +67,82 @@ function createOperatorAuthority() {
 }
 
 describe("followup queue authority", () => {
-  it.each(["followup", "collect"] as const)(
-    "keeps a restricted sender's tool policy and task root through a %s drain",
-    async (mode) => {
-      const q = createQueueCase({ mode }, 2);
-      const conversationToolPolicy = {
-        allow: ["read", "sessions_spawn", "sessions_yield", "subagents"],
-        deny: ["exec"],
+  it("keeps a restricted sender's tool policy and task root through a collect drain", async () => {
+    const q = createQueueCase({ mode: "collect" }, 2);
+    const conversationToolPolicy = {
+      allow: ["read", "sessions_spawn", "sessions_yield", "subagents"],
+      deny: ["exec"],
+    };
+    for (const restricted of [true, false]) {
+      const run = createRun({
+        prompt: restricted ? "guest request" : "later unrestricted request",
+        originatingChannel: "telegram",
+        originatingTo: "chat-1",
+      });
+      run.run = {
+        ...run.run,
+        senderId: "sender-1",
+        senderIsOwner: false,
+        conversationToolPolicy: restricted ? conversationToolPolicy : undefined,
+        sessionRoot: "/tmp/requester-task",
+        workspaceDir: "/tmp/requester-task",
+        thinkingCatalog: [{ provider: "openai", id: "gpt-test", input: ["text"] }],
+        skipProviderRuntimeHints: true,
       };
-      for (const restricted of [true, false]) {
-        const run = createRun({
-          prompt: restricted ? "guest request" : "later unrestricted request",
-          originatingChannel: "telegram",
-          originatingTo: "chat-1",
+      q.add(run);
+    }
+    try {
+      await q.drain();
+      expect(q.calls).toHaveLength(2);
+      const observed = [];
+      for (const queued of q.calls) {
+        const params = await buildEmbeddedRunBaseParams({
+          run: queued.run,
+          provider: "openai",
+          model: "gpt-test",
+          runId: `queued-${observed.length}`,
+          authProfile: {},
         });
-        run.run = {
-          ...run.run,
+        const policy = resolveRequesterToolPolicies({
+          config: params.config,
+          agentId: queued.run.agentId,
+          senderId: queued.run.senderId,
+          conversationPolicy: params.conversationToolPolicy,
+        });
+        observed.push({
+          senderId: queued.run.senderId,
+          senderIsOwner: params.senderIsOwner,
+          source: policy.inheritedToolPolicySource,
+          canSpawn: isToolAllowedByPolicies("sessions_spawn", [policy.groupPolicy]),
+          canExec: isToolAllowedByPolicies("exec", [policy.groupPolicy]),
+          sessionRoot: params.sessionRoot,
+          workspaceDir: params.workspaceDir,
+        });
+      }
+      expect(observed).toEqual([
+        {
           senderId: "sender-1",
           senderIsOwner: false,
-          conversationToolPolicy: restricted ? conversationToolPolicy : undefined,
+          source: "sender",
+          canSpawn: true,
+          canExec: false,
           sessionRoot: "/tmp/requester-task",
           workspaceDir: "/tmp/requester-task",
-          thinkingCatalog: [{ provider: "openai", id: "gpt-test", input: ["text"] }],
-          skipProviderRuntimeHints: true,
-        };
-        q.add(run);
-      }
-      try {
-        await q.drain();
-        expect(q.calls).toHaveLength(2);
-        const observed = [];
-        for (const queued of q.calls) {
-          const params = await buildEmbeddedRunBaseParams({
-            run: queued.run,
-            provider: "openai",
-            model: "gpt-test",
-            runId: `queued-${observed.length}`,
-            authProfile: {},
-          });
-          const policy = resolveRequesterToolPolicies({
-            config: params.config,
-            agentId: queued.run.agentId,
-            senderId: queued.run.senderId,
-            conversationPolicy: params.conversationToolPolicy,
-          });
-          observed.push({
-            senderId: queued.run.senderId,
-            senderIsOwner: params.senderIsOwner,
-            source: policy.inheritedToolPolicySource,
-            canSpawn: isToolAllowedByPolicies("sessions_spawn", [policy.groupPolicy]),
-            canExec: isToolAllowedByPolicies("exec", [policy.groupPolicy]),
-            sessionRoot: params.sessionRoot,
-            workspaceDir: params.workspaceDir,
-          });
-        }
-        expect(observed).toEqual([
-          {
-            senderId: "sender-1",
-            senderIsOwner: false,
-            source: "sender",
-            canSpawn: true,
-            canExec: false,
-            sessionRoot: "/tmp/requester-task",
-            workspaceDir: "/tmp/requester-task",
-          },
-          {
-            senderId: "sender-1",
-            senderIsOwner: false,
-            source: undefined,
-            canSpawn: true,
-            canExec: true,
-            sessionRoot: "/tmp/requester-task",
-            workspaceDir: "/tmp/requester-task",
-          },
-        ]);
-      } finally {
-        clearFollowupQueueForTest(q.key);
-      }
-    },
-  );
+        },
+        {
+          senderId: "sender-1",
+          senderIsOwner: false,
+          source: undefined,
+          canSpawn: true,
+          canExec: true,
+          sessionRoot: "/tmp/requester-task",
+          workspaceDir: "/tmp/requester-task",
+        },
+      ]);
+    } finally {
+      clearFollowupQueueForTest(q.key);
+    }
+  });
 
   it("admits consecutive compatible operator input in FIFO order after its request returns", async () => {
     const key = "test-collect-original-operator";

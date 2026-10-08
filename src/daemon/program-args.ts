@@ -193,12 +193,8 @@ export async function resolveGatewayProgramArguments(params: {
     gatewayArgs.push("--allow-unconfigured");
   }
   const result = await resolveCliProgramArguments({
-    cliEntrypoint: params.cliEntrypoint,
+    ...params,
     args: gatewayArgs,
-    dev: params.dev,
-    runtime: params.runtime,
-    runtimePath: params.runtimePath,
-    wrapperPath: params.wrapperPath,
   });
   if (params.runtime === "node" && !params.wrapperPath?.trim()) {
     // Size only the managed Gateway, before Node loads its entrypoint. Keeping
@@ -252,11 +248,5 @@ export async function resolveNodeProgramArguments(params: {
   } else if (params.commands !== undefined) {
     args.push("--commands", params.commands.join(","));
   }
-  return resolveCliProgramArguments({
-    args,
-    dev: params.dev,
-    runtime: params.runtime,
-    runtimePath: params.runtimePath,
-    wrapperPath: params.wrapperPath,
-  });
+  return resolveCliProgramArguments({ ...params, args });
 }

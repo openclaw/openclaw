@@ -24,6 +24,29 @@ type ReadSessionStore = <T>(
   }) => Promise<T>,
 ) => Promise<T>;
 
+/** Capture under writer FIFO custody; validation grants no access to a released reader. */
+export function captureSessionEntryNativeMutationWitness(
+  databases: readonly PreparedSessionEntryWorkerRead["database"][],
+) {
+  const sources = databases.map((database) => {
+    const native = getOpenClawAgentDatabaseIfOpen(database);
+    return { database, native, revision: native && readSqliteNativeMutationRevision(native.db) };
+  });
+  return () => {
+    for (const { database, native, revision } of sources) {
+      if (
+        getOpenClawAgentDatabaseIfOpen(database) !== native ||
+        (native &&
+          (native.db.isTransaction ||
+            revision === undefined ||
+            readSqliteNativeMutationRevision(native.db) !== revision))
+      ) {
+        throw new SessionEntryChangedDuringReadError();
+      }
+    }
+  };
+}
+
 /** Native effects retain existing writer FIFO order through their synchronous consumer. */
 export async function withOrderedSessionEntriesInWorker<T>(
   inputs: readonly SessionEntryWorkerRead[],
@@ -53,16 +76,14 @@ export async function withOrderedSessionEntriesInWorker<T>(
       selected.map(({ database }) => database),
       async () => {
         // Synchronous SDK writers bypass the FIFO and may not publish row changes.
-        const nativeSources = selected.map(({ database }) => {
-          const native = getOpenClawAgentDatabaseIfOpen(database);
-          return {
-            database,
-            native,
-            revision: native && readSqliteNativeMutationRevision(native.db),
-          };
-        });
+        const assertNativeCurrent = captureSessionEntryNativeMutationWitness(
+          selected.map(({ database }) => database),
+        );
         let changed = false;
         const unsubscribe = sessionChanges.subscribeFacts((change) => {
+          if (!("all" in change) && change.scope === "acp") {
+            return;
+          }
           const scope = "all" in change ? change.scope : change;
           if (typeof scope === "string") {
             // Registry topology can invalidate discovery; presentation-only buses
@@ -108,17 +129,7 @@ export async function withOrderedSessionEntriesInWorker<T>(
           for (const read of selected) {
             read.assertCurrent();
           }
-          for (const { database, native, revision } of nativeSources) {
-            if (
-              getOpenClawAgentDatabaseIfOpen(database) !== native ||
-              (native &&
-                (native.db.isTransaction ||
-                  revision === undefined ||
-                  readSqliteNativeMutationRevision(native.db) !== revision))
-            ) {
-              throw new SessionEntryChangedDuringReadError();
-            }
-          }
+          assertNativeCurrent();
           if (changed) {
             throw new SessionEntryChangedDuringReadError();
           }

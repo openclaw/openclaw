@@ -17,15 +17,16 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as allocation from "./allocation.js";
+import type { WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
 import { formatWorktreeGcResult } from "./gc-result.js";
 import { requireGit } from "./git.js";
 import { insertRegistryWorktreeInDatabase } from "./registry-run-end.worker.js";
 import {
-  getRegistryWorktree,
   deleteRegistryWorktree,
   insertRegistryWorktree,
   updateRegistryWorktree,
 } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import { resolveRepository } from "./service-preparation.js";
 import { IDLE_GC_MS, SNAPSHOT_RETENTION_MS, ManagedWorktreeService } from "./service.js";
@@ -214,12 +215,16 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
   const gc = service.gc.bind(service);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   setRuntimeConfigSnapshot({}, {});
+  const ownerPolicy: WorktreeCleanupOwnerPolicy = {
+    shouldProtectOwner: (_kind, id) => id === "active-owner",
+    shouldRemoveOwner: () => false,
+  };
   let collected: ManagedWorktreeGcResult | undefined;
   vi.spyOn(ManagedWorktreeService.prototype, "gc").mockImplementation(async (params) => {
     collected = await gc({
       ...params,
-      shouldProtectOwner: (_kind, id) => id === "active-owner",
-      shouldRemoveOwner: () => false,
+      ...ownerPolicy,
+      prepareOwners: async () => ownerPolicy,
     });
     return collected;
   });
@@ -359,7 +364,7 @@ it.each(["gitdir", "checkout"])(
       ownerId: "agent:main:projection",
       names: ["projection"],
     });
-    deleteRegistryWorktree(env, record!.id);
+    await deleteRegistryWorktree(env, record!.id);
     record!.id = randomUUID();
     await insertRegistryWorktree(env, record!);
     await bindFixtureRepository(env, repo, [record!.id]);
