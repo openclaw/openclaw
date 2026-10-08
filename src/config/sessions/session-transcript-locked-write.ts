@@ -343,9 +343,15 @@ export async function withWorkerTranscriptWriteLock<T>(
               let message: TMessage | undefined = originalMessage;
               if (prepare && expected && !expected.pending && !expected.existing) {
                 // Preparation may await a delta read; settle it before this append commits.
-                message = await withTranscriptLockSettlement((queue) =>
+                message = await withTranscriptLockSettlement((queueRead) =>
                   withLockedSessionTranscriptReads(
-                    { canonicalPath: identity.canonicalPath, claim, worker, assertCurrent, queue },
+                    {
+                      canonicalPath: identity.canonicalPath,
+                      claim,
+                      worker,
+                      assertCurrent,
+                      queue: queueRead,
+                    },
                     () => prepare(originalMessage),
                   ),
                 );

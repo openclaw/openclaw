@@ -16,6 +16,7 @@ export async function withTranscriptLockSettlement<T>(
       return Promise.reject(new Error("Transcript write context is closed"));
     }
     if (signal?.aborted) {
+      // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve caller-owned AbortSignal reasons, including non-Error values.
       return Promise.reject(signal.reason);
     }
     let detach = () => {};
@@ -32,6 +33,7 @@ export async function withTranscriptLockSettlement<T>(
       return pending;
     }
     return new Promise((resolve, reject) => {
+      // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve caller-owned AbortSignal reasons, including non-Error values.
       const abort = () => reject(signal.reason);
       signal.addEventListener("abort", abort, { once: true });
       detach = () => signal.removeEventListener("abort", abort);
