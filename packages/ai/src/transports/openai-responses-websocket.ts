@@ -235,8 +235,7 @@ function acquireWebSocket(
   },
   connection: PreparedWebSocketConnection,
 ): WebSocketLease {
-  const useCache = params.mode !== "websocket" && Boolean(params.sessionId);
-  if (!useCache || !params.sessionId) {
+  if (params.mode === "websocket" || !params.sessionId) {
     return createTransientWebSocketLease(connection);
   }
 
@@ -549,10 +548,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
               steering?.close(new Error("Responses failed before steering could be applied"));
             }
             const continuationBuffer: ResponsesWebSocketStreamMessage[] = [];
-            for (;;) {
-              if (!steering?.pending) {
-                break;
-              }
+            while (steering?.pending) {
               const acknowledgement = await nextWebSocketMessage(iterator, params.signal);
               if (acknowledgement.done) {
                 throw new Error("Responses closed before acknowledging steering");

@@ -670,7 +670,7 @@ extensions/policy/src/doctor/automatic-repairs.ts	7
 extensions/policy/src/doctor/evaluation.ts	3
 extensions/policy/src/doctor/exec-approval-findings.ts	1
 extensions/policy/src/doctor/policy-runtime.ts	2
-extensions/policy/src/doctor/routing-shapes.ts	2
+extensions/policy/src/doctor/routing-shapes.ts	1
 extensions/policy/src/doctor/strictness.ts	3
 extensions/policy/src/doctor/tool-findings.ts	2
 extensions/policy/src/policy-routing.ts	2
@@ -1060,14 +1060,14 @@ packages/ai/src/providers/anthropic-refusal.ts	1
 packages/ai/src/providers/anthropic-server-fallback.ts	3
 packages/ai/src/providers/anthropic-thinking-replay.ts	2
 packages/ai/src/providers/anthropic-tool-projection.ts	2
-packages/ai/src/providers/anthropic-usage.ts	3
+packages/ai/src/providers/anthropic-usage.ts	1
 packages/ai/src/providers/anthropic.ts	3
 packages/ai/src/providers/azure-openai-responses.ts	1
-packages/ai/src/providers/clean-for-gemini.ts	6
+packages/ai/src/providers/clean-for-gemini.ts	5
 packages/ai/src/providers/google-shared.ts	2
 packages/ai/src/providers/mistral.ts	3
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
-packages/ai/src/providers/openai-chatgpt-responses.ts	19
+packages/ai/src/providers/openai-chatgpt-responses.ts	18
 packages/ai/src/providers/openai-completions-tool-calls.ts	3
 packages/ai/src/providers/openai-completions.ts	1
 packages/ai/src/providers/openai-reasoning-effort.ts	6
