@@ -376,7 +376,7 @@ vi.mock("openclaw/plugin-sdk/routing", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/agent-scope-runtime", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
 }));
 
