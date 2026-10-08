@@ -485,11 +485,10 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
     // Readers keep the committed generation until each candidate has discovered its own rows.
     // A failed discovery publishes the candidate's static rows, never the previous catalog's.
     await racePromiseWithAbortSignal(
-      Promise.all(
-        candidates.map((owner) =>
-          owner.snapshot
-            ?.loadFullModelCatalog?.({ refresh: true, wait: true })
-            .catch(() => undefined),
+      Promise.allSettled(
+        candidates.map(
+          async (owner) =>
+            await owner.snapshot?.loadFullModelCatalog?.({ refresh: true, wait: true }),
         ),
       ),
       controller.signal,

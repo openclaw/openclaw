@@ -309,13 +309,15 @@ it("keeps discovered rows published until the adopted catalog's discovery comple
   signal,
 }) => {
   await setup();
-  let hold: { started: () => void; release: Promise<unknown> } | undefined;
+  const discovering = createDeferred();
+  const release = createDeferred();
+  let held = false;
   mocks.runPreparedModelCatalogWorker.mockImplementation(async () => {
     // Discovery observes the catalog version of the generation that runs it.
     const id = `discovered-${captureRemoteModelCatalogSnapshot()?.generatedAt}`;
-    if (hold) {
-      hold.started();
-      await hold.release;
+    if (held) {
+      discovering.resolve();
+      await release.promise;
     }
     const row = { id, provider: "custom", name: id };
     return { entries: [row], routeVariants: [row] };
@@ -325,9 +327,7 @@ it("keeps discovered rows published until the adopted catalog's discovery comple
   await getPreparedModelRuntimeSnapshot(fixture.agentInput("default", config))!
     .loadFullModelCatalog!({ refresh: true });
   expect(await rows()).toContain("discovered-200");
-  const discovering = createDeferred();
-  const release = createDeferred();
-  hold = { started: () => discovering.resolve(), release: release.promise };
+  held = true;
   const adoption = applyRemoteModelCatalogUpdate(() => config);
   try {
     await withinTest(discovering.promise, signal);
