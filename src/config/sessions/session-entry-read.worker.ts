@@ -55,6 +55,7 @@ import {
   assertSessionEntryCurrentNativeSource,
   readSessionEntryCurrentFactsInDatabase,
 } from "./session-entry-current-admission.worker.js";
+import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
   SessionEntryListWorkerInput,
   SessionEntryListWorkerResult,
@@ -193,26 +194,6 @@ export async function readSessionEntryWorkerRequest(
     return { kind: "session-entry-read", entry: undefined, source, readError };
   }
   return { kind: "session-entry-read", entry: read.value, source };
-}
-
-function captureSessionEntryReadSource(
-  database: Parameters<typeof listSqliteSessionEntriesFromDatabase>[0],
-  expectedIdentity: SessionEntryListWorkerInput["expectedIdentity"],
-  unavailableMessage = "Session entry read requires its current durable owner",
-) {
-  if (expectedIdentity) {
-    assertOpenClawAgentDatabaseIdentity(database, expectedIdentity);
-  }
-  const identity = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity.identity !== "string" || !isOpenClawAgentDatabasePathCurrent(database)) {
-    throw new Error(unavailableMessage);
-  }
-  return {
-    agentId: database.agentId,
-    path: database.path,
-    databaseIdentity: identity.identity,
-    databaseBirthtime: identity.birthtime,
-  };
 }
 
 /** Cleanup selects identity columns before materializing metadata in the same worker snapshot. */

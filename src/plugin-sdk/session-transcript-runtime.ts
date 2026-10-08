@@ -100,6 +100,7 @@ export function composeSessionTranscriptWriteAssertion(
 ): SessionSourceAssertion {
   return composeSessionSourceAssertion(sources.map(captureExternalSessionCommitGuard), check, {
     // A plugin's wrapper remains opaque even when all of its children are prepared.
+    hasOpaqueCheck: check !== undefined,
     preparedCheck: (assertSources) => assertSources(),
   });
 }

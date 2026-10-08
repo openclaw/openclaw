@@ -17,6 +17,7 @@ import {
   updateUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
+import { bootstrapSharedAuthStoreInWorker } from "./shared-store-bootstrap.worker.js";
 import { readAuthProfileRows, SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import { isMissingDatabasePath } from "./sqlite-read-pool.js";
 import { updateAuthProfileStoreInDatabase } from "./store-update-kernel.js";
@@ -36,6 +37,7 @@ import { reduceAuthProfileFailure } from "./usage-reduction.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 
 export const authProfileOperations = {
+  "authProfiles.bootstrap": bootstrapSharedAuthStoreInWorker,
   "authProfiles.personalAccept": (
     input: { profileId: string; credential: AuthProfileCredential },
     { stateOptions },
@@ -97,6 +99,7 @@ export const authProfileOperations = {
       ({ db }) => {
         updateAuthProfileStoreInDatabase(db, "shared-state", input);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        return true;
       },
       stateOptions(),
       { operationLabel: "auth-profiles.update" },

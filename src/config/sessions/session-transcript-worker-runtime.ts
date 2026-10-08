@@ -241,9 +241,10 @@ export function retainSessionHistoryWorkerDatabase(
       receive,
       signal,
       onRequest,
+      timeoutMs = 60_000,
     ) => {
       assertCurrent();
-      const deadline = performance.now() + 60_000;
+      const deadline = performance.now() + timeoutMs;
       let sequence = 0;
       let retirement: Promise<void> | undefined;
       const hostEffects = new Set<Promise<WorkerTaskResponse>>();
@@ -259,7 +260,7 @@ export function retainSessionHistoryWorkerDatabase(
           },
           {
             inputBytes,
-            timeoutMs: 60_000,
+            timeoutMs,
             signal,
             onRequest: onRequest
               ? (value, context) => {
@@ -303,6 +304,7 @@ export function retainSessionHistoryWorkerDatabase(
           !Array.isArray(received) &&
           (received.kind === "session-entry-read" ||
             received.kind === "session-entry-list" ||
+            received.kind === "session-cleanup" ||
             received.kind === "session-exact-entries" ||
             received.kind === "session-entry-current" ||
             received.kind === "session-runtime-target" ||

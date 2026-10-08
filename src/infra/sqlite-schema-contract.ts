@@ -1,4 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  ensureSqliteLibrarySelected,
+  SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY,
+  type SqliteLibrarySelection,
+} from "./bun-sqlite-library.js";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
@@ -48,12 +56,46 @@ export type CanonicalSqliteNamedIndexContract = {
   unique: boolean;
 };
 
-const schemaContractCache = new Map<string, SqliteSchemaContract>();
+type ExpectedSchemaContractCache = {
+  pid: number;
+  runtime: {
+    executable: string;
+    nodeVersion: string;
+    bunVersion: string | undefined;
+    library: SqliteLibrarySelection;
+  };
+  contracts: Map<string, SqliteSchemaContract>;
+};
+
+function expectedSchemaContracts(): Map<string, SqliteSchemaContract> {
+  return resolveGlobalSingleton(Symbol.for(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY), () => {
+    const runtime = {
+      executable: process.execPath,
+      nodeVersion: process.versions.node,
+      bunVersion: process.versions.bun,
+      library: ensureSqliteLibrarySelected(),
+    };
+    // SAFETY: The existing worker launcher clones only this owner's versioned envelope.
+    const inherited = getEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY) as
+      | ExpectedSchemaContractCache
+      | undefined;
+    const cache: ExpectedSchemaContractCache =
+      inherited?.pid === process.pid &&
+      isDeepStrictEqual(inherited.runtime, runtime) &&
+      inherited.contracts instanceof Map
+        ? inherited
+        : { pid: process.pid, runtime, contracts: new Map() };
+    // The retained supervisor captures this current map for each new descendant.
+    setEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY, cache);
+    return cache.contracts;
+  });
+}
 
 /** Capture only an existing canonical contract; callers must not build it on a host request. */
 export function captureSqliteSchemaContracts(
   schemaSqls: readonly string[],
 ): PreparedSqliteSchemaContract[] {
+  const schemaContractCache = expectedSchemaContracts();
   return schemaSqls.flatMap((schemaSql) => {
     const tables = schemaContractCache.get(schemaSql);
     return tables ? [{ schemaSql, tables }] : [];
@@ -64,6 +106,7 @@ export function captureSqliteSchemaContracts(
 export function adoptSqliteSchemaContracts(
   contracts: readonly PreparedSqliteSchemaContract[],
 ): void {
+  const schemaContractCache = expectedSchemaContracts();
   for (const contract of contracts) {
     if (!schemaContractCache.has(contract.schemaSql)) {
       schemaContractCache.set(contract.schemaSql, contract.tables);
@@ -114,6 +157,8 @@ function collectSqliteSchemaIssuesInSnapshot(
 ): SqliteSchemaIssue[] {
   const expected = getSqliteSchemaContract(schemaSql);
   const readActualTable = readTable ?? createSqliteTableContractReader(database);
+  const excludedTables = new Set(compatibility.excludedTables ?? []);
+  const excludedIndexes = new Set(compatibility.excludedIndexes ?? []);
   const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);
   const allowedMissingIndexes = new Set(compatibility.allowedMissingIndexes ?? []);
 
@@ -122,6 +167,9 @@ function collectSqliteSchemaIssuesInSnapshot(
     issues.push(createSqliteSchemaIssue(code, objectName, message));
   };
   for (const [tableName, expectedTable] of expected) {
+    if (excludedTables.has(tableName)) {
+      continue;
+    }
     const actualTable = readActualTable(tableName);
     if (!actualTable) {
       if (allowedMissingTables.has(tableName)) {
@@ -145,6 +193,9 @@ function collectSqliteSchemaIssuesInSnapshot(
     );
     const expectedIndexFingerprints = new Set<string>();
     for (const expectedIndex of expectedTable.indexes) {
+      if (expectedIndex.name !== null && excludedIndexes.has(expectedIndex.name)) {
+        continue;
+      }
       const fingerprint = JSON.stringify(expectedIndex);
       expectedIndexFingerprints.add(fingerprint);
       if (!actualIndexFingerprints.has(fingerprint)) {
@@ -357,6 +408,7 @@ function normalizeOptionalCanonicalTriggerSql(sql: string): string | null {
 }
 
 function getSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
+  const schemaContractCache = expectedSchemaContracts();
   let expected = schemaContractCache.get(schemaSql);
   if (!expected) {
     expected = buildSqliteSchemaContract(schemaSql);
