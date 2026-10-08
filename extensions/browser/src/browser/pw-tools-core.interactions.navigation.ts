@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import type { Frame, Page } from "playwright-core";
@@ -516,7 +517,7 @@ export function createAbortPromiseWithListener(
   if (!signal) {
     return { cleanup: () => {} };
   }
-  const { promise: abortPromise, reject } = Promise.withResolvers<never>();
+  const { promise: abortPromise, reject } = createDeferred<never>();
   const abortListener = () => {
     onAbort?.(signal.reason);
     reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));

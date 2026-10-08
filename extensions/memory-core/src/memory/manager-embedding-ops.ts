@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
@@ -177,14 +178,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
   private activeProviderUses = new Map<
     EmbeddingProvider,
-    PromiseWithResolvers<void> & { count: number }
+    ReturnType<typeof createDeferred<void>> & { count: number }
   >();
   private syncProviderGenerationRelease: (() => void) | null = null;
   private syncProviderGenerationOwners = 0;
 
   protected acquireProviderUse(provider: EmbeddingProvider): () => void {
     const use = this.activeProviderUses.get(provider) ?? {
-      ...Promise.withResolvers<void>(),
+      ...createDeferred<void>(),
       count: 0,
     };
     use.count += 1;
