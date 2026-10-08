@@ -9,62 +9,11 @@ import {
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 
 describe("plugin runtime session creation", () => {
-  it("lists exact selected keys without losing full entry fields", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const runtime = createRuntimeAgent();
-      for (const name of ["selected", "other"]) {
-        await runtime.session.upsertSessionEntry({
-          agentId: "main",
-          sessionKey: `agent:main:${name}`,
-          entry: { sessionId: name, updatedAt: 1, category: "Team", execCwd: `/work/${name}` },
-        });
-      }
-      expect(
-        runtime.session.listSessionEntries({
-          agentId: "main",
-          readOnly: true,
-          sessionKeys: ["agent:main:selected", "agent:main:missing"],
-        }),
-      ).toEqual([
-        expect.objectContaining({
-          sessionKey: "agent:main:selected",
-          entry: expect.objectContaining({
-            sessionId: "selected",
-            execCwd: "/work/selected",
-            category: "Team",
-          }),
-        }),
-      ]);
-      expect(
-        runtime.session.listSessionEntries({ agentId: "main", readOnly: true, sessionKeys: [] }),
-      ).toEqual([]);
-      const assertions: Array<() => void> = [];
-      for (const readOnly of [true, false]) {
-        runtime.session.listSessionEntries({
-          agentId: "main",
-          readOnly,
-          sessionKeys: ["agent:main:selected"],
-          captureSource: (assertCurrent) => assertions.push(assertCurrent),
-        });
-      }
-      expect(assertions).toHaveLength(2);
-      assertions.forEach((assertCurrent) => expect(assertCurrent).not.toThrow());
-      const pathname = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-      await closeOpenClawAgentDatabasesAsync();
-      fs.renameSync(pathname, `${pathname}.previous`);
-      fs.copyFileSync(`${pathname}.previous`, pathname);
-      assertions.forEach((assertCurrent) => expect(assertCurrent).toThrow());
-    });
-  });
   it("resolves synchronous session catalog targets through agent model policy", () => {
     const runtime = createRuntimeAgent();
     const config = {

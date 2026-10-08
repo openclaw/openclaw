@@ -4,6 +4,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
+import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
@@ -19,6 +20,7 @@ import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js"
 import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
 import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
 import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-exact-read.js";
+import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
@@ -72,9 +74,9 @@ export function readSelectedSessionEntriesInDatabase(
     assertCanonicalSqliteSessionKeysCurrent(database);
     const keys = new Set(sessionKeys);
     const fullEntryKeys = new Set(options.fullEntryKeys);
-    const query = selectSessionEntryRows(database, "list", options.fullEntryKeys).select(
-      "updated_at",
-    );
+    const query = selectSessionEntryRows(database, "list", options.fullEntryKeys)
+      .select("updated_at")
+      .orderBy("session_key");
     const db = getNodeSqliteKysely<DB>(database.db);
     const pending = db.selectFrom("session_canonical_validation_pending").select("session_key");
     let selected = db
@@ -138,10 +140,25 @@ export function listSessionEntriesReadOnly(
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
     if (scope.sessionKeys && !scope.cronRetention && !scope.expiredCronRuns) {
       captureListingSource(database, scope);
-      return readSelectedSessionEntriesInDatabase(database, scope.sessionKeys, {
-        continuation: options.continuation,
-        ...(scope.projection === "list" ? {} : { fullEntryKeys: scope.sessionKeys }),
-      });
+      const sessionKeys = scope.sessionKeys;
+      const readSelected = () =>
+        runSqliteReadOperationSync(database.db, () => {
+          const entries = readSelectedSessionEntriesInDatabase(database, sessionKeys, {
+            ...(scope.projection === "list" ? {} : { fullEntryKeys: sessionKeys }),
+          });
+          if (options.deferParticipants || scope.includeParticipants === false) {
+            return entries;
+          }
+          return [
+            ...projectSqliteSessionParticipantsBatch(
+              database.db,
+              new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+            ),
+          ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
+        });
+      return options.continuation
+        ? readWithCanonicalSessionReaderContinuation(database, options.continuation, readSelected)
+        : readSelected();
     }
     const read = () => listSqliteSessionEntriesFromDatabase(database, resolved, scope, options);
     return options.continuation
@@ -158,6 +175,8 @@ export function listSqliteSessionEntriesFromDatabase(
   options: { deferParticipants?: true } = {},
 ): SessionEntrySummary[] {
   captureListingSource(database, scope);
+  const deferParticipants =
+    options.deferParticipants || scope.includeParticipants === false ? true : undefined;
   if (scope.cronRetention || scope.expiredCronRuns) {
     const expired = scope.expiredCronRuns;
     const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;
@@ -166,6 +185,7 @@ export function listSqliteSessionEntriesFromDatabase(
         const snapshot = readSessionEntryCache(database, {
           cache: false,
           projection: "list",
+          deferParticipants,
         });
         // Sibling metadata and participants still cross complete listing validation.
         const entries = Array.from(iterateSessionEntriesForListing(snapshot));
@@ -212,7 +232,7 @@ export function listSqliteSessionEntriesFromDatabase(
     cache,
     latest: scope.readConsistency === "latest",
     projection,
-    deferParticipants: options.deferParticipants,
+    deferParticipants,
   });
   return Array.from(
     iterateSessionEntriesForListing(

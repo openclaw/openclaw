@@ -79,6 +79,8 @@ type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams,
   readOnly?: boolean;
   /** Restrict results to exact persisted keys while retaining canonical listing validation. */
   sessionKeys?: readonly string[];
+  /** Set false to skip derived participant identities and counts when reading metadata. */
+  includeParticipants?: boolean;
   /** Capture the admitted store's physical identity; access policy remains caller-owned. */
   captureSource?: (assertCurrent: () => void) => void;
 };

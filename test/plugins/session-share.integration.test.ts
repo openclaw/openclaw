@@ -244,14 +244,19 @@ describe("session-share node commands", () => {
         },
       );
       const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-      const counter = trackSqliteStatementExecutions(db, ["transcript"], (sql) =>
-        /\btranscript_events\b/.test(sql) ? "transcript" : null,
+      const counter = trackSqliteStatementExecutions(db, ["transcript", "participants"], (sql) =>
+        /\bfrom\s+"?session_participants\b/i.test(sql)
+          ? "participants"
+          : /\btranscript_events\b/.test(sql)
+            ? "transcript"
+            : null,
       );
       try {
         expect((await source.list({ limit: 1 })).sessions).toMatchObject([
           { threadId: "agent:main:named", name: "Named session" },
         ]);
         expect.soft(counter.counts.transcript).toBe(0);
+        expect.soft(counter.counts.participants).toBe(0);
       } finally {
         counter.restore();
       }

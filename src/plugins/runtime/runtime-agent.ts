@@ -85,6 +85,9 @@ const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) =
     : listAccessorSessionEntries;
   return listEntries({
     ...(params.sessionKeys !== undefined ? { sessionKeys: params.sessionKeys } : {}),
+    ...(params.includeParticipants !== undefined
+      ? { includeParticipants: params.includeParticipants }
+      : {}),
     ...(params.captureSource ? { captureSource: params.captureSource } : {}),
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),

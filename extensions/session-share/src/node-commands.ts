@@ -65,6 +65,7 @@ function sharedEntries(
           agentId,
           storePath,
           readOnly: true,
+          includeParticipants: false,
           ...(sessionKeys ? { sessionKeys } : {}),
           captureSource: (assertCurrent) => {
             assertSourceCurrent = assertCurrent;

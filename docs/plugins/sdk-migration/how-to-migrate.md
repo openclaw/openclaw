@@ -204,6 +204,9 @@ the next unpinned page reads fresh facts. This snapshot never replaces a permiss
 Recheck the source's current sharing policy before disclosure. The existing
 `runtime.agent.session.listSessionEntries` accepts optional `sessionKeys` to restrict
 this final read to exact persisted keys while preserving canonical listing validation.
+Selected reads include derived participants and counts by default. Guards that consume only
+sharing metadata can pass `includeParticipants: false` to skip that hydration; canonical
+validation remains enabled in both read-only and writable listings.
 Its optional `captureSource(assertCurrent)` callback captures the admitted physical store;
 invoke the supplied assertion after preparation and before the final sharing read to reject
 replacement at the same path, even when session IDs were reused.
