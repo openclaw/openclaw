@@ -456,14 +456,28 @@ export async function buildProbeTargets(params: {
 
     const appendDirectTargets = () => {
       if (includeConfigKey) {
+        const target = {
+          provider: providerKey,
+          model,
+          ...(configuredReference.kind === "profile" ||
+          configuredReference.kind === "profile-incompatible"
+            ? { profileId: configuredReference.profileId }
+            : {}),
+          label: "config",
+          source: "models.json" as const,
+          mode: configuredMode,
+        };
+        const unresolvedResult = (error: string): AuthProbeResult => ({
+          ...target,
+          model: model ? `${model.provider}/${model.model}` : undefined,
+          status: model ? "unknown" : "no_model",
+          reasonCode: model ? "unresolved_ref" : "no_model",
+          error: model ? error : "No model available for check",
+        });
         if (configuredReference.kind === "profile-incompatible") {
           results.push({
-            provider: providerKey,
+            ...target,
             model: model ? `${model.provider}/${model.model}` : undefined,
-            profileId: configuredReference.profileId,
-            label: "config",
-            source: "models.json",
-            mode: configuredMode,
             status: "unknown",
             reasonCode: "ineligible_profile",
             error: "Configured API key references an incompatible auth profile.",
@@ -472,50 +486,21 @@ export async function buildProbeTargets(params: {
           if (!profileIds.includes(configuredReference.profileId)) {
             if (configuredBinding?.kind === "profile-resolved" && model) {
               targets.push({
-                provider: providerKey,
-                model,
+                ...target,
                 profileId: configuredBinding.auth.profileId,
-                label: "config",
-                source: "models.json",
                 mode: configuredBinding.auth.mode,
                 boundValue: configuredBinding.auth.apiKey,
               });
             } else {
-              results.push({
-                provider: providerKey,
-                model: model ? `${model.provider}/${model.model}` : undefined,
-                profileId: configuredReference.profileId,
-                label: "config",
-                source: "models.json",
-                mode: configuredMode,
-                status: model ? "unknown" : "no_model",
-                reasonCode: model ? "unresolved_ref" : "no_model",
-                error: model
-                  ? "Configured auth profile could not be resolved."
-                  : "No model available for check",
-              });
+              results.push(unresolvedResult("Configured auth profile could not be resolved."));
             }
           }
         } else if (!configuredValue) {
-          results.push({
-            provider: providerKey,
-            model: model ? `${model.provider}/${model.model}` : undefined,
-            label: "config",
-            source: "models.json",
-            mode: configuredMode,
-            status: model ? "unknown" : "no_model",
-            reasonCode: model ? "unresolved_ref" : "no_model",
-            error: model
-              ? "Configured API key could not be resolved."
-              : "No model available for check",
-          });
+          results.push(unresolvedResult("Configured API key could not be resolved."));
         } else {
           appendTarget({
-            provider: providerKey,
-            model,
+            ...target,
             label: configuredTargetLabel,
-            source: "models.json",
-            mode: configuredMode,
             boundValue: configuredValue,
             ...(configuredReference.kind === "marker" ? { useRuntimeAuth: true } : {}),
           });
@@ -583,17 +568,13 @@ export async function buildProbeTargets(params: {
           includeConfigKey &&
           configuredReference.kind === "profile" &&
           profileId === configuredReference.profileId;
+        let issue: { reasonCode: AuthProbeReasonCode; error: string } | null;
         if (!isConfigBoundProfile && explicitOrder && !explicitOrder.includes(profileId)) {
-          results.push(
-            buildProbeResult(target, {
-              status: "unknown",
-              reasonCode: "excluded_by_auth_order",
-              error: "Excluded by auth.order for this provider.",
-            }),
-          );
-          continue;
-        }
-        if (!isConfigBoundProfile && allowedProfiles && !allowedProfiles.has(profileId)) {
+          issue = {
+            reasonCode: "excluded_by_auth_order",
+            error: "Excluded by auth.order for this provider.",
+          };
+        } else if (!isConfigBoundProfile && allowedProfiles && !allowedProfiles.has(profileId)) {
           const eligibility = resolveAuthProfileEligibility({
             cfg,
             store,
@@ -601,31 +582,15 @@ export async function buildProbeTargets(params: {
             profileId,
           });
           const reasonCode = mapEligibilityReasonToProbeReasonCode(eligibility.reasonCode);
-          results.push(
-            buildProbeResult(target, {
-              status: "unknown",
-              reasonCode,
-              error: formatMissingCredentialProbeError(reasonCode),
-            }),
-          );
-          continue;
+          issue = { reasonCode, error: formatMissingCredentialProbeError(reasonCode) };
+        } else {
+          issue = await maybeResolveUnresolvedRefIssue({ cfg, profile, cache: refResolveCache });
         }
-        const unresolvedRefIssue = await maybeResolveUnresolvedRefIssue({
-          cfg,
-          profile,
-          cache: refResolveCache,
-        });
-        if (unresolvedRefIssue) {
-          results.push(
-            buildProbeResult(target, {
-              status: "unknown",
-              reasonCode: unresolvedRefIssue.reasonCode,
-              error: unresolvedRefIssue.error,
-            }),
-          );
-          continue;
+        if (issue) {
+          results.push(buildProbeResult(target, { status: "unknown", ...issue }));
+        } else {
+          appendTarget(target);
         }
-        appendTarget(target);
       }
       appendDirectTargets();
       continue;

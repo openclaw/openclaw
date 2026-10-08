@@ -22,10 +22,9 @@ Every job carries exactly one payload kind, chosen by flag:
 | Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
 
-System-owned monitor jobs are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). The weekly Skill Workshop review is a normal isolated `agentTurn` job with a reserved declaration key. Both appear in `openclaw cron list`; use `--all` to include disabled rows.
-The `skillCollectionReview` payload kind is not accepted. Stored rows that use it are replaced with the canonical review job.
+System-owned monitor jobs are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). Monitor jobs appear in `openclaw cron list`; use `--all` to include disabled rows.
 
-Skill collection review runs every 7 days. It is enabled when `skills.workshop.autonomous.mode` is `auto`; `propose` and `off` keep the system-owned job disabled. In `auto` mode, a review stays disabled when every statically resolvable model candidate is known to lack rooted execution support. Its display name includes `no-rooted-runtime`; inspect disabled rows with `openclaw cron list --all --json`. A supported fallback keeps the job enabled. Stored session model/runtime preferences and unknown eligibility also keep it enabled, with final checks at execution time. The Gateway converges these jobs at startup and after config reload. Convergence clears the reason and restores auto-mode enablement when the configured chain becomes eligible or unknown. Scheduled reviews require automations. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the Gateway logs a startup warning and does not run scheduled reviews. There is no separate weekly Gateway timer.
+The weekly Skill Workshop curator (declaration key `skill-collection-review:<agentId>`, and the older `skillCollectionReview` payload kind) is retired. The Gateway deletes those stored rows when it loads the cron store and creates no replacement; the declaration-key namespace stays reserved. Learned-skill cleanup now runs without a schedule; see [Unused-skill cleanup](/tools/skill-workshop#unused-skill-cleanup).
 
 ### Agent-turn options
 

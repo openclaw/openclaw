@@ -28,7 +28,6 @@ import {
 import {
   assertCanonicalIntegerTimestamp,
   assertCanonicalTimestamp,
-  readWorkspaceStateSnapshotFromDatabase,
   deleteWorkspaceStateRowsInDatabase,
   resolveWorkspaceIdentityFromDatabase,
   WORKSPACE_SETUP_STATE_VERSION,
@@ -53,7 +52,6 @@ export {
   readWorkspaceStateSnapshotFromDatabase,
   registerWorkspaceStateAliasIdentitiesInTransaction,
   registerWorkspaceStateAliasesInTransaction,
-  WORKSPACE_ATTESTATION_RECENT_MS,
   WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND,
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
   WORKSPACE_SETUP_STATE_VERSION,
@@ -245,30 +243,6 @@ function deleteWorkspaceRows(
   deferSqlitePostCommitPublication(database.db, () =>
     retireWorkspaceFileCache(identity.workspacePath),
   );
-}
-
-/** The migration owner has verified the same workspace and every relocated byte before this commit. */
-export function retireWorkspaceRelocationAttestation(params: {
-  database: WorkspaceStateDatabaseHandle;
-  identity: WorkspaceStateIdentity;
-  attestedAtMs: number;
-}): boolean {
-  const snapshot = readWorkspaceStateSnapshotFromDatabase(params);
-  if (
-    snapshot.setupExists ||
-    snapshot.attestation?.attestedAtMs !== params.attestedAtMs ||
-    snapshot.attestation.generatedHashes.size > 0
-  ) {
-    return false;
-  }
-  executeSqliteQuerySync(
-    params.database.db,
-    getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db)
-      .updateTable("workspace_setup_state")
-      .set({ attested_at_ms: null, attestation_updated_at_ms: null })
-      .where("workspace_key", "=", params.identity.workspaceKey),
-  );
-  return true;
 }
 
 /** Clear expired state only when no concurrent writer refreshed the vanished workspace. */

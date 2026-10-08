@@ -673,3 +673,82 @@ it("settles two unawaited worker appends FIFO across the real Gateway close prel
     await fixture.cleanup();
   }
 });
+
+it.each(["live", "revoked", "foreign"] as const)(
+  "retains logical mirror writer binding (%s)",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const physical = await seed(env);
+      const scope = {
+        ...physical,
+        storePath: resolveSessionStorePathCore(undefined, { agentId: physical.agentId, env }),
+      };
+      expect(scope.storePath).not.toBe(physical.storePath);
+      const target =
+        mode === "foreign"
+          ? { ...scope, sessionId: "foreign-mirror", sessionKey: "agent:main:foreign-mirror" }
+          : scope;
+      if (mode === "foreign") {
+        await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      }
+      let current = true;
+      const guard = composeSessionTranscriptWriteAssertion([], () => {
+        if (!current) {
+          throw new Error("Logical mirror writer revoked");
+        }
+      });
+      const operation = withSessionTranscriptWriteAssertion(scope, guard, () => {
+        if (mode === "revoked") {
+          current = false;
+        }
+        return appendAssistantMirrorMessageByIdentity({
+          ...target,
+          text: "Owned terminal fallback",
+          idempotencyKey: "logical-owned-mirror",
+        });
+      });
+      if (mode === "live") {
+        await expect(operation).resolves.toMatchObject({ ok: true });
+      } else if (mode === "revoked") {
+        await expect(operation).rejects.toThrow("Logical mirror writer revoked");
+      } else {
+        await expect(operation).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+      }
+      expect(messageIds(physical)).toHaveLength(mode === "live" ? 1 : 0);
+      if (mode === "foreign") {
+        expect(messageIds(target)).toEqual([]);
+      }
+    });
+  },
+);
+
+it("cannot retarget owned authority by mutating a logical selector after dispatch", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const physical = await seed(state.env);
+    const requested = {
+      ...physical,
+      storePath: resolveSessionStorePathCore(undefined, {
+        agentId: physical.agentId,
+        env: state.env,
+      }),
+    };
+    const owner = {
+      ...physical,
+      storePath: state.statePath("other-owner", "openclaw-agent.sqlite"),
+    };
+    await replaceSessionEntry(owner, { sessionId: owner.sessionId, updatedAt: 1 });
+    await expect(
+      withSessionTranscriptWriteAssertion(owner, composeSessionTranscriptWriteAssertion([]), () => {
+        const pending = withTranscriptWriteLock(requested, (locked) =>
+          locked.appendMessage({
+            message: { role: "assistant", content: "must not cross stores" },
+          }),
+        );
+        requested.storePath = owner.storePath;
+        return pending;
+      }),
+    ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+    expect(messageIds(physical)).toEqual([]);
+    expect(messageIds(owner)).toEqual([]);
+  });
+});

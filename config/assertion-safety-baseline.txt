@@ -53,7 +53,7 @@ extensions/browser/src/browser/client-fetch.ts	2
 extensions/browser/src/browser/errors.ts	4
 extensions/browser/src/browser/extension-install-layout.ts	4
 extensions/browser/src/browser/extension-relay/auth-v2.ts	4
-extensions/browser/src/browser/extension-relay/relay-bridge.ts	8
+extensions/browser/src/browser/extension-relay/relay-bridge.ts	7
 extensions/browser/src/browser/extension-relay/relay-protocol.ts	1
 extensions/browser/src/browser/output-files.ts	1
 extensions/browser/src/browser/paths.ts	1
@@ -533,7 +533,7 @@ extensions/memory-core/src/dreaming.ts	1
 extensions/memory-core/src/memory/hybrid.ts	1
 extensions/memory-core/src/memory/manager-db.ts	2
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
-extensions/memory-core/src/memory/manager-search.ts	5
+extensions/memory-core/src/memory/manager-search.ts	4
 extensions/memory-core/src/memory/manager-sync-base.ts	1
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
 extensions/memory-core/src/memory/manager.ts	2
@@ -1521,7 +1521,6 @@ src/agents/tools/sessions-search-tool.ts	1
 src/agents/tools/sessions-spawn-tool.ts	5
 src/agents/tools/sessions-tool.ts	1
 src/agents/tools/sessions-yield-tool.ts	1
-src/agents/tools/skill-workshop-tool-helpers.ts	1
 src/agents/tools/structured-output-tool.ts	2
 src/agents/tools/subagents-tool.ts	1
 src/agents/tools/system-agent-tool.ts	1
@@ -1753,7 +1752,6 @@ src/cli/update-cli/update-command-plugins.ts	1
 src/cli/users-cli.ts	1
 src/commands/agent-exec.ts	1
 src/commands/agent-via-gateway.ts	6
-src/commands/agents.commands.bind.ts	2
 src/commands/agents.commands.identity.ts	1
 src/commands/agents.config.ts	1
 src/commands/agents.providers.ts	4
@@ -1762,7 +1760,7 @@ src/commands/backup-restore.ts	1
 src/commands/backup-schedule.ts	1
 src/commands/backup-verify.ts	2
 src/commands/channel-setup/config-compatibility.ts	2
-src/commands/channel-setup/discovery.ts	8
+src/commands/channel-setup/discovery.ts	6
 src/commands/channel-test-registry.ts	2
 src/commands/channels/add-wizard.ts	1
 src/commands/channels/add.ts	2
@@ -2204,7 +2202,7 @@ src/infra/net/undici-dispatcher-options.ts	3
 src/infra/net/undici-global-dispatcher.ts	2
 src/infra/node-commands.ts	1
 src/infra/node-sqlite.ts	3
-src/infra/npm-managed-root.ts	8
+src/infra/npm-managed-root.ts	6
 src/infra/oauth-loopback-callback.ts	1
 src/infra/openclaw-cli-shim.ts	1
 src/infra/openclaw-root.ts	1
@@ -2609,9 +2607,6 @@ src/skills/loading/frontmatter.ts	1
 src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1
-src/skills/workshop/policy.ts	1
-src/skills/workshop/store-record.ts	3
-src/skills/workshop/store-sqlite-event.ts	1
 src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7
 src/snapshot/git-backup.ts	2
@@ -2908,8 +2903,6 @@ ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	5
 ui/src/pages/sessions/view.ts	7
-ui/src/pages/skill-workshop/self-learning.ts	1
-ui/src/pages/skill-workshop/view.ts	1
 ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/view-details.ts	5
 ui/src/pages/usage/view-overview.ts	2

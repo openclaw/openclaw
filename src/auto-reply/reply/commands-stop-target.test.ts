@@ -23,7 +23,7 @@ const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
 );
 const stopSubagentsForRequesterMock = vi.hoisted(() =>
   vi.fn<typeof import("./abort-operation.js").stopSubagentsForRequester>(async (params) => {
-    await params.beforeKill?.();
+    await params.beforeKill?.(() => {});
     return { stopped: 0, failed: 0 };
   }),
 );
@@ -245,7 +245,7 @@ describe("handleStopCommand target fallback", () => {
         retirement: Promise.reject(cleanupError),
       });
       stopSubagentsForRequesterMock.mockImplementationOnce(async (request) => {
-        await request.beforeKill?.();
+        await request.beforeKill?.(() => {});
         descendantCancellation();
         return { stopped: 0, failed: 0 };
       });

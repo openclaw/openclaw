@@ -201,13 +201,12 @@ export function resolveFinalDoctorHealthContributions(params: {
         ["local-audio-acceleration", "Local audio acceleration", "run"],
         ["runtime-tool-schemas", "Runtime tool schemas", "agent"],
         ["skill-workshop-tool-policy", "Skill Workshop tool policy", "agent"],
-        ["skill-workshop-relocation", "Skill Workshop relocation"],
       ] as const
     ).map(([name, label, scope]) =>
       createDoctorHealthContribution({
         id: `doctor:${name}`,
         label,
-        ...(scope ? { updateWork: { kind: "inspection", scope } as const } : {}),
+        updateWork: { kind: "inspection", scope },
         healthCheckIds: [`core/doctor/${name}`],
         run: (ctx) => runCoreHealthFindingNote(ctx, `core/doctor/${name}`),
       }),

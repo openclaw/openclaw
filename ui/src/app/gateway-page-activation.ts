@@ -1,8 +1,10 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ApplicationGatewayPhase } from "./gateway.ts";
 
 type PageActivationGateway = {
   readonly snapshot: {
-    readonly client: Pick<GatewayBrowserClient, "needsWakeReconnect" | "pairingRetryPaused"> | null;
+    readonly client: Pick<GatewayBrowserClient, "needsWakeReconnect"> | null;
+    readonly phase: ApplicationGatewayPhase;
   };
   connect: () => void;
 };
@@ -34,10 +36,10 @@ export function startGatewayPageActivation(
       if (disposed || documentTarget.visibilityState === "hidden") {
         return;
       }
-      const client = gateway.snapshot.client;
+      const { client, phase } = gateway.snapshot;
       if (
         client &&
-        !client.pairingRetryPaused &&
+        !["stopped", "offline", "reload-required"].includes(phase) &&
         (forceQueuedRecovery || client.needsWakeReconnect)
       ) {
         // Replacing the client retires Safari's ghost socket synchronously. A

@@ -92,16 +92,16 @@ function createApprovalNativeRouteCoordinatorState(): ApprovalNativeRouteCoordin
   };
 }
 
-function clearApprovalRouteSelection(
-  state: ApprovalNativeRouteCoordinatorState,
+function clearApprovalRouteEntry<T extends { cleanupTimeout: NodeJS.Timeout }>(
+  entries: Map<string, T>,
   approvalId: string,
 ): void {
-  const selection = state.selections.get(approvalId);
-  if (!selection) {
+  const entry = entries.get(approvalId);
+  if (!entry) {
     return;
   }
-  state.selections.delete(approvalId);
-  clearTimeout(selection.cleanupTimeout);
+  entries.delete(approvalId);
+  clearTimeout(entry.cleanupTimeout);
 }
 
 function resolveApprovalRouteSelection(
@@ -122,7 +122,6 @@ function resolveApprovalRouteSelection(
     groups.set(key, [...(groups.get(key) ?? []), runtime]);
   }
 
-  const selectedRuntimeIds = new Set<string>();
   for (const group of groups.values()) {
     const candidates: ApprovalRouteRuntimeRecord[] = [];
     for (const runtime of group) {
@@ -143,41 +142,32 @@ function resolveApprovalRouteSelection(
       }
       continue;
     }
-    if (routeClass === "bound-or-explicit") {
-      if (candidates.length === 0) {
-        for (const runtime of group) {
-          if (!verdicts.has(runtime.runtimeId)) {
-            verdicts.set(runtime.runtimeId, { kind: "owner-unavailable" });
-          }
+    if (routeClass === "bound-or-explicit" && candidates.length === 0) {
+      for (const runtime of group) {
+        if (!verdicts.has(runtime.runtimeId)) {
+          verdicts.set(runtime.runtimeId, { kind: "owner-unavailable" });
         }
-        continue;
       }
+    } else if (routeClass === "bound-or-explicit" || routeClass === "unbound") {
+      const kind =
+        routeClass === "bound-or-explicit" || candidates.length === 1
+          ? "selected"
+          : "ambiguous-owner";
       for (const runtime of candidates) {
-        selectedRuntimeIds.add(runtime.runtimeId);
-      }
-    } else if (routeClass === "unbound" && candidates.length === 1) {
-      const [candidate] = candidates;
-      if (candidate) {
-        selectedRuntimeIds.add(candidate.runtimeId);
-      }
-    } else if (routeClass === "unbound" && candidates.length > 1) {
-      for (const runtime of candidates) {
-        verdicts.set(runtime.runtimeId, { kind: "ambiguous-owner" });
+        verdicts.set(runtime.runtimeId, { kind });
       }
     }
   }
 
   for (const runtime of runtimes) {
-    if (selectedRuntimeIds.has(runtime.runtimeId)) {
-      verdicts.set(runtime.runtimeId, { kind: "selected" });
-    } else if (!verdicts.has(runtime.runtimeId)) {
+    if (!verdicts.has(runtime.runtimeId)) {
       verdicts.set(runtime.runtimeId, { kind: "ineligible" });
     }
   }
 
   const timeoutMs = Math.min(Math.max(0, params.request.expiresAtMs - Date.now()), 0x7fffffff);
   const cleanupTimeout = setTimeout(() => {
-    clearApprovalRouteSelection(state, params.request.id);
+    clearApprovalRouteEntry(state.selections, params.request.id);
   }, timeoutMs);
   cleanupTimeout.unref?.();
   const selection: ApprovalRouteSelection = {
@@ -191,39 +181,34 @@ function resolveApprovalRouteSelection(
 const defaultCoordinatorState = createApprovalNativeRouteCoordinatorState();
 const MAX_APPROVAL_ROUTE_NOTICE_TTL_MS = 5 * 60_000;
 
-function clearPendingApprovalRouteNotice(
-  state: ApprovalNativeRouteCoordinatorState,
-  approvalId: string,
-): void {
-  const entry = state.pendingNotices.get(approvalId);
-  if (!entry) {
-    return;
-  }
-  state.pendingNotices.delete(approvalId);
-  clearTimeout(entry.cleanupTimeout);
-}
-
-function createPendingApprovalRouteNotice(
+function resolvePendingApprovalRouteNotice(
   state: ApprovalNativeRouteCoordinatorState,
   params: {
     request: ApprovalRequest;
     approvalKind: ChannelApprovalKind;
   },
 ): PendingApprovalRouteNotice {
+  const { request, approvalKind } = params;
+  const existing = state.pendingNotices.get(request.id);
+  if (existing) {
+    return existing;
+  }
   const timeoutMs = Math.min(
-    Math.max(0, params.request.expiresAtMs - Date.now()),
+    Math.max(0, request.expiresAtMs - Date.now()),
     MAX_APPROVAL_ROUTE_NOTICE_TTL_MS,
   );
   const cleanupTimeout = setTimeout(() => {
-    void maybeFinalizeApprovalRouteNotice(state, params.request.id, { force: true });
+    void maybeFinalizeApprovalRouteNotice(state, request.id, { force: true });
   }, timeoutMs);
   cleanupTimeout.unref?.();
-  return {
-    request: params.request,
-    approvalKind: params.approvalKind,
+  const entry: PendingApprovalRouteNotice = {
+    request,
+    approvalKind,
     reports: new Map(),
     cleanupTimeout,
   };
+  state.pendingNotices.set(request.id, entry);
+  return entry;
 }
 
 function resolveRouteNoticeTargetFromRequest(request: ApprovalRequest): RouteNoticeTarget | null {
@@ -470,7 +455,7 @@ async function maybeFinalizeApprovalRouteNotice(
     reports,
     missingSelectedRuntime,
   });
-  clearPendingApprovalRouteNotice(state, approvalId);
+  clearApprovalRouteEntry(state.pendingNotices, approvalId);
   if (!notice) {
     return;
   }
@@ -517,12 +502,7 @@ function createApprovalNativeRouteReporterForState(
     if (!selection.verdicts.has(runtimeId)) {
       return;
     }
-    const entry =
-      state.pendingNotices.get(payload.request.id) ??
-      createPendingApprovalRouteNotice(state, {
-        request: payload.request,
-        approvalKind: payload.approvalKind,
-      });
+    const entry = resolvePendingApprovalRouteNotice(state, payload);
     entry.reports.set(runtimeId, {
       runtimeId,
       channel: params.channel,
@@ -533,7 +513,6 @@ function createApprovalNativeRouteReporterForState(
       requestGateway: params.requestGateway,
       skipReason: payload.skipReason,
     });
-    state.pendingNotices.set(payload.request.id, entry);
     await maybeFinalizeApprovalRouteNotice(state, payload.request.id);
   };
 
@@ -555,13 +534,7 @@ function createApprovalNativeRouteReporterForState(
         }
       }
       const selection = resolveApprovalRouteSelection(state, payload);
-      const entry =
-        state.pendingNotices.get(payload.request.id) ??
-        createPendingApprovalRouteNotice(state, {
-          request: payload.request,
-          approvalKind: payload.approvalKind,
-        });
-      state.pendingNotices.set(payload.request.id, entry);
+      resolvePendingApprovalRouteNotice(state, payload);
       return selection.verdicts.get(runtimeId) ?? { kind: "ineligible" };
     },
     start(): void {
@@ -606,8 +579,8 @@ function createApprovalNativeRouteReporterForState(
       await report(paramsLocal);
     },
     completeRequest(approvalId: string): void {
-      clearApprovalRouteSelection(state, approvalId);
-      clearPendingApprovalRouteNotice(state, approvalId);
+      clearApprovalRouteEntry(state.selections, approvalId);
+      clearApprovalRouteEntry(state.pendingNotices, approvalId);
     },
     async stop(): Promise<void> {
       if (!registered) {
@@ -659,10 +632,10 @@ export function createApprovalNativeRouteCoordinator(): ApprovalNativeRouteCoord
       // startup must not repopulate routes belonging to the retired instance.
       state.closed = true;
       for (const approvalId of Array.from(state.pendingNotices.keys())) {
-        clearPendingApprovalRouteNotice(state, approvalId);
+        clearApprovalRouteEntry(state.pendingNotices, approvalId);
       }
       for (const approvalId of Array.from(state.selections.keys())) {
-        clearApprovalRouteSelection(state, approvalId);
+        clearApprovalRouteEntry(state.selections, approvalId);
       }
       state.activeRuntimes.clear();
     },

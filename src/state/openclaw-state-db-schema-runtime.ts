@@ -49,7 +49,7 @@ import {
 import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import {
   assertSupportedStateSchemaVersion,
-  readStateSchemaMigrationVersion,
+  readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import { migrateSessionWatchCursorProvenance } from "./openclaw-state-db-session-watch-migration.js";
 import { isUninitializedNativeStartupDatabase } from "./openclaw-state-db-startup-checkpoint.js";
@@ -104,7 +104,7 @@ export function ensureOpenClawStateRuntimeSchema(
         if (initializeNativeOnly && !isUninitializedNativeStartupDatabase(db)) {
           return [];
         }
-        const previousVersion = readStateSchemaMigrationVersion(db);
+        const previousVersion = readStateSchemaContentVersion(db);
         const includeAgentDeletionJournal =
           tableExists(db, "agent_deletion_journal") ||
           hasPreJournalStateSchema(db) ||

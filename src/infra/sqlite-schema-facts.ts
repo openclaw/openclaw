@@ -27,6 +27,9 @@ export type SqliteSchemaFacts = {
   readonly triggers: ReadonlyMap<string, { table: string; sql: string | null }>;
 };
 
+type SqliteSchemaMarkers = Pick<SqliteSchemaFacts, "schemaVersion" | "userVersion">;
+type SchemaMutationListener = (observed?: SqliteSchemaMarkers) => void;
+
 type SchemaOwner = {
   admitted: boolean;
   revision: number;
@@ -45,7 +48,7 @@ type SchemaOwner = {
   authorizerActive: boolean;
   scope?: SchemaScope;
   scopeRevision?: number;
-  mutationListeners?: Set<() => void>;
+  mutationListeners?: Set<SchemaMutationListener>;
   installTempTrackingSchema?: (schema: SqliteTempTrackingSchema) => void;
 };
 
@@ -72,9 +75,9 @@ function invalidate(owner: SchemaOwner): void {
   owner.facts = undefined;
 }
 
-function notifySchemaMutation(owner: SchemaOwner): void {
+function notifySchemaMutation(owner: SchemaOwner, observed?: SqliteSchemaMarkers): void {
   for (const listener of owner.mutationListeners ?? []) {
-    listener();
+    listener(observed);
   }
 }
 
@@ -128,10 +131,10 @@ export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
   }
 }
 
-/** Admission proof is revoked at the same producer boundary as prepared schema facts. */
+/** Local mutations revoke before execution; foreign observations carry their committed markers. */
 export function registerSqliteSchemaMutationListener(
   database: DatabaseSync,
-  listener: () => void,
+  listener: SchemaMutationListener,
 ): () => void {
   const owner = owners.get(database);
   if (!owner) {
@@ -551,12 +554,17 @@ export function readSqliteDataVersion(database: DatabaseSync): number {
   return row.data_version;
 }
 
-function matchesSqliteSchemaFacts(database: DatabaseSync, facts: SqliteSchemaFacts): boolean {
+function readChangedSqliteSchemaMarkers(
+  database: DatabaseSync,
+  facts: SqliteSchemaFacts,
+): SqliteSchemaMarkers | undefined {
   return runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
     const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
       s.get(),
     );
-    return facts.schemaVersion === schemaVersion && facts.userVersion === userVersion?.user_version;
+    const matches =
+      facts.schemaVersion === schemaVersion && facts.userVersion === userVersion?.user_version;
+    return matches ? undefined : { schemaVersion, userVersion: Number(userVersion?.user_version) };
   });
 }
 
@@ -583,11 +591,10 @@ export function readSqliteCacheDataVersion(
     if (owner.dataVersion !== dataVersion) {
       const facts = owner.facts;
       // Data commits preserve schema-derived caches; compare both markers in one snapshot.
-      const unchanged = facts && matchesSqliteSchemaFacts(database, facts);
-      if (!unchanged) {
-        if (facts) {
-          // Foreign DDL revokes borrowed admission proof when this connection observes it.
-          notifySchemaMutation(owner);
+      const changed = facts && readChangedSqliteSchemaMarkers(database, facts);
+      if (!facts || changed) {
+        if (changed) {
+          notifySchemaMutation(owner, changed);
         }
         invalidate(owner);
       }
@@ -637,7 +644,7 @@ export function adoptSqliteSchemaFacts(database: DatabaseSync, facts: SqliteSche
     return false;
   }
   const dataVersion = readSqliteDataVersion(database);
-  if (!matchesSqliteSchemaFacts(database, facts)) {
+  if (readChangedSqliteSchemaMarkers(database, facts)) {
     return false;
   }
   const snapshot = getSqlitePinnedReadSnapshot(database);

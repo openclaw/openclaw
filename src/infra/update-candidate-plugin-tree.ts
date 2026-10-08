@@ -4,7 +4,6 @@ import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
@@ -12,6 +11,10 @@ import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-pat
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { copyUpdateCandidatePluginFiles } from "./update-candidate-plugin-file.js";
+import {
+  withUpdateCandidatePluginFileHashing,
+  type UpdateCandidatePluginFileHasher,
+} from "./update-candidate-plugin-hash.js";
 import {
   assertUpdateCandidatePluginEntryStat,
   isUpdateCandidateHostLauncher,
@@ -103,6 +106,15 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   retainedHostRoot?: string;
   onProgress?: () => void | Promise<void>;
 }): Promise<UpdateCandidatePluginTreePlan> {
+  return await withUpdateCandidatePluginFileHashing((hashFile) =>
+    prepareUpdateCandidatePluginTreesWithHashing(params, hashFile),
+  );
+}
+
+async function prepareUpdateCandidatePluginTreesWithHashing(
+  params: Parameters<typeof prepareUpdateCandidatePluginTrees>[0],
+  hashFile: UpdateCandidatePluginFileHasher,
+): Promise<UpdateCandidatePluginTreePlan> {
   const roots = new Map(params.roots);
   const privateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   const candidateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.candidateRoot));
@@ -186,7 +198,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         ctimeNs: stat.ctimeNs.toString(),
         uid: stat.uid.toString(),
         gid: stat.gid.toString(),
-        sha256: hashFileMutationSnapshotSync(file, stat),
+        sha256: await hashFile(file, stat),
       };
     } else if (stat.isSymbolicLink()) {
       const target =

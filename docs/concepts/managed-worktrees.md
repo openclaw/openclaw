@@ -205,6 +205,8 @@ OpenClaw creates branch `openclaw/<name>` at the requested base ref. Without a b
 
 Git worktree registration, ordinary checkout removal, and source materialization during creation or snapshot restore each have a five-minute timeout, including a creation retry from local `HEAD`. Fetching missing objects for the size estimate uses the same five-minute budget. Other managed-worktree Git commands keep their two-minute timeout, except automatic Git maintenance, which gets 30 minutes. Explicit interrupted-removal recovery joins deletion without a deadline. The separate `.openclaw/worktree-setup.sh` step also keeps its own two-minute timeout.
 
+Background Git maintenance and pack-index repair use only locally available objects. They never fetch missing objects from a partial clone's promisor remote; explicit fetching remains responsible for downloading those objects.
+
 ## Capacity and disk space
 
 Creation and restoration enforce the [count and eviction policy](#capacity-and-eviction) before allocating files. Disk admission independently measures every affected volume.
@@ -358,7 +360,7 @@ Cleanup progress and JSON output report `eligibleCount` (removal candidates that
 
 Idle collection checks registry eligibility, remembered dispositions, owner activity, and run leases before requesting Git inventories. It classifies candidates serially and shares one preliminary lock and branch inventory per repository. Known provisioning ledgers use filesystem checks without Git setup. Ordinary removal rereads the current lock and HEAD and verifies worktree activity under its allocation lease. Cap eviction ranks branch history in the Git worker and checks live removal authority again before deletion. Preliminary inventories never authorize removal. If cleanup cannot acquire the lease, it preserves orphan candidates and expired snapshots for a later pass.
 
-Each cleanup pass batches session-owner activity reads without loading saved prompts or full session entries. Cleanup still rechecks the current session identity, activity, archive state, and worktree binding immediately before mutations. Unreadable or uncertain owner state preserves the checkout.
+Each cleanup pass batches session-owner activity and worker-placement reads in database workers without loading saved prompts or full session entries. Owner classification yields between batches. Cleanup still rechecks the current session identity, activity, archive state, worktree binding, and worker placement immediately before mutations. Unreadable or uncertain owner state preserves the checkout.
 
 Cleanup remembers protected checkouts' deferral reasons and fingerprints instead of repeating unchanged inspections. Managed activity, registry lifecycle changes, and observed checkout or HEAD changes invalidate those decisions. Run `openclaw worktrees gc --retry-deferred` to force another inspection after repairing files or Git metadata. Remembered idle-cleanup protection never exempts a checkout from cap eviction. The nullable derived-state column is added on database admission without a schema-version change; older builds ignore these dispositions and resume their previous inspection behavior. Snapshot retention remains 30 days.
 
