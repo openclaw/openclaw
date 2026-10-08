@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
+import { resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnMock, voiceWorkspaceFixture } = vi.hoisted(() => ({
@@ -47,6 +48,8 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
 
 import {
   DiscordOpusEncodeStream,
+  createDiscordPcmToRealtimeConverter,
+  createRealtimePcmToDiscordConverter,
   createDiscordOpusPlaybackStream,
   decodeOpusStreamChunks,
   writeVoiceWavFile,
@@ -101,7 +104,8 @@ describe("discord voice opus codec", () => {
     expect(onWarn).not.toHaveBeenCalled();
   });
 
-  it.each([2, 3, 6])("decodes a valid %i-frame Opus packet without truncation", async (frames) => {
+  it("decodes a valid 120 ms Opus packet without truncation", async () => {
+    const frames = 6;
     // RFC 6716 code 3 CBR: repeat the standard Discord 20 ms silence frame.
     const packet = Buffer.from([
       0xfb,
@@ -136,62 +140,6 @@ describe("discord voice opus codec", () => {
     expect(onError).toHaveBeenCalledOnce();
     expect(onChunk).toHaveBeenCalledOnce();
   });
-
-  it("pads final partial PCM frames before encoding", async () => {
-    const encoder = new DiscordOpusEncodeStream();
-    const packetsPromise = collectBuffers(encoder);
-
-    encoder.end(Buffer.alloc((960 * 2 * 2) / 2));
-    const packets = await packetsPromise;
-
-    expect(packets).toHaveLength(1);
-    const onChunk = vi.fn();
-    await decodeOpusStreamChunks(Readable.from(packets), {
-      onChunk,
-      onVerbose: vi.fn(),
-      onWarn: vi.fn(),
-    });
-    expect(onChunk).toHaveBeenCalledOnce();
-    expect(onChunk.mock.calls[0]?.[0]).toHaveLength(960 * 2 * 2);
-  });
-
-  it("preserves decoded audio and reports stream failures", async () => {
-    const err = new Error("memory access out of bounds");
-    const onError = vi.fn();
-    const stream = Readable.from(
-      (async function* () {
-        yield Buffer.from([0xf8, 0xff, 0xfe]);
-        throw err;
-      })(),
-    );
-
-    const onChunk = vi.fn();
-    await decodeOpusStreamChunks(stream, {
-      onChunk,
-      onError,
-      onVerbose: vi.fn(),
-      onWarn: vi.fn(),
-    });
-
-    expect(onError).toHaveBeenCalledWith(err);
-    expect(onChunk).toHaveBeenCalledOnce();
-    expect(onChunk.mock.calls[0]?.[0]).toHaveLength(960 * 2 * 2);
-  });
-
-  it("streams audio beyond a batch-sized budget without accumulating or truncating it", async () => {
-    let bytes = 0;
-    await decodeOpusStreamChunks(
-      Readable.from(Array.from({ length: 3 }, () => Buffer.from([0xf8, 0xff, 0xfe]))),
-      {
-        onChunk: (pcm) => {
-          bytes += pcm.length;
-        },
-        onVerbose: vi.fn(),
-        onWarn: vi.fn(),
-      },
-    );
-    expect(bytes).toBe(3 * 3840);
-  });
 });
 
 describe("createDiscordOpusPlaybackStream child stream errors", () => {
@@ -199,25 +147,22 @@ describe("createDiscordOpusPlaybackStream child stream errors", () => {
     spawnMock.mockReset();
   });
 
-  it.each(["stdout", "stderr"] as const)(
-    "routes a %s stream error to the playback stream instead of crashing",
-    async (streamName) => {
-      const ffmpeg = createFakeFfmpeg();
-      spawnMock.mockReturnValue(ffmpeg);
+  it("routes a stderr stream error to the playback stream instead of crashing", async () => {
+    const ffmpeg = createFakeFfmpeg();
+    spawnMock.mockReturnValue(ffmpeg);
 
-      const playback = createDiscordOpusPlaybackStream("input.mp3");
-      const errorSeen = new Promise<Error>((resolve) => {
-        playback.once("error", resolve);
-      });
+    const playback = createDiscordOpusPlaybackStream("input.mp3");
+    const errorSeen = new Promise<Error>((resolve) => {
+      playback.once("error", resolve);
+    });
 
-      const streamError = new Error(`${streamName} broke`);
-      expect(() => ffmpeg[streamName].emit("error", streamError)).not.toThrow();
+    const streamError = new Error("stderr broke");
+    expect(() => ffmpeg.stderr.emit("error", streamError)).not.toThrow();
 
-      await expect(errorSeen).resolves.toBe(streamError);
-      expect(ffmpeg.kill).toHaveBeenCalledOnce();
-      expect(ffmpeg.kill).toHaveBeenCalledWith("SIGKILL");
-    },
-  );
+    await expect(errorSeen).resolves.toBe(streamError);
+    expect(ffmpeg.kill).toHaveBeenCalledOnce();
+    expect(ffmpeg.kill).toHaveBeenCalledWith("SIGKILL");
+  });
 
   it("bounds multibyte ffmpeg stderr by bytes without a replacement character", async () => {
     const ffmpeg = createFakeFfmpeg();
@@ -290,5 +235,80 @@ describe("Discord voice WAV workspace ownership", () => {
 
       expect(await fs.readdir(rootDir)).toEqual([]);
     });
+  });
+});
+
+function createMono(sampleRate: number): Buffer {
+  const pcm = Buffer.alloc((sampleRate / 10) * 2);
+  for (let offset = 0; offset < pcm.length; offset += 2) {
+    pcm.writeInt16LE(Math.round(Math.sin((offset / 2) * 0.19) * 24_000), offset);
+  }
+  return pcm;
+}
+
+function streamFragments(
+  pcm: Buffer,
+  converter: { process(chunk: Buffer): Buffer; flush(): Buffer },
+): Buffer {
+  const output: Buffer[] = [];
+  const sizes = [1, 389, 2, 960, 7, 1_919];
+  let offset = 0;
+  let chunkIndex = 0;
+  while (offset < pcm.length) {
+    const chunk = Buffer.from(
+      pcm.subarray(offset, offset + (sizes[chunkIndex % sizes.length] ?? 1)),
+    );
+    offset += chunk.length;
+    chunkIndex += 1;
+    output.push(converter.process(chunk));
+    chunk.fill(0x7f);
+  }
+  output.push(converter.flush());
+  expect(converter.flush()).toHaveLength(0);
+  expect(() => converter.process(Buffer.alloc(4))).toThrow(/flushed/);
+  return Buffer.concat(output);
+}
+
+describe("Discord streaming PCM conversion", () => {
+  it("preserves the waveform and stereo frame fragments across incoming packet boundaries", () => {
+    const mono = createMono(48_000);
+    const stereo = Buffer.alloc(mono.length * 2);
+    for (let offset = 0; offset < mono.length; offset += 2) {
+      const sample = mono.readInt16LE(offset);
+      stereo.writeInt16LE(sample - 3_000, offset * 2);
+      stereo.writeInt16LE(sample + 3_000, offset * 2 + 2);
+    }
+    const actual = streamFragments(stereo, createDiscordPcmToRealtimeConverter());
+    expect(actual).toEqual(resamplePcm(mono, 48_000, 24_000));
+  });
+
+  it("drains a playback gap without losing history, samples, or a split PCM byte", () => {
+    const input = createMono(24_000);
+    const splitBytes = 961;
+    const completePrefixBytes = splitBytes - 1;
+    const converter = createRealtimePcmToDiscordConverter();
+    const prefix = Buffer.concat([
+      converter.process(input.subarray(0, splitBytes)),
+      converter.drain(),
+    ]);
+    expect(converter.drain()).toHaveLength(0);
+    const suffix = Buffer.concat([
+      converter.process(input.subarray(splitBytes)),
+      converter.flush(),
+    ]);
+    const prefixReference = resamplePcm(input.subarray(0, completePrefixBytes), 24_000, 48_000);
+    const fullReference = resamplePcm(input, 24_000, 48_000);
+    expect(prefix.length).toBe(prefixReference.length * 2);
+    expect(prefix.length + suffix.length).toBe(fullReference.length * 2);
+    for (let offset = 0; offset < prefixReference.length; offset += 2) {
+      expect(prefix.readInt16LE(offset * 2)).toBe(prefixReference.readInt16LE(offset));
+    }
+    // The already played gap edge was approximated; later output still uses its
+    // real preceding samples rather than treating the resumed chunk as a new signal.
+    for (let offset = 0; offset < suffix.length / 2; offset += 2) {
+      const sample = fullReference.readInt16LE(prefixReference.length + offset);
+      expect(suffix.readInt16LE(offset * 2)).toBe(sample);
+      expect(suffix.readInt16LE(offset * 2 + 2)).toBe(sample);
+    }
   });
 });

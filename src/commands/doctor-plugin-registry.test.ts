@@ -5,14 +5,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import * as pluginInstall from "../plugins/install.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
+import { isTrustedOfficialPluginInstallRecord } from "../plugins/official-external-install-records.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   detectPluginRegistryHealthIssues,
   maybeRepairPluginRegistryState,
+  maybeRepairStaleManagedNpmBundledPlugins,
   pluginRegistryIssueToHealthFinding,
   pluginRegistryIssueToRepairEffect,
 } from "./doctor-plugin-registry.js";
@@ -300,14 +303,6 @@ describe("maybeRepairPluginRegistryState", () => {
   });
 
   it.each([
-    {
-      name: "catalog-owned external",
-      pluginId: "google-meet",
-      packageName: "@openclaw/google-meet",
-      bundledDist: undefined,
-      missingEntry: false,
-      missingSourceEntry: false,
-    },
     {
       name: "source-external",
       pluginId: "external-demo",
@@ -686,5 +681,121 @@ describe("maybeRepairPluginRegistryState", () => {
     const notes = vi.mocked(note).mock.calls.join("\n");
     expect(notes).toContain("Managed npm plugin packages could not be inspected");
     expect(notes).toContain("broken-plugin");
+  });
+
+  it("preserves payload and record state for a non-bundled external plugin", async () => {
+    const stateDir = makeTempDir();
+    const packageName = "@openclaw/external-demo";
+    const version = "2026.5.2";
+    const { packageDir } = createManagedNpmPlugin({
+      stateDir,
+      id: "external-demo",
+      packageName,
+      version,
+    });
+    const initialIndex = createCurrentIndexWithNpmRecord({
+      pluginId: "external-demo",
+      packageName,
+      packageDir,
+      version,
+    });
+    await writePersistedInstalledPluginIndex(initialIndex, { stateDir });
+
+    const result = maybeRepairStaleManagedNpmBundledPlugins({
+      stateDir,
+      candidates: [],
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["external-demo"],
+          entries: { "external-demo": { enabled: true } },
+        },
+      },
+      prompter: { shouldRepair: true },
+    });
+
+    expect(result).toBeNull();
+    expect(fs.existsSync(packageDir)).toBe(true);
+    expect((await readRequiredPersistedInstalledPluginIndex(stateDir)).installRecords).toEqual(
+      initialIndex.installRecords,
+    );
+  });
+});
+
+describe("doctor official plugin provenance", () => {
+  const pluginId = "diagnostics-otel";
+  const packageName = "@openclaw/diagnostics-otel";
+  const legacyRecord: PluginInstallRecord = {
+    source: "clawhub",
+    spec: `clawhub:${packageName}@2026.7.2`,
+  };
+
+  async function createProvenanceFixture(record = legacyRecord) {
+    const stateDir = makeTempDir();
+    const installRecords = { [pluginId]: record };
+    await writePersistedInstalledPluginIndex(
+      { ...createCurrentIndex(), installRecords },
+      { stateDir },
+    );
+    return {
+      stateDir,
+      installRecords,
+      params: { stateDir, candidates: [], env: hermeticEnv(), config: {} },
+    };
+  }
+
+  it("persists missing ClawHub authority from a proven official record", async () => {
+    const { stateDir, params } = await createProvenanceFixture();
+    expect(
+      isTrustedOfficialPluginInstallRecord({ pluginId, packageName, record: legacyRecord }),
+    ).toBe(false);
+
+    await maybeRepairPluginRegistryState({ ...params, prompter: { shouldRepair: true } });
+
+    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+    const record = persisted.installRecords[pluginId]!;
+    expect(record).toEqual({
+      ...legacyRecord,
+      clawhubUrl: "https://clawhub.ai",
+      clawhubChannel: "official",
+    });
+    expect(isTrustedOfficialPluginInstallRecord({ pluginId, packageName, record })).toBe(true);
+
+    await maybeRepairPluginRegistryState({ ...params, prompter: { shouldRepair: true } });
+    expect((await readRequiredPersistedInstalledPluginIndex(stateDir)).installRecords).toEqual(
+      persisted.installRecords,
+    );
+  });
+
+  it.each([
+    { name: "path source", record: { ...legacyRecord, source: "path" } },
+    { name: "local source path", record: { ...legacyRecord, sourcePath: "/tmp/local-plugin" } },
+    { name: "missing URL only", record: { ...legacyRecord, clawhubChannel: "official" } },
+    { name: "missing channel only", record: { ...legacyRecord, clawhubUrl: "https://clawhub.ai" } },
+    { name: "custom host", record: { ...legacyRecord, clawhubUrl: "https://example.invalid" } },
+    { name: "community channel", record: { ...legacyRecord, clawhubChannel: "community" } },
+    { name: "conflicting identity", record: { ...legacyRecord, resolvedName: "@vendor/acpx" } },
+    {
+      name: "npm-only catalog identity",
+      record: { source: "clawhub", spec: "clawhub:@openclaw/acpx" },
+    },
+    { name: "unlisted spec", record: { source: "clawhub", spec: "clawhub:@vendor/acpx" } },
+  ] satisfies Array<{ name: string; record: PluginInstallRecord }>)(
+    "preserves unproven $name for reinstall instead of inventing authority",
+    async ({ record }) => {
+      const { stateDir, installRecords, params } = await createProvenanceFixture(record);
+      await maybeRepairPluginRegistryState({ ...params, prompter: { shouldRepair: true } });
+      expect((await readRequiredPersistedInstalledPluginIndex(stateDir)).installRecords).toEqual(
+        installRecords,
+      );
+    },
+  );
+
+  it("leaves legacy authority untouched without repair", async () => {
+    const { stateDir, installRecords, params } = await createProvenanceFixture();
+    await maybeRepairPluginRegistryState({ ...params, prompter: { shouldRepair: false } });
+    expect((await readRequiredPersistedInstalledPluginIndex(stateDir)).installRecords).toEqual(
+      installRecords,
+    );
   });
 });

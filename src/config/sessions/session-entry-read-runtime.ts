@@ -135,12 +135,18 @@ export async function withSessionEntryReadOnlyInWorker<T>(
   return withSessionStoreReaderInWorker(
     { ...scope, agentId, storePath },
     async ({ reader, database, continuation, logicalAgentId, ...owner }) => {
+      // Keep live caller signals and callbacks out of request sizing and worker transport.
       const readScope = {
-        ...scope,
         agentId: logicalAgentId,
         databaseAgentId: database.agentId,
         storePath: database.path,
         env: database.env,
+        sessionKey: scope.sessionKey,
+        clone: scope.clone,
+        defaultAgentId: scope.defaultAgentId,
+        hydrateSkillPromptRefs: scope.hydrateSkillPromptRefs,
+        readConsistency: scope.readConsistency,
+        projection: scope.projection,
       };
       const read = await reader.readEntryResult({ scope: readScope, continuation });
       owner.assertCurrent();

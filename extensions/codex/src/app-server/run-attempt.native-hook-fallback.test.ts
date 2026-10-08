@@ -183,7 +183,10 @@ describe("Codex participant native admission", () => {
               ]) {
                 spawnFailure = new Error(message);
                 await expect(
-                  resources.buildNativeHookRelayFinalConfigPatch({ action: "start" }),
+                  resources.buildNativeHookRelayFinalConfigPatch(
+                    { action: "start" },
+                    harness.client,
+                  ),
                 ).rejects.toBe(spawnFailure);
               }
               spawnFailure = ambiguity;

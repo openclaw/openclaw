@@ -55,7 +55,7 @@ export type SessionTranscriptHydrationWorkerResult =
 export type SessionTranscriptHydrationChunk = {
   kind: "transcript-hydration-chunk";
   encoding: string;
-  frames: Array<{ data: Uint8Array; endOfEvent: boolean }>;
+  frames: Array<{ data: Uint8Array; endOfEvent: boolean; seq?: number }>;
 };
 
 export type SessionTranscriptCurrentTurnEntryRead = {

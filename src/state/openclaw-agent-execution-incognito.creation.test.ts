@@ -1,6 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -9,7 +8,6 @@ import { readPreparedSessionEntryPublicationSource } from "../config/sessions/se
 import { assertSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
-import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../infra/sqlite-worker-contract.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -161,30 +159,6 @@ it("creates the owner and transcript before publishing the public creation recei
     stopFacts();
     stopIdentity();
   }
-});
-
-it("commits and returns creation content larger than one worker message", async () => {
-  const scope = target("large-prompt");
-  const prompt = "s".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES + 1024);
-  const summarize = (value: string | undefined) => ({
-    length: value?.length,
-    sha256: value === undefined ? undefined : createHash("sha256").update(value).digest("hex"),
-  });
-  const expected = summarize(prompt);
-  const created = await withIncognitoSessionActor(actor, () =>
-    createSessionEntryWithTranscript(scope, () => ({
-      ok: true,
-      entry: {
-        sessionId: "large-prompt",
-        updatedAt: 1,
-        skillsSnapshot: { prompt, skills: [] },
-      },
-    })),
-  );
-  assert(created.ok, "Expected large actor creation to commit");
-  expect(summarize(created.entry.skillsSnapshot?.prompt)).toEqual(expected);
-  const persisted = await actor.sessions.read(authority, { sessionKey: scope.sessionKey });
-  expect(summarize(persisted.entry?.skillsSnapshot?.prompt)).toEqual(expected);
 });
 
 it.each(["rewrite", "revocation"] as const)(

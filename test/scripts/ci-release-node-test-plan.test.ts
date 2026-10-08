@@ -208,3 +208,16 @@ it("splits measured full-release hosted rows without losing their execution cont
     fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
   }
 });
+
+it("gives measured long unfitted release rows room above the hosted job cap", async () => {
+  const { createNodeTestShardBundles } = await import("../../scripts/lib/ci-node-test-plan.mts");
+  const rows = createNodeTestShardBundles({ runnerBackend: "github" });
+  for (const owner of [
+    "agentic-cli-process",
+    "agentic-control-plane-agent-chat",
+    "core-runtime-config",
+  ]) {
+    const row = rows.find((candidate) => candidate.shardName === owner);
+    expect(row?.timeoutMinutes, owner).toBe(90);
+  }
+});

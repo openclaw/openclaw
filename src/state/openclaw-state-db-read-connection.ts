@@ -206,11 +206,7 @@ function assertStateReadSchemaForPolicy(
   }
 }
 
-function admitStateReadSchema(
-  database: DatabaseSync,
-  pathname: string,
-  existingSchema: boolean,
-): void {
+function admitStateReadSchemaFacts(database: DatabaseSync, pathname: string): void {
   try {
     admitSqliteSchema(database, (userVersion) =>
       assertSupportedStateSchemaVersion(database, pathname, {
@@ -218,8 +214,8 @@ function admitStateReadSchema(
         contentVersion: userVersion,
       }),
     );
-    assertStateReadSchemaForPolicy(database, pathname, existingSchema);
   } catch (error) {
+    // Catalog admission precedes version validation's legacy-schema diagnostic boundary.
     throw normalizeOpenClawStateSchemaReadError(error, pathname);
   }
 }
@@ -277,7 +273,8 @@ export function readOpenClawStateReadOnlyLocation<T>(
       result = {
         status: "available",
         value: runSqliteReadOperationSync(opened.database.db, () => {
-          admitStateReadSchema(opened.database.db, pathname, existingSchema);
+          admitStateReadSchemaFacts(opened.database.db, pathname);
+          assertStateReadSchemaForPolicy(opened.database.db, pathname, existingSchema);
           return operation(opened.database);
         }),
       };
@@ -355,11 +352,8 @@ export function openOpenClawStateReadOnlyLocation(
   const connection = openOpenClawStateReadConnection(pathname, source);
   try {
     runSqliteReadOperationSync(connection.database.db, () => {
-      admitStateReadSchema(
-        connection.database.db,
-        pathname,
-        isExistingOpenClawStateSchema(pathname, connection.database.db),
-      );
+      admitStateReadSchemaFacts(connection.database.db, pathname);
+      assertStateReadSchema(connection.database.db, pathname);
     });
   } catch (error) {
     try {

@@ -44,7 +44,7 @@ export type AdmittedRunContext = Readonly<{
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
   /** Host-captured original authenticated input, consumed only by restart-claim admission. */
-  recoverySnapshot?: import("../gateway/operator-run-recovery.types.js").OperatorRunRecoverySnapshot;
+  recoverySnapshot?: import("../gateway/operator-run-recovery-source.js").OperatorRunRecoverySnapshot;
   scopes: readonly string[];
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;

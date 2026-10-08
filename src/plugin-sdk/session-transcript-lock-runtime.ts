@@ -1,6 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
-  publishTranscriptUpdate,
   resolveSessionTranscriptRuntimeTarget,
   withTranscriptWriteLock,
   type SessionTranscriptWriteLockAccessorContext,
@@ -78,6 +77,7 @@ export async function withProjectedSessionTranscriptWriteLock<
   const guardProjectedContext = (
     locked: SessionTranscriptWriteLockAccessorContext,
   ): SessionTranscriptWriteLockAccessorContext => ({
+    publishUpdate: (update) => whileOpen(() => locked.publishUpdate(update)),
     readEvents: () => whileOpen(locked.readEvents),
     readMessageFacts: (query) => whileOpen(() => locked.readMessageFacts(query)),
     replaceEvents: (events) => whileOpen(() => locked.replaceEvents(events)),
@@ -96,32 +96,30 @@ export async function withProjectedSessionTranscriptWriteLock<
       callbackClosed = true;
     }
   };
-  const result = await withTranscriptWriteLock(
-    boundScope,
-    async (locked) =>
-      await runOpen(
-        projectContext(
-          {
-            target,
-            readEvents: () => whileOpen(locked.readEvents),
-            appendMessage: (options) =>
-              whileOpen(() =>
-                locked.appendMessage({
-                  ...options,
-                  ...(params.config !== undefined ? { config: params.config } : {}),
-                }),
-              ),
-            publishUpdate: (update) =>
-              whileOpen(async () => {
-                queuedUpdates.push(update ? { ...update } : undefined);
+  return await withTranscriptWriteLock(boundScope, async (locked) => {
+    const result = await runOpen(
+      projectContext(
+        {
+          target,
+          readEvents: () => whileOpen(locked.readEvents),
+          appendMessage: (options) =>
+            whileOpen(() =>
+              locked.appendMessage({
+                ...options,
+                ...(params.config !== undefined ? { config: params.config } : {}),
               }),
-          },
-          guardProjectedContext(locked),
-        ),
+            ),
+          publishUpdate: (update) =>
+            whileOpen(async () => {
+              queuedUpdates.push(update ? { ...update } : undefined);
+            }),
+        },
+        guardProjectedContext(locked),
       ),
-  );
-  for (const update of queuedUpdates) {
-    await publishTranscriptUpdate(boundScope, update);
-  }
-  return result;
+    );
+    for (const update of queuedUpdates) {
+      await locked.publishUpdate(update);
+    }
+    return result;
+  });
 }
