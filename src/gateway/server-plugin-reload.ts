@@ -97,6 +97,17 @@ export async function reloadGatewayPlugins(
   const previousMetadata = runtime.pluginMetadataSnapshot;
   const previousLoadContext = getPluginRuntimeLoadContext(previousRegistry);
   const recovery = createPluginReloadRecovery(previousRegistry, preparePlugins);
+  const sharedLoadParams = {
+    workspaceDir: pluginWorkspaceDir,
+    log,
+    coreGatewayMethodNames,
+    hostServices: pluginHostServices,
+    baseMethods,
+    ambientEnvTriggers,
+    resolveGatewayContext: resolvePluginGatewayContext,
+    loadIntent: "replacement" as const,
+    previousRegistry,
+  };
 
   const cache = createPluginCache();
   const operationId = params.pluginLifecycle?.operationId ?? randomUUID();
@@ -216,19 +227,11 @@ export async function reloadGatewayPlugins(
       }),
     );
     const loadParams = {
+      ...sharedLoadParams,
       cfg: params.nextConfig,
       activationSourceConfig: params.sourceConfig,
-      workspaceDir: pluginWorkspaceDir,
-      log,
-      coreGatewayMethodNames,
-      hostServices: pluginHostServices,
-      baseMethods,
       pluginLookUpTable: lookup,
       pluginMetadataSnapshot: nextMetadata,
-      ambientEnvTriggers,
-      resolveGatewayContext: resolvePluginGatewayContext,
-      loadIntent: "replacement" as const,
-      previousRegistry,
       replacePluginIds,
       expectedSourceDigests: params.pluginLifecycle?.expectedSourceDigests,
       prepareRegistrationFailureCleanup: prepareRegistrationFailureCleanup(params.nextConfig),
@@ -540,19 +543,11 @@ export async function reloadGatewayPlugins(
             await disposeInstances(previousRegistry, changedPluginIds);
             recovered = recovery.prepare(
               {
+                ...sharedLoadParams,
                 cfg: previousConfig,
                 activationSourceConfig:
                   previousLoadContext?.activationSourceConfig ?? previousConfig,
-                workspaceDir: pluginWorkspaceDir,
-                log,
-                coreGatewayMethodNames,
-                hostServices: pluginHostServices,
-                baseMethods,
                 pluginMetadataSnapshot: previousMetadata,
-                ambientEnvTriggers,
-                resolveGatewayContext: resolvePluginGatewayContext,
-                loadIntent: "replacement",
-                previousRegistry,
                 replacePluginIds: changedPluginIds,
                 prepareRegistrationFailureCleanup:
                   prepareRegistrationFailureCleanup(previousConfig),

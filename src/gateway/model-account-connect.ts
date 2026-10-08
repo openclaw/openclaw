@@ -239,28 +239,42 @@ export function createModelAccountConnectService(options: {
       }
     }
   };
-  const setLink = async (
+  const selectLink = async (
     action: ModelAccountConnectWorkerAction,
-    provider: string,
     authProfileId: string,
-    context: OpenClawStateWorkerContext,
-    previous: readonly ConnectOperation[],
-  ) => {
-    action.assertCurrent();
-    const links = await setUserProfileAuthLinkAsync(
-      {
-        profileId: action.owner,
-        provider,
-        authProfileId,
-        authorityProfileIds: action.actorProfileId ? [action.actorProfileId] : [],
-        assertCurrent: action.assertCurrent,
-      },
-      { context },
-    );
-    supersede(action.owner, provider, previous);
-    options.onChanged?.();
-    action.assertCurrent();
-    return { links };
+    personalOnly: boolean,
+  ): Promise<UsersLinkAuthProfileResult> => {
+    assertRunning(action);
+    const context = captureOpenClawStateWorkerContext();
+    const previous = [...operations.values()];
+    return retainWrite(async () => {
+      const provider = personalOnly
+        ? await resolveOwnedAccountProvider(action.owner, authProfileId, context)
+        : requireLinkableProvider(
+            await resolveLinkableAuthProfileProvider(
+              options.getConfig(),
+              action.owner,
+              authProfileId,
+              context,
+            ),
+            authProfileId,
+          );
+      action.assertCurrent();
+      const links = await setUserProfileAuthLinkAsync(
+        {
+          profileId: action.owner,
+          provider,
+          authProfileId,
+          authorityProfileIds: action.actorProfileId ? [action.actorProfileId] : [],
+          assertCurrent: action.assertCurrent,
+        },
+        { context },
+      );
+      supersede(action.owner, provider, previous);
+      options.onChanged?.();
+      action.assertCurrent();
+      return { links };
+    });
   };
   const setLinkNative = (
     action: ModelAccountConnectAction,
@@ -370,29 +384,8 @@ export function createModelAccountConnectService(options: {
       assertRunning(action);
       return { links };
     },
-    async linkAsync(
-      action: ModelAccountConnectWorkerAction,
-      authProfileId: string,
-    ): Promise<UsersLinkAuthProfileResult> {
-      assertRunning(action);
-      const context = captureOpenClawStateWorkerContext();
-      const previous = [...operations.values()];
-      return retainWrite(async () => {
-        const provider = await resolveLinkableAuthProfileProvider(
-          options.getConfig(),
-          action.owner,
-          authProfileId,
-          context,
-        );
-        return setLink(
-          action,
-          requireLinkableProvider(provider, authProfileId),
-          authProfileId,
-          context,
-          previous,
-        );
-      });
-    },
+    linkAsync: (action: ModelAccountConnectWorkerAction, authProfileId: string) =>
+      selectLink(action, authProfileId, false),
     async unlinkAsync(
       action: ModelAccountConnectWorkerAction,
       provider: string,
@@ -463,18 +456,8 @@ export function createModelAccountConnectService(options: {
       assertRunning(action);
       return { providers: [...providers.values()] };
     },
-    async selectAsync(
-      action: ModelAccountConnectWorkerAction,
-      authProfileId: string,
-    ): Promise<UsersSelectModelAccountResult> {
-      assertRunning(action);
-      const context = captureOpenClawStateWorkerContext();
-      const previous = [...operations.values()];
-      return retainWrite(async () => {
-        const provider = await resolveOwnedAccountProvider(action.owner, authProfileId, context);
-        return setLink(action, provider, authProfileId, context, previous);
-      });
-    },
+    selectAsync: (action: ModelAccountConnectWorkerAction, authProfileId: string) =>
+      selectLink(action, authProfileId, true),
     async start(
       action: ModelAccountConnectAction,
       provider: string,
