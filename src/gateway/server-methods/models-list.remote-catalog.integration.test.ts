@@ -238,11 +238,14 @@ it.for([1, 2])(
           client.request<ModelsListResult>("models.list", { view: "all", refresh: refreshCatalog });
         const kimiIds = (catalog: ModelsListResult) =>
           catalog.models.filter((row) => row.provider === "kimi").map((row) => row.id);
-        const waitForRows = async (model: string, isReady = () => true) => {
+        const waitForRows = async (
+          model: string,
+          isReady: (catalog: ModelsListResult) => boolean = () => true,
+        ) => {
           const ready = createDeferred<ModelsListResult>();
           const read = () => {
             void list().then((catalog) => {
-              if (kimiIds(catalog).includes(model) && isReady()) {
+              if (kimiIds(catalog).includes(model) && isReady(catalog)) {
                 ready.resolve(catalog);
               }
             }, ready.reject);
@@ -279,8 +282,15 @@ it.for([1, 2])(
           }
         };
         expect(kimiIds(await list(true))).toContain("remote-first");
-        // This ID is also configured locally; only the published price proves remote adoption.
-        await waitForRows("remote-first", () => currentPrice() === 1);
+        // Remote rows can precede executable provider publication; admit only its completed pair.
+        await waitForRows(
+          "remote-first",
+          (catalog) =>
+            !catalog.pendingProviders?.length &&
+            catalog.models.some(
+              (row) => row.provider === provider && row.id === "known-provider-model",
+            ),
+        );
         const config = getRuntimeConfig();
         const input = {
           config,
