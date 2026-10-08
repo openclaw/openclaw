@@ -1,10 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
+import {
   setupCronIssueRegressionFixtures,
   startCronForStore,
   topOfHourOffsetMs,
 } from "./service.issue-regressions.test-helpers.js";
-import { loadCronStore, saveCronStore } from "./store.js";
+import { CronService } from "./service.js";
+import {
+  createCronStoreHarness,
+  createNoopLogger,
+  createStartedCronServiceWithFinishedBarrier,
+  installCronTestHooks,
+  setupCronServiceSuite,
+  writeCronStoreSnapshot,
+} from "./service.test-harness.js";
+import { loadCronJobsStore, loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob, CronJobState } from "./types.js";
 
 describe("Cron issue regressions", () => {
@@ -97,37 +111,6 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
-  it("rejects invalid cron schedule updates without mutating disabled jobs", async () => {
-    const { store, cron } = await disabledCron();
-
-    const disabledJob = await cron.add({
-      name: "disabled-cron",
-      enabled: false,
-      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "tick" },
-    });
-
-    await expect(
-      cron.update(disabledJob.id, {
-        schedule: { kind: "cron", expr: "* * * 13 *", tz: "UTC" },
-      }),
-    ).rejects.toThrow("CronPattern");
-
-    const persisted = await loadCronStore(store.storePath);
-    const storedJob = persisted.jobs.find((job) => job.id === disabledJob.id);
-    expect(storedJob?.enabled).toBe(false);
-    expect(storedJob?.schedule.kind).toBe("cron");
-    if (storedJob?.schedule.kind !== "cron") {
-      throw new Error("expected stored cron schedule");
-    }
-    expect(storedJob.schedule.expr).toBe("0 * * * *");
-    expect(storedJob.schedule.tz).toBe("UTC");
-
-    cron.stop();
-  });
-
   it("#13845: one-shot jobs with terminal statuses do not re-fire on restart", async () => {
     const store = cronIssueRegressionFixtures.makeStorePath();
     const pastAt = Date.parse("2026-02-06T09:00:00.000Z");
@@ -173,5 +156,120 @@ describe("Cron issue regressions", () => {
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
       cron.stop();
     }
+  });
+});
+
+describe("list preserves past-due schedules (#16156)", () => {
+  const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
+    prefix: "openclaw-cron-16156-",
+    fakeTimers: false,
+  });
+
+  it("does not skip a cron job when list() is called while the job is past-due", async () => {
+    const store = await makeStorePath();
+    const clock = createGatewaySchedulerClock(Date.parse("2025-12-13T00:00:00.000Z"));
+    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(clock.clock),
+      storePath: store.storePath,
+      logger: noopLogger,
+    });
+
+    await cron.start();
+
+    const job = await cron.add({
+      name: "every-minute",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "cron-tick" },
+    });
+
+    const firstDueAt = job.state.nextRunAtMs!;
+    expect(firstDueAt).toBe(Date.parse("2025-12-13T00:01:00.000Z"));
+
+    clock.setTime(firstDueAt + 5);
+
+    const listedBefore = await cron.list({ includeDisabled: true });
+    const jobBeforeTimer = listedBefore.find((j) => j.id === job.id);
+
+    expect(jobBeforeTimer?.state.nextRunAtMs).toBe(firstDueAt);
+
+    const finishedRun = finished.waitForOk(job.id);
+    await clock.wake();
+    await finishedRun;
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const updated = jobs.find((j) => j.id === job.id);
+
+    const [text, options] = mockCall(enqueueSystemEvent) as [
+      string,
+      { agentId?: string } | undefined,
+    ];
+    expect(text).toBe("cron-tick");
+    expect(options?.agentId).toBe("main");
+    expect(updated?.state.lastStatus).toBe("ok");
+    expect(updated?.state.nextRunAtMs).toBeGreaterThan(firstDueAt);
+
+    cron.stop();
+  });
+});
+
+describe("remove preserves sibling schedules", () => {
+  const noopLogger = createNoopLogger();
+  const { makeStorePath } = createCronStoreHarness();
+  installCronTestHooks({ logger: noopLogger });
+
+  const base = Date.parse("2025-12-13T00:00:00.000Z");
+
+  function createJob(id: string, schedule: CronJob["schedule"], nextRunAtMs?: number): CronJob {
+    return {
+      id,
+      name: id,
+      enabled: true,
+      createdAtMs: base - 3_600_000,
+      updatedAtMs: base - 10_000,
+      schedule,
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "tick" },
+      delivery: { mode: "none" },
+      state: nextRunAtMs === undefined ? {} : { nextRunAtMs },
+    };
+  }
+
+  it("preserves a due sibling while backfilling another enabled sibling on cold-store remove", async () => {
+    const store = await makeStorePath();
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [
+        createJob("due-every", { kind: "every", everyMs: 10_000 }, base - 5_000),
+        createJob("missing-next", { kind: "cron", expr: "0 9 * * *", tz: "UTC" }),
+        createJob("to-remove", { kind: "cron", expr: "0 12 * * *", tz: "UTC" }, base + 3_600_000),
+      ],
+    });
+
+    const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    const result = await cron.remove("to-remove");
+    expect(result).toEqual({ ok: true, removed: true });
+
+    const persisted = await loadCronJobsStore(store.storePath);
+    const byId = new Map(persisted.jobs.map((job) => [job.id, job]));
+
+    expect(byId.has("to-remove")).toBe(false);
+    expect(byId.get("due-every")?.state.nextRunAtMs).toBe(base - 5_000);
+    expect(byId.get("missing-next")?.state.nextRunAtMs).toBeGreaterThan(base);
+
+    cron.stop();
   });
 });

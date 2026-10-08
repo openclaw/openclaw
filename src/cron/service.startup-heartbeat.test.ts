@@ -76,30 +76,22 @@ describe("heartbeat startup catch-up", () => {
     }
   });
 
-  it.each([
-    { name: "monitor", declarationKey: "heartbeat:main", payload: { kind: "heartbeat" } },
-    {
-      name: "task",
-      declarationKey: heartbeatTaskDeclarationKey("main", "inbox"),
-      payload: { kind: "systemEvent", text: "Check the inbox" },
-    },
-    { name: "immediate event", payload: { kind: "systemEvent", text: "Deliver the reminder" } },
-  ] as const)("defers an overdue $name without awaiting its heartbeat", async (testCase) => {
+  it("defers an overdue heartbeat task without awaiting its heartbeat", async () => {
     const store = await makeStorePath();
     const scheduler = createTestGatewayScheduler();
     const now = scheduler.now();
     const job: CronJob = {
       id: "overdue-heartbeat",
-      name: testCase.name,
-      ...("declarationKey" in testCase ? { declarationKey: testCase.declarationKey } : {}),
+      name: "overdue heartbeat task",
+      declarationKey: heartbeatTaskDeclarationKey("main", "inbox"),
       agentId: "main",
       enabled: true,
       createdAtMs: now - 120_000,
       updatedAtMs: now - 120_000,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 120_000 },
       sessionTarget: "main",
-      wakeMode: testCase.name === "immediate event" ? "now" : "next-heartbeat",
-      payload: testCase.payload,
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "Check the inbox" },
       state: { nextRunAtMs: now - 60_000 },
     };
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });

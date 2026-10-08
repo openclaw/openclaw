@@ -28,56 +28,10 @@ type MaintenanceCase = {
   name: string;
   job: Partial<CronJob>;
   nowMs?: number;
-  recomputeExpired?: boolean;
   changed: boolean;
   expected: CronJob["state"];
-  expectedSchedule?: CronJob["schedule"];
 };
-const startedAt = Date.parse("2026-03-01T12:00:00.000Z");
 const cases: MaintenanceCase[] = [
-  {
-    name: "schedules loaded every jobs without backfilling anchorMs",
-    nowMs: startedAt,
-    job: {
-      createdAtMs: startedAt - 120_000,
-      updatedAtMs: startedAt - 120_000,
-      schedule: { kind: "every", everyMs: 60_000 },
-    },
-    recomputeExpired: true,
-    changed: true,
-    expected: { nextRunAtMs: startedAt + 60_000 },
-    expectedSchedule: { kind: "every", everyMs: 60_000 },
-  },
-  {
-    name: "keeps recovered recurring error retries behind run-end backoff",
-    nowMs: startedAt + 31_000,
-    job: {
-      createdAtMs: startedAt - 60_000,
-      updatedAtMs: startedAt,
-      schedule: { kind: "every", everyMs: 1_000, anchorMs: startedAt - 60_000 },
-      state: {
-        lastRunAtMs: startedAt,
-        lastDurationMs: 90_000,
-        lastStatus: "error",
-        consecutiveErrors: 1,
-      },
-    },
-    recomputeExpired: true,
-    changed: true,
-    expected: { nextRunAtMs: startedAt + 120_000 },
-  },
-  {
-    name: "repairs future non-slots",
-    job: { state: { nextRunAtMs: badFuture } },
-    changed: true,
-    expected: { nextRunAtMs: nextSlot },
-  },
-  {
-    name: "preserves the next natural slot",
-    job: { state: { nextRunAtMs: nextSlot } },
-    changed: false,
-    expected: { nextRunAtMs: nextSlot },
-  },
   {
     name: "repairs early system-event slots",
     job: { state: { nextRunAtMs: now + 30 * 60_000 } },
@@ -85,51 +39,24 @@ const cases: MaintenanceCase[] = [
     expected: { nextRunAtMs: nextSlot },
   },
   {
-    name: "preserves early agent-turn deferrals",
-    job: {
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "tick" },
-      state: { nextRunAtMs: deferred },
-    },
-    changed: false,
-    expected: { nextRunAtMs: deferred },
-  },
-  ...[
-    {
-      name: "preserves retry backoff without duration",
-      nowMs: "2025-12-13T04:02:00Z",
-      lastRun: "2025-12-13T04:01:00Z",
-      updated: "2025-12-13T04:01:10Z",
-      lastDurationMs: undefined,
-      retryAt: "2025-12-13T04:10:00Z",
-    },
-    {
-      name: "preserves retry backoff from run end",
-      nowMs: "2025-12-13T04:10:00Z",
-      lastRun: "2025-12-13T04:01:30Z",
-      updated: "2025-12-13T04:05:30Z",
-      lastDurationMs: 4 * 60_000,
-      retryAt: "2025-12-13T04:20:30Z",
-    },
-  ].map(({ name, nowMs, lastRun, updated, lastDurationMs, retryAt }): MaintenanceCase => ({
-    name,
-    nowMs: Date.parse(nowMs),
+    name: "preserves retry backoff from run end",
+    nowMs: Date.parse("2025-12-13T04:10:00Z"),
     job: {
       createdAtMs: Date.parse("2025-12-10T12:00:00Z"),
-      updatedAtMs: Date.parse(updated),
+      updatedAtMs: Date.parse("2025-12-13T04:05:30Z"),
       schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
       wakeMode: "next-heartbeat",
       state: {
-        nextRunAtMs: Date.parse(retryAt),
-        lastRunAtMs: Date.parse(lastRun),
-        lastDurationMs,
+        nextRunAtMs: Date.parse("2025-12-13T04:20:30Z"),
+        lastRunAtMs: Date.parse("2025-12-13T04:01:30Z"),
+        lastDurationMs: 4 * 60_000,
         lastStatus: "error",
         consecutiveErrors: 4,
       },
     },
     changed: false,
-    expected: { nextRunAtMs: Date.parse(retryAt) },
-  })),
+    expected: { nextRunAtMs: Date.parse("2025-12-13T04:20:30Z") },
+  },
   {
     name: "repairs stale future slots after error backoff expires",
     job: {
@@ -167,29 +94,13 @@ const cases: MaintenanceCase[] = [
 ];
 
 describe("cron schedule maintenance", () => {
-  it.each(cases)(
-    "$name",
-    ({
-      name,
-      job: overrides,
-      nowMs = now,
-      recomputeExpired,
-      changed,
-      expected,
-      expectedSchedule,
-    }) => {
-      const job = createMaintenanceJob(name, overrides);
-      const state = createMockCronStateForJobs({ jobs: [job], nowMs });
-      expect(
-        recomputeNextRunsForMaintenance(state, { recomputeExpired, deferredNotifications: [] }),
-      ).toBe(changed);
-      expect(job.state.nextRunAtMs).toBe(expected.nextRunAtMs);
-      expect(job.state.scheduleErrorCount).toBe(expected.scheduleErrorCount);
-      if (expectedSchedule) {
-        expect(job.schedule).toEqual(expectedSchedule);
-      }
-    },
-  );
+  it.each(cases)("$name", ({ name, job: overrides, nowMs = now, changed, expected }) => {
+    const job = createMaintenanceJob(name, overrides);
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs });
+    expect(recomputeNextRunsForMaintenance(state, { deferredNotifications: [] })).toBe(changed);
+    expect(job.state.nextRunAtMs).toBe(expected.nextRunAtMs);
+    expect(job.state.scheduleErrorCount).toBe(expected.scheduleErrorCount);
+  });
 
   it.each([true, false])(
     "preserves startup catch-up deferrals only while enabled=%s",

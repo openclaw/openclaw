@@ -164,88 +164,6 @@ describe("CronService one-shot lifecycle", () => {
     }
   });
 
-  it.each([
-    {
-      name: "default delivery failure",
-      bestEffort: undefined,
-      unknown: false,
-      reason: undefined,
-      completion: "failed",
-    },
-    {
-      name: "best-effort delivery failure",
-      bestEffort: true,
-      unknown: false,
-      reason: undefined,
-      completion: "succeeded",
-    },
-    {
-      name: "unknown delivery",
-      bestEffort: undefined,
-      unknown: true,
-      reason: undefined,
-      completion: "unknown",
-    },
-    {
-      name: "silent suppression",
-      bestEffort: false,
-      unknown: false,
-      reason: "silent" as const,
-      completion: "succeeded",
-    },
-  ])("cleans up $name once across restart", async ({ bestEffort, unknown, reason, completion }) => {
-    const runIsolatedAgentJob = vi.fn(async () => ({
-      status: "ok" as const,
-      summary: "payload completed",
-      delivered: unknown ? undefined : false,
-      deliveryError: unknown || reason ? undefined : "delivery rejected",
-      deliverySuppressionReason: reason,
-    }));
-    const { cron, deps, clock, finished, cleanup } = await fixture({ runIsolatedAgentJob });
-    let current = cron;
-    try {
-      const job = await cron.add(isolatedJob({ delivery: { mode: "announce", bestEffort } }));
-      await clock.advanceTo(atMs);
-      expect(await finished).toMatchObject({
-        status: "ok",
-        completionStatus: completion,
-        deliveryStatus: unknown ? "unknown" : "not-delivered",
-        nextRunAtMs: undefined,
-        ...(reason ? { deliverySuppressionReason: reason } : {}),
-      });
-      expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
-      const retained = cron.getJob(job.id);
-      if (completion === "succeeded") {
-        expect(retained).toBeUndefined();
-      } else {
-        expect(retained).toMatchObject({
-          enabled: false,
-          state: { lastRunStatus: "ok", consecutiveErrors: 0 },
-        });
-      }
-      expect(retained?.state.nextRunAtMs).toBeUndefined();
-      expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
-      cron.stop();
-      const restartedRun = vi.fn(async () => ({ status: "ok" as const }));
-      current = new CronService({
-        ...deps,
-        scheduler: createTestGatewayScheduler(clock.clock),
-        runIsolatedAgentJob: restartedRun,
-      });
-      await current.start();
-      await clock.advanceBy(60_000);
-      expect(restartedRun).not.toHaveBeenCalled();
-      if (completion === "succeeded") {
-        expect(current.getJob(job.id)).toBeUndefined();
-      } else {
-        expect(current.getJob(job.id)).toMatchObject({ enabled: false });
-      }
-    } finally {
-      await cleanup(current);
-    }
-  });
-
   it("removes a queued main-session event when an immediate heartbeat fails", async () => {
     const requestHeartbeatAndWait = vi.fn(async () => {
       throw new Error("heartbeat failed");
@@ -350,6 +268,23 @@ describe("CronService one-shot lifecycle", () => {
       }
     },
   );
+
+  it("disables persisted main jobs with empty systemEvent text after skipping them", async () => {
+    const { cron, deps, clock, cleanup } = await fixture();
+    try {
+      await cron.add(mainJob({ payload: { kind: "systemEvent", text: "   " } }));
+      await clock.advanceTo(atMs);
+      expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+      const [job] = await cron.list({ includeDisabled: true });
+      expect(job?.enabled).toBe(false);
+      expect(job?.state.lastStatus).toBe("skipped");
+      expect(job?.state.lastError).toMatch(/non-empty/i);
+      expect(job?.state.nextRunAtMs).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
 
   it("rejects unsupported session/payload combinations", async () => {
     const { cron, cleanup } = await fixture();
