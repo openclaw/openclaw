@@ -258,6 +258,7 @@ function formatCronStatusForDisplay(job: CronJob) {
   const state = job.state ?? {};
   const status = computeStatus(job);
   const incompleteDelivery =
+    status !== "running" &&
     state.lastRunStatus === "ok" &&
     (state.lastCompletionStatus === "failed" || state.lastCompletionStatus === "unknown");
   const streamDisabled =

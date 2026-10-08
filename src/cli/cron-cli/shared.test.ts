@@ -293,6 +293,29 @@ describe("printCronList", () => {
     },
   );
 
+  it.each(["failed", "unknown"] as const)(
+    "shows an active run before the previous %s delivery outcome",
+    (lastCompletionStatus) => {
+      const job = createBaseJob({
+        state: {
+          runningAtMs: Date.now(),
+          lastRunStatus: "ok",
+          lastCompletionStatus,
+          lastDeliveryStatus: lastCompletionStatus === "failed" ? "not-delivered" : "unknown",
+        },
+      });
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: "running" });
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expect(list.logs.join("\n")).toContain("running");
+      expect(list.logs.join("\n")).not.toContain("delivery failed");
+      expect(list.logs.join("\n")).not.toContain("delivery unknown");
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expect(show.logs.join("\n")).toContain("status: running");
+    },
+  );
+
   it.each(["error", "skipped"] as const)(
     "preserves %s execution status when completion also failed",
     (lastRunStatus) => {
