@@ -194,7 +194,9 @@ export function openOpenClawAgentDatabaseReadOnly(
   try {
     enableNodeSqliteKyselyStatementCache(db);
     registerOpenClawAgentDatabaseIdentity(db);
-    const privatePath = isArtifactPreservingStateRead("agent") ? db.location() : undefined;
+    const privatePath = isArtifactPreservingStateRead("agent", pathname)
+      ? db.location()
+      : undefined;
     const database = { agentId, db, path: privatePath ?? pathname, close };
     const hasSchema = runSqliteReadOperationSync(db, () => {
       admitSqliteSchema(db);

@@ -55,10 +55,7 @@ import {
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
-import {
-  requiresArtifactPreservingSnapshot,
-  withExistingOpenClawStateDatabaseReadOnly,
-} from "./openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { repairStateSchema } from "./openclaw-state-db-repair.js";
 import {
   assertOpenClawStateSchemaRepairAllowed,
@@ -259,16 +256,22 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     }
     throw error;
   }
+  return readOnlyStateDatabase(connection.database, connection.close);
+}
+
+function readOnlyStateDatabase(
+  database: Pick<OpenClawStateDatabase, "db" | "path">,
+  close: () => boolean,
+): OpenClawStateDatabase {
   return {
-    db,
-    path: pathname,
+    ...database,
     walMaintenance: {
       checkpoint: () => false,
       stop: async () => {},
       reclaimFreePages: createSqliteWalReclamationResult,
       // Cleanup can fail transiently after the database closes. Keep the
       // close contract retryable until one call finishes both responsibilities.
-      close: () => connection.close(),
+      close,
     },
   };
 }
@@ -282,23 +285,14 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
   const env = options.env ?? process.env;
   const pathname = options.database?.path ?? resolveDatabasePath(options);
-  if (isArtifactPreservingStateRead("agent") && requiresArtifactPreservingSnapshot(pathname)) {
+  if (isArtifactPreservingStateRead("agent", pathname)) {
     assertOpenClawStateDatabaseFreshOpenAllowed(options);
     const db = openSqliteReadOnlyDatabase(pathname, { timeout: busyTimeoutMs });
     assertSupportedStateSchemaVersion(db, pathname);
-    return {
-      db,
-      path: pathname,
-      walMaintenance: {
-        checkpoint: () => false,
-        stop: async () => {},
-        close: () => {
-          db.close();
-          return true;
-        },
-        reclaimFreePages: createSqliteWalReclamationResult,
-      },
-    };
+    return readOnlyStateDatabase({ db, path: pathname }, () => {
+      db.close();
+      return true;
+    });
   }
   const existingSchema = !options.database && isExistingOpenClawStateSchema(pathname);
   const cached = options.database ?? stateDbCache.getCachedOpenClawStateDatabase(pathname);
@@ -447,8 +441,7 @@ export function runWithOpenClawStateBusyTimeout<T>(
   busyTimeoutMs: number,
 ): T {
   if (
-    isArtifactPreservingStateRead("agent") &&
-    requiresArtifactPreservingSnapshot(options.database?.path ?? resolveDatabasePath(options))
+    isArtifactPreservingStateRead("agent", options.database?.path ?? resolveDatabasePath(options))
   ) {
     return operation(openOpenClawStateDatabaseWithBusyTimeout(options, busyTimeoutMs));
   }
@@ -490,8 +483,7 @@ export function runOpenClawStateWriteTransaction<T>(
   > = {},
 ): T {
   if (
-    isArtifactPreservingStateRead("agent") &&
-    requiresArtifactPreservingSnapshot(options.database?.path ?? resolveDatabasePath(options))
+    isArtifactPreservingStateRead("agent", options.database?.path ?? resolveDatabasePath(options))
   ) {
     throw new Error("Programming error: shared-state write during artifact-preserving inspection.");
   }

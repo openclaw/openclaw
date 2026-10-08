@@ -20,27 +20,24 @@ export const stateSchemaHealthCheck: HealthCheck = {
   kind: "core",
   description: "Shared state migrations require explicit repair.",
   async detect(ctx) {
-    const command = formatCliCommand("openclaw doctor --fix", ctx.env);
-    return (
-      withExistingOpenClawStateDatabaseReadOnly(
-        ({ db, path }) => {
-          const version = readStateSchemaMigrationVersion(db);
-          return version < OPENCLAW_STATE_SCHEMA_VERSION
-            ? [
-                {
-                  checkId: "core/doctor/state-schema",
-                  severity: "warning" as const,
-                  path,
-                  requirement: "state-schema-migration-pending",
-                  message: `Shared state schema migration pending (${version} → ${OPENCLAW_STATE_SCHEMA_VERSION}); run ${command}.`,
-                  fixHint: `Run \`${command}\` to migrate the shared state database.`,
-                },
-              ]
-            : [];
-        },
-        { env: ctx.env },
-      ) ?? []
+    const state = withExistingOpenClawStateDatabaseReadOnly(
+      ({ db, path }) => ({ version: readStateSchemaMigrationVersion(db), path }),
+      { env: ctx.env },
     );
+    if (!state || state.version >= OPENCLAW_STATE_SCHEMA_VERSION) {
+      return [];
+    }
+    const command = formatCliCommand("openclaw doctor --fix", ctx.env);
+    return [
+      {
+        checkId: "core/doctor/state-schema",
+        severity: "warning",
+        path: state.path,
+        requirement: "state-schema-migration-pending",
+        message: `Shared state schema migration pending (${state.version} → ${OPENCLAW_STATE_SCHEMA_VERSION}); run ${command}.`,
+        fixHint: `Run \`${command}\` to migrate the shared state database.`,
+      },
+    ];
   },
 };
 

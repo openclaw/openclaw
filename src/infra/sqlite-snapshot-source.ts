@@ -51,7 +51,7 @@ export function openSqliteReadOnlyDatabase(
   options: Parameters<typeof openNodeSqliteDatabase>[1] = {},
 ) {
   const scope = artifactPreservingReads.getStore();
-  if (!scope || !scope.agentDatabases) {
+  if (!scope || !isArtifactPreservingStateRead("agent", pathname)) {
     return openNodeSqliteDatabase(pathname, { ...options, readOnly: true });
   }
   const snapshot = prepareSqliteReadOnlyLocationSync(pathname);
@@ -91,7 +91,7 @@ export async function prepareSqliteReadOnlyLocation(
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const signal = resolveSqliteInspectionSignal(options.signal);
   const preserveSourceArtifacts =
-    options.preserveSourceArtifacts === true || isArtifactPreservingStateRead("agent");
+    options.preserveSourceArtifacts === true || isArtifactPreservingStateRead("agent", pathname);
   try {
     signal?.throwIfAborted();
     if (!preserveSourceArtifacts && options.allowLiveOwner !== false) {
@@ -120,7 +120,7 @@ export function startSqliteReadOnlyLocationAsync(
   signal?.throwIfAborted();
   const pathname = path.resolve(inputPathname);
   const preserveSourceArtifacts =
-    options.preserveSourceArtifacts === true || isArtifactPreservingStateRead("agent");
+    options.preserveSourceArtifacts === true || isArtifactPreservingStateRead("agent", pathname);
   const expectedSourceIdentity =
     options.expectedSourceIdentity === undefined
       ? undefined

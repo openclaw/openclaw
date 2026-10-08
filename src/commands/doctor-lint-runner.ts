@@ -52,6 +52,7 @@ import {
   withPluginSourceCaptureStorage,
 } from "../plugins/plugin-source-capture-context.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { artifactPreservingReads } from "../state/artifact-preserving-state-reads.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
   withArtifactPreservingStateReads,
@@ -566,6 +567,11 @@ async function withReadOnlyPluginStateSnapshot<T>(
     throw new DoctorLintStateSnapshotError(error);
   }
   const privateStateDir = path.join(privateRoot, "openclaw-state");
+  // Only this owned copy is mutable; source-bound checks keep the enclosing read scope.
+  const inspection = artifactPreservingReads.getStore();
+  if (inspection) {
+    inspection.privateRoots.add(privateStateDir);
+  }
   const privateDatabasePath = resolveOpenClawStateSqlitePath({
     ...sourceEnv,
     OPENCLAW_STATE_DIR: privateStateDir,

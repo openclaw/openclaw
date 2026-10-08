@@ -120,8 +120,8 @@ function assertAgentDatabaseOperationCurrent(
   assertCurrent?.();
 }
 
-function assertAgentDatabaseWriteAllowed(): void {
-  if (isArtifactPreservingStateRead("agent")) {
+function assertAgentDatabaseWriteAllowed(options: OpenClawAgentDatabaseOptions): void {
+  if (isArtifactPreservingStateRead("agent", resolveOpenClawAgentSqlitePath(options))) {
     throw new Error("Programming error: writable agent database open during read-only inspection.");
   }
 }
@@ -151,7 +151,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     registrationObserver?: OpenClawAgentDatabaseRegistrationObserver,
     repairAdmission?: OpenClawAgentDatabaseRepairAdmission,
   ): OpenClawAgentDatabase {
-    assertAgentDatabaseWriteAllowed();
+    assertAgentDatabaseWriteAllowed(options);
     const run = () => {
       const steps = openSteps(
         options,
@@ -263,7 +263,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     signal?: AbortSignal,
     prepared?: "native" | "worker",
   ): Promise<T> {
-    assertAgentDatabaseWriteAllowed();
+    assertAgentDatabaseWriteAllowed(inputOptions);
     signal?.throwIfAborted();
     assertCurrent?.();
     // Admission retains its original path, registration, and permission inputs across awaits.
@@ -350,7 +350,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     withAdmission: OpenClawAgentDatabaseWriteAdmission,
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
   ): Promise<T> {
-    assertAgentDatabaseWriteAllowed();
+    assertAgentDatabaseWriteAllowed(inputOptions);
     const options = {
       ...inputOptions,
       env: cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env),

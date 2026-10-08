@@ -1,11 +1,20 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export const artifactPreservingReads = resolveGlobalSingleton(
   Symbol.for("openclaw.artifactPreservingStateReads"),
-  () => new AsyncLocalStorage<{ agentDatabases: boolean; readers: Set<() => void> } | false>(),
+  () =>
+    new AsyncLocalStorage<
+      | {
+          agentDatabases: boolean;
+          readers: Set<() => void>;
+          privateRoots: Set<string>;
+        }
+      | false
+    >(),
 );
 
 /** Admission scopes every nested reader without changing normal live-read semantics. */
@@ -21,7 +30,11 @@ export function withArtifactPreservingStateReads(
     return operation();
   }
   // Mutable maintenance keeps source identities; only inspection opts into all readers.
-  const scope = { agentDatabases: options.agentDatabases === true, readers: new Set<() => void>() };
+  const scope = {
+    agentDatabases: options.agentDatabases === true,
+    readers: new Set<() => void>(),
+    privateRoots: new Set<string>(),
+  };
   const finish = (value: unknown, errors: unknown[] = []) => {
     for (const close of scope.readers) {
       try {
@@ -44,7 +57,14 @@ export function withArtifactPreservingStateReads(
     : finish(result);
 }
 
-export function isArtifactPreservingStateRead(kind: "shared" | "agent" = "shared"): boolean {
+export function isArtifactPreservingStateRead(
+  kind: "shared" | "agent" = "shared",
+  pathname?: string,
+): boolean {
   const scope = artifactPreservingReads.getStore();
-  return Boolean(scope && (kind === "shared" || scope.agentDatabases));
+  return Boolean(
+    scope &&
+    (kind === "shared" || scope.agentDatabases) &&
+    (!pathname || ![...scope.privateRoots].some((root) => isPathInside(root, pathname))),
+  );
 }

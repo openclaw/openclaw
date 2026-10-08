@@ -222,7 +222,7 @@ export async function withDisposableOpenClawStateReads<T>(
 
 export function requiresArtifactPreservingSnapshot(pathname: string): boolean {
   return (
-    isArtifactPreservingStateRead() &&
+    isArtifactPreservingStateRead("shared", pathname) &&
     !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname)
   );
 }
@@ -304,7 +304,10 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
       value: withOpenClawStateReadOnlyLocation(operation, pathname, snapshot.location),
     };
   }
-  if (isArtifactPreservingStateRead("agent") && requiresArtifactPreservingSnapshot(pathname)) {
+  if (
+    isArtifactPreservingStateRead("agent", pathname) &&
+    requiresArtifactPreservingSnapshot(pathname)
+  ) {
     return { reused: false };
   }
   return withCachedOpenClawStateDatabaseReadOnly(

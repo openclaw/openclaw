@@ -38,7 +38,7 @@ type AuthProfileReadPoolCloseScope =
   | { kind: "root"; rootPath: string };
 
 export function closeAuthProfileReadDatabase(databasePath: string): void {
-  if (isArtifactPreservingStateRead("agent")) {
+  if (isArtifactPreservingStateRead("agent", databasePath)) {
     return;
   }
   const pathname = path.resolve(databasePath);
@@ -125,7 +125,7 @@ export function acquireAuthProfileReadDatabase(
   if (isDeletedAgentDatabasePath(resolvedPath)) {
     return { status: "missing" };
   }
-  const inspection = isArtifactPreservingStateRead("agent");
+  const inspection = isArtifactPreservingStateRead("agent", resolvedPath);
   const cached = inspection ? undefined : authProfileReadDatabases.get(resolvedPath);
   if (cached?.ready && cached.db.isOpen) {
     authProfileReadDatabases.delete(resolvedPath);
@@ -173,11 +173,8 @@ export function acquireAuthProfileReadDatabase(
     }
     return { status: "unreadable" };
   }
-  if (inspection) {
-    return { status: "readable", db };
-  }
   try {
-    while (authProfileReadDatabases.size > AUTH_PROFILE_READ_HANDLE_CAP) {
+    while (!inspection && authProfileReadDatabases.size > AUTH_PROFILE_READ_HANDLE_CAP) {
       const oldestPath = authProfileReadDatabases.keys().next().value;
       if (oldestPath === undefined) {
         break;

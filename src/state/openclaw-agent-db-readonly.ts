@@ -65,7 +65,7 @@ export function retainOpenClawAgentDatabaseReadOnly(
 ):
   | { found: true; database: OpenClawAgentReadOnlyDatabase; claim: OpenClawAgentDatabaseClaim }
   | { found: false; reason: "database-missing" | "schema-missing" } {
-  if (isArtifactPreservingStateRead("agent")) {
+  if (isArtifactPreservingStateRead("agent", resolveOpenClawAgentSqlitePath(options))) {
     const inspected = openOpenClawAgentDatabaseReadOnly(options);
     return inspected.found
       ? {
@@ -97,7 +97,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
-  if (isArtifactPreservingStateRead("agent")) {
+  if (isArtifactPreservingStateRead("agent", pathname)) {
     return withFreshOpenClawAgentDatabaseReadOnly(operation, options, behavior);
   }
   if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {

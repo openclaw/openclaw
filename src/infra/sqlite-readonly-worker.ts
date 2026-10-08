@@ -350,7 +350,7 @@ export function runSqliteReadOnlyWorker(
 ): Promise<SqliteReadOnlyWorkerValue> {
   const options: SqliteReadOnlyWorkerOptions =
     (inputOptions.mode === "auth-profile-rows" || inputOptions.mode === "operation") &&
-    isArtifactPreservingStateRead("agent")
+    isArtifactPreservingStateRead("agent", pathname)
       ? { ...inputOptions, artifactPreserving: true }
       : inputOptions;
   if (options.mode === "reclaim") {
