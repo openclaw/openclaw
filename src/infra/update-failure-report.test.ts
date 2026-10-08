@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { VERSION } from "../version.js";
@@ -407,56 +411,65 @@ describe("update failure report", () => {
     expect(issueCreateCalls).toBe(1);
   });
 
-  it("does not let a pending-reservation loser delete the winner's fallback report", async () => {
+  it("does not let a pending-reservation loser delete the winner's fallback report", async ({
+    signal,
+  }) => {
     const { prepared, stateDir, submit } = await prepareFailedReport(
       "attempt-pending-fallback-race",
     );
-    let finishValidation!: () => void;
-    const validationGate = new Promise<boolean>((resolve) => {
-      finishValidation = () => resolve(true);
-    });
-    const delayedCreateIssue = vi.fn();
-    const delayed = submit({
-      createIssue: delayedCreateIssue,
-      validateCurrentAttempt: () => validationGate,
-    });
     const fallbackUrl = prepared.url;
     if (!fallbackUrl) {
       throw new Error("expected an available browser handoff");
     }
-    let finishFallback!: () => void;
+    const validationGate = createDeferred<boolean>();
+    const fallbackEntered = createDeferred();
+    const fallbackGate = createDeferred();
+    const delayedCreateIssue = vi.fn();
+    const delayed = submit({
+      createIssue: delayedCreateIssue,
+      validateCurrentAttempt: () => validationGate.promise,
+    });
     const createIssue = vi.fn(
       async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
         await hooks.afterAuthPreflight?.();
-        return await new Promise<{
-          url: string;
-          reason: "cli-unavailable";
-          status: "browser-fallback";
-        }>((resolve) => {
-          finishFallback = () =>
-            resolve({
-              url: fallbackUrl,
-              reason: "cli-unavailable",
-              status: "browser-fallback",
-            });
-        });
+        fallbackEntered.resolve();
+        await fallbackGate.promise;
+        return {
+          url: fallbackUrl,
+          reason: "cli-unavailable" as const,
+          status: "browser-fallback" as const,
+        };
       },
     );
     const winner = submit({ createIssue });
-    await vi.waitFor(() => expect(createIssue).toHaveBeenCalledOnce());
-    const winnerReportPath = await currentSavedReportArtifactPath(prepared, stateDir);
-    expect(await fs.readFile(winnerReportPath, "utf8")).toBe(prepared.body);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          fallbackEntered.promise,
+          winner,
+          "Winner did not reach fallback transport",
+        ),
+        signal,
+      );
+      expect(createIssue).toHaveBeenCalledOnce();
+      const winnerReportPath = await currentSavedReportArtifactPath(prepared, stateDir);
+      expect(await fs.readFile(winnerReportPath, "utf8")).toBe(prepared.body);
 
-    finishValidation();
-    const delayedResult = await delayed;
-    expect(delayedResult).toMatchObject({ status: "retryable" });
-    expect(delayedResult).not.toHaveProperty("fallbackUrl");
-    expect(delayedCreateIssue).not.toHaveBeenCalled();
-    finishFallback();
-    const winnerResult = await winner;
-    expect(winnerResult).toMatchObject({ status: "fallback", fallbackUrl });
-    expect(winnerResult.savedReportPath).toBe(winnerReportPath);
-    expect(await fs.readFile(winnerReportPath, "utf8")).toBe(prepared.body);
+      validationGate.resolve(true);
+      const delayedResult = await withinTest(delayed, signal);
+      expect(delayedResult).toMatchObject({ status: "retryable" });
+      expect(delayedResult).not.toHaveProperty("fallbackUrl");
+      expect(delayedCreateIssue).not.toHaveBeenCalled();
+      fallbackGate.resolve();
+      const winnerResult = await withinTest(winner, signal);
+      expect(winnerResult).toMatchObject({ status: "fallback", fallbackUrl });
+      expect(winnerResult.savedReportPath).toBe(winnerReportPath);
+      expect(await fs.readFile(winnerReportPath, "utf8")).toBe(prepared.body);
+    } finally {
+      validationGate.resolve(true);
+      fallbackGate.resolve();
+      await Promise.allSettled([delayed, winner]);
+    }
   });
 
   it("does not let expired validation cleanup delete a replacement fallback report", async () => {
@@ -860,14 +873,16 @@ describe("update failure report", () => {
     }
   });
 
-  it("does not publish a fallback after its preparation lease is replaced", async () => {
+  it("does not publish a fallback after its preparation lease is replaced", async ({ signal }) => {
     const { prepared, stateDir, submit } = await prepareFailedReport(
       "attempt-expired-fallback-preparation",
     );
+    const fallbackEntered = createDeferred();
     const { promise: oldFallbackGate, resolve: releaseOldFallback } = createDeferred();
     const oldFallback = vi.fn(
       async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
         await hooks.afterAuthPreflight?.();
+        fallbackEntered.resolve();
         await oldFallbackGate;
         return {
           url: prepared.url!,
@@ -877,27 +892,42 @@ describe("update failure report", () => {
       },
     );
     const oldSubmission = submit({ createIssue: oldFallback });
-    await vi.waitFor(() => expect(oldFallback).toHaveBeenCalledOnce());
+    const submissions = [oldSubmission];
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          fallbackEntered.promise,
+          oldSubmission,
+          "Old owner did not reach fallback transport",
+        ),
+        signal,
+      );
+      expect(oldFallback).toHaveBeenCalledOnce();
+      expireUpdateFailureReportReceipt(prepared.attemptId, stateDir);
+      const replacementSubmission = submit({
+        createIssue: mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123"),
+      });
+      submissions.push(replacementSubmission);
+      const replacement = await withinTest(replacementSubmission, signal);
+      releaseOldFallback();
+      const oldResult = await withinTest(oldSubmission, signal);
 
-    expireUpdateFailureReportReceipt(prepared.attemptId, stateDir);
-    const replacement = await submit({
-      createIssue: mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123"),
-    });
-    releaseOldFallback();
-    const oldResult = await oldSubmission;
-
-    expect(replacement).toMatchObject({
-      status: "created",
-      url: "https://github.com/openclaw/openclaw/issues/123",
-    });
-    expect(oldResult).toMatchObject({
-      status: "duplicate",
-      url: "https://github.com/openclaw/openclaw/issues/123",
-    });
-    expect(oldResult).not.toHaveProperty("fallbackUrl");
-    await expect(fs.stat(`${prepared.savedReportPath}.result.json`)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+      expect(replacement).toMatchObject({
+        status: "created",
+        url: "https://github.com/openclaw/openclaw/issues/123",
+      });
+      expect(oldResult).toMatchObject({
+        status: "duplicate",
+        url: "https://github.com/openclaw/openclaw/issues/123",
+      });
+      expect(oldResult).not.toHaveProperty("fallbackUrl");
+      await expect(fs.stat(`${prepared.savedReportPath}.result.json`)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      releaseOldFallback();
+      await Promise.allSettled(submissions);
+    }
   });
 
   it.each([
