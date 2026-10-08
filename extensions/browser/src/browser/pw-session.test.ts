@@ -109,7 +109,6 @@ describe("pw-session refLocator", () => {
     const { page, selectedFrame, mocks } = fakePage();
     const state = ensurePageState(page);
     state.roleRefs = { [ref]: { role: "button", name } };
-    state.roleRefsFrameSelector = "iframe#main";
     state.roleRefsFrame = selectedFrame;
 
     refLocator(page, ref);
@@ -682,7 +681,7 @@ describe("pw-session ensurePageState", () => {
 
     handlers.get("framedetached")?.[0]?.(selectedFrame);
     expect(state.roleRefs).toBeUndefined();
-    expect(state.roleRefsFrameSelector).toBeUndefined();
+    expect(state.roleRefsFrame).toBeUndefined();
   });
 });
 

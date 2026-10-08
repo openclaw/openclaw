@@ -146,20 +146,6 @@ function projectSourceParticipant(
   };
 }
 
-/** A synchronous page reuses first-read display facts; later pages read fresh state. */
-export function createSessionCatalogSourceParticipantProjector() {
-  const profiles = new Map<string, ReturnType<typeof readSourceProfileFacts>>();
-  return (params: SourceParticipantParams): SessionParticipant =>
-    projectSourceParticipant(params, (id) => {
-      let facts = profiles.get(id);
-      if (!facts) {
-        facts = readSourceProfileFacts(id);
-        profiles.set(id, facts);
-      }
-      return facts;
-    });
-}
-
 /** Prepare one sender cohort off-thread; synchronous projection never opens profile storage. */
 export async function prepareSessionCatalogSourceParticipantProjector(
   identities: readonly TranscriptSenderIdentity[],

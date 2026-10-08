@@ -165,14 +165,14 @@ export function collectTelegramStatusIssues(
     if (audit.hasWildcardUnmentionedGroups === true) {
       addIssue(
         "config",
-        'Telegram groups config uses "*" with requireMention=false; membership probing is not possible without explicit group IDs.',
-        "Add explicit numeric group ids under channels.telegram.groups (or per-account groups) to enable probing.",
+        'Telegram groups config uses "*" with requireMention=false; membership checking is not possible without explicit group IDs.',
+        "Add explicit numeric group ids under channels.telegram.groups (or per-account groups) to enable checking.",
       );
     }
     if (audit.unresolvedGroups && audit.unresolvedGroups > 0) {
       addIssue(
         "config",
-        `Some configured Telegram groups are not numeric IDs (unresolvedGroups=${audit.unresolvedGroups}). Membership probe can only check numeric group IDs.`,
+        `Some configured Telegram groups are not numeric IDs (unresolvedGroups=${audit.unresolvedGroups}). Membership checks require numeric group IDs.`,
         "Use numeric chat IDs (e.g. -100...) as keys in channels.telegram.groups for requireMention=false groups.",
       );
     }

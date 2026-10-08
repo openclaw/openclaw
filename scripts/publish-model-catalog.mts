@@ -1029,7 +1029,7 @@ function serializeStandalonePricing(prices: Map<string, SourcedPricing> | undefi
 }
 
 /** Reads the curated global list; publication fails on any entry that is not canonical. */
-export function readRecommendedModels(rootDir: string): string[] {
+function readRecommendedModels(rootDir: string): string[] {
   const ids: unknown = JSON.parse(
     fs.readFileSync(path.join(rootDir, RECOMMENDED_MODELS_FILE), "utf8"),
   );

@@ -100,6 +100,8 @@ when the run is still stopping and compaction cannot proceed.
 
 Client-side compaction in the built-in OpenClaw runtime passes focus to both older-history and split-turn-prefix summaries. The host limits operator-provided focus to 800 Unicode code points and escapes it as prompt data before adding it to model requests.
 
+Automatic session title generation runs in the background and does not block manual compaction. Gateway compaction requests promptly refuse admitted turns and accepted queued work. Once foreground admission has ended, a completed reply that is still saving or cleaning up can take up to 15 seconds to settle before the request rechecks the session. In-band commands exclude their own execution from this wait, but still wait for other completed writers.
+
 Client-side manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
 
 When the built-in OpenClaw runtime has prepared the foreground request,

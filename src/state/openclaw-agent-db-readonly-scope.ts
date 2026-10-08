@@ -18,6 +18,7 @@ import {
   hasOpenClawAgentReadOnlySchema,
   openOpenClawAgentDatabaseReadOnly,
   readOpenClawAgentDatabase,
+  readOpenClawAgentDatabaseSnapshot,
   withFreshOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentDatabaseReadOnlyResult,
   type OpenClawAgentReadOnlyDatabase,
@@ -28,6 +29,8 @@ import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-
 
 export type OpenClawAgentDatabaseReadOnlyBehavior = {
   allowExtension?: boolean;
+  /** Consume admission and read kernels in one synchronous deferred transaction. */
+  snapshot?: boolean;
 };
 
 type ReadTarget = OpenClawAgentDatabaseOptions & { agentId: string; path: string };
@@ -149,6 +152,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
   private acquire(
     options: OpenClawAgentDatabaseOptions,
     onAdmitted?: (database: OpenClawAgentReadOnlyDatabaseHandle) => void,
+    snapshot = false,
   ) {
     const finish = (database: OpenClawAgentReadOnlyDatabaseHandle) => {
       const requestedAgentId = normalizeAgentId(options.agentId);
@@ -201,6 +205,9 @@ export class OpenClawAgentDatabaseReadOnlyScope {
       return finish(opened.database);
     }
     const database = this.database;
+    if (snapshot) {
+      return finish(database);
+    }
     let result: ReturnType<typeof openOpenClawAgentDatabaseReadOnly> = {
       found: false,
       reason: "schema-missing",
@@ -268,28 +275,38 @@ export class OpenClawAgentDatabaseReadOnlyScope {
   read<T>(
     operation: (database: OpenClawAgentReadOnlyDatabase) => T,
     options: OpenClawAgentDatabaseOptions,
+    behavior: OpenClawAgentDatabaseReadOnlyBehavior = {},
   ): OpenClawAgentDatabaseReadOnlyResult<T> {
     this.assertUsable();
     if (this.database?.db.isOpen && this.database.db.isTransaction) {
-      return withFreshOpenClawAgentDatabaseReadOnly(operation, options);
+      return withFreshOpenClawAgentDatabaseReadOnly(operation, options, behavior);
     }
     let result: OpenClawAgentDatabaseReadOnlyResult<T> = {
       found: false,
       reason: "schema-missing",
     };
-    const opened = this.acquire(options, (database) => {
-      this.borrowers++;
-      try {
-        result = readOpenClawAgentDatabase(database, operation);
-      } catch (error) {
-        if (this.cached && this.borrowers === 1) {
-          this.discardConnection();
+    const opened = this.acquire(
+      options,
+      (database) => {
+        this.borrowers++;
+        try {
+          result = behavior.snapshot
+            ? readOpenClawAgentDatabaseSnapshot(database, operation)
+            : readOpenClawAgentDatabase(database, operation);
+          if (!result.found) {
+            this.discardConnection();
+          }
+        } catch (error) {
+          if (this.cached && this.borrowers === 1) {
+            this.discardConnection();
+          }
+          throw error;
+        } finally {
+          this.releaseBorrow(database);
         }
-        throw error;
-      } finally {
-        this.releaseBorrow(database);
-      }
-    });
+      },
+      behavior.snapshot,
+    );
     return opened.found ? result : opened;
   }
 }
@@ -336,5 +353,6 @@ export function withScopedOpenClawAgentDatabaseReadOnly<T>(
   return (scope?.matches(options.agentId, options.path) ? scope : cachedScope(options)).read(
     operation,
     options,
+    behavior,
   );
 }

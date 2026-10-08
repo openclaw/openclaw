@@ -338,7 +338,6 @@ export function buildEmbeddedCompactionRuntimeContext(
     permissionMode: afterTurn ? undefined : params.permissionMode,
     sessionRoot: afterTurn ? undefined : params.sessionRoot,
     requireWorkspaceOnly: afterTurn ? undefined : params.requireWorkspaceOnly,
-    requireWritableSandbox: afterTurn ? undefined : params.requireWritableSandbox,
     agentDir: params.agentDir,
     config: params.config,
     toolOverrides: afterTurn ? undefined : params.toolOverrides,

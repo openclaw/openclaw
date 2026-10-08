@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -102,16 +103,85 @@ describe("captured model decisions", () => {
     const refreshed = await owner.acquire({ ...request, refresh: true });
     expect(load).toHaveBeenCalledTimes(2);
     expect(first.isCurrent()).toBe(false);
-    await owner.acquire({
+    const failure = new Error("Discovery unavailable");
+    load.mockRejectedValueOnce(failure);
+    await expect(owner.acquire({ ...request, refresh: true })).rejects.toBe(failure);
+    expect((await owner.acquire(request)).outcomes).toEqual(refreshed.outcomes);
+    expect(refreshed.isCurrent()).toBe(true);
+    expect(load).toHaveBeenCalledTimes(3);
+    const entered = createDeferred();
+    const release = createDeferred();
+    load.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return [];
+    });
+    const superseded = owner.acquire({ ...request, refresh: true });
+    await entered.promise;
+    const replacement = await owner.acquire({
       ...request,
       credential: { ...credential, token: "synthetic-replacement-token" },
     });
     expect(refreshed.isCurrent()).toBe(false);
-    expect(load).toHaveBeenCalledTimes(3);
+    release.resolve();
+    await expect(superseded).rejects.toThrow("changed");
+    expect(replacement.isCurrent()).toBe(true);
+    expect(load).toHaveBeenCalledTimes(5);
     retirement.abort();
     await expect(owner.acquire(request)).rejects.toThrow("changed");
-    expect(load).toHaveBeenCalledTimes(3);
+    expect(load).toHaveBeenCalledTimes(5);
   });
+
+  it.for(["during discovery", "after publication"] as const)(
+    "retires response observers when explicit refresh arrives %s",
+    async (timing) => {
+      const owner = createPreparedAccountCatalogAccess(() => true);
+      const credential = { type: "api_key", provider: "openai", key: "synthetic-key" } as const;
+      const record = owner.prepareServiceTierObserver({
+        credential,
+        selectedCredential: {
+          source: "profile",
+          profileId: "account",
+          identityKey: "profile:account",
+        },
+      });
+      const observation = {
+        modelId: "fixture-model",
+        runtimeId: "openclaw",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        requestedTier: "ultrafast",
+        responseTier: "priority",
+      };
+      record(observation);
+      const entered = createDeferred();
+      const release = createDeferred<[]>();
+      const load = vi.fn(() => {
+        entered.resolve();
+        return release.promise;
+      });
+      const request = { profileId: "account", credential, load, allowDiscovery: true };
+      const cold = owner.acquire(request);
+      await entered.promise;
+      if (timing === "after publication") {
+        release.resolve([]);
+        await release.promise;
+      }
+      const refresh = owner.acquire({ ...request, refresh: true });
+      release.resolve([]);
+      await Promise.all([
+        timing === "after publication"
+          ? expect(cold).rejects.toThrow("Selected account catalog changed")
+          : expect(cold).resolves.toMatchObject({ outcomes: [] }),
+        expect(refresh).resolves.toMatchObject({ outcomes: [] }),
+      ]);
+      expect(load).toHaveBeenCalledTimes(timing === "during discovery" ? 1 : 2);
+      expect(
+        owner.readServiceTierObservation({ ...observation, identityKey: "profile:account" }),
+      ).toBeUndefined();
+      expect(record(observation)).toBe(false);
+    },
+  );
 
   it("keeps response tier observations account-bound without completing discovery and revokes stale observers", async () => {
     const retirement = new AbortController();

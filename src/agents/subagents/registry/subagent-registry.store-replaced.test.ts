@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -7,9 +6,6 @@ import { createGatewayRequestContext } from "../../../gateway/server-request-con
 import { makeContextParams } from "../../../gateway/server-request-context.test-support.js";
 import { resetHeartbeatEventsForTest } from "../../../infra/heartbeat-events.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
-import { resetLogger, setLoggerOverride } from "../../../logging/logger.js";
-import { testApi as loggerTestApi } from "../../../logging/logger.test-support.js";
-import { createDiagnosticLogRecordCapture } from "../../../logging/test-helpers/diagnostic-log-capture.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -76,66 +72,41 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-it("reports an ownerless store retirement once per execution across repeated publications", async () => {
+it("leaves yielded tasks with their owner until a final result needs store retirement", async () => {
   const { subagent } = records();
   subagent.requesterStorePath = "original-store";
-  subagent.generation = 1;
   markSubagentRunPausedAfterYield({ entry: subagent });
   seedSubagentCompletionDelivery({ subagent });
   publishCommittedRecords(subagent);
-  const capture = createDiagnosticLogRecordCapture();
-  setLoggerOverride({
-    level: "info",
-    consoleLevel: "silent",
-    file: path.join(tempDirs.make("openclaw-store-retirement-log-"), "retirement.log"),
-  });
-  const retirementRecords = () =>
-    capture.records.filter(
-      (record) =>
-        record.message === "subagent notification store retirement has no current native owner",
-    );
-  try {
-    publishSystemEventStoreResolver(() => "replacement-store");
-    await settleRootWork(true);
-    await vi.advanceTimersByTimeAsync(0);
-    await capture.flush();
-    expect(retirementRecords()).toMatchObject([
-      { level: "INFO", attributes: { runId: subagent.runId } },
-    ]);
+  using runWorker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
 
+  for (let publication = 0; publication < 3; publication++) {
     publishSystemEventStoreResolver(() => "replacement-store");
     await settleRootWork(true);
-    const sameExecution = structuredClone(
-      expectDefined(subagentRuns.get(subagent.runId), "paused notification owner"),
-    );
-    publishCommittedRecords(sameExecution);
-    publishSystemEventStoreResolver(() => "replacement-store");
-    await settleRootWork(true);
-    await vi.advanceTimersByTimeAsync(0);
-    await capture.flush();
-    expect(retirementRecords()).toHaveLength(1);
-    expect(loadSubagentRegistryFromSqlite().get(subagent.runId)).toMatchObject({
-      pauseReason: "sessions_yield",
-      delivery: { status: "pending" },
-    });
-
-    const nextExecution = { ...structuredClone(sameExecution), generation: 2 };
-    seedSubagentCompletionDelivery({ subagent: nextExecution });
-    publishCommittedRecords(nextExecution);
-    publishSystemEventStoreResolver(() => "replacement-store");
-    await settleRootWork(true);
-    await vi.advanceTimersByTimeAsync(0);
-    await capture.flush();
-    expect(retirementRecords()).toMatchObject([
-      { level: "INFO", attributes: { runId: subagent.runId } },
-      { level: "INFO", attributes: { runId: subagent.runId } },
-    ]);
-  } finally {
-    await loggerTestApi.flushFileLogQueueForTests();
-    capture.cleanup();
-    setLoggerOverride(null);
-    resetLogger();
   }
+  expect(runWorker).not.toHaveBeenCalled();
+  expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(false);
+  expect(loadSubagentRegistryFromSqlite().get(subagent.runId)).toMatchObject({
+    pauseReason: "sessions_yield",
+    delivery: { status: "pending" },
+  });
+
+  const completed = structuredClone(
+    expectDefined(subagentRuns.get(subagent.runId), "yielded task"),
+  );
+  delete completed.pauseReason;
+  completed.execution.outcome = { status: "ok" };
+  completed.completion = { required: true, resultText: "retained final result" };
+  seedSubagentCompletionDelivery({ subagent: completed });
+  publishCommittedRecords(completed);
+  publishSystemEventStoreResolver(() => "replacement-store");
+  publishSystemEventStoreResolver(() => "original-store");
+  expect(subagentRuns.isCompletionAuthorityRetired(completed)).toBe(true);
+  await settleRootWork(true);
+  expect(loadSubagentRegistryFromSqlite().get(subagent.runId)).toMatchObject({
+    completion: { resultText: "retained final result" },
+    delivery: { status: "suspended", disposition: "intentional_non_delivery" },
+  });
 });
 
 it.each([false, true])(

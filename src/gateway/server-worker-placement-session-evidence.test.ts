@@ -385,9 +385,14 @@ describe("worker placement session evidence", () => {
             throw new Error("Unavailable placement registry reads cannot follow registration");
           },
         }));
+        const prepareRegistry = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
         const registry = vi
           .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
-          .mockReturnValue({ read, assertCurrent() {} });
+          .mockImplementation((...args) => ({
+            ...prepareRegistry(...args),
+            read,
+            assertCurrent() {},
+          }));
         try {
           const requested =
             route === "incognito-only" ? [incognito, missing] : [disk, incognito, missing];
@@ -447,14 +452,16 @@ describe("worker placement session evidence", () => {
   it("warns instead of silently swallowing resolver pipeline failures", async () => {
     const stateDir = tempDirs.make("openclaw-placement-session-pipeline-failure-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const prepareRegistry = registryListing.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
       const registry = vi
         .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
-        .mockReturnValueOnce({
+        .mockImplementationOnce((...args) => ({
+          ...prepareRegistry(...args),
           assertCurrent() {},
           read: async () => {
             throw new Error("evidence pipeline exploded");
           },
-        });
+        }));
       const placement = localPlacement(
         "session-pipeline-failure",
         "agent:retired:pipeline-failure",

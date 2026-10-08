@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
@@ -143,8 +144,15 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     );
     const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
     if (!res.found || res.value === undefined) {
+      const autoManaged = AUTO_MANAGED_CONFIG_META_PATHS.some(
+        (managedPath) =>
+          parsedPath.every((segment, index) => managedPath[index] === segment) ||
+          managedPath.every((segment, index) => parsedPath[index] === segment),
+      );
       const message = isConfigSchemaPath(schema, parsedPath)
-        ? `Config path is valid but unset: ${opts.path}. The runtime default applies until you set an authored value with ${formatCliCommand(`openclaw config set ${quoteCliArg(opts.path)} <value>`)}.`
+        ? autoManaged
+          ? `Config path is valid but unset: ${opts.path}. This path contains metadata managed automatically by OpenClaw on config writes; it cannot be authored with config set.`
+          : `Config path is valid but unset: ${opts.path}. The runtime default applies until you set an authored value with ${formatCliCommand(`openclaw config set ${quoteCliArg(opts.path)} <value>`)}.`
         : `Unknown config path: ${opts.path}. Run ${formatCliCommand("openclaw config schema")} to inspect valid paths.`;
       if (opts.json) {
         writeRuntimeJson(runtime, formatCliJsonFailure(message));

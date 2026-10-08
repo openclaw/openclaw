@@ -48,6 +48,7 @@ import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.j
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import { prepareInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
+import { registerRawChildRestoreOwnershipTest } from "./subagent-orphan-recovery.raw-owner.test-support.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -217,7 +218,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
       }),
     );
   });
-  it("hands five retained predecessor sessions to restart recovery without startup warnings", async () => {
+  registerRawChildRestoreOwnershipTest(fixture);
+
+  it("reconciles retained predecessor sessions during startup without waiting for a sweep", async () => {
     const startedAt = Math.floor(performance.timeOrigin) - 60_000;
     const generation = getAgentEventLifecycleGeneration();
     const records = Array.from({ length: 5 }, (_, index) =>
@@ -263,7 +266,6 @@ describe("subagent orphan recovery — faithful restart path", () => {
         });
         await initSubagentRegistry();
         await activateGatewayRuntime();
-        await testing.sweepOnceForTests();
         await fixture.settle();
         for (const entry of records) {
           expect(

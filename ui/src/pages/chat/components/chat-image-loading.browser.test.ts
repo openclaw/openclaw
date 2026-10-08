@@ -10,6 +10,7 @@ import {
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 import "../../../test-helpers/load-styles.ts";
+import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "../../activity/session-activity-media.css";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -59,7 +60,8 @@ async function admittedImage(container: HTMLElement): Promise<HTMLImageElement> 
 }
 
 function geometry(container: HTMLElement) {
-  const imageRect = frame(container).getBoundingClientRect();
+  const outer = frame(container);
+  const imageRect = (outer.querySelector(".chat-image-surface") ?? outer).getBoundingClientRect();
   const nextRect = container.querySelector("[data-next-message]")!.getBoundingClientRect();
   return { width: imageRect.width, height: imageRect.height, nextTop: nextRect.top };
 }
@@ -134,7 +136,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     ["landscape", 1200, 800, 500, 400, 400 / 1.5, "assistant", true],
     ["portrait", 800, 1600, 500, 180, 360, "user", true],
     ["tiny image", 1, 1, 500, 160, 160, "assistant", true],
-    ["narrow pane", 1200, 800, 180, 180, 120, "user", true],
+    ["narrow pane", 1200, 800, 180, 128, 128 / 1.5, "user", true],
     ["panorama", 1200, 80, 500, 400, 400 / 15, "assistant", true],
     ["tiny tall image", 80, 1600, 500, 160, 360, "user", true],
     ["unknown dimensions", 800, 1600, 500, 180, 360, "assistant", false],
@@ -173,7 +175,9 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(before.width).toBeCloseTo(sized ? expectedWidth : 400, 1);
       expect(before.height).toBeCloseTo(sized ? expectedHeight : 400 / 1.5, 1);
       expect(container.querySelector(".chat-image-skeleton")).not.toBeNull();
-      expect(getComputedStyle(originalFrame).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+      expect(
+        getComputedStyle(originalFrame.querySelector(".chat-image-surface")!).backgroundColor,
+      ).not.toBe("rgba(0, 0, 0, 0)");
       expect(originalFrame.getAttribute("aria-busy")).toBe("true");
       expect(originalFrame.textContent?.trim()).toBe("");
       expect(originalFrame.querySelector("svg")).toBeNull();
@@ -312,26 +316,37 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(before).toHaveLength(count);
       for (const rect of before) {
         expect(rect.width).toBe(tile);
-        expect(rect.height).toBe(tile);
+        expect(rect.height).toBe(tile - 52);
       }
       const nextTop = container.querySelector("[data-next-message]")!.getBoundingClientRect().top;
       ready.resolve();
       await waitForFast(() => expect(container.querySelectorAll("img")).toHaveLength(count));
       await Promise.all([...container.querySelectorAll("img")].map((image) => image.decode()));
       expect(rectangles()).toEqual(before);
+      for (const surface of container.querySelectorAll(".chat-image-surface")) {
+        const rect = surface.getBoundingClientRect();
+        expect(rect.width).toBe(rect.height);
+        for (const content of surface.querySelectorAll("button, img")) {
+          expect(content.getBoundingClientRect().width).toBe(rect.width);
+          expect(content.getBoundingClientRect().height).toBe(rect.height);
+        }
+      }
       expect(container.querySelector("[data-next-message]")!.getBoundingClientRect().top).toBe(
         nextTop,
       );
     },
   );
 
-  it.each([1440, 390])(
-    "anchors image actions around tiny and tall previews at %s px",
-    async (viewport) => {
+  it.each(
+    [1440, 390].flatMap((viewport) => ["ltr", "rtl"].map((direction) => ({ viewport, direction }))),
+  )(
+    "anchors image actions around tiny and tall previews at $viewport px in $direction",
+    async ({ viewport, direction }) => {
       const { page } = await import("vitest/browser");
       // The browser fixture does not scroll; keep all five previews reachable.
       await page.viewport(viewport, 1800);
       const container = mount(Math.min(500, viewport - 32));
+      container.dir = direction;
       vi.stubGlobal(
         "fetch",
         vi
@@ -392,26 +407,19 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         }
         const frameRect = element.getBoundingClientRect();
         const actionsRect = element.querySelector(".chat-image-actions")!.getBoundingClientRect();
-        expect(getComputedStyle(element, "::after").opacity).toBe("1");
-        expect(actionsRect.left).toBeGreaterThanOrEqual(frameRect.left);
+        const surface = element.querySelector(".chat-image-surface")!;
+        const surfaceRect = surface.getBoundingClientRect();
+        expect(getComputedStyle(element, "::after").content).toBe("none");
+        expect(actionsRect.left).toBeGreaterThanOrEqual(surfaceRect.right + 8);
         expect(actionsRect.right).toBeLessThanOrEqual(frameRect.right);
-        expect(actionsRect.top).toBeGreaterThanOrEqual(frameRect.top);
-        expect(actionsRect.bottom).toBeLessThanOrEqual(frameRect.bottom);
-        for (const action of element.querySelectorAll<HTMLButtonElement>(".chat-image-action")) {
-          const rect = action.getBoundingClientRect();
-          expect(
-            action.contains(
-              document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
-            ),
-          ).toBe(true);
-        }
-        expect(frameRect.bottom - actionsRect.bottom).toBeLessThanOrEqual(9);
-        expect(Number.parseFloat(getComputedStyle(element, "::after").width)).toBeCloseTo(
-          frameRect.width,
-          0,
-        );
-        expect(frameRect.width).toBeCloseTo(expectedWidth, 0);
-        expect(getComputedStyle(element).overflow).toBe("hidden");
+        expect(actionsRect.top).toBe(frameRect.top);
+        const action = element.querySelector<HTMLButtonElement>(".chat-image-action")!;
+        const rect = action.getBoundingClientRect();
+        expect(rect.width).toBe(44);
+        expect(rect.height).toBe(44);
+        expect(action.contains(document.elementFromPoint(rect.x + 22, rect.y + 22))).toBe(true);
+        expect(surfaceRect.width).toBeCloseTo(expectedWidth, 0);
+        expect(getComputedStyle(surface).overflow).toBe("hidden");
       }
     },
   );

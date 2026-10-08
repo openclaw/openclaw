@@ -25,13 +25,13 @@ export type UserProfileCatalogIdentityInput =
   | { kind: "source"; profileIds: readonly string[] }
   | { kind: "link"; accountIds: readonly string[]; owners: readonly string[] };
 
-export type UserProfileCatalogIdentityFacts = {
+type UserProfileCatalogIdentityFacts = {
   profileId: string;
   profile: UserProfileDisplay | undefined;
   github: StoredGitHubIdentity | undefined;
 };
 
-export type UserProfileCatalogIdentityResult =
+type UserProfileCatalogIdentityResult =
   | { ok: true; facts: UserProfileCatalogIdentityFacts }
   | { ok: false; message: string; error: OpenClawStateWorkerErrorPayload | undefined };
 

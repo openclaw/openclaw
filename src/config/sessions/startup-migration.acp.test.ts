@@ -40,6 +40,12 @@ it("startup requires offline ACP repair before handing restored stores to runtim
     const owners = new Set<string>();
     for (const { shape, agentId, sessionKey, sourceKey } of [
       {
+        shape: "raw-key",
+        agentId: "main",
+        sessionKey: "agent:main:acp:raw",
+        sourceKey: "agent:main:acp:raw",
+      },
+      {
         shape: "ownerless-key",
         agentId: "main",
         sessionKey: "agent:main:acp:ownerless",
@@ -274,5 +280,74 @@ it("scoped ACP admission does not probe unreadable literal-key candidates in ano
     ).resolves.toBeUndefined();
     expect(handoffDatabase).toHaveBeenCalledTimes(1);
     expect(fs.readFileSync(unreadable, "utf8")).toBe("unreadable unrelated database");
+  });
+});
+
+it("startup preserves unbound ACP rows retained by Doctor without serving their metadata", async () => {
+  await withOpenClawTestState({ scenario: "empty" }, async ({ env, writeConfig }) => {
+    const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
+    await writeConfig(cfg);
+    const entry = {
+      sessionId: "current-session",
+      lifecycleRevision: "current-revision",
+      updatedAt: 100,
+    };
+    replaceSessionEntrySync({ agentId: "main", env, sessionKey: "agent:main:main" }, entry);
+    const staleKey = "agent:main:acp:stale";
+    replaceSessionEntrySync({ agentId: "main", env, sessionKey: staleKey }, entry);
+    const keys = [
+      "agent:main:acp:absent",
+      "agent:main:acp:binding:absent",
+      staleKey,
+      "orphan-bare-key",
+      "agent:retired:acp:absent",
+    ];
+    for (const sessionKey of keys) {
+      writeAcpSessionMetaForMigration({
+        env,
+        sessionKey,
+        lifecycleRevision: "old-revision",
+        meta: {
+          backend: "fixture",
+          agent: "main",
+          runtimeSessionName: "retained-runtime",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 50,
+        },
+        now: () => 50,
+      });
+    }
+    const { db } = openOpenClawStateDatabase({ env });
+    const before = db.prepare("SELECT * FROM acp_sessions ORDER BY session_key").all();
+    const repair = await repairAcpSessionMetaKeysForDoctor({
+      cfg,
+      env,
+      apply: true,
+      authority: { assertCurrent() {} },
+    });
+    expect(repair.repaired).toBe(0);
+    expect(repair.warnings).toHaveLength(keys.length);
+    const handoffDatabase = vi.fn(async () => {});
+    await expect(
+      runSessionStartupMigration({
+        cfg,
+        env,
+        log: { info: vi.fn(), warn: vi.fn() },
+        handoffDatabase,
+      }),
+    ).resolves.toBeUndefined();
+    expect(handoffDatabase).toHaveBeenCalledTimes(1);
+    for (const sessionKey of keys) {
+      expect(
+        readAcpSessionMeta({
+          cfg,
+          env,
+          agentId: sessionKey.startsWith("agent:retired:") ? "retired" : "main",
+          sessionKey,
+        }),
+      ).toBeUndefined();
+    }
+    expect(db.prepare("SELECT * FROM acp_sessions ORDER BY session_key").all()).toEqual(before);
   });
 });

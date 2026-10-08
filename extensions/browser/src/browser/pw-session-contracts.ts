@@ -125,7 +125,6 @@ export type PageState = {
    */
   roleRefs?: Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }>;
   roleRefsMode?: "role" | "aria";
-  roleRefsFrameSelector?: string;
   roleRefsFrame?: Frame;
   /** Target-cache entry owned by the current role refs. */
   roleRefsTargetKey?: string;

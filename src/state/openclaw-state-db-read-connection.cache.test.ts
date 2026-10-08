@@ -17,6 +17,7 @@ import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeRetainedOpenClawStateReadConnections,
+  openOpenClawStateReadOnlyLocation,
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
 import {
@@ -123,8 +124,10 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   const observation = observeSqliteReadSql(native.StatementSync.prototype);
   const configSelect = /^select "value_json", "updated_at_ms" from "config_machine_state"/iu;
   const contentVersionSelect = /^select "value_json" from "config_machine_state"/iu;
-  const dataVersion = /^PRAGMA data_version$/iu;
+  const dataVersion = /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu;
   expect(await value()).toBe(1);
+  expect(await value()).toBe(1);
+  // First admission uses its native pragma; the retained observation caches on its second use.
   expect(await value()).toBe(1);
   prepare.mockClear();
   observation.queries.length = 0;
@@ -209,6 +212,38 @@ it.each([
   }
 });
 
+it.each(["read", "open"])(
+  "reports an unsupported version before an unreadable catalog during %s admission",
+  (kind) => {
+    const { pathname, read } = fixture();
+    const futureVersion = OPENCLAW_STATE_SCHEMA_VERSION + 1;
+    const writer = sqlite.openNodeSqliteDatabase(pathname);
+    try {
+      writer.exec(
+        `CREATE INDEX future_index ON sample(value); PRAGMA user_version=${futureVersion}`,
+      );
+      writer.enableDefensive?.(false);
+      writer.exec("PRAGMA writable_schema=ON");
+      writer
+        .prepare("UPDATE sqlite_schema SET sql=? WHERE name='future_index'")
+        .run("CREATE INDEX future_index ON sample(future_column)");
+    } finally {
+      writer.close();
+    }
+    const before = fs.readFileSync(pathname);
+    const operation = vi.fn();
+    expect(() => {
+      if (kind === "open") {
+        openOpenClawStateReadOnlyLocation(pathname, pathname).close();
+      } else {
+        read(operation);
+      }
+    }).toThrow(`uses newer schema version ${futureVersion}`);
+    expect(operation).not.toHaveBeenCalled();
+    expect(fs.readFileSync(pathname)).toEqual(before);
+  },
+);
+
 it("keeps content markers current through local writes, rollback, and authorizers", () => {
   const database = sqlite.openNodeSqliteDatabase(":memory:");
   const { constants } = sqlite.requireNodeSqlite();
@@ -264,9 +299,11 @@ it("observes peer commits and closes only the invalidated physical identity", ()
         return [select(), select()];
       }),
     ).toEqual([2, 2]);
-    expect(observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql))).toHaveLength(
-      1,
-    );
+    expect(
+      observation.queries.filter((sql) =>
+        /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
+      ),
+    ).toHaveLength(1);
     expect(first.read(({ db }) => db)).toBe(reader);
     expect(peer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
   } finally {

@@ -4,6 +4,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
+import type { UpdateCandidatePluginHashRequest } from "./update-candidate-plugin-hash.js";
 import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
@@ -53,12 +55,22 @@ it.each(["settled", "failed"] as const)(
       await fs.link(payload, path.join(source, `${index}.txt`));
     }
     await fs.symlink("0.txt", path.join(source, "payload-link"), "file");
+    // Inventory has its own read-only pool; this test gates the later copy owner.
+    transport.run.mockImplementation(async (input) => {
+      const request = input as UpdateCandidatePluginHashRequest;
+      expect(request.type).toBe("snapshot-hash");
+      return {
+        type: "hashed",
+        sha256: hashFileMutationSnapshotSync(request.filePath, request.expected),
+      };
+    });
     const plan = await prepareUpdateCandidatePluginTrees({
       roots: new Map([[source, destination]]),
       project: (file) => path.join(destination, path.relative(source, file)),
       targetStateDir,
       candidateRoot,
     });
+    transport.close.mockClear();
     const entered = createDeferredCore();
     const failFirst = createDeferredCore();
     const firstFailed = createDeferredCore();

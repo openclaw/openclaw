@@ -26,6 +26,25 @@ Before a significant update, [create a verified backup](#before-updating-create-
 Automatic config copies and migration recovery originals are not a full-state
 backup.
 
+## Retired tenant-container management
+
+The experimental `openclaw fleet` command has been removed. Updating the host
+CLI leaves existing tenant containers, networks, mounted data, and registry
+records untouched; it does not update their container images.
+
+Before updating, back up each tenant and record its container identity, runtime,
+image, ports, mounts, resource limits, and environment. Protect that record as
+credentials: container environments can contain Gateway tokens. Transfer
+lifecycle, image updates, backups, and cleanup to your Docker or Podman deployment
+tooling. Verify each tenant through its existing endpoint before retiring recovery
+copies or removing resources. Keep separate state and credentials for each
+[trust boundary](/gateway/security/trust-model).
+
+See [container image updates](/install/docker#upgrading-container-images),
+[backups](/install/backups), and the
+[downgrade limitation](/install/updating/rollback-and-recovery#downgrade) before
+changing images or restoring an older OpenClaw version.
+
 ## Upgrading very old versions
 
 For installations older than July 2026, upgrade to **`2026.9.5` first**, run its
@@ -749,7 +768,10 @@ setup and [pairing](/channels/pairing) distinguish owner access from chat access
 existing allowed users are not automatically promoted.
 Chat updates retain the original authorization source across managed handoffs,
 repair workers, and Doctor runs. Each worker checks the original installation's
-current policy and profile state before acting. Reassigning a channel account to
+current policy and profile state before acting. A repair worker's inference turn
+checks them before each model attempt, each tool call and its effects, and
+before it reports a result; its run-preparation checks verify update ownership,
+the updater connection, and cancellation. Reassigning a channel account to
 another administrator does not transfer an update already in progress; a current
 owner must start a new update. Older updater handoffs without a captured profile
 source retain their configured-owner checks and cannot acquire linked-profile

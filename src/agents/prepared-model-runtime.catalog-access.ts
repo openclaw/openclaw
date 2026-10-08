@@ -694,6 +694,7 @@ export async function createFullModelCatalogAccess(
       return published.catalog;
     },
     refreshExpiredModelCatalog,
+    recheckNativeLogin,
     readPublishedModels: () => {
       assertCurrent();
       return published.inventory?.runtimeModels;

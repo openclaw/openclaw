@@ -97,7 +97,7 @@ export async function materializePendingSupervisionBranch(
           }
           throw new CodexAppServerUnsafeSubscriptionError(
             kind === "probe"
-              ? "Codex model probe fork may have materialized without a response"
+              ? "Codex model test fork may have materialized without a response"
               : "Canonical Codex branch may have started without a response",
             { cause: error },
           );
@@ -198,7 +198,7 @@ export async function materializePendingSupervisionBranch(
     const probeThreadId = requireDistinctSupervisionThreadId({
       threadId: readSupervisionResponseThreadId(rawProbeResponse),
       sourceThreadId: pending.sourceThreadId,
-      role: "model probe",
+      role: "model test",
     });
     let probeResponse: ReturnType<typeof assertCodexThreadForkResponse>;
     try {
@@ -216,7 +216,7 @@ export async function materializePendingSupervisionBranch(
         CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
       ).catch((cause: unknown) => {
         throw new CodexAppServerUnsafeSubscriptionError(
-          `Codex model probe subscription could not be released: ${probeThreadId}`,
+          `Codex model test subscription could not be released: ${probeThreadId}`,
           { cause },
         );
       });

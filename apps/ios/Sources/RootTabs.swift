@@ -216,14 +216,12 @@ struct RootTabs: View {
                 // and the periodic attention refresh all land here.
                 .task(id: self.sidebarRefreshID) {
                     guard self.scenePhase == .active else { return }
-                    await self.sidebarModel.refresh(appModel: self.appModel)
-                    await self.appModel.refreshPendingApprovalInbox()
-                    while !Task.isCancelled {
-                        try? await Task.sleep(for: .seconds(600))
-                        guard !Task.isCancelled else { return }
+                    repeat {
                         await self.sidebarModel.refresh(appModel: self.appModel)
                         await self.appModel.refreshPendingApprovalInbox()
-                    }
+                        guard !Task.isCancelled else { return }
+                        try? await Task.sleep(for: .seconds(600))
+                    } while !Task.isCancelled
                 }
                 .task(id: "\(self.sidebarRefreshID):events") {
                     guard self.scenePhase == .active else { return }

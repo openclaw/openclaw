@@ -87,6 +87,17 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readRawDelta: reader("transcript-raw-delta", "raw transcript delta", (value) => value.result),
+    readVisibleDelta: reader(
+      "transcript-visible-delta",
+      "visible transcript delta",
+      (value) => value.result,
+    ),
+    readSessionMemoryCapture: reader(
+      "session-memory-capture",
+      "session Memory capture",
+      (value) => value.result,
+    ),
     readBoardSnapshot: reader("board-snapshot", "a Board snapshot", (result) => result.value),
     readBoardWidgetDocument: reader(
       "board-widget-document",

@@ -26,6 +26,7 @@ import { observeRootWork } from "./subagent-registry.browser-cleanup.test-suppor
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
+import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 const fixture = vi.hoisted(() => ({
   sessionId: "retained-collector-session",
@@ -62,11 +63,13 @@ vi.mock("./subagent-control-session.js", () => ({
   }),
 }));
 vi.mock("../../../gateway/call.js", () => ({ callGateway: vi.fn() }));
-vi.mock("./subagent-session-reconciliation.js", () => ({
-  loadSubagentSessionEntry: () => ({
+vi.mock("./subagent-session-reconciliation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-session-reconciliation.js")>()),
+  loadSubagentSessionEntry: vi.fn(async () => ({
     sessionId: fixture.sessionId,
     lifecycleRevision: fixture.lifecycleRevision,
-  }),
+    updatedAt: 1,
+  })),
 }));
 
 let state: OpenClawTestState;
@@ -163,6 +166,7 @@ function createRestorer(
     ensureListener: () => {},
     startSweeper: () => {},
     scheduleSweep: () => {},
+    recoverInterruptedRuns: async () => {},
     resumeRun: () => {},
     listSwarmRunsForGroup: () => [],
     startQueuedSubagentRun: async () => true,
@@ -366,6 +370,70 @@ it("settles an acknowledged queued launch failure through its captured native re
     collectorCompletion: { status: "failed" },
   });
   expect((await readStored()).get(runId)?.queuedLaunch).toBeUndefined();
+});
+
+it("leaves an acknowledged collector rekey with its launch owner during restore metadata preparation", async () => {
+  const { refusal, manager } = createRegistrationFixture();
+  refusal.descriptor = false;
+  const runId = "queued-restore-address";
+  const acceptedRunId = "accepted-restore-address";
+  const childSessionKey = "agent:main:subagent:restore-rekey";
+  await manager.registerSubagentRun({
+    runId,
+    childSessionKey,
+    requesterSessionKey: "agent:main:main",
+    requesterAgentId: "main",
+    requesterDisplayKey: "main",
+    task: "Resume only the captured physical collector address",
+    cleanup: "keep",
+    collect: true,
+    groupId: "restore-rekey",
+    queued: true,
+    queuedLaunch: {
+      request: { sessionKey: childSessionKey },
+      timeoutMs: 100,
+      schedulerGroupKey: "restore-rekey",
+      maxConcurrent: 1,
+    },
+  });
+  const gateway = sessionSharingTestContext(vi.fn());
+  const resolver = () => gateway;
+  const resumeRun = vi.fn();
+  const startQueuedSubagentRun = vi.fn(async () => true);
+  const restorer = createRestorer({
+    getGatewayContextResolver: () => resolver,
+    resumeRun,
+    startQueuedSubagentRun,
+  });
+  const entered = createDeferred();
+  const release = createDeferred();
+  vi.mocked(loadSubagentSessionEntry).mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    return { ...fixture, updatedAt: 1 };
+  });
+  await restorer.restoreOnce();
+  const activation = restorer.activate();
+  try {
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      activation,
+      "Restore skipped metadata preparation",
+    );
+    expect(await manager.startQueuedSubagentRun(runId, acceptedRunId)).toBe(true);
+    const accepted = expectDefined(subagentRuns.get(acceptedRunId), "accepted collector");
+    release.resolve();
+    await activation;
+    expect(subagentRuns.has(runId)).toBe(false);
+    expect(subagentRuns.get(acceptedRunId)).toBe(accepted);
+    expect(accepted.execution.status).toBe("running");
+    expect(resumeRun).not.toHaveBeenCalled();
+    expect(startQueuedSubagentRun).not.toHaveBeenCalled();
+  } finally {
+    release.resolve();
+    await activation;
+    restorer.reset();
+  }
 });
 
 it.each(["current", "during hydration", "reset", "replaced Gateway"] as const)(

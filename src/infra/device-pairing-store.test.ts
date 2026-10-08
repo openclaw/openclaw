@@ -39,7 +39,7 @@ afterEach(() => {
 
 test("shares admitted pairing freshness and observes foreign changes on the next read", () => {
   const reads = trackSqliteStatementExecutions(database.db, ["freshness", "paired"], (sql) =>
-    /\bPRAGMA data_version\b/iu.test(sql)
+    /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
       ? "freshness"
       : /\bfrom "device_pairing_paired"/iu.test(sql)
         ? "paired"

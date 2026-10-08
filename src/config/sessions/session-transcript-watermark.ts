@@ -23,8 +23,8 @@ export function readSessionTranscriptWatermarkAsync(
   return withSessionTranscriptReadSource(
     scope,
     readSessionTranscriptWatermark,
-    ({ scope: captured, owner, expectedIdentity }) =>
-      owner.readWatermark({ scope: captured, expectedIdentity }),
+    ({ scope: captured, owner, preparedReads, expectedIdentity }) =>
+      (preparedReads ?? owner).readWatermark({ scope: captured, expectedIdentity }),
   );
 }
 

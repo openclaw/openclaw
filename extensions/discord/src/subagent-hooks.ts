@@ -38,19 +38,12 @@ type DiscordSubagentDeliveryTargetResult =
     }
   | undefined;
 
-function normalizeThreadBindingTargetKind(raw?: string): ThreadBindingTargetKind | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "subagent" || normalized === "acp") {
-    return normalized;
-  }
-  return undefined;
-}
-
 export async function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
+  const targetKind = normalizeOptionalLowercaseString(event.targetKind);
   await unbindThreadBindingsBySessionKeyAsync({
     targetSessionKey: event.targetSessionKey,
     accountId: event.accountId,
-    targetKind: normalizeThreadBindingTargetKind(event.targetKind),
+    targetKind: targetKind === "subagent" || targetKind === "acp" ? targetKind : undefined,
     reason: event.reason,
     sendFarewell: event.sendFarewell,
   });

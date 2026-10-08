@@ -331,15 +331,11 @@ export async function runActiveReplySteer(
         isError: true,
       });
     }
-    const transcriptCommitUnconfirmed =
-      finalization.outcome.result?.transcriptCommit === "unconfirmed";
     if (finalization.aborted) {
       if (replyOperationRunState) {
         replyOperationRunState.messageInjectionAborted = true;
       }
-      const reason = transcriptCommitUnconfirmed
-        ? (finalization.outcome.result?.errorMessage ?? "transcript commitment unconfirmed")
-        : `adoption lost: ${formatErrorMessage(finalization.adoptionError)}`;
+      const reason = `adoption lost: ${formatErrorMessage(finalization.adoptionError)}`;
       logVerbose(
         `queue: active session ${steerSessionId} aborted exact steered target without replay (${reason})`,
       );

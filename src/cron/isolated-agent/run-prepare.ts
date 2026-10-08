@@ -217,7 +217,6 @@ export async function prepareCronRunContext(params: {
     });
     workspaceLease = selectedWorkspace.lease;
     const workspaceDir = selectedWorkspace.workspaceDir;
-    const executionWorkspaceDir = input.executionRoot ?? workspaceDir;
     const persistCronSessionRow: CronSessionRowWriter = async ({
       storePath,
       sessionKey,
@@ -281,7 +280,7 @@ export async function prepareCronRunContext(params: {
       isGmailHook,
       agentId,
       agentDir,
-      workspaceDir: executionWorkspaceDir,
+      workspaceDir,
     });
     if (!resolvedModelSelection.ok) {
       sessionWorkAdmission.release();
@@ -428,6 +427,7 @@ export async function prepareCronRunContext(params: {
       modelApi,
       agentId: modelOwner.agentId,
       agentDir: modelOwner.agentDir,
+
       sessionKey: agentSessionKey,
       agentPayload,
     });
@@ -497,16 +497,14 @@ export async function prepareCronRunContext(params: {
     }
     commandBody = appendCronUnattendedRunPreamble(commandBody, { externalHook: isExternalHook });
 
-    const skillsSnapshot =
-      input.skillsSnapshot ??
-      (await resolveCronSkillsSnapshot({
-        workspaceDir: executionWorkspaceDir,
-        config: cfgWithAgentDefaults,
-        agentId,
-        existingSnapshot: cronSession.sessionEntry.skillsSnapshot,
-        librarySelections: cronSession.sessionEntry.skillLibrarySelections,
-        isFastTestEnv: params.isFastTestEnv,
-      }));
+    const skillsSnapshot = await resolveCronSkillsSnapshot({
+      workspaceDir,
+      config: cfgWithAgentDefaults,
+      agentId,
+      existingSnapshot: cronSession.sessionEntry.skillsSnapshot,
+      librarySelections: cronSession.sessionEntry.skillLibrarySelections,
+      isFastTestEnv: params.isFastTestEnv,
+    });
     await persistCronSkillsSnapshotIfChanged({
       isFastTestEnv: params.isFastTestEnv,
       cronSession,
@@ -604,7 +602,6 @@ export async function prepareCronRunContext(params: {
         workspaceDir,
         cwd: selectedWorkspace.cwd,
         workspaceLease,
-        executionRoot: input.executionRoot,
         commandBody,
         inputProvenance:
           agentPayload && !isExternalHook

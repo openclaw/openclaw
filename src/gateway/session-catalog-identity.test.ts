@@ -7,9 +7,9 @@ import { linkEmail, syncGitHubIdentity } from "../state/user-profile-writes.work
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createSessionCatalogGitHubLinker,
-  createSessionCatalogSourceParticipantProjector,
   prepareSessionCatalogGitHubLinker,
   prepareSessionCatalogSourceActorProjector,
+  prepareSessionCatalogSourceParticipantProjector,
 } from "./session-catalog-identity.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -55,14 +55,6 @@ it("links every verified account to one person while exporting only the primary 
       ).toEqual({ type: "profile", id: primary.id });
     }
     expect(linker.resolveOwner("github:secondary")?.id).toBe(primary.id);
-    expect(
-      createSessionCatalogSourceParticipantProjector()({
-        pluginId: "fixture",
-        sourceDomain: "fixture",
-        identity: { type: "profile", id: secondary.id },
-      }).identity,
-    ).toMatchObject({ idKind: "github-account", id: "101" });
-
     const database = openOpenClawStateDatabase();
     const prepare = database.db.prepare.bind(database.db);
     const hostSql = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
@@ -75,6 +67,15 @@ it("links every verified account to one person while exporting only the primary 
     const source = { pluginId: "fixture", sourceDomain: "fixture", actors: [actor] };
     const portable = await prepareSessionCatalogSourceActorProjector(source);
     expect(portable(actor)?.identity).toMatchObject({ idKind: "github-account", id: "101" });
+    const senderIdentity = { type: "profile", id: secondary.id } as const;
+    const sender = await prepareSessionCatalogSourceParticipantProjector([senderIdentity]);
+    expect(
+      sender.project({
+        pluginId: "fixture",
+        sourceDomain: "fixture",
+        identity: senderIdentity,
+      }).identity,
+    ).toMatchObject({ idKind: "github-account", id: "101" });
     const participants = ["101", "102"].map((id) => ({
       identity: {
         type: "remote",

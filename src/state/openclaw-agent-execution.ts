@@ -76,6 +76,31 @@ export const captureOpenClawAgentDatabaseExecution = createAgentDatabaseExecutio
   captureFileAgentDatabaseExecution,
 );
 
+/** Borrow an existing physical owner without creating or preparing a writer for a read. */
+export function captureExistingOpenClawAgentDatabaseExecution(options: {
+  path: string;
+  env?: NodeJS.ProcessEnv;
+}): OpenClawAgentDatabaseExecution | undefined {
+  const pathname = path.resolve(options.path);
+  const existing =
+    executions.get(pathname) ??
+    executions.get(readDatabasePathIdentitySync(pathname).canonicalPath);
+  if (!existing || existing.kind !== "file") {
+    return undefined;
+  }
+  const target = { ...options, agentId: existing.agentId, path: pathname };
+  if (!supportsAgentDatabaseExecutionScope(target)) {
+    return undefined;
+  }
+  try {
+    assertAgentDatabaseExecutionSharedState(target, existing.sharedDatabaseKey);
+    return existing.borrow(pathname);
+  } catch {
+    // Initial read selection does not inherit failures of an unrelated writable lifecycle.
+    return undefined;
+  }
+}
+
 /** Borrow before callers yield; native opening stays lazy and release joins owned work. */
 function captureFileAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
@@ -333,7 +358,8 @@ function createAgentDatabaseExecution(
         signal,
         readmitSchema,
       );
-      if (generation === current && current.failure()) {
+      // A peer's intentional native close can finish while this admitted operation settles.
+      if (generation === current && !nativeClosing && current.failure()) {
         await owner.close().catch(reportCleanupFailure);
       }
       return result;
@@ -342,7 +368,7 @@ function createAgentDatabaseExecution(
       const contended = !entered && isSqliteLockError(error);
       if (generation === current && (nativeFailure || retireNativeOnFailure)) {
         try {
-          if (nativeFailure === "native" && !contended) {
+          if (nativeFailure === "native" && !contended && !nativeClosing) {
             await owner.close();
           } else {
             // The rejected broker scope has settled; only its captured native owner is retired.

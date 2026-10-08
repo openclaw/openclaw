@@ -169,6 +169,11 @@ export function startGatewayEventSubscriptions(params: {
     sessionEventSubscribers: params.sessionEventSubscribers,
     broadcastToConnIds: params.broadcastToConnIds,
   });
+  const unsubscribeObserverEvents = onAgentRuntimeEvent((evt) => {
+    void sessionObserver
+      .handleEventAsync(evt)
+      .catch((error: unknown) => params.log.warn("Session observer event failed", { error }));
+  });
   const sessionCompanion = createSessionCompanion({
     scheduler: params.scheduler,
     contextReader: defaultSessionCompanionContextReader,
@@ -179,6 +184,8 @@ export function startGatewayEventSubscriptions(params: {
   // Auxiliary model calls can inherit request work; cancel before that work drains.
   const stopSessionBackgroundWork = (): void => {
     if (!sessionBackgroundStop) {
+      // Chat and terminal persistence still consume events while the observer drains.
+      unsubscribeObserverEvents();
       sessionCompanion.dispose();
       sessionBackgroundStop = Promise.all([
         sessionObserver.disposeAsync(),
@@ -443,9 +450,6 @@ export function startGatewayEventSubscriptions(params: {
     let failedDispatchCleanup: (() => void) | undefined;
     let terminalPreparation: Promise<void> | undefined;
     let terminalEntries: Map<string, ChatAbortControllerEntry> | undefined;
-    void sessionObserver
-      .handleEventAsync(evt)
-      .catch((error: unknown) => params.log.warn("Session observer event failed", { error }));
     sessionActivitySummaries.handleEvent(evt);
     auditRecorder.record(evt);
     const lifecyclePhase =

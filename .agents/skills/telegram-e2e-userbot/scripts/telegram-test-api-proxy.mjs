@@ -28,7 +28,13 @@ export function telegramTestApiPath(pathname) {
 function requestHeaders(headers) {
   const filtered = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (value !== undefined && key !== "host" && !HOP_BY_HOP_HEADERS.has(key)) {
+    // Fetch owns framing after this proxy buffers or streams the incoming body.
+    if (
+      value !== undefined &&
+      key !== "host" &&
+      key !== "content-length" &&
+      !HOP_BY_HOP_HEADERS.has(key)
+    ) {
       filtered[key] = value;
     }
   }

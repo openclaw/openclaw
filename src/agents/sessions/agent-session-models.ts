@@ -48,45 +48,43 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
       previousModel,
       thinkingSelection: committedThinkingSelection,
       commit: committedMetadata,
-    } = await owner.run(() =>
-      withSessionManagerWrite(owner.manager, async () => {
-        owner.assertCurrent();
-        if (!this.sessionModelRegistry.hasConfiguredAuth(model)) {
-          throw new Error(`No API key for ${model.provider}/${model.id}`);
+    } = await owner.run(async () => {
+      owner.assertCurrent();
+      if (!this.sessionModelRegistry.hasConfiguredAuth(model)) {
+        throw new Error(`No API key for ${model.provider}/${model.id}`);
+      }
+      // Queued transitions replace the state at admission, not at invocation.
+      const previous = this.model;
+      const thinkingSelection = this.planThinkingLevel(
+        this.getThinkingLevelForModelSwitch(),
+        model,
+      );
+      const publication: { commit?: SessionMetadataCommit } = {};
+      await withSessionMetadataPublication(
+        owner.manager,
+        { type: "model_change", provider: model.provider, modelId: model.id },
+        (commit) => {
+          publication.commit = commit;
+          this.agent.state.model = model;
+          this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
+        },
+        () => owner.manager.appendModelChange(model.provider, model.id),
+      );
+      if (thinkingSelection) {
+        try {
+          owner.assertCurrent();
+          publication.commit =
+            (await this.appendThinkingSelection(owner, thinkingSelection)) ?? publication.commit;
+        } catch (cause) {
+          this.failAfterMetadataCommit(cause, publication.commit);
         }
-        // Queued transitions replace the state at admission, not at invocation.
-        const previous = this.model;
-        const thinkingSelection = this.planThinkingLevel(
-          this.getThinkingLevelForModelSwitch(),
-          model,
-        );
-        const publication: { commit?: SessionMetadataCommit } = {};
-        await withSessionMetadataPublication(
-          owner.manager,
-          { type: "model_change", provider: model.provider, modelId: model.id },
-          (commit) => {
-            publication.commit = commit;
-            this.agent.state.model = model;
-            this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
-          },
-          () => owner.manager.appendModelChange(model.provider, model.id),
-        );
-        if (thinkingSelection) {
-          try {
-            owner.assertCurrent();
-            publication.commit =
-              (await this.appendThinkingSelection(owner, thinkingSelection)) ?? publication.commit;
-          } catch (cause) {
-            this.failAfterMetadataCommit(cause, publication.commit);
-          }
-        }
-        return {
-          previousModel: previous,
-          thinkingSelection: thinkingSelection?.event,
-          commit: publication.commit,
-        };
-      }),
-    );
+      }
+      return {
+        previousModel: previous,
+        thinkingSelection: thinkingSelection?.event,
+        commit: publication.commit,
+      };
+    });
     // Hooks can await another transition after this write has settled.
     try {
       const thinking = this.emitThinkingLevelSelect(
@@ -119,17 +117,15 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
    */
   async setThinkingLevel(level: ThinkingLevel): Promise<void> {
     const owner = this.captureMetadataOwner();
-    const committedSelection = await owner.run(() =>
-      withSessionManagerWrite(owner.manager, async () => {
-        owner.assertCurrent();
-        const selection = this.planThinkingLevel(level, this.model);
-        if (!selection) {
-          return undefined;
-        }
-        const commit = await this.appendThinkingSelection(owner, selection);
-        return { event: selection.event, commit };
-      }),
-    );
+    const committedSelection = await owner.run(async () => {
+      owner.assertCurrent();
+      const selection = this.planThinkingLevel(level, this.model);
+      if (!selection) {
+        return undefined;
+      }
+      const commit = await this.appendThinkingSelection(owner, selection);
+      return { event: selection.event, commit };
+    });
     try {
       await this.emitThinkingLevelSelect(committedSelection?.event, owner.runner, owner.isCurrent);
     } catch (cause) {
@@ -235,10 +231,10 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
           return false;
         }
       },
-      run: <T>(operation: () => Promise<T>): Promise<T> =>
-        target
-          ? withSessionTranscriptWriteAssertion(target, assertCurrent, operation)
-          : operation(),
+      run: <T>(operation: () => Promise<T>): Promise<T> => {
+        const write = () => withSessionManagerWrite(manager, operation);
+        return target ? withSessionTranscriptWriteAssertion(target, assertCurrent, write) : write();
+      },
     };
   }
 

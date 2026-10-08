@@ -32,6 +32,7 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
@@ -301,13 +302,30 @@ export function dispatchAgentRunFromGateway(params: {
       return Promise.reject(failure);
     }
   };
+  const runOwnedAgent = () =>
+    withExecRequestTurn(
+      {
+        identity: {
+          runId: params.runId,
+          sessionKey: registeredRunEntry?.sessionKey,
+          sessionId: registeredRunEntry?.sessionId,
+          agentId: registeredRunEntry?.agentId,
+          ownerConnId: registeredRunEntry?.ownerConnId,
+          ownerDeviceId: registeredRunEntry?.ownerDeviceId,
+          controlUiVisible: registeredRunEntry?.controlUiVisible,
+          turnKind: registeredRunEntry?.turnKind,
+        },
+        abortSignal: params.abortController.signal,
+      },
+      runAgent,
+    );
   const agentExecution = cronCreatorAuthorityCapability
     ? runWithCronCreatorAuthorityCapability(
         cronCreatorAuthorityCapability,
-        runAgent,
+        runOwnedAgent,
         params.abortController.signal,
       )
-    : runAgent();
+    : runOwnedAgent();
   // Startup failures may never enter command finalization; delivery already joined this boundary.
   const agentRun = (async () => {
     try {

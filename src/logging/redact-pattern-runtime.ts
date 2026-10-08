@@ -299,8 +299,8 @@ export function setRedactPatternPrefilter(
   if (patternPrefilters.has(pattern)) {
     return;
   }
-  // oxlint-disable-next-line typescript/unbound-method -- Compare method identity; never invoke it unbound.
-  const { source, exec } = pattern;
+  const source = pattern.source;
+  const exec = pattern.exec;
   const flags = pattern instanceof RegExp ? pattern.flags : undefined;
   const replace = pattern instanceof RegExp ? pattern[Symbol.replace] : undefined;
   patternPrefilters.set(
