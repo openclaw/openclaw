@@ -534,6 +534,7 @@ describe("spawnAcpDirect", () => {
       const cwd = typeof args.cwd === "string" ? args.cwd : undefined;
       return {
         closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
+        sessionEntry: { sessionId: "sess-123", updatedAt: Date.now() },
         runtime: {
           close: vi.fn().mockResolvedValue(undefined),
         },

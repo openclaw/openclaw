@@ -7,8 +7,6 @@ import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isMissingPathError } from "../../../infra/errors.js";
@@ -155,16 +153,6 @@ export async function initializeAcpSpawnRuntime(params: {
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   params.assertActive?.();
-  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
-    agentId: params.ownerAgentId,
-  });
-  const sessionEntry = loadSessionEntry({
-    storePath,
-    sessionKey: params.sessionKey,
-    agentId: params.ownerAgentId,
-    clone: false,
-  });
-  const sessionId = sessionEntry?.sessionId;
   const initialized = await getAcpSessionManager().initializeSession({
     assertActive: params.assertActive,
     cfg: params.cfg,
@@ -182,8 +170,8 @@ export async function initializeAcpSpawnRuntime(params: {
 
   return {
     initialized,
-    sessionId,
-    sessionEntry,
+    sessionId: initialized.sessionEntry.sessionId,
+    sessionEntry: initialized.sessionEntry,
   };
 }
 
