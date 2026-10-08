@@ -13,6 +13,7 @@ import {
 import { resolveSrtPluginConfig } from "./config.js";
 
 const isDarwin = process.platform === "darwin";
+const isSupported = isDarwin || process.platform === "linux";
 const servers: Server[] = [];
 const tempDirs: string[] = [];
 
@@ -69,7 +70,7 @@ afterEach(async () => {
   }
 });
 
-describe.skipIf(!isDarwin)("srt sandbox real backend network modes", () => {
+describe.skipIf(!isSupported)("srt sandbox real backend network modes", () => {
   it("enforces deny-all, strict allowlist, and open through the initialized proxy/profile", async () => {
     const endpoint = await startLoopbackServer();
 
@@ -115,8 +116,12 @@ describe.skipIf(!isDarwin)("srt sandbox real backend network modes", () => {
       usePty: false,
     });
     const wrappedArgv = Buffer.from(spec.env.SRT_CUSTODY_ARGV!, "base64").toString("utf8");
-    expect(wrappedArgv).toContain("sandbox-exec");
-    expect(wrappedArgv).toContain("allow network-outbound");
-    expect(wrappedArgv).toContain(`localhost:${SandboxManager.getProxyPort()}`);
+    if (isDarwin) {
+      expect(wrappedArgv).toContain("sandbox-exec");
+      expect(wrappedArgv).toContain("allow network-outbound");
+      expect(wrappedArgv).toContain(`localhost:${SandboxManager.getProxyPort()}`);
+    } else {
+      expect(wrappedArgv).toContain("bwrap");
+    }
   });
 });

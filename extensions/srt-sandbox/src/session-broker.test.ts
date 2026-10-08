@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { buildBrokerRuntimeConfig, sameParentProxy } from "./broker-config.js";
+import { findLinuxProcessByArgv0 } from "./process-proof.test-helpers.js";
 import { ScopeChildReaper } from "./scope-reaper.js";
 import {
   SessionBroker,
@@ -317,10 +318,11 @@ describe.skipIf(!isLive)("session broker — live per-session network isolation 
     async () => {
       const writable = mkdtempSync(path.join(tmpdir(), "srt-broker-abort-"));
       const pidFile = path.join(writable, "descendant.pid");
+      const marker = path.join(writable, "command-child");
       const a = makeBroker([`${alpha.host}:${alpha.port}`], [writable]);
       const controller = new AbortController();
       const running = a.exec({
-        script: `sleep 30 & echo $! > ${JSON.stringify(pidFile)}; wait`,
+        script: `bash -c 'exec -a ${JSON.stringify(marker)} sleep 30' & echo $! > ${JSON.stringify(pidFile)}; wait`,
         signal: controller.signal,
       });
       const deadline = Date.now() + 10_000;
@@ -329,7 +331,11 @@ describe.skipIf(!isLive)("session broker — live per-session network isolation 
           setTimeout(resolve, 25);
         });
       }
-      const descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
+      let descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
+      if (process.platform === "linux") {
+        await expect.poll(() => findLinuxProcessByArgv0(marker), { timeout: 2000 }).toBeDefined();
+        descendantPid = findLinuxProcessByArgv0(marker)!;
+      }
       expect(isAlive(descendantPid)).toBe(true);
       controller.abort(new Error("test cancellation"));
       await expect(running).rejects.toThrow("test cancellation");

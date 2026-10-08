@@ -130,10 +130,45 @@ export function buildSrtFilesystemPolicy(
     }
     return aliases;
   });
+  // Linux readonly child mounts do not prevent renaming their ancestors.
+  // Bind each writable ancestor as a mount point so its entry cannot move.
+  // These anchors are already within admitted writable roots; they add no
+  // filesystem authority, and readonly/hidden roots retain precedence.
+  const anchors: string[] = [];
+  for (const protectedRoot of denyWrite) {
+    const api = protectedRoot.startsWith("/") ? path.posix : path.win32;
+    let parent = api.dirname(protectedRoot);
+    while (
+      allowWrite.some((root) => within(parent, root)) &&
+      !denyWrite.some((root) => within(parent, root)) &&
+      !denyRead.some((root) => within(parent, root))
+    ) {
+      try {
+        if (
+          fs.statSync(parent).isDirectory() &&
+          withCanonicalAliases([parent]).every(
+            (alias) =>
+              allowWrite.some((root) => within(alias, root)) &&
+              !denyWrite.some((root) => within(alias, root)) &&
+              !denyRead.some((root) => within(alias, root)),
+          )
+        ) {
+          anchors.push(parent);
+        }
+      } catch {
+        // Missing ancestors cannot be moved; protect their existing parents.
+      }
+      const next = api.dirname(parent);
+      if (next === parent) {
+        break;
+      }
+      parent = next;
+    }
+  }
   return {
     allowRead: [],
     denyRead,
-    allowWrite: dedupeAbsolute(allowWrite),
+    allowWrite: dedupeAbsolute([...allowWrite, ...anchors]).toSorted((a, b) => a.length - b.length),
     denyWrite,
   };
 }

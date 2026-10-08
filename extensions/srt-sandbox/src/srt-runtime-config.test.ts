@@ -11,6 +11,35 @@ describe.skipIf(process.platform === "win32")("protected filesystem mount bounda
       dispose();
     }
   });
+  it("does not promote an outside symlink target through readonly mount ancestors", () => {
+    const workspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "srt-anchor-alias-",
+    });
+    cleanup.push(() => workspace.cleanup());
+    const privateDir = workspace.path("private");
+    const outside = workspace.path("outside");
+    const resource = path.join(outside, "readonly");
+    for (const dir of [privateDir, resource]) {
+      mkdirSync(dir, { recursive: true });
+    }
+    const alias = path.join(privateDir, "alias");
+    symlinkSync(outside, alias);
+    const policy = buildSrtFilesystemPolicy(
+      {
+        workspaceDir: privateDir,
+        agentWorkspaceDir: privateDir,
+        workspaceAccess: "rw",
+        readOnlyResourceMounts: [
+          { hostPath: path.join(alias, "readonly"), containerPath: "/readonly" },
+        ],
+      },
+      [],
+    );
+    expect(policy.allowWrite).not.toContain(alias);
+    expect(policy.allowWrite).not.toContain(outside);
+    expect(policy.allowWrite).toContain(privateDir);
+  });
   it.each(["none", "ro", "rw"] as const)(
     "does not re-admit protected mounts through narrower writable roots for %s",
     (workspaceAccess) => {

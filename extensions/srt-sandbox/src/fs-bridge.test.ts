@@ -16,6 +16,7 @@ import { spawn } from "node:child_process";
 // The owner here is spawned without the sandbox wrap; end-to-end kernel
 // enforcement is proven in backend.bridge.test.ts.
 import {
+  writeFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -293,6 +294,125 @@ describe("srt fs bridge — AC4 exact-location guarantee (方案 2 live handles)
 });
 
 describe("srt fs bridge — held-pin lifecycle (no fd leak on any path)", () => {
+  const operations = ["write", "create", "copy-destination", "mkdir", "remove"] as const;
+  const mutate = (f: Fixture, action: (typeof operations)[number], pinnedPath: string) => {
+    const filePath = "parent/target";
+    switch (action) {
+      case "write":
+        return f.bridge.writeFile({ filePath, data: "authorized", mkdir: true, pinnedPath });
+      case "create":
+        return f.bridge.createFileExclusive!({
+          filePath,
+          data: "authorized",
+          mkdir: true,
+          pinnedPath,
+        });
+      case "copy-destination":
+        return f.bridge.copyFile!({
+          sourcePath: "source",
+          destinationPath: filePath,
+          mkdir: true,
+          pinnedPath,
+        });
+      case "mkdir":
+        return f.bridge.mkdirp({ filePath, pinnedPath });
+      case "remove":
+        return f.bridge.remove({ filePath, pinnedPath });
+    }
+    throw new Error("Unexpected mutation action");
+  };
+
+  it.each(operations)(
+    "rejects an expired %s pin before touching a replacement parent",
+    async (action) => {
+      const f = make({ pinTimeoutMs: 120 });
+      mkdirSync(path.join(f.ws, "parent"));
+      writeFileSync(path.join(f.ws, "source"), "authorized");
+      if (action === "remove") {
+        writeFileSync(path.join(f.ws, "parent/target"), "original");
+      }
+      const pin = await f.bridge.resolvePinnedMutationTarget!({
+        filePath: "parent/target",
+        action,
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
+      expect((await f.client.ping()).held).toBe(0);
+      renameSync(path.join(f.ws, "parent"), path.join(f.ws, "original"));
+      mkdirSync(path.join(f.ws, "parent"));
+      if (action === "remove") {
+        writeFileSync(path.join(f.ws, "parent/target"), "replacement");
+      }
+      await expect(mutate(f, action, pin.pinnedPath)).rejects.toThrow(
+        /pin.*(expired|consumed|live)/i,
+      );
+      if (action === "remove") {
+        expect(readFileSync(path.join(f.ws, "parent/target"), "utf8")).toBe("replacement");
+      } else {
+        expect(existsSync(path.join(f.ws, "parent/target"))).toBe(false);
+      }
+    },
+  );
+
+  it.each(operations)(
+    "rejects a consumed %s pin while allowing the first authorized mutation",
+    async (action) => {
+      const f = make();
+      mkdirSync(path.join(f.ws, "parent"));
+      writeFileSync(path.join(f.ws, "source"), "authorized");
+      if (action === "remove") {
+        writeFileSync(path.join(f.ws, "parent/target"), "original");
+      }
+      const pin = await f.bridge.resolvePinnedMutationTarget!({
+        filePath: "parent/target",
+        action,
+      });
+      await mutate(f, action, pin.pinnedPath);
+      expect((await f.client.ping()).held).toBe(0);
+      if (action === "remove") {
+        expect(existsSync(path.join(f.ws, "parent/target"))).toBe(false);
+      } else if (action === "mkdir") {
+        expect((await f.bridge.stat({ filePath: "parent/target" }))?.type).toBe("directory");
+      } else {
+        expect(readFileSync(path.join(f.ws, "parent/target"), "utf8")).toBe("authorized");
+      }
+      renameSync(path.join(f.ws, "parent"), path.join(f.ws, "original"));
+      mkdirSync(path.join(f.ws, "parent"));
+      if (action === "remove") {
+        writeFileSync(path.join(f.ws, "parent/target"), "replacement");
+      }
+      await expect(mutate(f, action, pin.pinnedPath)).rejects.toThrow(
+        /pin.*(expired|consumed|live)/i,
+      );
+      if (action === "remove") {
+        expect(readFileSync(path.join(f.ws, "parent/target"), "utf8")).toBe("replacement");
+      } else {
+        expect(existsSync(path.join(f.ws, "parent/target"))).toBe(false);
+      }
+    },
+  );
+
+  it("rejects another parent with the same basename without consuming the live pin", async () => {
+    const f = make();
+    mkdirSync(path.join(f.ws, "approved"));
+    mkdirSync(path.join(f.ws, "other"));
+    const pin = await f.bridge.resolvePinnedMutationTarget!({
+      filePath: "approved/target",
+      action: "write",
+    });
+    await expect(
+      f.bridge.writeFile({ filePath: "other/target", data: "wrong", pinnedPath: pin.pinnedPath }),
+    ).rejects.toThrow(/does not match/);
+    expect(existsSync(path.join(f.ws, "other/target"))).toBe(false);
+    await f.bridge.writeFile({
+      filePath: "approved/target",
+      data: "authorized",
+      pinnedPath: pin.pinnedPath,
+    });
+    expect(readFileSync(path.join(f.ws, "approved/target"), "utf8")).toBe("authorized");
+  });
+
   it("single-flight: a second unfinalized resolve of the same canonical path is rejected", async () => {
     const f = make();
     const first = await f.bridge.resolvePinnedMutationTarget!({

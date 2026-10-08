@@ -19,7 +19,7 @@ afterEach(async () => {
   }
 });
 
-describe.skipIf(process.platform !== "darwin")(
+describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
   "real scope permissions across commands and file tools",
   () => {
     it.each(
@@ -98,7 +98,11 @@ describe.skipIf(process.platform !== "darwin")(
         const commandWrite = (target: string) =>
           handle.runShellCommand({ script: `printf changed > '${target}'`, allowFailure: true });
         const hostResult = await commandWrite(hostSeed);
-        expect(hostResult.code === 0).toBe(access === "rw");
+        // Linux may write its empty hidden tmpfs; the host seed must remain
+        // unchanged. Other modes directly exercise readonly/writable mounts.
+        if (access !== "none" || process.platform !== "linux") {
+          expect(hostResult.code === 0).toBe(access === "rw");
+        }
         if (access === "rw") {
           await bridge.writeFile({ filePath: hostSeed, data: "host-allowed" });
         } else {
@@ -134,7 +138,11 @@ describe.skipIf(process.platform !== "darwin")(
         const alias = fixture.path("host-alias");
         symlinkSync(agentWorkspaceDir, alias);
         if (access !== "rw") {
-          expect((await commandWrite(path.join(alias, "seed.txt"))).code).not.toBe(0);
+          const aliasWrite = await commandWrite(path.join(alias, "seed.txt"));
+          if (access !== "none" || process.platform !== "linux") {
+            expect(aliasWrite.code).not.toBe(0);
+          }
+          expect(readFileSync(hostSeed, "utf8")).toBe("host-seed");
           await expect(
             bridge.writeFile({ filePath: path.join(alias, "seed.txt"), data: "denied" }),
           ).rejects.toThrow();

@@ -211,7 +211,7 @@ describe.skipIf(!isLinux)("srt sandbox Linux buildExecSpec (bwrap wrapper in arg
       usePty: false,
     });
     expect(spec.argv.length).toBeGreaterThanOrEqual(3);
-    expect(spec.argv.join(" ")).toContain("bwrap");
+    expect(Buffer.from(spec.env.SRT_CUSTODY_ARGV!, "base64").toString("utf8")).toContain("bwrap");
     expect(spec.stdinMode).toBe("pipe-open");
     expect(spec.cwd).toBe(ws);
   });
@@ -239,7 +239,9 @@ describe.skipIf(!isLinux)("srt sandbox Linux seccomp engaged (AC-R3)", () => {
       env: { PATH: process.env.PATH ?? "" },
       usePty: false,
     });
-    const argv = spec.argv.join(" ");
+    const argv = (
+      JSON.parse(Buffer.from(spec.env.SRT_CUSTODY_ARGV!, "base64").toString("utf8")) as string[]
+    ).join(" ");
 
     // The wrap must still be a bwrap invocation (kernel wrapper present)…
     expect(argv).toContain("bwrap");

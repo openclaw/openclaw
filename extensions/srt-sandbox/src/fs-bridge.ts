@@ -82,7 +82,12 @@ type TargetPlan = {
   mode: "file" | "dir";
 };
 
-type HeldPin = { opId: number; timer?: ReturnType<typeof setTimeout> };
+type HeldPin = {
+  opId: number;
+  mode: TargetPlan["mode"];
+  expiresAt?: number;
+  timer?: ReturnType<typeof setTimeout>;
+};
 
 function absolutePathFlavor(value: string): PathFlavor | undefined {
   if (/^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)/.test(value)) {
@@ -281,29 +286,37 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     return { policyPath: targetAbs, pinnedPath, canonicalRoot: canonical, rel, leaf, mode };
   }
 
-  private assertPinnedMatches(
-    pinnedPath: string | undefined,
-    plan: TargetPlan,
-    directory = false,
-  ): void {
+  private assertPinnedMatches(pinnedPath: string | undefined, plan: TargetPlan): void {
     if (pinnedPath === undefined) {
       return;
     }
     const flavor = absolutePathFlavor(plan.pinnedPath) ?? this.workspaceFlavor;
     const api = pathApi(flavor);
     const canonical = normalizeAbsolute(pinnedPath, flavor);
+    const expected = normalizeAbsolute(plan.pinnedPath, flavor);
     if (!api.isAbsolute(canonical)) {
       throw new Error(`Pinned sandbox destination is not an absolute path: ${pinnedPath}`);
     }
-    // File-backed pins must preserve the requested basename so the mutation
-    // lands on the authorized entry; directory pins authorize the directory
-    // itself (an existing alias may have renamed it). Mirrors core's
-    // authorizedPinnedTarget contract (src/agents/sandbox/fs-bridge.ts).
-    if (!directory && api.basename(canonical) !== plan.leaf) {
+    const matches =
+      flavor === "win32"
+        ? canonical.toLowerCase() === expected.toLowerCase()
+        : canonical === expected;
+    if (!matches) {
       throw new Error(
         `Pinned sandbox destination does not match the requested path: ${plan.policyPath}`,
       );
     }
+    const held = this.heldPins.get(plan.pinnedPath);
+    if (held?.expiresAt !== undefined && performance.now() >= held.expiresAt) {
+      clearTimeout(held.timer);
+      this.heldPins.delete(plan.pinnedPath);
+      void this.client.release(held.opId).catch(() => {});
+    } else if (held?.expiresAt !== undefined && held.mode === plan.mode) {
+      return;
+    }
+    throw new Error(
+      "Supplied sandbox mutation pin has expired, been consumed, or has no live matching binding",
+    );
   }
 
   // --- held-pin lifecycle ----------------------------------------------------
@@ -320,7 +333,7 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
       throw new Error(`Sandbox path is already pinned: ${plan.pinnedPath}`);
     }
     const opId = this.nextOpId++;
-    const entry: HeldPin = { opId };
+    const entry: HeldPin = { opId, mode: plan.mode };
     // Reserve synchronously so a concurrent resolve of the same path sees it.
     this.heldPins.set(plan.pinnedPath, entry);
     try {
@@ -334,6 +347,7 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
       this.heldPins.delete(plan.pinnedPath);
       throw error;
     }
+    entry.expiresAt = performance.now() + this.limits.pinTimeoutMs;
     entry.timer = setTimeout(() => {
       const current = this.heldPins.get(plan.pinnedPath);
       if (current !== entry) {
@@ -347,9 +361,13 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
   private async runMutation(
     plan: TargetPlan,
     mutation: Parameters<PinOwnerClient["mutate"]>[1],
+    pinnedPath?: string,
   ): Promise<string> {
-    const held = this.heldPins.get(plan.pinnedPath);
-    if (held) {
+    if (pinnedPath !== undefined) {
+      // A supplied authorization can only consume its live binding. Never
+      // resolve a replacement after expiry, replay or a mismatched target.
+      this.assertPinnedMatches(pinnedPath, plan);
+      const held = this.heldPins.get(plan.pinnedPath)!;
       // Reuse the fds pinned by an earlier resolvePinnedMutationTarget; the
       // owner releases them when the mutation completes.
       if (held.timer) {
@@ -448,13 +466,17 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     params.signal?.throwIfAborted();
     const plan = this.planTarget(params.filePath, params.cwd, "file");
     this.assertPinnedMatches(params.pinnedPath, plan);
-    if (params.mkdir) {
+    if (params.mkdir && params.pinnedPath === undefined) {
       await this.ensureParentDir(plan, params.cwd);
     }
-    await this.runMutation(plan, {
-      kind: "write",
-      data: SrtSandboxFsBridge.toBuffer(params.data, params.encoding),
-    });
+    await this.runMutation(
+      plan,
+      {
+        kind: "write",
+        data: SrtSandboxFsBridge.toBuffer(params.data, params.encoding),
+      },
+      params.pinnedPath,
+    );
   }
 
   async createFileExclusive(params: {
@@ -469,13 +491,17 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     params.signal?.throwIfAborted();
     const plan = this.planTarget(params.filePath, params.cwd, "file");
     this.assertPinnedMatches(params.pinnedPath, plan);
-    if (params.mkdir) {
+    if (params.mkdir && params.pinnedPath === undefined) {
       await this.ensureParentDir(plan, params.cwd);
     }
-    const result = await this.runMutation(plan, {
-      kind: "create",
-      data: SrtSandboxFsBridge.toBuffer(params.data, params.encoding),
-    });
+    const result = await this.runMutation(
+      plan,
+      {
+        kind: "create",
+        data: SrtSandboxFsBridge.toBuffer(params.data, params.encoding),
+      },
+      params.pinnedPath,
+    );
     return result === "exists" ? "exists" : "created";
   }
 
@@ -490,13 +516,13 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     params.signal?.throwIfAborted();
     const { absolute: sourceAbs, flavor } = this.resolveAbsolute(params.sourcePath, params.cwd);
     this.assertReadable(sourceAbs, flavor);
-    const data = await this.client.read(sourceAbs);
     const plan = this.planTarget(params.destinationPath, params.cwd, "file");
     this.assertPinnedMatches(params.pinnedPath, plan);
-    if (params.mkdir) {
+    const data = await this.client.read(sourceAbs);
+    if (params.mkdir && params.pinnedPath === undefined) {
       await this.ensureParentDir(plan, params.cwd);
     }
-    await this.runMutation(plan, { kind: "write", data });
+    await this.runMutation(plan, { kind: "write", data }, params.pinnedPath);
   }
 
   async mkdirp(params: {
@@ -507,8 +533,8 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
   }): Promise<void> {
     params.signal?.throwIfAborted();
     const plan = this.planTarget(params.filePath, params.cwd, "dir");
-    this.assertPinnedMatches(params.pinnedPath, plan, true);
-    await this.runMutation(plan, { kind: "mkdir" });
+    this.assertPinnedMatches(params.pinnedPath, plan);
+    await this.runMutation(plan, { kind: "mkdir" }, params.pinnedPath);
   }
 
   async remove(params: {
@@ -522,13 +548,17 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     params.signal?.throwIfAborted();
     const plan = this.planTarget(params.filePath, params.cwd, "file", true);
     this.assertPinnedMatches(params.pinnedPath, plan);
-    await this.runMutation(plan, {
-      kind: "remove",
-      recursive: params.recursive === true,
-      // Default idempotent (force) unless the caller explicitly disables it,
-      // matching the core pinned-remove default.
-      force: params.force !== false,
-    });
+    await this.runMutation(
+      plan,
+      {
+        kind: "remove",
+        recursive: params.recursive === true,
+        // Default idempotent (force) unless the caller explicitly disables it,
+        // matching the core pinned-remove default.
+        force: params.force !== false,
+      },
+      params.pinnedPath,
+    );
   }
 
   async rename(params: {
