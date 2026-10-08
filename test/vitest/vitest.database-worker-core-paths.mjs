@@ -1098,7 +1098,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts",
   "src/plugin-sdk/channel-inbound.test.ts",
   "src/plugin-sdk/session-transcript-mirror-runtime.test.ts",
-  "src/plugin-sdk/session-transcript-runtime.configured-store.test.ts",
   "src/plugin-sdk/session-store-runtime.test.ts",
   "src/plugin-sdk/session-store-runtime.conversation.test.ts",
   "src/plugin-sdk/session-store-runtime.maintenance.test.ts",
