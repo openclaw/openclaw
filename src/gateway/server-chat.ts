@@ -28,7 +28,11 @@ import {
   type AgentEventPayload,
   type AgentEventRuntimePayload,
 } from "../infra/agent-events.js";
-import { getAgentRunContext, getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
+import {
+  getAgentRunContext,
+  getAgentRunContextOwnership,
+  getAgentRunContextOwnerStatus,
+} from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { logError, logWarn } from "../logger.js";
@@ -42,7 +46,6 @@ import {
   readSessionTranscriptRunId,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
-import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
@@ -77,6 +80,8 @@ import {
   assistantWireProjection,
   cancelPendingLiveTextFlush,
   chatWireProjection,
+  createChatTerminalMessage,
+  deliverChatTerminal,
   liveTextDelivery,
   prepareAgentWirePayload,
   scheduleLiveTextFlush,
@@ -229,7 +234,9 @@ export type AgentEventHandlerOptions = {
 };
 
 type AgentEventHandler = ((event: AgentEventPayload) => void | Promise<void>) & {
-  retireTranscript: (event: InternalSessionTranscriptUpdate) => void;
+  retireTranscript: (
+    event: InternalSessionTranscriptUpdate,
+  ) => { published: () => void; settled: () => void } | undefined;
   dispose: () => Promise<void>;
 };
 
@@ -529,7 +536,7 @@ export function createAgentEventHandler({
     // Payload dispatch owns its chat terminal and registration until delivery
     // settles; lifecycle observers still receive the runtime's terminal below.
     if (!replyDispatchOwnsCompletion) {
-      chatRunState.clearRun(clientRunId);
+      chatRunState.clearRun(clientRunId, true);
       if (!evt.contextClaimId) {
         clearRunContextForEvent(evt);
       }
@@ -748,7 +755,7 @@ export function createAgentEventHandler({
       return;
     }
     const broadcastCurrent = (broadcastOptions: typeof opts) => {
-      const projected = chatRunState.resolveBuffer(clientRunId);
+      const projected = chatRunState.resolveBuffer(clientRunId, { publishedOnly: true });
       if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId, opts?.isHeartbeat)) {
         return;
       }
@@ -790,7 +797,7 @@ export function createAgentEventHandler({
     },
   ) => {
     cancelPendingChatDeltaFlush(clientRunId);
-    const { text, suppress } = chatRunState.resolveBuffer(clientRunId);
+    const { text, suppress } = chatRunState.resolveBuffer(clientRunId, { publishedOnly: true });
     const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
       clientRunId,
       sourceRunId,
@@ -882,7 +889,10 @@ export function createAgentEventHandler({
       isHeartbeat?: boolean;
     },
   ) => {
-    const terminalBuffer = chatRunState.resolveBuffer(clientRunId, { final: true });
+    const terminalBuffer = chatRunState.resolveBuffer(clientRunId, {
+      final: true,
+      publishedOnly: true,
+    });
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
@@ -909,31 +919,16 @@ export function createAgentEventHandler({
       seq,
     };
     const createTerminalMessage = (canvasBlocks: NonNullable<ChatRunRecord["canvasBlocks"]>) =>
-      appendChatCanvasBlocksToMessage(
-        {
-          role: "assistant",
-          content: text ? [{ type: "text", text }] : [],
-          timestamp: Date.now(),
-          ...(terminalBuffer.displayText === undefined
-            ? {}
-            : {
-                [ASSISTANT_DISPLAY_CONTENT_FIELD]: appendChatCanvasBlocks(
-                  terminalBuffer.displayText
-                    ? [{ type: "text", text: terminalBuffer.displayText }]
-                    : [],
-                  canvasBlocks,
-                ),
-              }),
-          ...(opts?.assistantTranscriptIdempotencyKey
-            ? {
-                __openclaw: {
-                  runId: clientRunId,
-                  idempotencyKey: opts.assistantTranscriptIdempotencyKey,
-                },
-              }
-            : {}),
-        },
+      createChatTerminalMessage(
+        text,
+        terminalBuffer.displayText,
         canvasBlocks,
+        clientRunId,
+        opts?.assistantTranscriptIdempotencyKey,
+      );
+    const deliver = (payload: Parameters<typeof deliverChatTerminal>[2]) =>
+      deliverChatTerminal(chatRunState, sourceRunId, payload, (message, liveText) =>
+        sendLivePayload("chat", sessionKey, message, { ...opts, liveText }),
       );
     if (jobState !== "error") {
       const run = chatRunState.runs.get(clientRunId);
@@ -960,8 +955,7 @@ export function createAgentEventHandler({
       if (payload.message) {
         emitFirstAssistantChatSendTiming(opts?.firstAssistantTimingEntry);
       }
-      sendLivePayload("chat", sessionKey, payload, opts);
-      chatRunState.clearRun(clientRunId);
+      deliver(payload);
       return;
     }
     const errorDetail = projectChatErrorDetail(opts?.errorObservation);
@@ -978,8 +972,7 @@ export function createAgentEventHandler({
       ...(errorDetail ? { errorDetail } : {}),
       ...(stopReason && { stopReason }),
     };
-    sendLivePayload("chat", sessionKey, payload, opts);
-    chatRunState.clearRun(clientRunId);
+    deliver(payload);
   };
 
   const sendAgentPayload = (
@@ -1207,8 +1200,11 @@ export function createAgentEventHandler({
     const isHeartbeat = runContext?.isHeartbeat ?? evt.isHeartbeat;
     const heartbeatPolicy = resolveHeartbeatFlag(clientRunId, evt.runId, evt.isHeartbeat);
     // A detached worker may reuse its correlation id under a new claim.
-    // Retire its old text before the new owner can append or flush it.
-    if (chatRunState.runs.get(clientRunId)?.bufferIsCurrent?.() === false) {
+    // Retire its old text and terminal before the new owner can publish.
+    if (
+      chatRunState.runs.get(clientRunId)?.bufferIsCurrent?.() === false ||
+      chatRunState.runs.get(clientRunId)?.bufferPublication?.isCurrent() === false
+    ) {
       chatRunState.clearRun(clientRunId);
       agentRunSeq.delete(evt.runId);
     }
@@ -1648,7 +1644,7 @@ export function createAgentEventHandler({
     retireTranscript: (event: InternalSessionTranscriptUpdate) => {
       const sourceRunId = readSessionTranscriptRunId(event.message);
       if (!sourceRunId || getTranscriptMessageRole(event.message) !== "assistant") {
-        return;
+        return undefined;
       }
       const link = chatRunState.registry.peek(sourceRunId);
       const clientRunId = link?.clientRunId ?? sourceRunId;
@@ -1663,29 +1659,33 @@ export function createAgentEventHandler({
         sessionKey !== event.sessionKey ||
         (context?.sessionId && context.sessionId !== event.sessionId)
       ) {
-        return;
+        return undefined;
       }
-      const run = chatRunState.getOrCreate(clientRunId);
-      if (
-        run.bufferIsCurrent?.() === false ||
-        isChatAbortMarkerCurrent(run.abortMarker, link) ||
-        !(source
-          ? chatRunState.retireSource(clientRunId, source)
-          : chatRunState.retireBuffer(clientRunId, itemIds))
-      ) {
-        return;
-      }
-      run.liveTextEpoch = {};
-      flushBufferedChatDeltaIfNeeded(
-        sessionKey,
-        link?.agentId ?? context?.agentId,
+      const claims = new Set(getAgentRunContextOwnership(sourceRunId)?.claimIds);
+      const ownerIsCurrent = () => {
+        const current = getAgentRunContext(sourceRunId);
+        return (
+          (!current || current === context) &&
+          ![...(getAgentRunContextOwnership(sourceRunId)?.claimIds ?? [])].some(
+            (id) => !claims.has(id),
+          )
+        );
+      };
+      return chatRunState.prepareBufferPublication(
         clientRunId,
         sourceRunId,
-        agentRunSeq.get(sourceRunId) ?? 0,
-        {
-          controlUiVisible: context?.isControlUiVisible,
-          isHeartbeat: context?.isHeartbeat,
-        },
+        source,
+        itemIds,
+        ownerIsCurrent,
+        () =>
+          flushBufferedChatDeltaIfNeeded(
+            sessionKey,
+            link?.agentId ?? context?.agentId,
+            clientRunId,
+            sourceRunId,
+            agentRunSeq.get(sourceRunId) ?? 0,
+            { controlUiVisible: context?.isControlUiVisible, isHeartbeat: context?.isHeartbeat },
+          ),
       );
     },
   });

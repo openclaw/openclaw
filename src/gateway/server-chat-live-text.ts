@@ -1,8 +1,10 @@
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
+  appendChatCanvasBlocks,
   appendChatCanvasBlocksToMessage,
   type ChatCanvasBlock,
 } from "./chat-display-projection.canvas.js";
@@ -185,4 +187,66 @@ export function scheduleLiveTextFlush(
   }, delayMs);
   timer.unref?.();
   pendingFlushes[stream] = { timer, flush };
+}
+
+export function createChatTerminalMessage(
+  text: string,
+  displayText: string | undefined,
+  canvasBlocks: ChatCanvasBlock[],
+  runId: string,
+  idempotencyKey?: string,
+) {
+  return appendChatCanvasBlocksToMessage(
+    {
+      role: "assistant",
+      content: text ? [{ type: "text", text }] : [],
+      timestamp: Date.now(),
+      ...(displayText === undefined
+        ? {}
+        : {
+            [ASSISTANT_DISPLAY_CONTENT_FIELD]: appendChatCanvasBlocks(
+              displayText ? [{ type: "text", text: displayText }] : [],
+              canvasBlocks,
+            ),
+          }),
+      ...(idempotencyKey ? { __openclaw: { runId, idempotencyKey } } : {}),
+    },
+    canvasBlocks,
+  );
+}
+
+type ChatTerminalFrame = Extract<ChatEvent, { state: "final" | "error" | "aborted" }> & {
+  message?: ReturnType<typeof createChatTerminalMessage>;
+};
+
+export function deliverChatTerminal(
+  state: ChatRunState,
+  sourceRunId: string,
+  payload: ChatTerminalFrame,
+  send: (payload: ChatTerminalFrame, liveText: GatewayBroadcastOpts["liveText"]) => void,
+) {
+  const liveText = liveTextDelivery(state, payload.runId);
+  const canvasBlocks = state.runs.get(payload.runId)?.canvasBlocks ?? [];
+  const deferred = state.afterBufferPublication(payload.runId, sourceRunId, (projection) => {
+    const message = payload.message;
+    send(
+      message && projection.displayText !== undefined
+        ? {
+            ...payload,
+            message: {
+              ...message,
+              [ASSISTANT_DISPLAY_CONTENT_FIELD]: appendChatCanvasBlocks(
+                projection.displayText ? [{ type: "text", text: projection.displayText }] : [],
+                canvasBlocks,
+              ),
+            },
+          }
+        : payload,
+      liveText,
+    );
+  });
+  if (!deferred) {
+    send(payload, liveText);
+  }
+  state.clearRun(payload.runId, true);
 }

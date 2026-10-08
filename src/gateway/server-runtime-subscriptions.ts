@@ -659,12 +659,17 @@ export function startGatewayEventSubscriptions(params: {
       dispatchEventHandler<InternalSessionTranscriptUpdate>({
         loadHandler: agentHandler
           ? () =>
-              agentHandler
-                .then(
-                  (handler) => handler.retireTranscript(evt),
-                  () => undefined,
-                )
-                .then(getTranscriptUpdateHandler)
+              agentHandler.then((handler) => {
+                const retirement = handler.retireTranscript(evt);
+                return async (update: InternalSessionTranscriptUpdate) => {
+                  try {
+                    const publish = await getTranscriptUpdateHandler();
+                    await publish(update, retirement?.published);
+                  } finally {
+                    retirement?.settled();
+                  }
+                };
+              }, getTranscriptUpdateHandler)
           : getTranscriptUpdateHandler,
         event: evt,
         log: params.log,

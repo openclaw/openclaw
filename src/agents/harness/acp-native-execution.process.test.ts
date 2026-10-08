@@ -232,7 +232,7 @@ it.for(["complete", "revoke"] as const)(
       const committedSnapshots: string[] = [];
       const unsubscribeTranscript = onInternalSessionTranscriptUpdate((event) => {
         if (readSessionTranscriptRunId(event.message) === attempt.input.runId) {
-          gateway.handler.retireTranscript(event);
+          gateway.handler.retireTranscript(event)?.published();
           committedSnapshots.push(snapshot());
         }
       });

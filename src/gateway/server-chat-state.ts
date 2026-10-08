@@ -3,7 +3,6 @@ import type { AgentEventPayload, AgentAssistantSourceReceipt } from "../infra/ag
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import {
   createLiveAssistantTextProjection,
-  normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
 } from "./live-chat-projector.js";
 import * as assistantText from "./server-chat-buffer.js";
@@ -86,12 +85,9 @@ type PendingLiveTextFlush = {
   flush: () => void;
 };
 
-type LiveDisplayState = NonNullable<assistantText.ChatRunBufferState["display"]>;
-
 export type ChatRunRecord = assistantText.ChatRunBufferState & {
   lastActivityAt: number;
   registrations?: ChatRunEntry[];
-  buffer?: string;
   bufferIsCurrent?: () => boolean;
   /** Retire queued connection snapshots when this buffering generation is cleared. */
   liveTextGroup?: AbortController;
@@ -107,6 +103,12 @@ export type ChatRunRecord = assistantText.ChatRunBufferState & {
   toolRecipient?: ChatRunToolRecipientState;
   /** Fixed-deadline trailing wake-up owned by this run's buffered state. */
   pendingTextFlushes?: Partial<Record<"chat" | "agent", PendingLiveTextFlush>>;
+  bufferPublication?: {
+    pending: number;
+    isCurrent: () => boolean;
+    terminal?: () => void;
+    snapshot?: assistantText.ChatRunBufferState;
+  };
 };
 
 type ChatRunRecordStore = ReturnType<typeof createChatRunRecordStore>;
@@ -210,7 +212,7 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     }
   };
 
-  const clearRun = (runId: string) => {
+  const clearRun = (runId: string, preservePublication = false) => {
     const record = store.runs.get(runId);
     if (!record) {
       return;
@@ -218,6 +220,10 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     delete record.rawBuffer;
     delete record.rawOffset;
     delete record.assistantItems;
+    if (!preservePublication && record.bufferPublication) {
+      delete record.bufferPublication.terminal;
+      delete record.bufferPublication;
+    }
     delete record.buffer;
     delete record.bufferIsCurrent;
     record.liveTextGroup?.abort();
@@ -237,114 +243,35 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     store.releaseIfEmpty(runId);
   };
 
+  const resolveBufferPublication = (record: ChatRunRecord) => {
+    const pending = record.bufferPublication;
+    if (pending && !pending.isCurrent()) {
+      delete pending.terminal;
+      delete record.bufferPublication;
+      return undefined;
+    }
+    return pending;
+  };
+
   const clear = () => {
-    for (const record of store.runs.values()) {
-      clearPendingLiveTextFlushes(record);
-      record.liveTextGroup?.abort();
+    for (const runId of store.runs.keys()) {
+      clearRun(runId);
     }
     store.runs.clear();
   };
 
   const resolveBuffer = (
     runId: string,
-    options?: { final?: boolean },
-  ): ReturnType<typeof projectLiveAssistantBufferedText> & { displayText?: string } => {
+    options?: Parameters<typeof assistantText.projectBuffer>[1],
+  ): ReturnType<typeof assistantText.projectBuffer> => {
     const record = store.runs.get(runId);
-    if (!record || record.bufferIsCurrent?.() === false) {
-      return projectLiveAssistantBufferedText("");
-    }
-    const source = record.rawBuffer;
-    if (source === undefined) {
-      return projectLiveAssistantBufferedText(record.buffer ?? "");
-    }
-    const projectionOptions = {
-      ...options,
-      managedMediaUrls: record.managedMediaUrls ? [...record.managedMediaUrls] : undefined,
-    };
-    const createProjector = () => createLiveAssistantTextProjection(projectionOptions);
-    const rawText = source;
-    const tail = assistantText.bufferVisibleText(record);
-    const contextEvicted = (record.rawOffset ?? 0) > 0;
-    const projectTail = (full: LiveDisplayState["current"]) => {
-      if (tail === source && !contextEvicted) {
-        return full;
-      }
-      // Missing source context cannot justify suppressing retained output.
-      const suppressed =
-        !contextEvicted &&
-        (options?.final
-          ? projectLiveAssistantBufferedText(full.text, { suppressLeadFragments: false }).suppress
-          : full.suppress);
-      const text = suppressed
-        ? ""
-        : contextEvicted
-          ? tail
-          : normalizeLiveAssistantBufferedText(tail, projectionOptions);
-      return {
-        ...full,
-        text,
-        suppress: suppressed || !text,
-        pendingLeadFragment: suppressed && full.pendingLeadFragment,
-      };
-    };
-    // Delivery remains complete; display finalizes the same occurrence-owned tail.
-    if (options?.final) {
-      const complete = createProjector().replace(source);
-      return {
-        ...complete,
-        ...(tail !== source || contextEvicted ? { displayText: projectTail(complete).text } : {}),
-      };
-    }
-    let display = record.display;
-    if (!display) {
-      const projector = createProjector();
-      display = record.display = {
-        projector,
-        current: projectTail(projector.replace(rawText)),
-        unsentDelta: null,
-      };
-    } else if (display.reset || display.pendingRawDelta !== undefined) {
-      const { projector, pendingRawDelta, reset } = display;
-      if (reset) {
-        display.projector = createProjector();
-      }
-      // Delta-only producers prove appends. Cumulative snapshots retain their
-      // correction contract and need one prefix check before entering the chain.
-      const delta = reset
-        ? null
-        : pendingRawDelta === null
-          ? rawText.startsWith(projector.source)
-            ? rawText.slice(projector.source.length)
-            : null
-          : pendingRawDelta;
-      const next = projectTail(
-        delta == null
-          ? display.projector.replace(rawText)
-          : display.projector.append(delta, rawText),
-      );
-      // A source append is a display append only when it continues the emitted baseline.
-      const previous = display.current.suppress ? "" : display.current.text;
-      const visible = next.suppress ? "" : next.text;
-      next.delta =
-        next.delta !== null &&
-        visible.length === previous.length + next.delta.length &&
-        visible.startsWith(previous)
-          ? next.delta
-          : null;
-      display.current = next;
-      display.unsentDelta =
-        display.unsentDelta !== null && display.current.delta !== null
-          ? display.unsentDelta + display.current.delta
-          : null;
-      delete display.pendingRawDelta;
-      delete display.reset;
-    }
-    record.buffer = display.current.text;
-    return display.current;
+    return !record || record.bufferIsCurrent?.() === false
+      ? projectLiveAssistantBufferedText("")
+      : assistantText.projectBuffer(record, options);
   };
 
   const takeBufferDelta = (runId: string, text: string) => {
-    const projected = resolveBuffer(runId);
+    const projected = resolveBuffer(runId, { publishedOnly: true });
     const record = store.getOrCreate(runId);
     const display = (record.display ??= {
       projector: createLiveAssistantTextProjection(),
@@ -384,10 +311,117 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
       input: Parameters<typeof assistantText.updateBuffer>[1],
       source?: AgentAssistantSourceReceipt,
     ) => assistantText.updateBuffer(store.getOrCreate(runId), input, source),
-    retireBuffer: (runId: string, itemIds: readonly string[]) =>
-      assistantText.retireBuffer(store.getOrCreate(runId), itemIds),
+    retireBuffer: (runId: string, itemIds: readonly string[], published = false) =>
+      assistantText.retireBuffer(store.getOrCreate(runId), itemIds, published),
     retireSource: (runId: string, source: AgentAssistantSourceReceipt) =>
       assistantText.retireSource(store.runs.get(runId), source),
+    prepareBufferPublication: (
+      runId: string,
+      sourceRunId: string,
+      source: AgentAssistantSourceReceipt | undefined,
+      itemIds: readonly string[],
+      isCurrent: () => boolean,
+      onPublished: () => void,
+    ): { published: () => void; settled: () => void } | undefined => {
+      const record = store.getOrCreate(runId);
+      const link = registry.peek(sourceRunId);
+      if (
+        record.bufferIsCurrent?.() === false ||
+        isChatAbortMarkerCurrent(record.abortMarker, link)
+      ) {
+        return undefined;
+      }
+      const pending = resolveBufferPublication(record);
+      const buffer = record.assistantItems ? record : (pending?.snapshot ?? record);
+      if (source) {
+        assistantText.retireSource(buffer, source);
+      } else {
+        assistantText.retireBuffer(buffer, itemIds);
+      }
+      const items = buffer.assistantItems;
+      if (!items) {
+        return undefined;
+      }
+      const batch = (record.bufferPublication ??= { pending: 0, isCurrent });
+      batch.pending += 1;
+      const publishedIds = source?.itemId ? [source.itemId] : itemIds;
+      const publish = () => {
+        // Accepted terminals retain this occurrence map after their live state clears.
+        if (
+          !assistantText.retireBuffer({ assistantItems: items }, publishedIds, true) ||
+          store.runs.get(runId) !== record ||
+          record.assistantItems !== items ||
+          record.bufferIsCurrent?.() === false ||
+          registry.peek(sourceRunId) !== link ||
+          isChatAbortMarkerCurrent(record.abortMarker, link)
+        ) {
+          return;
+        }
+        if (record.display) {
+          record.display.reset = true;
+        }
+        record.liveTextEpoch = {};
+        onPublished();
+      };
+      let didSettle = false;
+      const settled = () => {
+        if (didSettle) {
+          return;
+        }
+        didSettle = true;
+        if (--batch.pending > 0) {
+          return;
+        }
+        const terminal = batch.terminal;
+        delete batch.terminal;
+        try {
+          terminal?.();
+        } finally {
+          if (record.bufferPublication === batch) {
+            delete record.bufferPublication;
+          }
+          store.releaseIfEmpty(runId);
+        }
+      };
+      return {
+        published: () => {
+          publish();
+          settled();
+        },
+        settled,
+      };
+    },
+    afterBufferPublication: (
+      runId: string,
+      sourceRunId: string,
+      send: (projection: ReturnType<typeof assistantText.projectBuffer>) => void,
+    ): boolean => {
+      const record = store.runs.get(runId);
+      const batch = record && resolveBufferPublication(record);
+      if (!record || !batch) {
+        return false;
+      }
+      const snapshot = (batch.snapshot = { ...record });
+      const registrations = new Set(store.runs.get(sourceRunId)?.registrations);
+      const ownerIsCurrent = batch.isCurrent;
+      batch.isCurrent = () =>
+        ownerIsCurrent() &&
+        !store.runs.get(sourceRunId)?.registrations?.some((entry) => !registrations.has(entry));
+      // The accepted terminal survives its own cleanup, never a successor stream.
+      batch.terminal = () => {
+        const current = store.runs.get(runId);
+        if (
+          current === record &&
+          current.bufferPublication === batch &&
+          batch.isCurrent() &&
+          !current.assistantItems &&
+          !current.liveTextEpoch
+        ) {
+          send(assistantText.projectBuffer(snapshot, { final: true, publishedOnly: true }));
+        }
+      };
+      return true;
+    },
     takeBufferDelta,
     flushPendingText: (runId: string) => {
       const record = store.runs.get(runId);

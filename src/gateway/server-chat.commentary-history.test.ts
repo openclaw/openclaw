@@ -13,7 +13,17 @@ import { buildChatItems } from "../../ui/src/pages/chat/chat-thread-build.ts";
 import { applySessionMessagePayload } from "../../ui/src/pages/chat/session-message-apply.ts";
 import { handleAgentEvent } from "../../ui/src/pages/chat/tool-stream.ts";
 import { createSubscribedSessionHarness } from "../agents/embedded-agent-subscribe.e2e-harness.js";
-import { emitAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  emitAgentEventForOwner,
+  type AgentEventPayload,
+} from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  getAgentRunContext,
+  releaseAgentRunContext,
+  registerAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import {
   createAgentEventTestHarness,
@@ -325,7 +335,7 @@ it.each([
       }
       await gateway.emit(runId, "assistant", { itemId: "item-a", text: "Saved A." });
       gateway.chatRunState.flushPendingText(runId);
-      gateway.handler.retireTranscript({
+      const savedPublication = gateway.handler.retireTranscript({
         sessionKey: "main",
         message: { ...saved, idempotencyKey: "item-a" },
       });
@@ -334,6 +344,7 @@ it.each([
         kind: "live",
         activeRunId: runId,
       });
+      savedPublication?.published();
       if (includeSteer && !steerFirst) {
         applySteer();
       }
@@ -367,7 +378,7 @@ it.each([
           timestamp: Date.now() + 3,
           __openclaw: { id: "saved-b", seq: 4, runId, idempotencyKey: "item-b" },
         };
-        gateway.handler.retireTranscript({
+        const tailPublication = gateway.handler.retireTranscript({
           sessionKey: "main",
           message: { ...savedTail, idempotencyKey: "item-b" },
         });
@@ -375,6 +386,7 @@ it.each([
           kind: "live",
           activeRunId: runId,
         });
+        tailPublication?.published();
       }
       if (canvas) {
         gateway.toolEventRecipients.add(runId, "control-ui");
@@ -437,3 +449,219 @@ it.each([
     }
   },
 );
+
+it.each([
+  "published",
+  "published-context-late-receipt",
+  "failed",
+  "reset",
+  "successor",
+  "successor-start",
+  "successor-start-remapped",
+  "successor-context",
+  "successor-context-start",
+  "successor-context-retained",
+  "successor-context-terminal",
+  "successor-context-hidden-terminal",
+  "successor-context-hidden",
+  "successor-early-receipt",
+] as const)("keeps terminal delivery behind transcript publication (%s)", async (outcome) => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.stubGlobal("window", globalThis);
+  const runId = "publication-handoff";
+  const sourceRunId = outcome === "successor-start-remapped" ? "source-publication" : runId;
+  const gateway = createAgentEventTestHarness();
+  const contextOwned = outcome.includes("context");
+  const retainedContext = outcome === "successor-context-retained";
+  const keeperClaim = retainedContext
+    ? claimAgentRunContext(sourceRunId, { sessionKey: "main" }, { trackOwner: true })
+    : undefined;
+  const claim = () => {
+    const owner = claimAgentRunContext(
+      sourceRunId,
+      { sessionKey: "main" },
+      { exclusive: !retainedContext, trackOwner: true },
+    );
+    expect(owner).toBeDefined();
+    return owner;
+  };
+  let contextClaim = contextOwned ? claim() : undefined;
+  const originalContext = getAgentRunContext(sourceRunId);
+  const stop = subscribeAgentEvents(gateway.handler);
+  const emit = async (
+    stream: AgentEventPayload["stream"],
+    data: AgentEventPayload["data"],
+    seq: number,
+  ) => {
+    if (contextClaim) {
+      if (retainedContext) {
+        emitAgentEvent({ runId: sourceRunId, stream, data });
+      } else {
+        emitAgentEventForOwner({ runId: sourceRunId, stream, data }, contextClaim);
+      }
+      await stop.drain();
+    } else {
+      await gateway.emit(sourceRunId, stream, data, { seq });
+    }
+  };
+  if (!contextOwned) {
+    gateway.register(sourceRunId, "main", runId);
+  }
+  const history = activeHistory(runId);
+  history.messages = [{ role: "user", content: "Original prompt", timestamp: Date.now() }];
+  const state = createState(history);
+  gateway.broadcast.mockImplementation((event: string, payload: unknown) => {
+    if (event === "chat" && Value.Check(ChatEventSchema, payload)) {
+      handleChatGatewayEvent(state, payload);
+    }
+  });
+  const saved = {
+    role: "assistant",
+    content: [{ type: "text", text: "Saved A." }],
+    timestamp: Date.now() + 1,
+    __openclaw: { id: "saved-a", seq: 2, runId: sourceRunId, idempotencyKey: "item-a" },
+  };
+  const count = (text: string) => renderedText(state).split(text).length - 1;
+  try {
+    await loadChatHistory(state);
+    await emit("assistant", { itemId: "item-a", text: "Saved A." }, 1);
+    gateway.chatRunState.flushPendingText(runId);
+    const published = gateway.handler.retireTranscript({
+      sessionKey: "main",
+      message: { ...saved, idempotencyKey: "item-a" },
+    });
+    expect(gateway.chatRunState.resolveBuffer(runId).text).toBe("");
+    expect(count("Saved A.")).toBe(1);
+    await emit("assistant", { itemId: "item-b", text: "Live B." }, 2);
+    if (outcome === "successor-context-hidden-terminal") {
+      gateway.chatRunState.flushPendingText(runId);
+      registerAgentRunContext(sourceRunId, { isControlUiVisible: false }, contextClaim);
+    }
+    await emit("lifecycle", { phase: "end" }, 3);
+    const lateSaved = {
+      ...saved,
+      idempotencyKey: "item-b",
+      content: [{ type: "text", text: "Live B." }],
+      __openclaw: { runId: sourceRunId, id: "saved-b", seq: 3, idempotencyKey: "item-b" },
+    };
+    const latePublication =
+      outcome === "published-context-late-receipt"
+        ? gateway.handler.retireTranscript({ sessionKey: "main", message: lateSaved })
+        : undefined;
+    if (outcome === "published-context-late-receipt") {
+      expect(latePublication).toBeDefined();
+    }
+    expect(count("Saved A.")).toBe(1);
+    expect(count("Live B.")).toBe(1);
+    const successorSaved = {
+      ...saved,
+      idempotencyKey: "new",
+      content: [{ type: "text", text: "New run." }],
+      __openclaw: { runId: sourceRunId, id: "saved-new", seq: 4, idempotencyKey: "new" },
+    };
+    let successorPublication: ReturnType<typeof gateway.handler.retireTranscript>;
+    if (outcome === "reset") {
+      gateway.chatRunState.clearRun(runId);
+    } else if (outcome.startsWith("successor")) {
+      if (contextOwned) {
+        releaseAgentRunContext(sourceRunId, contextClaim);
+        contextClaim = claim();
+        if (outcome === "successor-context-hidden") {
+          registerAgentRunContext(sourceRunId, { isControlUiVisible: false }, contextClaim);
+        }
+        if (retainedContext) {
+          expect(getAgentRunContext(sourceRunId)).toBe(originalContext);
+        }
+      } else {
+        gateway.register(sourceRunId, "main", runId);
+      }
+      if (outcome !== "successor-context") {
+        await emit("lifecycle", { phase: "start" }, 4);
+      }
+      if (outcome === "successor-context-hidden") {
+        await emit("lifecycle", { phase: "end" }, 6);
+        releaseAgentRunContext(sourceRunId, contextClaim);
+        contextClaim = undefined;
+      }
+      if (outcome === "successor-early-receipt") {
+        successorPublication = gateway.handler.retireTranscript({
+          sessionKey: "main",
+          message: successorSaved,
+        });
+        expect(successorPublication).toBeDefined();
+        applySessionMessagePayload(state, { message: successorSaved, runId }, true, {
+          kind: "live",
+          activeRunId: runId,
+        });
+        successorPublication?.published();
+        await emit("assistant", { itemId: "new", text: "New run." }, 5);
+        gateway.chatRunState.flushPendingText(runId);
+        expect(gateway.deltas().join("")).not.toContain("New run.");
+      }
+      if (outcome === "successor" || outcome.endsWith("terminal")) {
+        await emit("assistant", { itemId: "new", text: "New run." }, 5);
+        gateway.chatRunState.flushPendingText(runId);
+        if (outcome === "successor-context-hidden-terminal") {
+          successorPublication = gateway.handler.retireTranscript({
+            sessionKey: "main",
+            message: successorSaved,
+          });
+          expect(successorPublication).toBeDefined();
+        }
+        if (outcome.endsWith("terminal")) {
+          await emit("lifecycle", { phase: "end" }, 6);
+        }
+        if (outcome === "successor-context-hidden-terminal") {
+          expect(gateway.chat().filter(([, payload]) => payload.state === "final")).toHaveLength(0);
+        }
+      }
+    }
+    if (outcome.startsWith("published") || outcome.startsWith("successor")) {
+      applySessionMessagePayload(state, { message: saved, runId }, true, {
+        kind: "live",
+        activeRunId: runId,
+      });
+      published?.published();
+    }
+    published?.settled();
+    if (latePublication) {
+      applySessionMessagePayload(state, { message: lateSaved, runId }, true, {
+        kind: "live",
+        activeRunId: runId,
+      });
+      latePublication.published();
+    }
+    if (outcome === "successor-context-hidden-terminal") {
+      expect(gateway.chat().filter(([, payload]) => payload.state === "final")).toHaveLength(0);
+      applySessionMessagePayload(state, { message: successorSaved, runId }, true, {
+        kind: "live",
+        activeRunId: runId,
+      });
+      successorPublication?.published();
+    }
+    if (outcome === "reset" || outcome.startsWith("successor")) {
+      const finals = gateway.chat().filter(([, payload]) => payload.state === "final");
+      expect(finals).toHaveLength(outcome.endsWith("terminal") ? 1 : 0);
+      if (outcome.endsWith("terminal")) {
+        expect(finals[0]?.[1].message).toMatchObject({
+          content: [{ type: "text", text: "New run." }],
+        });
+      }
+      if (outcome === "successor") {
+        expect(count("New run.")).toBe(1);
+      }
+    } else {
+      expect(gateway.chat().filter(([, payload]) => payload.state === "final")).toHaveLength(1);
+      expect(count("Saved A.")).toBe(1);
+      expect(count("Live B.")).toBe(1);
+    }
+  } finally {
+    await stop();
+    releaseAgentRunContext(sourceRunId, contextClaim);
+    releaseAgentRunContext(sourceRunId, keeperClaim);
+    await gateway.handler.dispose();
+    gateway.chatRunState.clear();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});

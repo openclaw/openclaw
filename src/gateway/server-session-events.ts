@@ -84,7 +84,7 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     }
   >();
   const unresolvedQueueKeys = new Set<string>();
-  return (update: InternalSessionTranscriptUpdate): Promise<void> => {
+  return (update: InternalSessionTranscriptUpdate, published?: () => void): Promise<void> => {
     const projection = params.getSessionRowProjection?.();
     // Capture legacy ownership before the async queue can cross a same-id reset;
     // committed producer ownership always wins over a later session-store read.
@@ -206,6 +206,7 @@ export function createTranscriptUpdateBroadcastHandler(params: {
           markerCaptured,
           markerObservation,
           sessionKey ? undefined : joinQueue,
+          published,
         );
       } finally {
         keyReady.resolve(undefined);
@@ -257,6 +258,7 @@ async function handleTranscriptUpdateBroadcast(
   markerCaptured: ReturnType<SessionRowProjection["capture"]>,
   markerObservation: GenerationObservation | undefined,
   joinQueue?: (key: string) => Promise<void>,
+  published?: () => void,
 ): Promise<void> {
   const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
   const targetAgentId = normalizeOptionalString(update.target?.agentId);
@@ -366,6 +368,7 @@ async function handleTranscriptUpdateBroadcast(
         // This probe checks visibility only; it does not publish sender labels.
         projectChatDisplayMessage(update.message, { resolveCronJobName: () => undefined }))
     ) {
+      published?.();
       return;
     }
   }
@@ -554,11 +557,13 @@ async function handleTranscriptUpdateBroadcast(
       }
       if (projected?.payload) {
         params.broadcastToConnIds("session.message", projected.payload, connIds, broadcastOptions);
+        published?.();
         return;
       }
 
       // Messages suppressed from display can still change transcript state, so
       // notify broad session listeners even when no session.message is emitted.
+      published?.();
       const sessionEventConnIds = params.sessionEventSubscribers.getAll();
       if (!hasSessionChangeReceivers(sessionEventConnIds)) {
         return;

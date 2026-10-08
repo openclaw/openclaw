@@ -3,16 +3,26 @@ import type { AgentAssistantSourceReceipt } from "../infra/agent-events.js";
 import { mergeAssistantText, type AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import {
   capLiveAssistantText,
-  type createLiveAssistantTextProjection,
+  createLiveAssistantTextProjection,
+  normalizeLiveAssistantBufferedText,
+  projectLiveAssistantBufferedText,
 } from "./live-chat-projector.js";
 
 export type ChatRunBufferState = {
+  buffer?: string;
   rawBuffer?: string;
   rawOffset?: number;
   /** Positions are absolute; null ends retain identity facts after a source replacement. */
   assistantItems?: Map<
     string | symbol | undefined,
-    { itemId?: string; committed?: true; start?: number; end?: number | null; scope?: number }
+    {
+      itemId?: string;
+      committed?: true;
+      published?: true;
+      start?: number;
+      end?: number | null;
+      scope?: number;
+    }
   >;
   assistantScope?: AssistantTextSnapshot["scope"];
   assistantScopeOffset?: number;
@@ -35,13 +45,15 @@ const invalidateRange = (item: { start?: number; end?: number | null }) => {
   item.end = null;
 };
 
-export const bufferVisibleText = (record: ChatRunBufferState) => {
+const bufferVisibleText = (record: ChatRunBufferState, publishedOnly = false) => {
   const text = record.rawBuffer ?? "";
   const offset = record.rawOffset ?? 0;
   const items = [...(record.assistantItems?.values() ?? [])]
     .filter((item) => typeof item.end === "number" && item.end > offset)
     .toSorted((a, b) => (a.start ?? 0) - (b.start ?? 0));
-  if (!items.some((item) => item.committed)) {
+  const retired = (item: (typeof items)[number]) =>
+    publishedOnly ? item.published : item.committed;
+  if (!items.some(retired)) {
     return text;
   }
   let visible = "";
@@ -55,7 +67,7 @@ export const bufferVisibleText = (record: ChatRunBufferState) => {
     const start = Math.max(offset, item.start ?? 0);
     gap += text.slice(cursor - offset, start - offset);
     cursor = Math.max(cursor, item.end);
-    if (item.committed) {
+    if (retired(item)) {
       continue;
     }
     let part = text.slice(start - offset, item.end - offset);
@@ -78,6 +90,108 @@ export const bufferVisibleText = (record: ChatRunBufferState) => {
     scope = item.scope;
   }
   return visible;
+};
+
+export const projectBuffer = (
+  record: ChatRunBufferState,
+  options?: { final?: boolean; publishedOnly?: boolean },
+): ReturnType<typeof projectLiveAssistantBufferedText> & { displayText?: string } => {
+  const source = record.rawBuffer;
+  if (source === undefined) {
+    return projectLiveAssistantBufferedText(record.buffer ?? "");
+  }
+  const projectionOptions = {
+    ...options,
+    managedMediaUrls: record.managedMediaUrls ? [...record.managedMediaUrls] : undefined,
+  };
+  const createProjector = () => createLiveAssistantTextProjection(projectionOptions);
+  const rawText = source;
+  const tail = bufferVisibleText(record, true);
+  const contextEvicted = (record.rawOffset ?? 0) > 0;
+  const projectTail = (
+    full: NonNullable<ChatRunBufferState["display"]>["current"],
+    visibleTail = tail,
+  ) => {
+    if (visibleTail === source && !contextEvicted) {
+      return full;
+    }
+    // Missing source context cannot justify suppressing retained output.
+    const suppressed =
+      !contextEvicted &&
+      (options?.final
+        ? projectLiveAssistantBufferedText(full.text, { suppressLeadFragments: false }).suppress
+        : full.suppress);
+    const text = suppressed
+      ? ""
+      : contextEvicted
+        ? visibleTail
+        : normalizeLiveAssistantBufferedText(visibleTail, projectionOptions);
+    return {
+      ...full,
+      text,
+      suppress: suppressed || !text,
+      pendingLeadFragment: suppressed && full.pendingLeadFragment,
+    };
+  };
+  // Delivery remains complete; display finalizes the same occurrence-owned tail.
+  if (options?.final) {
+    const complete = createProjector().replace(source);
+    const finalTail = options.publishedOnly ? tail : bufferVisibleText(record);
+    return {
+      ...complete,
+      ...(finalTail !== source || contextEvicted
+        ? { displayText: projectTail(complete, finalTail).text }
+        : {}),
+    };
+  }
+  let display = record.display;
+  if (!display) {
+    const projector = createProjector();
+    display = record.display = {
+      projector,
+      current: projectTail(projector.replace(rawText)),
+      unsentDelta: null,
+    };
+  } else if (display.reset || display.pendingRawDelta !== undefined) {
+    const { projector, pendingRawDelta, reset } = display;
+    if (reset) {
+      display.projector = createProjector();
+    }
+    // Delta-only producers prove appends. Cumulative snapshots retain their
+    // correction contract and need one prefix check before entering the chain.
+    const delta = reset
+      ? null
+      : pendingRawDelta === null
+        ? rawText.startsWith(projector.source)
+          ? rawText.slice(projector.source.length)
+          : null
+        : pendingRawDelta;
+    const full =
+      delta == null ? display.projector.replace(rawText) : display.projector.append(delta, rawText);
+    const next = projectTail(full);
+    // A source append is a display append only when it continues the emitted baseline.
+    const previous = display.current.suppress ? "" : display.current.text;
+    const visible = next.suppress ? "" : next.text;
+    next.delta =
+      next.delta !== null &&
+      visible.length === previous.length + next.delta.length &&
+      visible.startsWith(previous)
+        ? next.delta
+        : null;
+    display.current = next;
+    display.unsentDelta =
+      display.unsentDelta !== null && display.current.delta !== null
+        ? display.unsentDelta + display.current.delta
+        : null;
+    delete display.pendingRawDelta;
+    delete display.reset;
+  }
+  record.buffer = display.current.text;
+  // Both views share source parsing. A committed snapshot cannot advance the
+  // wire's published baseline or consume its pending append delta.
+  return options?.publishedOnly
+    ? display.current
+    : projectTail(display.current, bufferVisibleText(record));
 };
 
 export const updateBuffer = (
@@ -266,17 +380,26 @@ export const updateBuffer = (
   return text;
 };
 
-export const retireBuffer = (record: ChatRunBufferState, itemIds: readonly string[]) => {
+export const retireBuffer = (
+  record: ChatRunBufferState,
+  itemIds: readonly string[],
+  published = false,
+) => {
   const items = (record.assistantItems ??= new Map());
   let changed = false;
   for (const itemId of itemIds) {
     const item = items.get(itemId);
-    changed ||= !item?.committed && typeof item?.end === "number";
-    items.set(itemId, { ...item, committed: true });
+    changed ||= !(published ? item?.published : item?.committed) && typeof item?.end === "number";
+    items.set(itemId, { ...item, committed: true, ...(published ? { published: true } : {}) });
     for (const observed of items.values()) {
       if (observed.itemId === itemId) {
-        changed ||= !observed.committed && typeof observed.end === "number";
+        changed ||=
+          !(published ? observed.published : observed.committed) &&
+          typeof observed.end === "number";
         observed.committed = true;
+        if (published) {
+          observed.published = true;
+        }
       }
     }
   }

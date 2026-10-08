@@ -149,7 +149,7 @@ describe("guardSessionManager transcript updates", () => {
     });
     const unsubscribeTranscript = onInternalSessionTranscriptUpdate((event) => {
       if (event.sessionId === target.sessionId) {
-        gateway.handler.retireTranscript(event);
+        gateway.handler.retireTranscript(event)?.published();
       }
     });
     const finishing = createDeferred();

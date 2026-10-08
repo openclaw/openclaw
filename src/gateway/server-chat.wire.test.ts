@@ -59,6 +59,7 @@ function createHarness(
   return {
     ...options,
     handler,
+    retireTranscript: retirePublishedTranscript.bind(undefined, handler),
     clients,
     broadcaster,
     registerRun(runId: string, sessionKey: string) {
@@ -76,12 +77,11 @@ function createHarness(
     },
   };
 }
-function emitLifecycleEnd(
-  handler: ReturnType<typeof createHarness>["handler"],
-  runId: string,
-  seq: number,
+function retirePublishedTranscript(
+  handler: ReturnType<typeof createAgentEventHandler>,
+  event: Parameters<typeof handler.retireTranscript>[0],
 ) {
-  return emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq });
+  handler.retireTranscript(event)?.published();
 }
 function answerCandidate(itemId: string, progressText: string, status = "candidate") {
   return {
@@ -191,7 +191,7 @@ it("restores the wire baseline when an anonymous snapshot invalidates retired ow
   const sessionKey = "agent:main:anonymous-reset";
   const emit = harness.registerRun(runId, sessionKey);
   await emit(1, "assistant", { itemId: "saved", text: "Saved." });
-  harness.handler.retireTranscript({
+  retirePublishedTranscript(harness.handler, {
     sessionKey,
     messageSeq: 2,
     assistantItemIds: ["saved"],
@@ -223,7 +223,7 @@ it.each([false, true])(
     const tail = `${SILENT_REPLY_TOKEN}.`;
     await emit(1, "assistant", { itemId: "native", occurrenceId: "a", text: prefix });
     await emit(2, "assistant", { itemId: "native", occurrenceId: "b", text: prefix + tail });
-    harness.handler.retireTranscript({
+    retirePublishedTranscript(harness.handler, {
       sessionKey,
       messageSeq: 2,
       assistantItemIds: ["a"],
@@ -235,7 +235,7 @@ it.each([false, true])(
     });
     const display = harness.chatRunState.resolveBuffer(runId).text;
     expect(display.trim()).toBe(tail);
-    await emitLifecycleEnd(harness.handler, runId, 3);
+    await emitAgentEvent(harness.handler, runId, "lifecycle", { phase: "end" }, { seq: 3 });
     const delta = payloads(frames, "chat").findLast((payload) => payload.state === "delta");
     expect
       .soft(
@@ -259,7 +259,7 @@ it.each(["Hello new", ""])(
     const sessionKey = "agent:main:native-receipt";
     const emit = harness.registerRun("native-receipt", sessionKey);
     await emit(1, "assistant", { itemId: "partial", text: "Hello" });
-    harness.handler.retireTranscript({
+    retirePublishedTranscript(harness.handler, {
       sessionKey,
       messageSeq: 2,
       assistantItemIds: ["partial"],
@@ -292,7 +292,7 @@ it("preserves an unfinished native replacement when an earlier matching prefix p
     replace: true,
     replaceable: true,
   });
-  harness.handler.retireTranscript({
+  retirePublishedTranscript(harness.handler, {
     sessionKey,
     messageSeq: 2,
     assistantItemIds: ["completed"],
@@ -330,7 +330,7 @@ it.each([
     }
     await emit(1, "captured", prefix, prefix);
     await emit(2, "tail", `${prefix}B`, "B");
-    harness.handler.retireTranscript({
+    retirePublishedTranscript(harness.handler, {
       sessionKey,
       messageSeq: 2,
       assistantItemIds: [...(preceding ? ["earlier"] : []), "captured"],
@@ -371,7 +371,7 @@ it.each([
     const sessionKey = "agent:main:cleared-native-item";
     const emit = harness.registerRun(runId, sessionKey);
     const commit = (itemId: string, text: string) =>
-      harness.handler.retireTranscript({
+      retirePublishedTranscript(harness.handler, {
         sessionKey,
         assistantItemIds: [itemId],
         message: {
@@ -406,7 +406,7 @@ it.each([
       "Done",
     );
     expect(payloads(frames, "chat").at(-1)).toMatchObject({ deltaText: "Done" });
-    await emitLifecycleEnd(harness.handler, runId, 5);
+    await emitAgentEvent(harness.handler, runId, "lifecycle", { phase: "end" }, { seq: 5 });
     expect(payloads(frames, "chat").at(-1)).toMatchObject({
       state: "final",
       message: { content: [{ type: "text", text: `${preceding ? "Earlier.\n\n" : ""}Done` }] },
@@ -526,7 +526,7 @@ it("keeps unidentified third-party text live through unrelated commits", async (
   const runId = "unkeyed-replacement";
   const emit = harness.registerRun(runId, sessionKey);
   const persist = (messageSeq: number) =>
-    harness.handler.retireTranscript({
+    retirePublishedTranscript(harness.handler, {
       sessionKey,
       messageSeq,
       message: {
@@ -566,7 +566,7 @@ it.each(["Tail.", "    const value = 1;"])(
     const emit = harness.registerRun("tail-run", sessionKey);
     await emit(1, "assistant", { itemId: "saved", text: "Saved.", delta: "Saved." });
     await emit(2, "assistant", { itemId: "tail", text: tail, delta: tail });
-    harness.handler.retireTranscript({
+    retirePublishedTranscript(harness.handler, {
       sessionKey,
       messageSeq: 2,
       message: {
@@ -591,7 +591,7 @@ it.each(["Tail.", "    const value = 1;"])(
     expect(payloads(returning, "chat").at(-1)).toMatchObject({
       message: { content: [{ type: "text", text: `${tail} More.` }] },
     });
-    await emitLifecycleEnd(harness.handler, "tail-run", 4);
+    await emitAgentEvent(harness.handler, "tail-run", "lifecycle", { phase: "end" }, { seq: 4 });
     expect(payloads(frames, "chat").at(-1)).toMatchObject({
       state: "final",
       message: { content: [{ type: "text", text: `Saved.\n\n${tail} More.` }] },
@@ -710,7 +710,7 @@ it("sends append-only wire text while retaining snapshots for observers and late
   );
   await emit(7, "Reset! again", " again");
   expect(payloads(frames, "agent").at(-1)?.data?.text).toBe("Reset! again");
-  handler.retireTranscript({
+  retirePublishedTranscript(handler, {
     sessionKey: "agent:main:wire",
     messageSeq: 1,
     assistantItemIds: ["other"],
@@ -723,7 +723,7 @@ it("sends append-only wire text while retaining snapshots for observers and late
   expect(projectInFlightRunSnapshot({ chatRunState, runId: "wire-run" }).text).toBe(
     "Reset!\n\nReset! again",
   );
-  await emitLifecycleEnd(handler, "wire-run", 8);
+  await emitAgentEvent(handler, "wire-run", "lifecycle", { phase: "end" }, { seq: 8 });
   expect(frames.at(-1)?.payload).toMatchObject({
     state: "final",
     message: { content: [{ type: "text", text: "Reset!\n\nOther\n\nReset! again" }] },
@@ -835,7 +835,7 @@ it("retires a real CLI reply before its corrected source snapshot arrives", asyn
       return harness.handler(event);
     }
   });
-  const stopTranscript = onInternalSessionTranscriptUpdate(harness.handler.retireTranscript);
+  const stopTranscript = onInternalSessionTranscriptUpdate(harness.retireTranscript);
   try {
     cli.emitCliAssistantDelta({ text: "Preview", delta: "Preview" });
     await stopEvents.drain();
