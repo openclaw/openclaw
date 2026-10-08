@@ -94,6 +94,7 @@ export async function runProjectionWrite<T>(
   operationLabel: Extract<SqliteSessionWriteOperation, `sessions.transcript-index.${string}`>,
   operation: (database: OpenClawAgentDatabase) => T,
   memorySource?: MemoryTranscriptProjectionSource,
+  signal?: AbortSignal,
 ): Promise<T> {
   return await runExclusiveSqliteSessionWrite(
     databaseOptions,
@@ -120,6 +121,9 @@ export async function runProjectionWrite<T>(
         : write();
     },
     operationLabel,
+    undefined,
+    "foreground",
+    signal,
   );
 }
 
@@ -266,6 +270,7 @@ export async function finalizePreparedProjection(
 export async function readSessionTranscriptIndexStatus(
   params: OpenClawAgentDatabaseOptions,
   assertCurrent?: () => void,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   assertCurrent?.();
   const options: ReconcileDatabaseOptions = {
@@ -317,6 +322,7 @@ export async function readSessionTranscriptIndexStatus(
               assertCurrent?.();
               execution!.assertCurrent();
             },
+            { signal },
           );
           return receipt?.value ?? { sessionIds: [], hasMore: false, traversalComplete: true };
         })
@@ -331,6 +337,7 @@ export async function readSessionTranscriptIndexStatus(
             };
           },
           memorySource,
+          signal,
         );
     assertCurrent?.();
     return status.hasMore || status.sessionIds.length > 0;

@@ -9,6 +9,7 @@ import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agen
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
+import * as writeAdmission from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
@@ -261,6 +262,79 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
 describe("search reader concurrency", () => {
   const lifetime = createFixtureLifetime();
   afterEach(() => lifetime.cleanup());
+
+  it("returns incomplete search hits and removes the status waiter while a writer is held", (context) =>
+    lifetime.run(() =>
+      withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const storePath = path.join(state.stateDir, "blocked-search.sqlite");
+        const database = { agentId: "main", path: storePath, env: state.env };
+        const sessionKey = "agent:main:blocked-search";
+        const scope = { agentId: "main", storePath, env: state.env };
+        await replaceTranscriptEvents({ ...scope, sessionKey, sessionId: "blocked-search" }, [
+          { type: "session", id: "blocked-search", version: 3 },
+          {
+            type: "message",
+            id: "needle",
+            parentId: null,
+            timestamp: 1,
+            message: { role: "assistant", content: "Blocked search needle" },
+          },
+        ]);
+        await waitForSessionTranscriptIndexReconcile(database);
+        const request = { ...scope, query: "needle", sessionKeys: [sessionKey] };
+        const initial = await searchSessionTranscripts(request, database);
+        expect(initial).toMatchObject({ hits: [{ messageId: "needle" }], indexing: false });
+
+        // Retain the executor so its independent idle timer stays outside the search clock.
+        const execution = agentExecution.captureOpenClawAgentDatabaseExecution(database);
+        const entered = createDeferred();
+        const release = createDeferred();
+        const holder = writeAdmission.runOpenClawAgentWriteAdmission(database, async () => {
+          entered.resolve();
+          await release.promise;
+        });
+        const queued = createDeferred();
+        const runWorkerWrite = writeAdmission.runOpenClawAgentWorkerWrite;
+        const admission = vi
+          .spyOn(writeAdmission, "runOpenClawAgentWorkerWrite")
+          .mockImplementation((options, run, timing, signal) => {
+            const work = runWorkerWrite(options, run, timing, signal);
+            queued.resolve();
+            return work;
+          });
+        let search: ReturnType<typeof searchSessionTranscripts> | undefined;
+        try {
+          await withinTest(entered.promise, context.signal);
+          const queuePath = fs.realpathSync(storePath);
+          const queue = writeAdmission.SQLITE_SESSION_WRITER_QUEUES.get(queuePath)!;
+          const drain = queue.drainPromise;
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          search = searchSessionTranscripts(request, database);
+          await withinTest(queued.promise, context.signal);
+          expect(queue.pending).toHaveLength(1);
+          await vi.advanceTimersByTimeAsync(4_999);
+          expect(queue.pending).toHaveLength(1);
+          await vi.advanceTimersByTimeAsync(1);
+          expect(queue.pending).toHaveLength(0);
+          expect(await withinTest(search, context.signal)).toEqual({ ...initial, indexing: true });
+          expect(vi.getTimerCount()).toBe(0);
+          expect(isSessionTranscriptIndexReconcileRunning(database)).toBe(false);
+
+          release.resolve();
+          await holder;
+          await drain;
+          expect(writeAdmission.SQLITE_SESSION_WRITER_QUEUES.has(queuePath)).toBe(false);
+          expect(await searchSessionTranscripts(request, database)).toEqual(initial);
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          vi.useRealTimers();
+          admission.mockRestore();
+          release.resolve();
+          await Promise.allSettled([holder, ...(search ? [search] : [])]);
+          await execution.release();
+        }
+      }),
+    ));
 
   it.skipIf(historyLane.pool.getSnapshot().maxWorkers < 2)(
     "searches while foreground and projection readers await index status",

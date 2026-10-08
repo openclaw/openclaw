@@ -56,6 +56,7 @@ import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-ru
 const SEARCH_SNIPPET_MAX_CHARS = 500;
 const SEARCH_LIMIT_MAX = 25;
 const SEARCH_QUERY_MAX_CHARS = 4096;
+const SEARCH_INDEX_STATUS_TIMEOUT_MS = 5_000;
 // SQLite data_version values are comparable only on the same live connection.
 const searchConnections = new WeakMap<DatabaseSync, string>();
 
@@ -237,16 +238,21 @@ export async function searchSessionTranscripts(
   let statusOwnerFailure: { error: unknown } | undefined;
   const readIndexStatus = async (assertCurrent?: () => void): Promise<boolean> => {
     assertCurrent?.();
+    const controller = new AbortController();
+    // The caller may hold a history pool slot that a write-queue holder is waiting to close.
+    const timeout = setTimeout(() => controller.abort(), SEARCH_INDEX_STATUS_TIMEOUT_MS);
     let indexing: boolean;
     try {
       if (statusOwnerFailure) {
         throw statusOwnerFailure.error;
       }
-      indexing = await readSessionTranscriptIndexStatus(options, assertCurrent);
+      indexing = await readSessionTranscriptIndexStatus(options, assertCurrent, controller.signal);
     } catch {
       // Writable maintenance failure must not discard an authorized read-only result.
       assertCurrent?.();
       return true;
+    } finally {
+      clearTimeout(timeout);
     }
     assertCurrent?.();
     if (indexing) {

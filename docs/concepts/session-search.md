@@ -80,6 +80,9 @@ sessions whose active branch was rewound are reindexed by a background reconcili
 with the next search. A response with `indexing: true` can therefore be incomplete; retry after
 indexing finishes. Deleting a session removes its index entries in the same transaction.
 
+If the index-status check waits five seconds for a busy database writer, search returns
+the available matches with `indexing: true`. Retry later to confirm that the results are complete.
+
 Search uses SQLite's Unicode word tokenizer with diacritic removal.
 
 ## Session search vs. memory search
