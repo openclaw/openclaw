@@ -174,8 +174,8 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
         }
         return this.params.player.handleBargeIn("active-speaker-audio");
       },
-      onAcceptedTranscript: (text, context, providerEpoch) =>
-        this.consults.handleAcceptedTranscript(text, context, providerEpoch),
+      onAcceptedTranscript: (text, speakerContext, providerEpoch) =>
+        this.consults.handleAcceptedTranscript(text, speakerContext, providerEpoch),
       playback: this.playback,
       recordInputAudio: (audio) => this.harness.recordInputAudio(audio),
       wakeNames: () => this.policy.wakeNames,
