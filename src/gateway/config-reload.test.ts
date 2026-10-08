@@ -544,13 +544,12 @@ describe("buildGatewayReloadPlan", () => {
       expectedAccounts: new Map<ChannelKind, Set<string>>(),
     },
     {
-      label: "lets an unlisted account replace earlier scoped targets",
-      paths: [
-        "channels.mattermost.accounts.alpha.enabled",
-        "channels.mattermost.accounts.removed.enabled",
-      ],
-      expectedChannels: new Set<ChannelKind>(["mattermost"]),
-      expectedAccounts: new Map<ChannelKind, Set<string>>(),
+      label: "keeps removed accounts alongside other scoped targets",
+      paths: ["channels.mattermost.accounts.alpha.enabled", "channels.mattermost.accounts.removed"],
+      expectedChannels: new Set<ChannelKind>(),
+      expectedAccounts: new Map<ChannelKind, Set<string>>([
+        ["mattermost", new Set(["alpha", "removed"])],
+      ]),
     },
     {
       label: "lets a mixed global change replace scoped targets",

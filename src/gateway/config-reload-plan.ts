@@ -478,14 +478,14 @@ function extractAccountIdFromPath(channel: ChannelId, path: string): string | nu
   return id && id !== DEFAULT_ACCOUNT_ID ? id : null;
 }
 
-function isInspectableChannelAccount(params: {
+function canReloadChannelAccountIndividually(params: {
   plugin: ChannelPlugin;
   accountId: string;
   config: OpenClawConfig;
 }): boolean {
   try {
     if (!params.plugin.config.listAccountIds(params.config).includes(params.accountId)) {
-      return false;
+      return true;
     }
     if (!params.plugin.config.inspectAccount && params.plugin.config.resolveAccountAsync) {
       return false;
@@ -597,7 +597,11 @@ export function buildGatewayReloadPlan(
       if (
         accountId === null ||
         (options.candidateConfig &&
-          !isInspectableChannelAccount({ plugin, accountId, config: options.candidateConfig }))
+          !canReloadChannelAccountIndividually({
+            plugin,
+            accountId,
+            config: options.candidateConfig,
+          }))
       ) {
         plan.restartChannels.add(plugin.id);
         continue;

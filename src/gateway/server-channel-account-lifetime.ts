@@ -14,6 +14,7 @@ import { withPluginServiceScheduler } from "../plugins/service-scheduler-binding
 import { createPluginServiceSchedulerRunner } from "../plugins/service-scheduler-context.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import type { PluginServiceSchedulerV1 } from "../plugins/service-scheduler.types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 export type ChannelAccountLifetime = {
   plugin: ChannelPlugin;
@@ -115,5 +116,22 @@ export async function runChannelAccountStop(params: {
   } catch (error) {
     params.onError(error);
     return { status: "rejected", error };
+  }
+}
+
+export async function waitForDeferredAccountStart(
+  deferred: Promise<void>,
+  abortSignal: AbortSignal,
+): Promise<void> {
+  if (abortSignal.aborted) {
+    return;
+  }
+  const aborted = createDeferredCore();
+  const onAbort = () => aborted.resolve();
+  abortSignal.addEventListener("abort", onAbort, { once: true });
+  try {
+    await Promise.race([deferred, aborted.promise]);
+  } finally {
+    abortSignal.removeEventListener("abort", onAbort);
   }
 }

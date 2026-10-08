@@ -720,49 +720,6 @@ describe("server-channels auto restart", () => {
     }
   });
 
-  it("retains the admitted teardown owner for a failed stop retry after account removal", async () => {
-    const originalConfig: OpenClawConfig = {
-      channels: { discord: { accounts: { alpha: { enabled: true } } } },
-    };
-    let config = originalConfig;
-    let stopFails = true;
-    const stopAccount = vi.fn(async (_context: ChannelGatewayContext<TestAccount>) => {
-      if (stopFails) {
-        throw new Error("first stop failed");
-      }
-    });
-    installTestRegistry(
-      createTestPlugin({
-        listAccountIds: (cfg) => Object.keys(cfg.channels?.discord?.accounts ?? {}),
-        resolveAccount: (cfg, id) => {
-          const account = cfg.channels?.discord?.accounts?.[id ?? DEFAULT_ACCOUNT_ID];
-          if (!account) {
-            throw new Error(`Account ${id} no longer exists`);
-          }
-          return account;
-        },
-        startAccount: async ({ abortSignal }) => await waitForAbort(abortSignal),
-        stopAccount,
-      }),
-    );
-    const manager = createManager({ getRuntimeConfig: () => config });
-    await manager.startChannels();
-    await flushMicrotasks();
-    await expect(manager.stopChannel("discord", "alpha", { manual: false })).rejects.toThrow(
-      "first stop failed",
-    );
-    config = { channels: { discord: { accounts: {} } } };
-    stopFails = false;
-    await expect(
-      manager.stopChannel("discord", "alpha", { manual: false }),
-    ).resolves.toBeUndefined();
-    expect(stopAccount).toHaveBeenCalledTimes(2);
-    expect(stopAccount.mock.calls[1]?.[0].cfg).toBe(originalConfig);
-    expect(stopAccount.mock.calls[1]?.[0].account).toBe(
-      originalConfig.channels?.discord?.accounts?.alpha,
-    );
-  });
-
   it.each(["hook-timeout", "task-timeout"] as const)(
     "releases retired channel slots for explicit replacement after %s",
     async (failure) => {

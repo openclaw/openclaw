@@ -73,6 +73,7 @@ import { waitForChannelStopGracefully } from "./channel-stop-timeout.js";
 import {
   createChannelAccountLifetime,
   runChannelAccountStop,
+  waitForDeferredAccountStart,
   type ChannelAccountLifetime,
   type ChannelAccountStopOutcome,
 } from "./server-channel-account-lifetime.js";
@@ -1141,6 +1142,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               ? runPluginCleanup(plugin, () => {
                   const gateway = plugin.gateway;
                   const stopAccount = gateway?.stopAccount;
+                  if (stopAccount && !manual && !plugin.config.listAccountIds(cfg).includes(id)) {
+                    return undefined;
+                  }
                   return gateway && stopAccount ? { gateway, stopAccount } : undefined;
                 })
               : undefined;
@@ -1333,6 +1337,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const failedStop = stopOutcomes.find((outcome) => outcome.status === "rejected");
     if (failedStop?.status === "rejected") {
       throw failedStop.error;
+    }
+    if (accountId && !manual && plugin) {
+      const currentAccountIds = runPluginCleanup(plugin, () =>
+        plugin.config.listAccountIds(getRuntimeConfig()),
+      );
+      evictStaleChannelAccountState(channelId, store, currentAccountIds);
     }
   };
 

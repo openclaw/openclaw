@@ -116,6 +116,7 @@ import { applyHookMappings, commitHookTransformMappingReload } from "./hooks-map
 import { createChannelManager } from "./server-channels.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import type { GatewayCronState } from "./server-cron.js";
+import { registerManagedChannelRemovalTests } from "./server-reload-channel-removal.test-support.js";
 import {
   GatewayConfigReloadSupersededError,
   type GatewayPluginReloadResult,
@@ -1022,6 +1023,7 @@ async function withManagedChannelSecretFixture(
     missingPath: string;
     starts: Array<{ accountId: string; token: unknown }>;
     stops: string[];
+    channelReloadDeferred: Promise<void>;
     manager: ReturnType<typeof createChannelManager>;
     write: (config: OpenClawConfig) => Promise<RuntimeConfigWriteApplicationStatus>;
     reloadPlugin: () => Promise<void>;
@@ -1078,9 +1080,10 @@ async function withManagedChannelSecretFixture(
       resolveAccount: (config, requestedAccountId) => {
         const accountId = requestedAccountId ?? "default";
         const { channel, accounts } = readChannel(config);
-        // Teardown can still address a just-removed lifetime.
-        const value = accounts[accountId];
-        const account = isRecord(value) ? value : {};
+        const account = accounts[accountId];
+        if (!isRecord(account)) {
+          throw new Error(`Account ${accountId} no longer exists`);
+        }
         return {
           accountId,
           botToken: account.botToken ?? channel.botToken,
@@ -1163,6 +1166,13 @@ async function withManagedChannelSecretFixture(
   });
   const writeListenerRef = createConfigWriteListenerRef();
   const commitRuntimePolicy = vi.fn();
+  const channelReloadDeferred = createDeferred();
+  const logReload = createInfoWarnErrorLogger();
+  logReload.warn.mockImplementation((message: string) => {
+    if (message.includes("deferring until")) {
+      channelReloadDeferred.resolve();
+    }
+  });
   const { requestRecoveryRestart, restartEmitted } = createRecoveryRestartMock();
   let currentSource = initialSource;
   let revision = 0;
@@ -1171,6 +1181,7 @@ async function withManagedChannelSecretFixture(
   const reloader = startManagedGatewayConfigReloader({
     initialConfig: initialSnapshot.config,
     initialCompareConfig: initialSource,
+    logReload,
     readSnapshot: vi.fn(async () =>
       createValidConfigSnapshot(currentSource, `hash-${revision}`),
     ) as never,
@@ -1208,6 +1219,7 @@ async function withManagedChannelSecretFixture(
       missingPath,
       starts,
       stops,
+      channelReloadDeferred: channelReloadDeferred.promise,
       manager,
       reloadPlugin: async () => {
         currentSource = { ...initialSource, plugins: { entries: { notes: { enabled: true } } } };
@@ -1363,24 +1375,7 @@ describe("managed channel credential publication", () => {
     },
   );
 
-  it("prunes a removed account when its surviving sibling becomes cold", async () => {
-    await withManagedChannelSecretFixture({}, async (fixture) => {
-      const next = fixture.nextSource(fixture.missingPath);
-      const channel = next.channels?.mattermost;
-      if (!isRecord(channel) || !isRecord(channel.accounts)) {
-        throw new Error("Expected account fixture");
-      }
-      delete channel.accounts.root;
-      expect(await fixture.write(next)).toBe("applied");
-      expect(fixture.stops.toSorted()).toEqual(["ada", "root"]);
-      expect(fixture.starts).toEqual([]);
-      expect(fixture.manager.getRuntimeSnapshot().channelAccounts.mattermost).not.toHaveProperty(
-        "root",
-      );
-      expect(fixture.manager.resolveRuntimeAccountId("mattermost", "root")).toBeUndefined();
-      expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
-    });
-  });
+  registerManagedChannelRemovalTests((run) => withManagedChannelSecretFixture({}, run));
 
   it.each([
     { cold: true, manualStop: false },
@@ -3197,7 +3192,7 @@ describe("gateway channel hot reload handlers", () => {
     );
   });
 
-  it.each(["unlisted", "unresolvable", "already whole-channel"] as const)(
+  it.each(["unresolvable", "already whole-channel"] as const)(
     "restarts the whole channel once when account targets are %s",
     async (reason) => {
       const events: string[] = [];
@@ -3209,7 +3204,7 @@ describe("gateway channel hot reload handlers", () => {
           async () => {
             await applyHotReload(
               createAccountReloadPlan(
-                reason === "unlisted" ? ["removed-account"] : ["alpha", "beta"],
+                ["alpha", "beta"],
                 reason === "already whole-channel" ? { restartChannels: new Set(["discord"]) } : {},
               ),
               {},
@@ -3262,31 +3257,34 @@ describe("gateway channel hot reload handlers", () => {
     expect(requestRecoveryRestart).toHaveBeenCalledOnce();
   });
 
-  it("stops account targets without restarting them while autostart is suppressed", async () => {
-    const events: string[] = [];
-    const channels = createRecordedChannelHandlers(events);
-    const { applyHotReload } = createReloadHandlersForTest(
-      undefined,
-      channels,
-      undefined,
-      undefined,
-      true,
-      {
-        getChannelAutostartSuppression: () => ({
-          reason: "crash-loop-breaker",
-          message: "safe mode",
-        }),
-      },
-    );
+  it.each(["alpha", "removed"])(
+    "stops account %s while autostart is suppressed",
+    async (accountId) => {
+      const events: string[] = [];
+      const channels = createRecordedChannelHandlers(events);
+      const { applyHotReload } = createReloadHandlersForTest(
+        undefined,
+        channels,
+        undefined,
+        undefined,
+        true,
+        {
+          getChannelAutostartSuppression: () => ({
+            reason: "crash-loop-breaker",
+            message: "safe mode",
+          }),
+        },
+      );
 
-    await withChannelReloadsEnabled(async () => {
-      await withDiscordAccounts(["default", "alpha"], async () => {
-        await applyHotReload(createAccountReloadPlan(["alpha"]), {});
+      await withChannelReloadsEnabled(async () => {
+        await withDiscordAccounts(["default", "alpha"], async () => {
+          await applyHotReload(createAccountReloadPlan([accountId]), {});
+        });
       });
-    });
 
-    expect(events).toEqual(["stop:discord:alpha"]);
-  });
+      expect(events).toEqual([`stop:discord:${accountId}`]);
+    },
+  );
 
   it.each([
     {
