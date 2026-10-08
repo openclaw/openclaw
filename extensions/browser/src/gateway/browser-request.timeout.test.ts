@@ -132,6 +132,43 @@ describe("browser.request local timeout", () => {
     },
   );
 
+  it("applies timeoutMs to local browser dispatches", async () => {
+    const respond = vi.fn();
+
+    await expectDefined(
+      browserHandlers["browser.request"],
+      "browser request handler",
+    )({
+      params: {
+        method: "POST",
+        path: "/tabs/open",
+        body: { url: "https://example.com" },
+        timeoutMs: 4321,
+      },
+      respond: respond as never,
+      context: {
+        nodeRegistry: { listConnected: () => [] },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-1", method: "browser.request" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(withTimeoutMock).toHaveBeenCalledTimes(1);
+    const [call] = withTimeoutMock.mock.calls;
+    if (!call) {
+      throw new Error("expected withTimeout call");
+    }
+    const [dispatchTask, timeoutMs, timeoutLabel] = call;
+    expect(dispatchTask).toBeTypeOf("function");
+    expect(timeoutMs).toBe(4321);
+    expect(timeoutLabel).toBe("browser request");
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "Error: browser request timed out",
+    });
+  });
+
   it("caps timeoutMs before local browser dispatches", async () => {
     const respond = vi.fn();
 
