@@ -25,6 +25,50 @@ function applyOrigin(
   return { ...entry, origin: sessionDeliveryOrigin(entry) };
 }
 
+it("clears confirmed absent portraits without changing the sender origin or permissions", () => {
+  const ctx = {
+    Provider: "telegram",
+    AccountId: "sample-bot",
+    ChatType: "direct",
+    From: "telegram:1000000001",
+    To: "telegram:1000000001",
+  };
+  const present = applyOrigin(undefined, {
+    ...ctx,
+    ConversationAvatar: "/media/inbound/portrait.png",
+  });
+  const transient = applyOrigin(present, ctx);
+  expect(transient.origin?.avatar).toBe(present.origin?.avatar);
+  const removed = applyOrigin(transient, { ...ctx, ConversationAvatar: "" });
+  expect(removed.origin).toEqual({ ...present.origin, avatar: undefined });
+  expect(removed.delivery).toEqual({ ...present.delivery, origin: removed.origin });
+  expect(present.origin?.avatar).toBe("/media/inbound/portrait.png");
+});
+
+it("drops the old native portrait when a shared main session moves to another peer", () => {
+  const first = applyOrigin(undefined, {
+    Provider: "telegram",
+    Surface: "telegram",
+    ChatType: "direct",
+    AccountId: "sample-bot",
+    From: "telegram:1000000001",
+    To: "telegram:1000000001",
+    ConversationAvatar: "/media/inbound/first-peer.png",
+  });
+  const second = applyOrigin(first, {
+    Provider: "telegram",
+    Surface: "telegram",
+    ChatType: "direct",
+    AccountId: "sample-bot",
+    From: "telegram:1000000002",
+    To: "telegram:1000000002",
+  });
+  expect(second.origin?.avatar).toBeUndefined();
+  expect(second.origin?.from).toBe("telegram:1000000002");
+  expect(second.origin?.nativeDirectUserId).toBeUndefined();
+  expect(first.origin?.avatar).toBe("/media/inbound/first-peer.png");
+});
+
 const slackTurn = {
   Provider: "slack",
   Surface: "slack",

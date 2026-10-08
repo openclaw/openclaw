@@ -24,12 +24,18 @@ import {
   resolveAssistantTextAvatar,
 } from "../../lib/avatar.ts";
 import {
+  resolveChannelSenderAvatarUrl,
+  type ChannelSenderAvatarSource,
+} from "../../lib/chat/channel-sender-avatar.ts";
+import {
   normalizeRoleForGrouping,
   readMessageSenderSession,
   resolveMessageRole,
 } from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
+import "../../components/channel-avatar.ts";
+import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
 import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
 import {
@@ -48,6 +54,7 @@ export function renderChatAvatar(
   },
   user?: { name?: string | null; avatar?: string | null },
   sender?: SenderIdentity | null,
+  channelAvatar?: ChannelSenderAvatarSource,
 ) {
   const normalized = normalizeRoleForGrouping(role);
   // Attributed multi-user messages show the author's own avatar (profile
@@ -56,7 +63,30 @@ export function renderChatAvatar(
     if (sender.identity?.type === "agent") {
       return renderChatAuthorAvatar(sender, "chat-avatar assistant");
     }
-    return renderUserAvatarSlot(resolveIdentityAvatarView(sender), formatSenderLabel(sender) ?? "");
+    const view = resolveIdentityAvatarView(sender);
+    const label = formatSenderLabel(sender) ?? "";
+    const gateway = readAvatarGatewayContext();
+    const channelPhoto = resolveChannelSenderAvatarUrl(
+      sender,
+      channelAvatar,
+      gateway.resourceBasePath,
+    );
+    if (channelPhoto) {
+      return html`<div
+        class="chat-avatar user chat-avatar--sender-initials"
+        role="img"
+        aria-label=${label}
+        style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
+      >
+        <openclaw-channel-avatar
+          .routeUrl=${channelPhoto}
+          .authTokens=${gateway.authTokens}
+          .authReady=${Boolean(gateway.origin)}
+          .fallback=${html`${view.fallback.initials}`}
+        ></openclaw-channel-avatar>
+      </div>`;
+    }
+    return renderUserAvatarSlot(view, label);
   }
   if (normalized === "assistant") {
     const name = assistant?.name?.trim() || "Assistant";

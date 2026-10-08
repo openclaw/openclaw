@@ -9,27 +9,17 @@ import {
   toLocationContext,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
-import type {
-  OpenClawConfig,
-  TelegramDirectConfig,
-  TelegramGroupConfig,
-  TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { NormalizedAllowFrom } from "./bot-access.js";
 import { normalizeAllowFrom } from "./bot-access.js";
-import type { resolveTelegramInboundBody } from "./bot-message-context.body.js";
 import type {
+  BuildTelegramInboundContextPayloadParams,
   TelegramMediaRef,
-  TelegramMessageContextOptions,
   TelegramMessageContextSessionRuntimeOverrides,
-  TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
 import {
   buildGroupLabel,
@@ -43,10 +33,8 @@ import {
   resolveTelegramPrimaryMedia,
   type TelegramMediaKind,
   type TelegramReplyTarget,
-  type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
-import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramDirectPeerId } from "./dm-session-key.js";
 import {
   resolveTelegramDirectToolPolicy,
@@ -210,35 +198,9 @@ function resolveReplyChainMediaType(entry: TelegramReplyChainEntry) {
   };
 }
 
-export async function buildTelegramInboundContextPayload(params: {
-  cfg: OpenClawConfig;
-  primaryCtx: TelegramContext;
-  msg: TelegramContext["message"];
-  allMedia: TelegramMediaRef[];
-  replyMedia: TelegramMediaRef[];
-  replyChain: TelegramReplyChainEntry[];
-  promptContext: TelegramPromptContextEntry[];
-  isGroup: boolean;
-  isForum: boolean;
-  chatId: number | string;
-  senderId: string;
-  senderUsername: string;
-  resolvedThreadId?: number;
-  dmThreadId?: number;
-  threadSpec: TelegramThreadSpec;
-  route: ResolvedAgentRoute;
-  bodyResult: NonNullable<Awaited<ReturnType<typeof resolveTelegramInboundBody>>>;
-  historyLimit: number;
-  dmHistoryLimit: number;
-  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
-  groupRequireMention: boolean;
-  options?: TelegramMessageContextOptions;
-  dmAllowFrom?: Array<string | number>;
-  effectiveGroupAllow?: NormalizedAllowFrom;
-  topicName?: string;
-  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
-}): Promise<{
+export async function buildTelegramInboundContextPayload(
+  params: BuildTelegramInboundContextPayloadParams,
+): Promise<{
   ctxPayload: TelegramInboundContextPayload;
   skillFilter: string[] | undefined;
   turn: {
@@ -611,6 +573,7 @@ export async function buildTelegramInboundContextPayload(params: {
       isBot: msg.from?.is_bot,
     },
     conversation: {
+      avatar: params.conversationAvatar,
       kind: conversationKind,
       id: String(chatId),
       routePeer: {

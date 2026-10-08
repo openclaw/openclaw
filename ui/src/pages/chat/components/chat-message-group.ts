@@ -557,6 +557,7 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
               ? { name: opts.userName ?? null, avatar: opts.userAvatar ?? null }
               : undefined,
             group.sender,
+            opts.channelAvatar,
           )
       : nothing;
 
@@ -690,7 +691,12 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
                 <div class="chat-group-footer__meta">
                   ${
                     normalizedRole === "user" && showAvatar && avatarPlacement === "footer"
-                      ? renderChatAuthorAvatar(group.sender)
+                      ? renderChatAuthorAvatar(
+                          group.sender,
+                          "chat-author-avatar",
+                          undefined,
+                          opts.channelAvatar,
+                        )
                       : nothing
                   }
                   ${renderSenderIdentity()} ${renderChatSendStatus(sendStatus, opts)}

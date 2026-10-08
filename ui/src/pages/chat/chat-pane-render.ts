@@ -4,7 +4,6 @@ import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
-import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import {
   markdownSessionPublicOrigin,
   navigateMarkdownSession,
@@ -39,6 +38,7 @@ import {
   readChatPublicationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
+import { resolveChatPaneUserPresentation } from "./chat-pane-session-presentation.ts";
 import {
   createSidebarFullMessageLoader,
   resolveSidebarLayoutForBoard,
@@ -219,14 +219,14 @@ export class ChatPane extends ChatPaneLayoutRender {
       setObserverVisibility: this.setSessionObserverVisibility,
       updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
     });
-    const selfUser = resolveCurrentSelfUser({
-      snapshotUser: gatewaySnapshot.selfUser,
-      presenceEntries: readPresenceEntries(this.presencePayload),
-      presenceInstanceId: gatewaySnapshot.client?.instanceId,
+    const { selfUser, ...userPresentation } = resolveChatPaneUserPresentation({
+      gatewaySnapshot,
+      presencePayload: this.presencePayload,
+      previousUserId: this.presentationUserId,
+      state,
+      selectedSession,
     });
-    if (selfUser?.identity?.type === "profile") {
-      this.presentationUserId = selfUser.identity.id;
-    }
+    this.presentationUserId = userPresentation.userId;
     const projectionRunId = resolveChatProjectionRunId({
       localRunId: state.chatRunId,
       activeRunIds: selectedSession?.activeRunIds,
@@ -675,9 +675,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         agentsList: this.context.agents.state.agentsList,
         hello: this.context.gateway.snapshot.hello,
       }),
-      userId: this.presentationUserId,
-      userName: selfUser?.name ?? state.userName,
-      userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
+      ...userPresentation,
       personActivity: personActivityRouting(this.context),
       mediaPolicyEpoch: state.mediaPolicyEpoch,
       connectionEpoch: state.connectionEpoch,

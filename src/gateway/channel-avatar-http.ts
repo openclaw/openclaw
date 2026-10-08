@@ -5,6 +5,7 @@ import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { readMediaBuffer } from "../media/store.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
+import { matchesChannelAvatarSender } from "./channel-avatar-reference.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
@@ -86,7 +87,8 @@ export async function handleChannelAvatarHttpRequest(
     basePath?: string;
   },
 ): Promise<boolean> {
-  const pathname = req.url ? new URL(req.url, "http://localhost").pathname : undefined;
+  const requestUrl = new URL(req.url ?? "/", "http://localhost");
+  const pathname = requestUrl.pathname;
   const parsed = parseControlUiResourcePath("channelAvatar", pathname, opts.basePath);
   if (!parsed.matched) {
     return false;
@@ -116,7 +118,10 @@ export async function handleChannelAvatarHttpRequest(
       parsed.value,
       { clone: false },
     );
-    reference = sessionDeliveryOrigin(entry)?.avatar;
+    const origin = sessionDeliveryOrigin(entry);
+    reference = matchesChannelAvatarSender(requestUrl.searchParams, origin)
+      ? origin?.avatar
+      : undefined;
   } catch {
     // Invalid or missing session keys are ordinary route misses.
   }

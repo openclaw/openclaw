@@ -65,6 +65,18 @@ const mergeSessionOrigin = (
     delete merged.accountId;
     delete merged.threadId;
   }
+  // A photo belongs to its native peer even when multiple DMs share one main session.
+  if (
+    existing &&
+    next &&
+    ((next.from != null && existing.from != null && next.from !== existing.from) ||
+      (next.chatType != null && existing.chatType != null && next.chatType !== existing.chatType) ||
+      (next.nativeDirectUserId != null &&
+        existing.nativeDirectUserId != null &&
+        next.nativeDirectUserId !== existing.nativeDirectUserId))
+  ) {
+    delete merged.avatar;
+  }
   const mergeField = <K extends keyof SessionOrigin>(field: K, value: SessionOrigin[K]) => {
     if (value) {
       merged[field] = value;
@@ -243,6 +255,9 @@ export function deriveSessionMetaPatch(params: {
 
   const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
   const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
+  if (origin && mergedOrigin && params.ctx.ConversationAvatar === "") {
+    delete mergedOrigin.avatar;
+  }
   if (mergedOrigin) {
     if (!patch.chatType && mergedOrigin.chatType) {
       patch.chatType = mergedOrigin.chatType;

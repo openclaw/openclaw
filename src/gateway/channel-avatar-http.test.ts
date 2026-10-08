@@ -2,6 +2,7 @@ import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { channelAvatarRevision } from "./channel-avatar-reference.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
 import { HTTP_IMAGE_MAX_BYTES } from "./http-image-response.js";
@@ -112,6 +113,43 @@ describe("handleChannelAvatarHttpRequest", () => {
 
   const avatarRoute = (sessionKey: string) =>
     `http://127.0.0.1:${port}${buildControlUiChannelAvatarUrl("", sessionKey, "test-revision")}`;
+
+  it("binds transcript avatar bytes to the exact native sender and media snapshot", async () => {
+    const entry = avatarEntry();
+    mocks.loadEntry.mockReturnValue({
+      entry: {
+        ...entry,
+        delivery: {
+          ...entry.delivery,
+          origin: {
+            ...entry.delivery.origin,
+            provider: "telegram",
+            accountId: "sample-bot",
+            from: "telegram:1000000001",
+            chatType: "direct",
+          },
+        },
+      },
+    });
+    const url = new URL(avatarRoute("agent:main:portrait-binding"));
+    url.searchParams.set("v", channelAvatarRevision(AVATAR_REFERENCE));
+    url.searchParams.set("provider", "telegram");
+    url.searchParams.set("account", "sample-bot");
+    url.searchParams.set("sender", "1000000001");
+    expect((await fetch(url)).status).toBe(200);
+    const reads = mocks.readMedia.mock.calls.length;
+    for (const [key, value] of [
+      ["sender", "1000000002"],
+      ["account", "another-bot"],
+      ["provider", "slack"],
+      ["v", "stale-revision"],
+    ] as const) {
+      const stale = new URL(url);
+      stale.searchParams.set(key, value);
+      expect((await fetch(stale)).status).toBe(404);
+    }
+    expect(mocks.readMedia).toHaveBeenCalledTimes(reads);
+  });
 
   it("rejects revoked authority while channel avatar bytes are loading", async () => {
     const reading = createDeferredCore();

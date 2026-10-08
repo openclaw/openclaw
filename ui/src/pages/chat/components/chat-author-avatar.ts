@@ -6,7 +6,13 @@ import {
   resolveIdentityAvatarView,
   type IdentityAvatarView,
 } from "../../../components/identity-avatar-view.ts";
+import "../../../components/channel-avatar.ts";
+import {
+  resolveChannelSenderAvatarUrl,
+  type ChannelSenderAvatarSource,
+} from "../../../lib/chat/channel-sender-avatar.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
+import { readAvatarGatewayContext } from "../../../lib/identity-avatar-context.ts";
 import {
   resolveAvatar,
   type IdentityAvatarInput,
@@ -48,6 +54,7 @@ export function renderChatAuthorAvatar(
   sender: IdentityAvatarInput | null | undefined,
   className = "chat-author-avatar",
   agentAvatar?: { avatar?: string | null; textAvatar?: string | null },
+  channelAvatar?: ChannelSenderAvatarSource,
 ): TemplateResult | typeof nothing {
   const label = formatSenderLabel(sender);
   if (!sender || !label) {
@@ -64,7 +71,20 @@ export function renderChatAuthorAvatar(
     </span>`;
   }
   const view = resolveIdentityAvatarView(sender);
-  const resolved = renderResolvedAvatar(view);
+  const gateway = readAvatarGatewayContext();
+  const channelPhoto = resolveChannelSenderAvatarUrl(
+    sender,
+    channelAvatar,
+    gateway.resourceBasePath,
+  );
+  const resolved = channelPhoto
+    ? html`<openclaw-channel-avatar
+        .routeUrl=${channelPhoto}
+        .authTokens=${gateway.authTokens}
+        .authReady=${Boolean(gateway.origin)}
+        .fallback=${renderInitialsAvatar(view.fallback)}
+      ></openclaw-channel-avatar>`
+    : renderResolvedAvatar(view);
   return html`<span
     class=${identityAvatarClass("chat-author-avatar", view)}
     role="img"
