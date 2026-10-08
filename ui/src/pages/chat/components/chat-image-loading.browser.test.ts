@@ -337,13 +337,16 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     },
   );
 
-  it.each([1440, 390])(
-    "anchors image actions around tiny and tall previews at %s px",
-    async (viewport) => {
+  it.each(
+    [1440, 390].flatMap((viewport) => ["ltr", "rtl"].map((direction) => ({ viewport, direction }))),
+  )(
+    "anchors image actions around tiny and tall previews at $viewport px in $direction",
+    async ({ viewport, direction }) => {
       const { page } = await import("vitest/browser");
       // The browser fixture does not scroll; keep all five previews reachable.
       await page.viewport(viewport, 1800);
       const container = mount(Math.min(500, viewport - 32));
+      container.dir = direction;
       vi.stubGlobal(
         "fetch",
         vi

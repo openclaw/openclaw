@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { buildControlUiCspHeader } from "../../../src/gateway/control-ui-csp.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   captureUiProofEnabled,
@@ -184,6 +185,9 @@ suite.define(() => {
           animations: "disabled",
         });
       }
+      await page
+        .locator("openclaw-image-lightbox wa-dialog dialog")
+        .evaluate(finishElementAnimations);
       const viewer = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
       expect(viewer).toMatchObject({ x: 0, y: 0, ...page.viewportSize() });
       expect(requestedVariants).toEqual(["thumbnail", ...Array(failures + 1).fill("full")]);
