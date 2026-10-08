@@ -119,7 +119,7 @@ describe("media requester provenance", () => {
             requesterOrigin: {
               channel: "webchat",
               ...(channel === "webchat"
-                ? { to: "stale-peer", accountId: "stale-account", threadId: "stale-thread" }
+                ? { to: "stale-peer", accountId: "test-bot", threadId: "stale-thread" }
                 : {}),
             },
             prompt,
