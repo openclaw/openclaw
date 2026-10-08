@@ -70,16 +70,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "query must not be empty"));
       return;
     }
-    const respondSearchError = (error: unknown) => {
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        throw error;
-      }
-      respond(
-        false,
-        undefined,
-        errorShapeFromError(ErrorCodes.UNAVAILABLE, error, { message: formatErrorMessage(error) }),
-      );
-    };
     if (params.scope !== undefined) {
       try {
         await searchProjectedSessionTranscripts({
@@ -94,7 +84,16 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           },
         });
       } catch (error) {
-        respondSearchError(error);
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          throw error;
+        }
+        respond(
+          false,
+          undefined,
+          errorShapeFromError(ErrorCodes.UNAVAILABLE, error, {
+            message: formatErrorMessage(error),
+          }),
+        );
       }
       return;
     }
@@ -264,7 +263,14 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       }
       throw new Error("Session search scope changed while reading; retry the request");
     } catch (error) {
-      respondSearchError(error);
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
+      }
+      respond(
+        false,
+        undefined,
+        errorShapeFromError(ErrorCodes.UNAVAILABLE, error, { message: formatErrorMessage(error) }),
+      );
     }
   },
   "sessions.list": createPreparedReadHandler((args) => {
