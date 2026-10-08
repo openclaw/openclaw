@@ -735,6 +735,10 @@
       - any-glob-to-any-file:
           - "extensions/senseaudio/**"
           - "docs/providers/senseaudio.md"
+"extensions: screenshot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/screenshot/**"
 "extensions: synthetic":
   - changed-files:
       - any-glob-to-any-file:

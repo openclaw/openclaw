@@ -2020,6 +2020,7 @@
                       "tools/progress-card",
                       "tools/reactions",
                       "tools/screen",
+                      "tools/screenshot",
                       "tools/show-widget",
                       "tools/theme"
                     ]

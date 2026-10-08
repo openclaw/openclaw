@@ -1,0 +1,22 @@
+{
+  "id": "screenshot",
+  "categories": ["computer-use"],
+  "activation": {
+    "onStartup": false
+  },
+  "name": "Screenshot",
+  "description": "Owner-only agent tool that captures the Windows Gateway host screen into the workspace and sends it to the current chat.",
+  "contracts": {
+    "tools": ["screenshot"]
+  },
+  "toolMetadata": {
+    "screenshot": {
+      "optional": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
