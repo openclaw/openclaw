@@ -433,9 +433,20 @@ the Doctor owner tests.
 
 Scale the fixture with `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS`,
 `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION`, and
-`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS`. The default budget for the
-idempotent Doctor pass is 60 seconds; override it with
-`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS` on slower hosts.
+`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS`. Before the idempotent Doctor pass,
+the harness counts persisted sessions, transcript events, cron jobs, and distinct
+enabled plugin roots. Its budget is 60 seconds of fixed overhead plus 80 ms per
+session, 2 ms per event, 20 ms per cron job, and 20 seconds per plugin root,
+rounded up to whole seconds. The 60-second floor covers small states; the
+per-unit allowances provide slow-hardware headroom over the measured 473-second
+AWS run while still rejecting a twofold slowdown on that fixture. The timed
+Doctor run never determines its own budget. Counts and computed/effective limits
+appear in the scenario output and `volume-doctor-budget.json`; the summary also
+records `timings.idempotenceBudgetSeconds`. The existing
+`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS` override remains
+available for explicit host calibration. The independent
+`OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT` watchdog still defaults to 900 seconds;
+increase it explicitly when scaling a fixture beyond that duration.
 
 The `Update Migration` workflow runs weekly and supports manual dispatch. Its
 default `supported-lines` baseline set resolves npm dist-tags and published
