@@ -28,6 +28,7 @@ import type {
   AgentFallbackCandidateCommonParams,
   AgentFallbackCycleParams,
 } from "./agent-runner-fallback-cycle.types.js";
+import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
   mintReplyMessageActionTurnCapability,
   resolveModelFallbackOptions,
@@ -105,7 +106,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     });
     return {
       candidateRun,
-      sessionRuntimeOverride,
       ...resolveRunEntryCliRuntime({
         config: params.runtimeConfig,
         provider,
@@ -120,18 +120,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   return params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
       preparedRunAdmission: params.preparedRunAdmission,
-      selection: {
-        cfg: selection.cfg,
-        provider: selection.provider,
-        model: selection.model,
-        requestedRouteResolution: selection.requestedRouteResolution,
-        agentDir: selection.agentDir,
-        fallbacksOverride: selection.fallbacksOverride,
-        userLockedAuthProfileId:
-          turn.followupRun.run.authProfileIdSource === "user"
-            ? turn.followupRun.run.authProfileId
-            : undefined,
-      },
+      selection: buildRunEntrySelection(selection, turn.followupRun.run),
       identity: {
         runId: params.runId,
         agentId: turn.followupRun.run.agentId,
@@ -240,7 +229,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
           sessionEntry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
-          agentRuntime: runtime.sessionRuntimeOverride,
+          agentRuntime: runOptions.agentHarnessRuntimeOverride,
         });
         const candidateThinkLevel = resolveRunThinkingLevelForFallbackCandidate({
           cfg: params.runtimeConfig,

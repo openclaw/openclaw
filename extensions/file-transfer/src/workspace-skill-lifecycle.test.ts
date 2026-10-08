@@ -16,24 +16,6 @@ import { createNodeWorkspaceTestTransport } from "./workspace-service.test-suppo
 
 vi.mock("./shared/audit.js", () => ({ appendFileTransferAudit: vi.fn() }));
 
-vi.mock("openclaw/plugin-sdk/agent-workspace-runtime", async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import("openclaw/plugin-sdk/agent-workspace-runtime")>();
-  const { fileURLToPath } = await import("node:url");
-  // Source children run outside the checkout. Keep ESM dependencies native and
-  // resolve source aliases with the repository tsconfig, as other source fixtures do.
-  const register = `import { register } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))}; register({ tsconfig: ${JSON.stringify(fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)))} });`;
-  return {
-    ...original,
-    resolveWorkspaceWorkerArgv(kind: "memory" | "skills") {
-      const argv = original.resolveWorkspaceWorkerArgv(kind);
-      return argv[0] === "--import"
-        ? ["--import", `data:text/javascript,${encodeURIComponent(register)}`, ...argv.slice(2)]
-        : argv;
-    },
-  };
-});
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let local: string;
 let remote: string;

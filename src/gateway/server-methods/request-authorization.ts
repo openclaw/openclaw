@@ -15,7 +15,7 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
-import type { GatewayMethodRegistry } from "../methods/registry.js";
+import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import {
   prepareGatewaySessionAccessAuthority,
   type GatewaySessionAccessAuthority,
@@ -52,7 +52,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   requestParams: unknown;
   client: GatewayRequestOptions["client"];
   context: GatewayRequestContext;
-  methodRegistry: GatewayMethodRegistry;
+  methodRegistry: GatewayMethodRegistryView;
   expectedProfileBinding?: ExpectedProfileBinding;
   hasCurrentClientAuthority?: () => boolean;
   assertInvocationCurrent?: () => void;
@@ -188,6 +188,29 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       assertPreparationCurrent?.();
       assertChatRoutingCurrent?.();
     };
+    const authorizeCurrent = (assertCurrent?: () => void, release?: () => void) => {
+      const current = authorizeMethod();
+      const authorizationError = current.error ?? startupError();
+      if (authorizationError) {
+        release?.();
+        return authorizationError;
+      }
+      try {
+        params.expectedProfileBinding?.assertCurrent();
+        assertCurrent?.();
+      } catch (error) {
+        release?.();
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          return error.error;
+        }
+        throw error;
+      }
+      if (current.sessionScope !== scopeAuthorization.sessionScope) {
+        release?.();
+        return errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed");
+      }
+      return null;
+    };
     const authorizeSession = (sessionRowRead?: SessionRowReadView) => {
       assertSessionInvocationCurrent();
       return sessionPolicy
@@ -197,24 +220,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     const authorizeSessionAndConsume = params.consumeSessionTurn
       ? (sessionRowRead?: SessionRowReadView) => {
           // Consume transient incognito rows before their prepared view closes.
-          const currentAuthorization = authorizeMethod();
-          const currentError = currentAuthorization.error ?? startupError();
-          if (currentError) {
-            return { error: currentError };
-          }
-          try {
-            params.expectedProfileBinding?.assertCurrent();
-            params.assertInvocationCurrent?.();
-          } catch (error) {
-            if (error instanceof SessionMutationAuthorizationChangedError) {
-              return { error: error.error };
-            }
-            throw error;
-          }
-          if (currentAuthorization.sessionScope !== scopeAuthorization.sessionScope) {
-            return {
-              error: errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed"),
-            };
+          const error = authorizeCurrent(() => params.assertInvocationCurrent?.());
+          if (error) {
+            return { error };
           }
           if (!sessionRowRead) {
             return { error: errorShape(ErrorCodes.UNAVAILABLE, "Session facts are unavailable") };
@@ -335,25 +343,11 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         }),
       };
     }
-    const currentAuthorization = authorizeMethod();
-    const currentError = currentAuthorization.error ?? startupError();
-    if (currentError) {
-      sessionAccessAuthority?.release();
-      return { error: currentError };
-    }
-    try {
-      params.expectedProfileBinding?.assertCurrent();
-      assertSessionInvocationCurrent();
-    } catch (error) {
-      sessionAccessAuthority?.release();
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        return { error: error.error };
-      }
-      throw error;
-    }
-    if (currentAuthorization.sessionScope !== scopeAuthorization.sessionScope) {
-      sessionAccessAuthority?.release();
-      return { error: errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed") };
+    const error = authorizeCurrent(assertSessionInvocationCurrent, () =>
+      sessionAccessAuthority?.release(),
+    );
+    if (error) {
+      return { error };
     }
     return {
       error: null,

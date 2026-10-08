@@ -89,22 +89,17 @@ export function createDiscordSendResult(params: {
   // so shared delivery custody cannot mistake a placeholder for platform evidence.
   const messageId = params.result.id ?? "";
   const channelId = params.result.channel_id ?? params.fallbackChannelId;
-  const receiptParams: Parameters<typeof createDiscordSendReceipt>[0] = {
-    platformMessageIds: params.result.platformMessageIds?.length
-      ? params.result.platformMessageIds
-      : [messageId],
-    channelId,
-    kind: params.kind,
-  };
-  if (params.threadId != null) {
-    receiptParams.threadId = String(params.threadId);
-  }
-  if (params.reply) {
-    receiptParams.reply = params.reply;
-  }
   return {
     messageId,
     channelId,
-    receipt: createDiscordSendReceipt(receiptParams),
+    receipt: createDiscordSendReceipt({
+      platformMessageIds: params.result.platformMessageIds?.length
+        ? params.result.platformMessageIds
+        : [messageId],
+      channelId,
+      kind: params.kind,
+      threadId: params.threadId == null ? undefined : String(params.threadId),
+      reply: params.reply,
+    }),
   };
 }

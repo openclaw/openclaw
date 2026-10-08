@@ -135,11 +135,8 @@ export function resolveVoiceWakeRouteByTrigger(params: {
   config: VoiceWakeRoutingConfig;
 }): VoiceWakeResolvedRoute {
   const normalizedTrigger = normalizeVoiceWakeTriggerWord(params.trigger ?? "");
-  if (normalizedTrigger) {
-    const matched = params.config.routes.find((route) => route.trigger === normalizedTrigger);
-    if (matched) {
-      return resolveVoiceWakeRouteTarget(matched.target);
-    }
-  }
-  return resolveVoiceWakeRouteTarget(params.config.defaultTarget);
+  const matched = normalizedTrigger
+    ? params.config.routes.find((route) => route.trigger === normalizedTrigger)
+    : undefined;
+  return resolveVoiceWakeRouteTarget(matched ? matched.target : params.config.defaultTarget);
 }

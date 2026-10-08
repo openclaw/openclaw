@@ -17,17 +17,18 @@ it("preserves the direct read request, signal, and projected result", async () =
   await expect(readers.readMessagePresence(input, signal)).resolves.toBe(true);
 });
 
-it.each([{ value: false }, { value: [] }, { value: { kind: "prewarm" as const } }])(
-  "rejects another worker result before projecting it: %j",
-  async ({ value }) => {
-    const readers = createSessionHistoryWorkerReaders(async (_prepare, _inputBytes, receive) =>
-      receive(value),
-    );
-    await expect(
-      readers.readMessagePresence({ scope: { sessionId: "synthetic-session" } }),
-    ).rejects.toThrow("Session history worker returned another result instead of message presence");
-  },
-);
+it.each([
+  { value: false },
+  { value: { kind: "session-members" as const, entry: undefined, members: [] } },
+  { value: { kind: "prewarm" as const } },
+])("rejects another worker result before projecting it: %j", async ({ value }) => {
+  const readers = createSessionHistoryWorkerReaders(async (_prepare, _inputBytes, receive) =>
+    receive(value),
+  );
+  await expect(
+    readers.readMessagePresence({ scope: { sessionId: "synthetic-session" } }),
+  ).rejects.toThrow("Session history worker returned another result instead of message presence");
+});
 
 it.each(["archives", "corpus", "targets"] as const)(
   "serializes Windows storage environments for %s inventory",

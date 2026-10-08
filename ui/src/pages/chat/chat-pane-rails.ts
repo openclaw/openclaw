@@ -75,17 +75,16 @@ export function createChatPaneRails(params: {
   };
   const togglePanelSlot = (slot: SidebarSlotId) =>
     isPanelVisible(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
-  const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
-    draftScope: params.presentationId,
-    draftContext: {
-      sessionTitle: params.sessionTitle,
-      paneLabel: params.paneLabel,
-    },
-    expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
-    presented: params.presented,
-  });
   const sessionWorkspace = {
-    ...sessionWorkspaceBase,
+    ...createSessionWorkspaceProps(state, {
+      draftScope: params.presentationId,
+      draftContext: {
+        sessionTitle: params.sessionTitle,
+        paneLabel: params.paneLabel,
+      },
+      expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
+      presented: params.presented,
+    }),
     collapsed: !isPanelVisible("workspace"),
     onToggleCollapsed: () => togglePanelSlot("workspace"),
     onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,

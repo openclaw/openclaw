@@ -59,14 +59,6 @@ export function buildExecApprovalCustomId(
   });
 }
 
-function decodeCustomIdValue(value: string): string | null {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return null;
-  }
-}
-
 export function parseExecApprovalData(data: ComponentData): {
   approvalId: string;
   approvalKind: DiscordApprovalAction["approvalKind"];
@@ -80,17 +72,18 @@ export function parseExecApprovalData(data: ComponentData): {
   const rawId = coerce(data.id);
   const rawKind = coerce(data.kind);
   const rawAction = coerce(data.action);
-  if (
-    !rawId ||
-    (rawKind !== "exec" && rawKind !== "plugin" && rawKind !== "system-agent") ||
-    !rawAction
-  ) {
+  if (!rawId || (rawKind !== "exec" && rawKind !== "plugin" && rawKind !== "system-agent")) {
     return null;
   }
   if (rawAction !== "allow-once" && rawAction !== "allow-always" && rawAction !== "deny") {
     return null;
   }
-  const approvalId = decodeCustomIdValue(rawId);
+  let approvalId: string;
+  try {
+    approvalId = decodeURIComponent(rawId);
+  } catch {
+    return null;
+  }
   if (!approvalId) {
     return null;
   }

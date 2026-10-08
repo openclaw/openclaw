@@ -386,16 +386,20 @@ it.for([1, 3])(
   },
 );
 
-it("archives an entry at its age boundary without another write", async () => {
-  const { request, storePath } = createStore();
+it("bounds empty maintenance writes while retaining the next age deadline", async ({ signal }) => {
+  const { database, request, storePath, archived } = createStore();
+  const execute = vi.spyOn(database.db, "exec");
+  const scheduled = observeNextPeriodicMaintenance(1_001);
   kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
+  await scheduled(signal);
+  const writerAdmissions = execute.mock.calls.filter(([sql]) => /^BEGIN IMMEDIATE;?$/i.test(sql));
+  expect.soft(writerAdmissions.length).toBeLessThanOrEqual(2);
   expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
 
   await vi.advanceTimersByTimeAsync(1_000);
   expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
   await vi.advanceTimersByTimeAsync(1);
-  await yieldToEventLoop();
+  await withinTest(archived, signal);
   expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
     archiveReason: "age-retention",
   });
@@ -523,7 +527,11 @@ it("rechecks foreign backdates at 30 minutes even when ordinary writes keep kick
   kickSessionEntryMaintenanceAfterWrite(request);
   await yieldToEventLoop();
   await vi.advanceTimersByTimeAsync(15 * 60 * 1_000 - 1);
-  expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
+  expect(
+    database.db
+      .prepare("SELECT archived_at FROM session_nodes WHERE session_key = ?")
+      .get(sessionKey),
+  ).toEqual({ archived_at: null });
   await vi.advanceTimersByTimeAsync(1);
   await withinTest(archived.promise, signal);
   expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({

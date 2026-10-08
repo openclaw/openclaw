@@ -95,12 +95,8 @@ export function resolveDirectBundledProviderPolicySurface(
   resolveBundledPluginsDir();
   const selection = metadata.bundledPluginsDir;
   const cached = cacheable ? metadata.bundledProviderPolicySurfaces.get(pluginId) : undefined;
-  if (
-    cached &&
-    cached.registry === registry &&
-    cached.version === version &&
-    cached.selection === selection
-  ) {
+  // Publication versions identify registries uniquely without retaining their runtime graphs.
+  if (cached && cached.version === version && cached.selection === selection) {
     return cached.read();
   }
   const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
@@ -111,7 +107,6 @@ export function resolveDirectBundledProviderPolicySurface(
   if (cacheable) {
     const instance = mod ? getPluginValueInstance(mod) : undefined;
     metadata.bundledProviderPolicySurfaces.set(pluginId, {
-      registry,
       version,
       selection,
       read: instance ? () => instance.run(() => surface) : () => surface,

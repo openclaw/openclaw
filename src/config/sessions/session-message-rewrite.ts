@@ -6,6 +6,7 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
+  type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
@@ -14,6 +15,7 @@ import {
 } from "./session-accessor.sqlite-transcript-message-rewrite.js";
 import type { SessionTranscriptAccessScope } from "./session-accessor.types.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
+import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { executeSessionMessageRewriteOperation } from "./session-message-rewrite-domain.js";
 import type {
   SessionMessageRewriteCommitted,
@@ -29,13 +31,13 @@ import {
 
 /** Bundled pure preparation; opaque public callbacks retain their transaction-local adapter. */
 async function rewritePreparedTranscriptMessage<T>(params: {
-  scope: SessionTranscriptAccessScope;
+  scope: ResolvedTranscriptScope;
   target: SessionMessageRewriteSelection["target"];
   expectedEntry?: SessionMessageRewriteSelection["expectedEntry"];
   prepare(message: unknown): T | undefined;
   assertCurrent?: () => void;
 }): Promise<{ generation: string; messageId: string; message: T } | null> {
-  const scope = captureLifecycleDatabaseScope(resolveSqliteTranscriptScope(params.scope));
+  const scope = captureLifecycleDatabaseScope(params.scope);
   const database = { ...toDatabaseOptions(scope), path: scope.path };
   const selection = structuredClone({
     scope,
@@ -97,10 +99,8 @@ export async function rewritePreparedTranscriptMessageAtAnchor<T>(
     "assertCurrent" | "expectedEntry"
   > & { active?: "exact" | "sequence"; assertNativeCurrent?: () => void } = {},
 ) {
-  if (
-    !isMainThread ||
-    !supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolveSqliteTranscriptScope(anchor)))
-  ) {
+  const scope = resolveSqliteTranscriptScope(anchor);
+  if (!isMainThread || !supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(scope))) {
     // Process-held incognito and native maintenance retain their current transaction owner.
     return rewriteTranscriptMessageAtAnchor(anchor, (message) => {
       options.assertCurrent?.();
@@ -120,7 +120,7 @@ export async function rewritePreparedTranscriptMessageAtAnchor<T>(
   }
   return rewritePreparedTranscriptMessage({
     ...options,
-    scope: anchor,
+    scope,
     target: { kind: "anchor", anchor, active: options.active },
     prepare,
   });
@@ -128,17 +128,17 @@ export async function rewritePreparedTranscriptMessageAtAnchor<T>(
 
 export async function rewritePreparedAssistantTranscriptMessageForRun(params: {
   scope: SessionTranscriptAccessScope & SessionTranscriptWriteScope;
+  readSource?: SessionEntryReadSource;
   runId: string;
   expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
   rewriteMessage(message: Record<string, unknown>): Record<string, unknown>;
 }): Promise<{ messageId: string } | null> {
-  if (
-    !isMainThread ||
-    !supportsOpenClawAgentDatabaseExecution(
-      toDatabaseOptions(resolveSqliteTranscriptScope(params.scope)),
-    )
-  ) {
-    return rewriteAssistantTranscriptMessageForRun(params);
+  const resolved = resolveSqliteTranscriptScope(params.scope, params.readSource);
+  if (!isMainThread || !supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved))) {
+    return rewriteAssistantTranscriptMessageForRun(
+      params,
+      params.readSource ? resolved : undefined,
+    );
   }
   const scope = withOwnedSessionTranscriptWriterFence({
     ...params.scope,
@@ -151,7 +151,7 @@ export async function rewritePreparedAssistantTranscriptMessageForRun(params: {
     throw new SessionTranscriptWriterClaimReboundError();
   }
   const result = await rewritePreparedTranscriptMessage({
-    scope,
+    scope: resolved,
     target: { kind: "terminal-assistant", runId: params.runId },
     expectedEntry: {
       lifecycleRevision: params.expectedLifecycleRevision ?? null,

@@ -31,7 +31,7 @@ import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
-import { resolveGatewayAuth } from "./auth-resolve.js";
+import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import {
   GatewayCredentialsRequiredError,
   GatewayLocalBackendSharedAuthUnavailableError,
@@ -412,14 +412,6 @@ export function buildGatewayConnectionDetails(
   });
 }
 
-function resolveGatewayCallAuth(config: OpenClawConfig) {
-  return resolveGatewayAuth({
-    authConfig: config.gateway?.auth,
-    env: process.env,
-    tailscaleMode: config.gateway?.tailscale?.mode,
-  });
-}
-
 export type { ExplicitGatewayAuth } from "./credentials.js";
 
 export { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth };
@@ -630,10 +622,15 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const deviceAuthScope = bootstrap.deviceAuthScope;
   const token = useStoredDeviceAuth ? undefined : bootstrap.auth.token;
   const password = useStoredDeviceAuth ? undefined : bootstrap.auth.password;
-  const { clientOptions, omitDeviceIdentity, deviceIdentity } = resolveGatewayCallDeviceAuth({
+  const resolvedAuth = resolveGatewayAuthForConfig({
+    config: context.config,
+    env: process.env,
+    tailscaleMode: context.config.gateway?.tailscale?.mode,
+  });
+  const { clientOptions, omitDeviceIdentity, deviceIdentity } = await resolveGatewayCallDeviceAuth({
     opts: input,
     url,
-    authMode: resolveGatewayCallAuth(context.config).mode,
+    authMode: resolvedAuth.mode,
     isImplicitLocalTarget: !urlOverrideSource && !context.isRemoteMode,
     token,
     password,
@@ -686,7 +683,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       );
     }
   }
-  const resolvedAuth = resolveGatewayCallAuth(context.config);
   if (
     (resolvedAuth.mode === "token" || resolvedAuth.mode === "password") &&
     !token &&

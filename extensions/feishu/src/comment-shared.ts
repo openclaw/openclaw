@@ -68,6 +68,28 @@ export function encodeQuery(params: Record<string, string | undefined>): string 
   return queryString ? `?${queryString}` : "";
 }
 
+export function extractFeishuApiErrorMeta(error: unknown) {
+  if (!isRecord(error)) {
+    return { message: typeof error === "string" ? error : JSON.stringify(error) };
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  const responseData = isRecord(response?.data) ? response?.data : undefined;
+  const nestedError = isRecord(responseData?.error) ? responseData.error : undefined;
+  return {
+    message: typeof error.message === "string" ? error.message : JSON.stringify(error),
+    code: readString(error.code),
+    config: isRecord(error.config) ? error.config : undefined,
+    httpStatus: typeof response?.status === "number" ? response.status : undefined,
+    feishuCode:
+      typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
+    feishuMsg: readString(responseData?.msg),
+    feishuLogId: readString(responseData?.log_id),
+    nestedErrorLogId: readString(nestedError?.log_id),
+    troubleshooter:
+      readString(responseData?.troubleshooter) || readString(nestedError?.troubleshooter),
+  };
+}
+
 export function formatFeishuApiError(
   error: unknown,
   options: {
@@ -78,29 +100,19 @@ export function formatFeishuApiError(
   if (!isRecord(error)) {
     return typeof error === "string" ? error : JSON.stringify(error);
   }
-  const config = isRecord(error.config) ? error.config : undefined;
-  const response = isRecord(error.response) ? error.response : undefined;
-  const responseData = isRecord(response?.data) ? response?.data : undefined;
-  const feishuLogId =
-    readString(responseData?.log_id) ||
-    (options.includeNestedErrorLogId
-      ? readString(isRecord(responseData?.error) ? responseData.error.log_id : undefined)
-      : undefined);
-  const nestedError = isRecord(responseData?.error) ? responseData.error : undefined;
-
+  const meta = extractFeishuApiErrorMeta(error);
   return JSON.stringify({
-    message: typeof error.message === "string" ? error.message : JSON.stringify(error),
-    code: readString(error.code),
-    method: readString(config?.method),
-    url: readString(config?.url),
-    ...(options.includeConfigParams ? { params: config?.params } : {}),
-    http_status: typeof response?.status === "number" ? response.status : undefined,
-    feishu_code:
-      typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
-    feishu_msg: readString(responseData?.msg),
-    feishu_log_id: feishuLogId,
-    feishu_troubleshooter:
-      readString(responseData?.troubleshooter) || readString(nestedError?.troubleshooter),
+    message: meta.message,
+    code: meta.code,
+    method: readString(meta.config?.method),
+    url: readString(meta.config?.url),
+    ...(options.includeConfigParams ? { params: meta.config?.params } : {}),
+    http_status: meta.httpStatus,
+    feishu_code: meta.feishuCode,
+    feishu_msg: meta.feishuMsg,
+    feishu_log_id:
+      meta.feishuLogId || (options.includeNestedErrorLogId ? meta.nestedErrorLogId : undefined),
+    feishu_troubleshooter: meta.troubleshooter,
   });
 }
 

@@ -291,6 +291,7 @@ type GatewayKernelContext = {
   /** Instance-local native approval subscribers; never derived from a network client. */
   approvalEvents?: GatewayApprovalEventPublisher;
   recoveryRuntime?: GatewayRecoveryRuntime;
+  sharedGatewaySessionGenerationState?: import("../server-shared-auth-generation.js").SharedGatewaySessionGenerationState;
   /** Uses the lifecycle owner's module graph for plugin and detached agent turns. */
   createAgentTurnFacade?: InternalAgentTurnFacadeFactory;
   /** Live target facts stay with the instance owner, outside tool dispatch's import graph. */
@@ -509,6 +510,12 @@ export type SessionMutationAuthorization = {
   /** Original materialized target; Stop must match producer facts, not a later row lookup. */
   admittedTarget?: Readonly<{ agentId: string; sessionKey: string; sessionId: string }>;
   assertCurrent: () => void;
+  /** Prepare captured agent-store reads before a shared-state worker takes its write lock. */
+  prepareWorkerGrant?: () => Promise<{
+    assertCurrent: () => void;
+    assertLifetimeCurrent: () => void;
+    release: () => void | Promise<void>;
+  }>;
   /** Original host/session authority for committed input custody, without the selection precondition. */
   assertAdmittedInputCurrent?: () => void;
   /** Fresh sharing facts for runtime custody; synchronous methods retain the released SDK contract. */

@@ -249,6 +249,7 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | "database.walMaintenance"
       | "agentDatabases.releaseExitedLease"
       | "worktrees.reserveCapacity"
+      | Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>
       | keyof CaptureWorkerOperations
       | keyof PluginStateWorkerOperations
       | keyof WorktreeTemplateWorkerOperations

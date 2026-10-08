@@ -73,17 +73,12 @@ function resolveWindowsStartupDir(env: GatewayServiceEnv): string {
   return path.join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
 }
 
-function sanitizeWindowsFilename(value: string): string {
-  return value.replace(/[<>:"/\\|?*]/g, "_").replace(/\p{Cc}/gu, "_");
-}
-
 export function resolveStartupEntryPath(env: GatewayServiceEnv, extension?: "cmd" | "vbs"): string {
-  const taskName = resolveTaskName(env);
+  const taskName = resolveTaskName(env)
+    .replace(/[<>:"/\\|?*]/g, "_")
+    .replace(/\p{Cc}/gu, "_");
   const entryExtension = extension ?? (shouldUseHiddenWindowsTaskLauncher(env) ? "vbs" : "cmd");
-  return path.join(
-    resolveWindowsStartupDir(env),
-    `${sanitizeWindowsFilename(taskName)}.${entryExtension}`,
-  );
+  return path.join(resolveWindowsStartupDir(env), `${taskName}.${entryExtension}`);
 }
 
 export function resolveStartupEntryPaths(env: GatewayServiceEnv): string[] {
@@ -462,7 +457,6 @@ async function readWindowsTaskCommand(
           throw new Error("Invalid Scheduled Task environment assignment");
         }
         if (assignment) {
-          // Generated cmd launchers inline service env before the final command.
           environment[assignment.key] = assignment.value;
         }
         continue;

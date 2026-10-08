@@ -127,13 +127,9 @@ export function handlePendingApprovalRequestWithDelivery<TKind extends keyof App
         let remaining = deliveryTasks.length;
         for (const delivery of deliveryTasks) {
           void delivery.then((delivered) => {
-            if (delivered) {
-              resolve(true);
-              return;
-            }
             remaining -= 1;
-            if (remaining === 0) {
-              resolve(false);
+            if (delivered || remaining === 0) {
+              resolve(delivered);
             }
           });
         }

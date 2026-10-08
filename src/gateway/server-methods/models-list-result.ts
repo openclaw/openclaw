@@ -11,9 +11,11 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import {
   createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
   type ModelCatalogDecisionParams,
 } from "../../agents/model-catalog-decisions.js";
+import { createModelPickerRecommendationRank } from "../../agents/model-catalog-order.js";
 import { prepareModelCatalogView } from "../../agents/model-catalog-view.js";
 import {
   resolveLogicalModelCatalogEntryState,
@@ -162,9 +164,20 @@ async function prepareOwnedModelsListResult({
   const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
   // Capture authority again after acquisition and before hydrating a personal projection.
   draft?.assertCurrent();
-  const projectorParams: ModelCatalogDecisionParams = {
+  const decisionOwner = () => ({
     cfg,
     agentId,
+    metadataSnapshot,
+    preparedAuthStore,
+    accountCatalog: preparedProjectionOwner?.accountCatalog,
+    preparedRuntimeAuthModes,
+    preparedRuntimeAuthMaterializations,
+    pluginRegistry: preparedPluginRegistry,
+    isCurrent,
+    observationConfig: preparedProjectionOwner?.observationConfig,
+  });
+  const projectorParams: ModelCatalogDecisionParams = {
+    ...decisionOwner(),
     agentDir: sourceOwner?.agentDir,
     workspaceDir,
     snapshot: {
@@ -177,11 +190,6 @@ async function prepareOwnedModelsListResult({
         return snapshot.refreshFailed;
       },
     },
-    metadataSnapshot,
-    preparedAuthStore,
-    accountCatalog: preparedProjectionOwner?.accountCatalog,
-    preparedRuntimeAuthModes,
-    preparedRuntimeAuthMaterializations,
     // A complete catalog and its synthetic-auth probes cross the worker boundary together.
     preparedSyntheticAuthComplete: publishedOwner
       ? isPreparedModelCatalogFull(publishedOwner.modelCatalog)
@@ -193,16 +201,11 @@ async function prepareOwnedModelsListResult({
         : (draft?.owner ?? params.requesterProfileId),
     ...(view === "provider-config" ? {} : profiles),
     routeResolverFactory: params.routeResolverFactory,
-    pluginRegistry: preparedPluginRegistry,
-    isCurrent,
-    observationConfig: preparedProjectionOwner?.observationConfig,
   };
-  const projector = await withCurrentReadAuthority(
-    authority,
-    () =>
-      (usedPreloadedCatalog ? params.catalogProjector : undefined) ??
-      createModelCatalogDecisions(projectorParams),
-  );
+  const preloadedProjector = usedPreloadedCatalog ? params.catalogProjector : undefined;
+  const projector = preloadedProjector
+    ? await withCurrentReadAuthority(authority, () => preloadedProjector)
+    : await prepareModelCatalogDecisions(projectorParams, authority);
   if (view !== "provider-config") {
     await projector.prepareSelectedAccountCatalog(
       () => {
@@ -215,8 +218,7 @@ async function prepareOwnedModelsListResult({
         }
       },
       {
-        allowDiscovery: !params.preloadedOnly && !params.params.preparedOnly,
-        refresh,
+        refresh: refresh && !params.preloadedOnly && !params.params.preparedOnly,
         withCurrent: authority?.withCurrent,
         beforeRequest: publicationScope?.beforeRequest,
       },
@@ -301,6 +303,7 @@ async function prepareOwnedModelsListResult({
       ...outcomeProjection,
       ...(snapshot.refreshFailed ? { refreshFailed: true } : {}),
       ...(accountSelection ? { accountSelection } : {}),
+      ...(decisionModels.length ? { decisionModels } : {}),
     };
   };
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
@@ -491,17 +494,8 @@ async function prepareOwnedModelsListResult({
       ...(providerOutcomes?.length ? { providerOutcomes } : {}),
     };
     const inventoryProjector = createModelCatalogDecisions({
-      cfg,
-      agentId,
+      ...decisionOwner(),
       snapshot: inventorySnapshot,
-      metadataSnapshot,
-      preparedAuthStore,
-      accountCatalog: preparedProjectionOwner?.accountCatalog,
-      preparedRuntimeAuthModes,
-      preparedRuntimeAuthMaterializations,
-      pluginRegistry: preparedPluginRegistry,
-      isCurrent,
-      observationConfig: preparedProjectionOwner?.observationConfig,
       ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
     });
     const inventory = await inventoryProjector.projectCatalog(authority);
@@ -519,7 +513,6 @@ async function prepareOwnedModelsListResult({
           .filter(({ entry }) => matchesProvider(entry))
           .map(({ entry, host }) => projectPublic(entry, evaluateNative(entry, host))),
         ...readOutcomeProjection(),
-        ...(decisionModels.length ? { decisionModels } : {}),
       }),
     };
   }
@@ -630,6 +623,7 @@ async function prepareOwnedModelsListResult({
     read: () => {
       const currentCatalog = readCatalog();
       const keyOf = createModelCatalogIdentityKeyResolver();
+      const recommendationRank = createModelPickerRecommendationRank(cfg);
       return {
         models: omitCliRuntimeAliasTwins(
           currentCatalog.filter(matchesProvider).map((entry) => {
@@ -643,12 +637,14 @@ async function prepareOwnedModelsListResult({
             if (runtimeChoices?.length) {
               projected.runtimeChoices = runtimeChoices;
             }
+            if (recommendationRank(entry) !== undefined) {
+              projected.recommended = true;
+            }
             return { row: projected, twin: twinRoutes.get(key) };
           }),
           selectionPolicies,
         ),
         ...readOutcomeProjection(),
-        ...(decisionModels.length ? { decisionModels } : {}),
       };
     },
   };

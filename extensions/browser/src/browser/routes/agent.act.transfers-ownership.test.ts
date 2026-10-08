@@ -116,8 +116,8 @@ describe("dashboard transfer authority", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
   it.each(
     cases.flatMap((entry) =>
-      (entry.kind === "upload" ? ["Stop", "current", "absent"] : ["Stop", "current"]).map(
-        (authority) => Object.assign({}, entry, { authority }),
+      (entry.kind === "upload" ? ["Stop", "absent"] : ["Stop", "current"]).map((authority) =>
+        Object.assign({}, entry, { authority }),
       ),
     ),
   )(

@@ -25,9 +25,7 @@ final class ScreenSnapshotService {
                 "No displays available for screen snapshot"
             case let .invalidScreenIndex(idx):
                 "Invalid screen index \(idx)"
-            case let .captureFailed(message):
-                message
-            case let .encodeFailed(message):
+            case let .captureFailed(message), let .encodeFailed(message):
                 message
             }
         }

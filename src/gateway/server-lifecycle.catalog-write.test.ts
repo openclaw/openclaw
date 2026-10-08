@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createOAuthManager } from "../agents/auth-profiles/oauth-manager.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
@@ -364,83 +366,98 @@ it("joins accepted workspace persistence and releases its lease after the Gatewa
   }
 });
 
-it("joins personal OAuth settlement after the close prelude cancels its observer", async ({
-  signal,
-}) => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-personal-refresh-close");
-  const accepted = createDeferredCore();
-  const release = createDeferredCore();
-  const parentClosed = createDeferredCore();
-  let resolving: Promise<unknown> | undefined;
-  let closing: Promise<void> | undefined;
-  try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = fixture.kernels.get(port);
-    assert(kernel);
-    const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
-    const owner = ensureProfileForEmail("close-personal@example.test");
-    const credential: OAuthCredential = {
-      type: "oauth",
-      provider: "synthetic",
-      access: "synthetic-close-old",
-      refresh: "synthetic-refresh-old",
-      expires: 1,
-    };
-    const { authProfileId: profileId } = connectUserModelAccount({
-      ownerProfileId: owner.id,
-      credential,
-      assertCurrent() {},
-    });
-    const replacement = {
-      ...credential,
-      access: "synthetic-close-new",
-      refresh: "synthetic-refresh-new",
-      expires: Date.now() + 600_000,
-    };
-    const manager = createOAuthManager({
-      canRefreshCredential: async () => true,
-      refreshCredential: async () => {
-        accepted.resolve();
-        await release.promise;
-        return replacement;
-      },
-      buildApiKey: async (_provider, value) => value.access,
-      readBootstrapCredential: () => null,
-    });
-    resolving = kernel.connectionWork
-      .track(() =>
-        manager.resolveOAuthAccess({
-          profileId,
-          credential,
-          store: { version: 1, profiles: { [profileId]: credential } },
-          signal: kernel.connectionWork.signal,
-        }),
-      )
-      .catch((error: unknown) => error);
-    await withinTest(
-      awaitGateBeforeSettlement(
-        accepted.promise,
-        resolving,
-        "Refresh did not acquire its durable claim",
-      ),
-      signal,
-    );
-    kernel.connectionWork.signal.addEventListener("abort", () => parentClosed.resolve(), {
-      once: true,
-    });
-    closing = server.close({ reason: "personal OAuth settlement regression" });
-    await withinTest(parentClosed.promise, signal);
-    expect(await resolving).toBeInstanceOf(Error);
-    expect(shared.isOpen).toBe(true);
-    release.resolve();
-    await closing;
-    expect(shared.isOpen).toBe(false);
-    expect(readUserModelAuthProfile(profileId)?.credential).toEqual(replacement);
-  } finally {
-    release.resolve();
-    await Promise.allSettled([resolving, closing]);
-    vi.restoreAllMocks();
-    await fixture.cleanup();
-  }
-});
+it.for(["personal", "shared-peer"] as const)(
+  "joins %s OAuth settlement after the close prelude cancels its observer",
+  async (kind, { signal }) => {
+    const fixture = await createGatewayMetadataCloseFixture("gateway-personal-refresh-close");
+    const accepted = createDeferredCore();
+    const release = createDeferredCore();
+    const parentClosed = createDeferredCore();
+    let resolving: Promise<unknown> | undefined;
+    let closing: Promise<void> | undefined;
+    try {
+      const port = await fixture.reservePort();
+      const server = await fixture.start(port);
+      const kernel = fixture.kernels.get(port);
+      assert(kernel);
+      const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
+      const owner = ensureProfileForEmail("close-personal@example.test");
+      const credential: OAuthCredential = {
+        type: "oauth",
+        provider: "synthetic",
+        access: "synthetic-close-old",
+        refresh: "synthetic-refresh-old",
+        expires: 1,
+      };
+      const peerDir = fixture.state.agentDir("peer");
+      const profileId =
+        kind === "personal"
+          ? connectUserModelAccount({
+              ownerProfileId: owner.id,
+              credential,
+              assertCurrent() {},
+            }).authProfileId
+          : "synthetic:shared";
+      if (kind === "shared-peer") {
+        const store = { version: 1, profiles: { [profileId]: credential } };
+        saveAuthProfileStore(store, peerDir);
+        saveAuthProfileStore(store);
+      }
+      const replacement = {
+        ...credential,
+        access: "synthetic-close-new",
+        refresh: "synthetic-refresh-new",
+        expires: Date.now() + 600_000,
+      };
+      const manager = createOAuthManager({
+        canRefreshCredential: async () => true,
+        refreshCredential: async () => {
+          accepted.resolve();
+          await release.promise;
+          return replacement;
+        },
+        buildApiKey: async (_provider, value) => value.access,
+        readBootstrapCredential: () => null,
+      });
+      resolving = kernel.connectionWork
+        .track(() =>
+          manager.resolveOAuthAccess({
+            profileId,
+            credential,
+            store: { version: 1, profiles: { [profileId]: credential } },
+            signal: kernel.connectionWork.signal,
+          }),
+        )
+        .catch((error: unknown) => error);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          accepted.promise,
+          resolving,
+          "Refresh did not acquire its durable claim",
+        ),
+        signal,
+      );
+      kernel.connectionWork.signal.addEventListener("abort", () => parentClosed.resolve(), {
+        once: true,
+      });
+      closing = server.close({ reason: "personal OAuth settlement regression" });
+      await withinTest(parentClosed.promise, signal);
+      expect(await resolving).toBeInstanceOf(Error);
+      expect(shared.isOpen).toBe(true);
+      release.resolve();
+      await closing;
+      expect(shared.isOpen).toBe(false);
+      if (kind === "personal") {
+        expect(readUserModelAuthProfile(profileId)?.credential).toEqual(replacement);
+      } else {
+        expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(replacement);
+        expect(loadPersistedAuthProfileStore(peerDir)?.profiles[profileId]).toBeUndefined();
+      }
+    } finally {
+      release.resolve();
+      await Promise.allSettled([resolving, closing]);
+      vi.restoreAllMocks();
+      await fixture.cleanup();
+    }
+  },
+);

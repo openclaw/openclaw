@@ -78,6 +78,9 @@ export function retireDeferredPluginSessionImport(
     return;
   }
   const recorded = DeferredPluginSessionImportSchema.parse(JSON.parse(receipt.reportJson));
+  const hasRemainingSources = () =>
+    statMigrationPath(params.target.storePath) ||
+    recorded.sources.some((source) => statMigrationPath(source.path));
   const expectedPending = readDeferredPluginMigrations({ env: params.env });
   if (
     expectedPending.some(
@@ -88,10 +91,7 @@ export function retireDeferredPluginSessionImport(
   ) {
     return;
   }
-  if (
-    statMigrationPath(params.target.storePath) ||
-    recorded.sources.some((source) => statMigrationPath(source.path))
-  ) {
+  if (hasRemainingSources()) {
     return;
   }
   runOpenClawStateWriteTransaction(
@@ -106,10 +106,7 @@ export function retireDeferredPluginSessionImport(
         ) {
           throw new Error("Deferred session import receipt changed before retirement.");
         }
-        if (
-          statMigrationPath(params.target.storePath) ||
-          recorded.sources.some((source) => statMigrationPath(source.path))
-        ) {
+        if (hasRemainingSources()) {
           return;
         }
         // Diagnostic callbacks and cached verification cannot authorize retirement.
@@ -437,40 +434,39 @@ export function countRetainedSessionSources(
   }
   const verifiedSources = new Map(retainedImport.sources.map((source) => [source.path, source]));
   for (const record of records) {
-    if (record.transcriptPath && sourceConflicts.has(record.transcriptPath)) {
+    const sourcePath = record.transcriptPath;
+    if (!sourcePath || sourceConflicts.has(sourcePath)) {
       continue;
     }
-    const source =
-      record.transcriptPath && verifiedSources.get(path.resolve(record.transcriptPath));
-    if (record.transcriptPath && !source) {
+    const source = verifiedSources.get(path.resolve(sourcePath));
+    if (!source) {
       report.issues.push({
         code: "transcript_missing",
-        message: `Transcript file is missing: ${record.transcriptPath}`,
+        message: `Transcript file is missing: ${sourcePath}`,
         sessionKey: record.sessionKey,
       });
-    } else if (record.transcriptPath && source) {
-      if (fs.existsSync(record.transcriptPath)) {
-        record.sourceFingerprint = readTranscriptFingerprint(record.transcriptPath);
-      }
-      const transcriptPath = resolveVerifiedSessionSource(
-        source,
-        sourceVerification.resolvedTarget,
-        sourceVerification.env,
-        sourceVerification.verification,
-      );
-      if (!transcriptPath) {
-        throw new Error(`Retained session migration source changed: ${record.transcriptPath}`);
-      }
-      // A receipt prevents replay; it does not certify the malformed suffix as imported.
-      countLegacyTranscript({ ...record, transcriptPath }, report);
-      record.recovery = {
-        complete: !report.issues.some(
-          (issue) =>
-            issue.code === "transcript_malformed" && issue.sessionKey === record.sessionKey,
-        ),
-        repaired: false,
-        events: 0,
-      };
+      continue;
     }
+    if (fs.existsSync(sourcePath)) {
+      record.sourceFingerprint = readTranscriptFingerprint(sourcePath);
+    }
+    const transcriptPath = resolveVerifiedSessionSource(
+      source,
+      sourceVerification.resolvedTarget,
+      sourceVerification.env,
+      sourceVerification.verification,
+    );
+    if (!transcriptPath) {
+      throw new Error(`Retained session migration source changed: ${sourcePath}`);
+    }
+    // A receipt prevents replay; it does not certify the malformed suffix as imported.
+    countLegacyTranscript({ ...record, transcriptPath }, report);
+    record.recovery = {
+      complete: !report.issues.some(
+        (issue) => issue.code === "transcript_malformed" && issue.sessionKey === record.sessionKey,
+      ),
+      repaired: false,
+      events: 0,
+    };
   }
 }

@@ -95,6 +95,27 @@ unscoped calls warn once per method. Core and bundled callers use the awaited
 methods. This migration changes no RPC schema, stored data, retention, or update
 behavior.
 
+## Await placement preparation
+
+Gateway contexts provide `workerSessionPlacementService.getManyAsync` and
+`retireSessionPlacementAsync`. Await their results before using placement facts,
+starting dependent work, or releasing request resources. Their synchronous
+counterparts shipped through the 2026.9.8 Gateway SDK and remain deprecated
+compatibility methods until the next Plugin SDK major.
+
+Use `placementStandingGrants.resolveBindingAsync`, `validateAsync`, and
+`retainAsync` for node-grant preparation. `resolveAsync` combines binding and
+retained-parent validation in one request. These additions are optional on the
+released interface so existing custom service implementations remain compatible;
+the native Gateway supplies them. Keep `consume` at the final synchronous
+transport authorization boundary: earlier prepared facts do not replace current
+placement, pairing, or parent-approval authority.
+
+Device-placement demand also has an awaited
+`workerPlacementDispatchService.getAdmittedDeviceSessionCountsAsync` companion.
+The synchronous method keeps its released signature until the next Plugin SDK
+major. These migrations change no schemas, stored data, or update behavior.
+
 ## Await reply tool authority
 
 Harness attempt parameters from `openclaw/plugin-sdk/agent-harness-runtime`
@@ -291,6 +312,15 @@ context consumer. It retains the actor through scanning, consumption, validation
 and cleanup. Without an actor binding it returns `undefined`, preserving the
 existing host route. The synchronous Codex context reader and validators refuse
 actor-bound access; they never reopen a native incognito database.
+
+Plugins that project durable history in their own worker can await
+`readCodexSessionContextProjection(target, project, signal?)` from the same SDK
+subpath. The projection callback receives the captured target, admission, and
+physical source. Pass those facts to the worker's `readCodexSessionContext`
+call and return `{ value, version }`. The retained transcript reader validates
+the result before returning it, keeping final version and admission checks off
+the Gateway thread. The synchronous validation exports remain compatible until
+the next Plugin SDK major.
 
 `branchAsync` can hydrate missing history through the read worker before selecting
 the branch. `resetLeafAsync(): Promise<void>` orders an in-memory navigation reset

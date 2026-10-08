@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
@@ -18,7 +19,8 @@ export type SessionHistoryWorkerRequestRunner = <TResult>(
   inputBytes: number,
   receive: (value: SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]]) => TResult,
   signal?: AbortSignal,
-  onRequest?: (value: unknown) => void,
+  onRequest?: (value: unknown) => void | Promise<WorkerTaskResponse>,
+  timeoutMs?: number,
 ) => Promise<TResult>;
 
 type SessionHistoryWorkerValue = SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]];
@@ -87,6 +89,37 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readTrajectoryRetention: (input, options) => {
+      const captured = {
+        ...input,
+        input: { ...input.input },
+        expectedIdentity: { ...input.expectedIdentity },
+        env: captureSessionTranscriptStorageEnvironment(input.env),
+      };
+      return runRequest(
+        () => ({ kind: "trajectory-retention", ...captured }),
+        JSON.stringify(captured).length * 2,
+        (value) => {
+          assertResultKind(value, "trajectory-retention", "trajectory retention");
+          return value.plan;
+        },
+        options.signal,
+        undefined,
+        options.timeoutMs,
+      );
+    },
+    readCleanup: reader("session-cleanup", "a cleanup snapshot", (value) => value),
+    readRawDelta: reader("transcript-raw-delta", "raw transcript delta", (value) => value.result),
+    readVisibleDelta: reader(
+      "transcript-visible-delta",
+      "visible transcript delta",
+      (value) => value.result,
+    ),
+    readSessionMemoryCapture: reader(
+      "session-memory-capture",
+      "session Memory capture",
+      (value) => value.result,
+    ),
     readBoardSnapshot: reader("board-snapshot", "a Board snapshot", (result) => result.value),
     readBoardWidgetDocument: reader(
       "board-widget-document",
@@ -198,17 +231,23 @@ export function createSessionHistoryWorkerReaders(
       "cold storage inventory",
       (value) => value,
     ),
-    searchTranscripts: reader(
-      "transcript-search",
-      "search",
-      (value) => value.result,
-      (params) => ({ kind: "transcript-search", params }),
-    ),
-    isTranscriptSearchCurrent: reader(
-      "transcript-search-current",
-      "search snapshot currency",
-      (value) => value.current,
-    ),
+    searchTranscripts: (params, readIndexStatus) =>
+      runRequest(
+        () => ({ kind: "transcript-search", params }),
+        JSON.stringify(params).length * 2,
+        (value) => {
+          assertResultKind(value, "transcript-search", "search");
+          return value.result;
+        },
+        undefined,
+        async (request) => {
+          if (request !== "transcript-index-status") {
+            throw new Error("Unexpected transcript search status request");
+          }
+          // Status waiting is host work; the resumed freshness read keeps its own budget.
+          return { input: await readIndexStatus(), timeoutMs: 60_000 };
+        },
+      ),
     readPreview: reader("session-preview", "a preview", (value) => value.items),
     readTitleFields: reader("session-title-fields", "title fields", (value) => value.fields),
     readWatermark: reader(
@@ -260,6 +299,7 @@ export function createSessionHistoryWorkerReaders(
     readTranscript: async (input, signal) => {
       const events: TranscriptEvent[] = [];
       const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
+      const eventSeqs: number[] | undefined = input.includeEventJson ? [] : undefined;
       let parts: string[] = [];
       let text: { encoding: string; decoder: TextDecoder } | undefined;
       const receiveChunk = (value: unknown) => {
@@ -292,6 +332,12 @@ export function createSessionHistoryWorkerReaders(
             const json = parts.join("");
             events.push(JSON.parse(json));
             eventJson?.push(json);
+            if (eventSeqs) {
+              if (typeof frame.seq !== "number" || !Number.isSafeInteger(frame.seq)) {
+                throw new Error("Transcript snapshot omitted its row sequence");
+              }
+              eventSeqs.push(frame.seq);
+            }
             parts = [];
           }
         }
@@ -317,7 +363,11 @@ export function createSessionHistoryWorkerReaders(
           }
           return {
             kind: "full",
-            snapshot: { events, version: value.version, ...(eventJson ? { eventJson } : {}) },
+            snapshot: {
+              events,
+              version: value.version,
+              ...(eventJson ? { eventJson, eventSeqs } : {}),
+            },
           };
         },
         signal,
@@ -348,17 +398,7 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "usage-cache", ...input }),
     ),
     readMembershipFacts: reader("session-membership-facts", "membership facts", (value) => value),
-    readMembers: async (input) =>
-      await runRequest(
-        () => ({ kind: "session-members", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (!Array.isArray(value)) {
-            throw new Error("Session history worker returned another result instead of members");
-          }
-          return value;
-        },
-      ),
+    readMembers: reader("session-members", "members", (value) => value),
     readSuggestions: reader("session-suggestions", "suggestions", (value) => value.suggestions),
     readExactEntries: async (input, signal) => {
       const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
@@ -390,6 +430,11 @@ export function createSessionHistoryWorkerReaders(
         },
       );
     },
+    readSessionMaintenance: reader(
+      "session-maintenance-read",
+      "session maintenance facts",
+      (value) => value,
+    ),
     readProgressCard: reader("session-progress-card", "a progress card", (value) => value.card),
     readPendingInputHistory: reader(
       "session-pending-input-history",

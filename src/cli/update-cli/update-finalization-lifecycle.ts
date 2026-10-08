@@ -391,21 +391,16 @@ export class UpdateFinalizationLifecycle {
       const doctorFailure = collectNestedErrorCandidates(error).find(
         (cause): cause is UpdateDoctorError => cause instanceof UpdateDoctorError,
       );
-      const facts = failure
-        ? [
-            createUpdateFailureFact({
-              check: phase,
-              code: "finalization-timeout",
-              message: failure.message,
-            }),
-          ]
-        : doctorFailure
+      const facts =
+        !failure && doctorFailure
           ? collectUpdateDoctorFailureFacts(error)
           : [
               createUpdateFailureFact({
                 check: phase,
-                code: extractErrorCode(error) ?? "finalization-failed",
-                message: formatErrorMessage(error),
+                code: failure
+                  ? "finalization-timeout"
+                  : (extractErrorCode(error) ?? "finalization-failed"),
+                message: failure ? failure.message : formatErrorMessage(error),
               }),
             ];
       const deferred =

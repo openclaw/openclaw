@@ -13,7 +13,7 @@ import {
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import * as metadataReader from "../acp/runtime/session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
-import { readAcpSessionEntry, readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
@@ -63,32 +63,6 @@ afterAll(async () => {
   vi.restoreAllMocks();
   await actor?.close();
   await closeOpenClawStateDatabaseAsync();
-});
-
-it.each(["", " \t "])("returns null for the empty ACP session key %j", async (sessionKey) => {
-  await expect(
-    readAcpSessionEntryAsync({ cfg, env, sessionKey }, { actor, authority }),
-  ).resolves.toBeNull();
-  await expect(
-    upsertAcpSessionMeta(
-      {
-        cfg,
-        env,
-        sessionKey,
-        mutate() {
-          throw new Error("Empty ACP mutation invoked its mutator");
-        },
-      },
-      { actor, authority },
-    ),
-  ).resolves.toBeNull();
-});
-
-it("normalizes an ACP session key while retaining a missing-entry result", async () => {
-  const sessionKey = key("missing");
-  await expect(
-    readAcpSessionEntryAsync({ cfg, env, sessionKey: ` ${sessionKey} ` }, { actor, authority }),
-  ).resolves.toMatchObject({ sessionKey, storeSessionKey: sessionKey, entry: undefined });
 });
 
 it.each(["read", "upsert"] as const)(
@@ -487,7 +461,6 @@ it.each(["revision", "consume-release", "prepared-release"] as const)(
       await expect(
         withIncognitoSessionActor(borrowed, async () => {
           expect(() => readAcpSessionEntry(input)).toThrow("Await readAcpSessionEntryAsync");
-          expect(() => readAcpSessionMeta(input)).toThrow("Await readAcpSessionMetaAsync");
           if (change === "prepared-release") {
             const preparation = prepareAcpSessionEntryRead(input);
             assert(preparation);

@@ -315,6 +315,7 @@ export async function writeConfigFileFromContext(
     sourceConfig: snapshot.parsed,
     nextConfig: applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths),
     pending: deferredPluginMigrations,
+    writeOptions: { unsetPaths: options.unsetPaths },
   });
   const stampedOutputConfig = stampConfigWriteMetadata(
     outputConfig,

@@ -300,11 +300,13 @@ Code Mode, and do not send completion notifications.
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
 
-When an earlier async tool call in the same model response has results the model
-has not received yet, OpenClaw defers `sessions_yield` and keeps the turn active.
-Finish the model response so the next request can deliver those results, then
-yield only if external work still requires waiting. This applies even when the
-tool has already finished and its result appears in the transcript.
+With Astra async tools, `sessions_yield` stays a synchronous call, so the model
+response pauses at the yield. When an earlier async tool call in that response
+has results the model has not received yet, OpenClaw defers the yield and keeps
+the turn active. The next request delivers those results ahead of the deferred
+yield result; the model yields again only if external work still requires
+waiting. This applies even when the tool has already finished and its result
+appears in the transcript.
 
 Use the optional `message` field for private context that the resumed turn
 should receive. OpenClaw sends a default waiting reply when an interactive
@@ -379,7 +381,9 @@ returns `status: "nothing_pending"`: guidance for the model, not a tool failure,
 so the conversation gets no failure warning. Detached `image_generate`,
 `video_generate`, and `music_generate` runs deliver their result as a later
 turn; a turn that ends with such a run in flight and no final reply stays
-pending instead of reporting a missing reply.
+pending instead of reporting a missing reply. Its waiting reply is the standard
+waiting status, or on Telegram and Discord the turn's visible progress card, which
+the result replaces; an undelivered result leaves the card showing the failed run.
 
 The controlling parent resumes a paused native child with an ordinary
 `sessions_send` continuation. The runtime preserves the original task and its

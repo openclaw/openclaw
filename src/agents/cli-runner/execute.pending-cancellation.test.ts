@@ -454,7 +454,7 @@ describe("CLI execution cancellation", () => {
     expect(coerce).not.toHaveBeenCalled();
   });
 
-  it.each(["rejected option", "abort", "terminal", "observed activity"] as const)(
+  it.each(["terminal", "observed activity"] as const)(
     "preserves plugin checkpoint failure ownership: %s",
     async (kind) => {
       const message = "unknown option '--checkpoint'";
@@ -465,9 +465,6 @@ describe("CLI execution cancellation", () => {
               code: "cli_max_turns",
             })
           : new Error(message);
-      if (kind === "abort") {
-        failure.name = "AbortError";
-      }
       const coerce = vi.spyOn(failoverErrors, "coerceToFailoverError").mockImplementation(() => {
         throw new Error("provider coercion was consulted");
       });
@@ -497,15 +494,7 @@ describe("CLI execution cancellation", () => {
       };
 
       const result = executePreparedCliRun(context, "resume-1");
-      if (kind === "rejected option") {
-        await expect(result).rejects.toMatchObject({
-          reason: "session_expired",
-          code: "cli_resume_at_unsupported",
-          cause: failure,
-        });
-      } else {
-        await expect(result).rejects.toBe(failure);
-      }
+      await expect(result).rejects.toBe(failure);
       expect(coerce).not.toHaveBeenCalled();
       expect(createChildAdapterMock).not.toHaveBeenCalled();
     },

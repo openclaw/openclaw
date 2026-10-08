@@ -1,11 +1,13 @@
 // Tests model selection resolution from directives, config, and session state.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { getContextWindowCaches } from "../../agents/context-cache.js";
 import {
   loadProviderScopedThinkingCatalog,
   readPreparedModelCatalog as loadModelCatalogLocal,
 } from "../../agents/model-catalog.runtime.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -83,6 +85,9 @@ const authProfileStoreMock = vi.hoisted(() => {
     profiles: Record<string, { type: "api_key"; provider: string; key: string }>;
   };
   const ensureAuthProfileStore = vi.fn(() => store);
+  const prepareAuthProfileProvider = vi.fn(async (): Promise<{ provider: string | undefined }> => ({
+    provider: undefined,
+  }));
   return {
     get store() {
       return store;
@@ -91,15 +96,19 @@ const authProfileStoreMock = vi.hoisted(() => {
       store = next;
     },
     ensureAuthProfileStore,
+    prepareAuthProfileProvider,
     reset() {
       store = { version: 1, profiles: {} };
       ensureAuthProfileStore.mockClear();
+      prepareAuthProfileProvider.mockReset().mockResolvedValue({ provider: undefined });
     },
   };
 });
 
-vi.mock("../../agents/auth-profiles.runtime.js", () => ({
+vi.mock("../../agents/auth-profiles.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles.runtime.js")>()),
   ensureAuthProfileStore: authProfileStoreMock.ensureAuthProfileStore,
+  prepareAuthProfileProvider: authProfileStoreMock.prepareAuthProfileProvider,
 }));
 
 // Alias-aware stub: mirrors the real isStoredCredentialCompatibleWithAuthProvider
@@ -863,6 +872,110 @@ describe("automatic fallback provenance", () => {
     });
   });
 });
+
+it.each(["user", "user-link", undefined] as const)(
+  "keeps a missing explicit auth pin through credential restoration (source=%s)",
+  async (source) => {
+    authProfileStoreMock.store = {
+      version: 1,
+      profiles: {
+        "openai:account-a": { type: "api_key", provider: "openai", key: "test-key-a" },
+      },
+    };
+    const entry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      modelOverrideSource: "user",
+      authProfileOverride: "openai:account-b",
+      authProfileOverrideSource: source,
+    });
+    const before = { ...entry };
+    const sessionStore = { [sessionKey]: entry };
+    const missing = await selectSession({}, "openai", "gpt-4o", entry, { sessionStore });
+    expect(missing).toMatchObject({ provider: "openai", model: "gpt-4o" });
+    expect(entry).toEqual(before);
+    expect(sessionStore[sessionKey]).toBe(entry);
+
+    authProfileStoreMock.store.profiles["openai:account-b"] = {
+      type: "api_key",
+      provider: "openai",
+      key: "test-key-b",
+    };
+    const restored = await selectSession({}, "openai", "gpt-4o", entry, { sessionStore });
+    expect(restored).toMatchObject({ provider: "openai", model: "gpt-4o" });
+    expect(entry).toEqual(before);
+    expect(sessionStore[sessionKey]).toBe(entry);
+  },
+);
+
+it.each([
+  { profileId: "openai:missing", source: "auto" },
+  { profileId: "anthropic:missing", source: "user" },
+] as const)(
+  "clears an ineligible $source auth pin for $profileId",
+  async ({ profileId, source }) => {
+    const entry = makeEntry({
+      authProfileOverride: profileId,
+      authProfileOverrideSource: source,
+    });
+    await selectSession({}, "openai", "gpt-4o", entry);
+    expect(entry.authProfileOverride).toBeUndefined();
+    expect(entry.authProfileOverrideSource).toBeUndefined();
+  },
+);
+
+it.each(["pin", "source", "provider", "session", "authority"] as const)(
+  "rejects a changed %s after awaiting missing-pin provider facts",
+  async (change) => {
+    const cfg: OpenClawConfig = { agents: { defaults: { model: "openai/gpt-4o" } } };
+    const entry = makeEntry({
+      updatedAt: 1,
+      authProfileOverride: "anthropic:missing",
+      authProfileOverrideSource: "user",
+    });
+    const sessionStore = { [sessionKey]: entry };
+    let current = true;
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "operator",
+      scopes: ["operator.write"],
+      modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { sourceAgent: "main" } }),
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("authority revoked");
+        }
+      },
+    });
+    authProfileStoreMock.prepareAuthProfileProvider.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      if (change === "pin") {
+        entry.authProfileOverride = "openai:replacement";
+      }
+      if (change === "source") {
+        entry.authProfileOverrideSource = "auto";
+      }
+      if (change === "provider") {
+        entry.providerOverride = "anthropic";
+      }
+      if (change === "session") {
+        sessionStore[sessionKey] = { ...entry, sessionId: "replacement" };
+      }
+      if (change === "authority") {
+        current = false;
+      }
+      return { provider: "anthropic" };
+    });
+    await expect(
+      selectSession(cfg, "openai", "gpt-4o", entry, { sessionStore, operatorAuthority }),
+    ).rejects.toThrow(
+      change === "authority" ? "authority revoked" : "Session account selection changed",
+    );
+    expect(entry.authProfileOverride).toBe(
+      change === "pin" ? "openai:replacement" : "anthropic:missing",
+    );
+    expect(entry.updatedAt).toBe(1);
+    expect(authProfileStoreMock.prepareAuthProfileProvider).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("keeps alias-compatible Anthropic auth for a CLI session", async () => {
   authProfileStoreMock.store = {

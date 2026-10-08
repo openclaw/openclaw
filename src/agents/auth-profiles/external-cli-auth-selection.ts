@@ -96,20 +96,14 @@ function resolveExternalCliAuthScopeFromAuthSelection(params: {
       providerIds.push(resolved.externalCliProviderId);
     }
   }
-  if (params.userPinnedAuthProfileId || orderedProfileIds.length > 0) {
-    return {
-      providerIds: [...new Set(providerIds)],
-      ...(selectedProviderId ? { selectedProviderId } : {}),
-    };
-  }
-
   const uniqueProviderIds = [...new Set(providerIds)];
+  if (!params.userPinnedAuthProfileId && orderedProfileIds.length === 0) {
+    // Without explicit order, select only when compatibility is unambiguous.
+    selectedProviderId = compatibleProfileCount === 1 ? uniqueProviderIds[0] : undefined;
+  }
   return {
     providerIds: uniqueProviderIds,
-    ...(compatibleProfileCount === 1 && uniqueProviderIds[0]
-      ? // Without explicit order, select only when compatibility is unambiguous.
-        { selectedProviderId: uniqueProviderIds[0] }
-      : {}),
+    ...(selectedProviderId ? { selectedProviderId } : {}),
   };
 }
 

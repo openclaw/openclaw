@@ -134,6 +134,24 @@ private fun WorkspaceDirectoryScreen(
   var refreshNonce by remember(path) { mutableIntStateOf(0) }
   val requestInFlight = loading || loadingMore
 
+  suspend fun loadDirectory(append: Boolean) {
+    try {
+      val listing = viewModel.listWorkspaceFiles(path = path.ifEmpty { null }, offset = if (append) entries.size else null)
+      entries =
+        if (append) {
+          val known = entries.map { it.path }.toSet()
+          entries + listing.entries.filter { it.path !in known }
+        } else {
+          listing.entries
+        }
+      totalEntries = listing.totalEntries
+    } catch (_: Throwable) {
+      errorText = nativeString("Could not load this folder.")
+    } finally {
+      if (append) loadingMore = false else loading = false
+    }
+  }
+
   LaunchedEffect(path, isConnected, refreshNonce) {
     if (!isConnected) {
       errorText = nativeString("Connect the gateway to browse workspace files.")
@@ -141,15 +159,7 @@ private fun WorkspaceDirectoryScreen(
     }
     loading = true
     errorText = null
-    try {
-      val listing = viewModel.listWorkspaceFiles(path = path.ifEmpty { null })
-      entries = listing.entries
-      totalEntries = listing.totalEntries
-    } catch (_: Throwable) {
-      errorText = nativeString("Could not load this folder.")
-    } finally {
-      loading = false
-    }
+    loadDirectory(append = false)
   }
 
   ClawScaffold(
@@ -235,18 +245,7 @@ private fun WorkspaceDirectoryScreen(
                 .clickable(enabled = !requestInFlight) {
                   if (loading || loadingMore) return@clickable
                   loadingMore = true
-                  scope.launch {
-                    try {
-                      val listing = viewModel.listWorkspaceFiles(path = path.ifEmpty { null }, offset = entries.size)
-                      val known = entries.map { it.path }.toSet()
-                      entries = entries + listing.entries.filter { it.path !in known }
-                      totalEntries = listing.totalEntries
-                    } catch (_: Throwable) {
-                      errorText = nativeString("Could not load this folder.")
-                    } finally {
-                      loadingMore = false
-                    }
-                  }
+                  scope.launch { loadDirectory(append = true) }
                 }.padding(horizontal = 10.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
@@ -306,12 +305,11 @@ private fun WorkspaceEntryRow(
 private fun workspaceEntryDetail(
   context: Context,
   entry: GatewayWorkspaceEntry,
-): String? {
-  val parts = mutableListOf<String>()
-  entry.size?.let { parts.add(Formatter.formatShortFileSize(context, it)) }
-  entry.updatedAtMs?.let { parts.add(DateFormat.getDateInstance(DateFormat.SHORT).format(Date(it))) }
-  return parts.takeIf { it.isNotEmpty() }?.joinToString(" • ")
-}
+): String? =
+  listOfNotNull(
+    entry.size?.let { Formatter.formatShortFileSize(context, it) },
+    entry.updatedAtMs?.let { DateFormat.getDateInstance(DateFormat.SHORT).format(Date(it)) },
+  ).takeIf { it.isNotEmpty() }?.joinToString(" • ")
 
 @Composable
 private fun WorkspaceFilePreview(

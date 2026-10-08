@@ -83,10 +83,16 @@ Use `$openclaw-changelog-update` for source-history inventory, human credit,
 editorial grouping, renderer limits, and verification. Generate the complete
 history manifest and notes during preparation; editorial work may overlap
 Code validation. Refresh them for actual source changes, not tooling retries.
-Beta notes use the stable-base
-`## YYYY.M.PATCH` section in `CHANGELOG/YYYY.M.PATCH.md`, with Highlights,
-Changes and Fixes. `CHANGELOG.md` is the generated index; the matching
-`CHANGELOG/records/YYYY.M.PATCH.md` retains the complete contribution record.
+Beta notes use the exact
+`## YYYY.M.PATCH-beta.N` section in `CHANGELOG/YYYY.M.PATCH-beta.N.md` and
+matching `CHANGELOG/records/YYYY.M.PATCH-beta.N.md`. Capture npm's current
+`openclaw@beta` version before publication as the delta baseline, including a
+stable version when `beta` and `latest` coincide. Never choose the last GitHub
+prerelease. Preserve the resolved tag in the contribution manifest and reuse
+it for verification/recovery after the selector moves. Every beta gets freshly
+inventoried delta prose; a new candidate refuses cumulative-only notes.
+Stable notes remain cumulative in `CHANGELOG/YYYY.M.PATCH.md`, with their own
+record. `CHANGELOG.md` is the generated index.
 Use the shared resolver and writer documented in the changelog skill. Canonical PR
 provenance follows current `origin/main`; retain a release-branch PR only while
 its change has not been forward-ported. Do not change root README as routine

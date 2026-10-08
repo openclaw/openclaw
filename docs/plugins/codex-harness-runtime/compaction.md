@@ -20,6 +20,14 @@ compaction through its selected host context engine before admitting the turn.
 This host compaction does not itself replace or rewrite Codex's canonical
 native thread.
 
+If the context engine declines required host compaction, OpenClaw rejects the
+turn without sending it to Codex. The reply names the saved-history size limit
+and asks you to use `/new`, then resend the message, or ask the operator to review
+the compaction settings. The failure reason is logged at warning level even when
+verbose replies are off. A decline does not count as successful compaction or
+suppress the next byte-limit check; native token headroom does not bypass the
+host byte guard.
+
 After host mirror compaction commits, OpenClaw may request
 `thread/compact/start` to synchronize an eligible native thread. This request
 is secondary: OpenClaw does not send it for host-isolated operations or

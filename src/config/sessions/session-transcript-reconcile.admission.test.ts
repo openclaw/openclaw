@@ -7,7 +7,7 @@ import * as sqlite from "../../infra/node-sqlite.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -60,7 +60,7 @@ async function fixture() {
   await waitForSessionTranscriptIndexReconcile(options);
   const database = openOpenClawAgentDatabase(options);
   database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-  closeOpenClawAgentDatabaseByPath(database.path);
+  await closeOpenClawAgentDatabaseByPathAsync(database.path);
   return {
     root,
     options: { ...options, path: database.path },

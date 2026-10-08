@@ -32,10 +32,14 @@ import {
   type GitResult,
 } from "./git.js";
 import { appendNameOrdinal, validateName } from "./name.js";
-import { worktreeOwnerMatches } from "./owner.js";
+import { assertOwnerWorktreeReuse, worktreeOwnerMatches } from "./owner.js";
 import { readPendingWorktrees, releasePendingWorktree } from "./pending-slots.js";
 import { startWorktreePreparationPhase } from "./preparation-timing.js";
-import { readRegistryWorktrees, readLiveRegistryWorktreeByOwner } from "./registry-read.js";
+import {
+  prepareWorktreeRegistryGuard,
+  readRegistryWorktrees,
+  readLiveRegistryWorktreeByOwner,
+} from "./registry-read.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { resolveCheckoutRootFromRealPath } from "./repository-paths.js";
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
@@ -516,23 +520,42 @@ export async function rebindLiveWorktreeRepository(
     }
     guard.signal?.throwIfAborted();
     guard.commitGuard?.();
-    await updateRegistryWorktree(
-      env,
-      record.id,
-      {
-        repositoryIdentity: {
-          repoRoot: repository.repoRoot,
-          repoFingerprint: repository.fingerprint,
+    const authority = {
+      ...guard.workerAuthority,
+      assertCurrent: guard.workerAuthority?.assertCurrent ?? guard.commitGuard,
+      predicates: [
+        ...(guard.workerAuthority?.predicates ?? []),
+        { kind: "binding" as const, record },
+      ],
+    };
+    if (
+      record.repoRoot === repository.repoRoot &&
+      record.repoFingerprint === repository.fingerprint
+    ) {
+      await prepareWorktreeRegistryGuard(captureWorktreeRunEndContext(env), authority);
+      guard.signal?.throwIfAborted();
+      return record;
+    }
+    const rebind = (workerAuthority: WorktreeWorkerAuthority) =>
+      updateRegistryWorktree(
+        env,
+        record.id,
+        {
+          repositoryIdentity: {
+            repoRoot: repository.repoRoot,
+            repoFingerprint: repository.fingerprint,
+          },
         },
-      },
-      {
-        workerAuthority: {
-          ...guard.workerAuthority,
-          assertCurrent: guard.workerAuthority?.assertCurrent ?? guard.commitGuard,
-          predicates: [...(guard.workerAuthority?.predicates ?? []), { kind: "binding", record }],
-        },
-      },
-    );
+        { workerAuthority },
+      );
+    if (authority.leaseSet?.mutationWorktreeIds?.includes(record.id)) {
+      await rebind(authority);
+    } else {
+      await withWorktreeMutationLease(
+        { env, id: record.id, ...guard, workerAuthority: authority },
+        (held) => rebind(held.workerAuthority),
+      );
+    }
     guard.signal?.throwIfAborted();
     guard.commitGuard?.();
     return { ...record, repoRoot: repository.repoRoot, repoFingerprint: repository.fingerprint };
@@ -705,11 +728,7 @@ export async function createOwnedWorktree<T>(
     if (existing && (await worktreePathExists(existing.path))) {
       return await withWorktreeSource(params, async (current) => {
         const validated = await rebindLiveWorktreeRepository(env, existing, current);
-        if (validated.repoRoot !== repository.repoRoot) {
-          throw new Error(
-            `worktree owner ${params.ownerKind ?? "manual"} ${params.ownerId} is already bound to another repository`,
-          );
-        }
+        assertOwnerWorktreeReuse(validated, current, repository.repoRoot);
         current.commitGuard?.();
         return { record: validated, materialized: false };
       });

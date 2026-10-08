@@ -226,6 +226,7 @@ describe("listGatewayMethods", () => {
       "sessions.storage.run",
       "plugins.reload",
       "claws.packages.remove",
+      "claws.removalJournal",
       "canvas.document.preview",
       "computer.status",
       "computer.invoke",
@@ -279,6 +280,10 @@ describe("listGatewayMethods", () => {
       "sessions.processes.stop",
       "catalog.browse",
       "catalog.searchKeywords",
+      "skills.workshop.list",
+      "skills.workshop.changes",
+      "skills.workshop.archive",
+      "skills.workshop.restore",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -311,6 +316,7 @@ describe("listGatewayMethods", () => {
       "sessions.storage.run",
       "plugins.reload",
       "claws.packages.remove",
+      "claws.removalJournal",
       "canvas.document.preview",
       "computer.status",
       "computer.invoke",
@@ -364,6 +370,10 @@ describe("listGatewayMethods", () => {
       "sessions.processes.stop",
       "catalog.browse",
       "catalog.searchKeywords",
+      "skills.workshop.list",
+      "skills.workshop.changes",
+      "skills.workshop.archive",
+      "skills.workshop.restore",
     ]);
   });
 
@@ -427,7 +437,14 @@ describe("listGatewayMethods", () => {
   it("classifies cron mutations as control-plane writes", () => {
     const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
 
-    for (const method of ["cron.add", "cron.update", "cron.remove", "cron.run", "claws.monitors"]) {
+    for (const method of [
+      "cron.add",
+      "cron.update",
+      "cron.remove",
+      "cron.run",
+      "claws.monitors",
+      "claws.removalJournal",
+    ]) {
       expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
         name: method,
         scope: "operator.admin",
@@ -524,6 +541,7 @@ describe("listGatewayMethods", () => {
       "sessions.storage.run",
       "plugins.reload",
       "claws.packages.remove",
+      "claws.removalJournal",
       "canvas.document.preview",
       "computer.status",
       "computer.invoke",
@@ -577,6 +595,10 @@ describe("listGatewayMethods", () => {
       "sessions.processes.stop",
       "catalog.browse",
       "catalog.searchKeywords",
+      "skills.workshop.list",
+      "skills.workshop.changes",
+      "skills.workshop.archive",
+      "skills.workshop.restore",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
@@ -710,17 +732,6 @@ describe("listGatewayMethods", () => {
         controlPlaneWrite: true,
       });
     }
-  });
-
-  it("classifies proposal evaluation as a control-plane write", () => {
-    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
-
-    expect(
-      descriptors.find((descriptor) => descriptor.name === "skills.proposals.evaluate"),
-    ).toMatchObject({
-      scope: "operator.admin",
-      controlPlaneWrite: true,
-    });
   });
 
   it("classifies project cloning as a described control-plane write", () => {

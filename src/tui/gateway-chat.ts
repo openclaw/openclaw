@@ -56,7 +56,7 @@ import {
 } from "../gateway/edge-auth.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { loadOriginDeviceToken } from "../infra/device-auth-store.js";
-import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
+import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -139,7 +139,7 @@ function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
 
 async function hasStoredOriginDeviceAuth(deviceAuthScope: string): Promise<boolean> {
   try {
-    const identity = loadDeviceIdentityIfPresent();
+    const identity = await loadDeviceIdentityIfPresentAsync();
     return Boolean(
       identity &&
       (

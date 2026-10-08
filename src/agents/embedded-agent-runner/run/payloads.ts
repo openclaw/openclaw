@@ -114,13 +114,9 @@ export function buildEmbeddedRunPayloads(params: {
     deliveredSourceReplyViaMessageTool,
     completedSourceReplyViaMessageTool,
   } = buildSourceReplyPayloadState({
+    ...params,
     payloads: params.messagingToolSourceReplyPayloads,
     sentTargets: params.messagingToolSentTargets,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    didDeliverSourceReplyViaMessageTool: params.didDeliverSourceReplyViaMessageTool,
-    runId: params.runId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
   });
   if (params.heartbeatToolResponse) {
     const heartbeatPayload = createHeartbeatToolResponsePayload(params.heartbeatToolResponse);
@@ -283,30 +279,16 @@ export function buildEmbeddedRunPayloads(params: {
             fallbackAnswerDirectiveState.mediaUrls?.length)) ||
         storedDelivery?.tts?.text?.trim(),
       );
-      const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
-      const answerTexts =
+      const answerDirectives =
         shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText
-          ? [fallbackAnswerSourceText]
-          : hasAssistantTextPayload
-            ? nonEmptyAssistantTexts
-            : fallbackAnswerText
-              ? [fallbackAnswerText]
+          ? [fallbackAnswerDirectiveState ?? parseReplyDirectives(fallbackAnswerSourceText)]
+          : nonEmptyAssistantTexts.length > 0
+            ? nonEmptyAssistantTexts.map((text) => parseReplyDirectives(text))
+            : fallbackAnswerDirectiveState
+              ? [fallbackAnswerDirectiveState]
               : [];
-      const preparedAnswerDirectives =
-        shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText || !hasAssistantTextPayload
-          ? fallbackAnswerDirectiveState
-          : null;
-      for (const text of answerTexts) {
-        const {
-          text: cleanedText,
-          mediaUrls,
-          mediaFailures,
-          audioAsVoice,
-          replyToId,
-          replyToTag,
-          replyToCurrent,
-          isSilent,
-        } = preparedAnswerDirectives ?? parseReplyDirectives(text);
+      for (const directives of answerDirectives) {
+        const { text: cleanedText, mediaUrls, mediaFailures, isSilent } = directives;
         hasIntentionalSilentFinal = isSilent;
         const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
         const delivery = shouldUseCanonicalFinalAnswer
@@ -316,7 +298,7 @@ export function buildEmbeddedRunPayloads(params: {
               replyToId: storedDelivery?.replyToId,
               replyToTag: Boolean(storedDelivery?.replyToCurrent || storedDelivery?.replyToId),
             }
-          : { audioAsVoice, replyToId, replyToTag, replyToCurrent };
+          : directives;
         if (
           !cleanedText &&
           (!mediaUrls || mediaUrls.length === 0) &&
@@ -362,13 +344,7 @@ export function buildEmbeddedRunPayloads(params: {
     }
     textStart = segment.textEnd;
   }
-  appendSegmentAnswer({
-    assistantTexts: params.assistantTexts.slice(textStart),
-    lastAssistant: params.lastAssistant,
-    currentAssistant: params.currentAssistant,
-    assistantMessageIndex: params.assistantMessageIndex,
-    keptAnswer: params.keptAnswer,
-  });
+  appendSegmentAnswer({ ...params, assistantTexts: params.assistantTexts.slice(textStart) });
   // A conversational NO_REPLY is an authored outcome, not a missing answer.
   // Native shell calls are conservatively classified as mutating even when
   // they only search files. That replay-safety classification must not replace

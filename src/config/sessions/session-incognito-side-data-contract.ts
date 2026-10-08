@@ -28,7 +28,7 @@ import type {
   SessionReactionWrite,
 } from "./session-reaction-store.types.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
+import type { SessionMembersSnapshot } from "./session-sharing-store.kernel.js";
 import type {
   SessionCollaborationMutation,
   SessionSharingWorkerOperations,
@@ -75,7 +75,7 @@ export type IncognitoSideDataOperations = {
     output: SessionSharingWorkerOperations["category.apply"]["output"];
   };
   "session.category.keys": { input: { name: string }; output: string[] };
-  "session.members.read": { input: { sessionKey: string }; output: SessionMember[] };
+  "session.members.read": { input: { sessionKey: string }; output: SessionMembersSnapshot };
   "session.suggestions.read": {
     input: { sessionKey: string; params: SessionSuggestionListParams };
     output: StoredSessionSuggestion[];

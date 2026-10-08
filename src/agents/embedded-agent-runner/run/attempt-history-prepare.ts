@@ -87,14 +87,11 @@ export async function prepareEmbeddedAttemptHistory(
           storePath,
         });
         assertActive();
-        const subagents = entries
-          .map(({ entry }) => entry)
-          .filter((entry) => entry.spawnedBy === sessionEntry.sessionId)
-          .map((entry) => ({
-            sessionId: entry.sessionId,
-            role: entry.subagentRole,
-            lastStatus: entry.status,
-          }));
+        const subagents = entries.flatMap(({ entry }) =>
+          entry.spawnedBy === sessionEntry.sessionId
+            ? [{ sessionId: entry.sessionId, role: entry.subagentRole, lastStatus: entry.status }]
+            : [],
+        );
         validated.push(
           buildHierarchyReinforcementMessage({
             summary: suspension.summary ?? "No recovery briefing was captured.",
@@ -120,10 +117,8 @@ export async function prepareEmbeddedAttemptHistory(
       }
     }
 
-    const limited = (() => {
-      if (isSettledTurnFinalization) {
-        return validated;
-      }
+    let limited = validated;
+    if (!isSettledTurnFinalization) {
       const heartbeatSummary =
         attempt.config && sessionAgentId
           ? resolveHeartbeatSummaryForAgent(attempt.config, sessionAgentId)
@@ -152,10 +147,10 @@ export async function prepareEmbeddedAttemptHistory(
       );
       // Truncation can orphan tool_result blocks by removing the assistant message
       // that contained the matching tool_use, so repair the pairs once more.
-      return transcriptPolicy.repairToolUseResultPairing
+      limited = transcriptPolicy.repairToolUseResultPairing
         ? sanitizeToolUseResultPairingForModel(truncated, isOpenAIResponsesApi)
         : truncated;
-    })();
+    }
     cacheTrace?.recordStage("session:limited", { messages: limited });
     if (limited.length > 0 || prior.length > 0) {
       activeSession.agent.state.messages = limited;

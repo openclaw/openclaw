@@ -1,5 +1,4 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
@@ -572,21 +571,12 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
     }),
   );
   for (const { page, targetId } of candidates) {
-    if (isBlockedPageRef(opts.cdpUrl, page)) {
-      blockedCount += 1;
-      continue;
-    }
     // Fail closed when we cannot resolve a target id while this session has
     // quarantined targets; otherwise a blocked tab can become selectable.
-    if (!targetId) {
-      if (hasBlockedTargetsForCdpUrl(opts.cdpUrl)) {
-        blockedCount += 1;
-        continue;
-      }
-      accessible.push({ page, targetId: null });
-      continue;
-    }
-    if (isBlockedTarget(opts.cdpUrl, targetId)) {
+    if (
+      isBlockedPageRef(opts.cdpUrl, page) ||
+      (targetId ? isBlockedTarget(opts.cdpUrl, targetId) : hasBlockedTargetsForCdpUrl(opts.cdpUrl))
+    ) {
       blockedCount += 1;
       continue;
     }
@@ -621,12 +611,9 @@ async function getPageForTargetIdOnce(opts: {
     }
     throw new Error("No pages available in the connected browser.");
   }
-  const first = expectDefined(accessible.at(0), "non-empty accessible browser pages");
-  if (!opts.targetId) {
-    bindRoleRefsTarget(first.page, opts.cdpUrl, first.targetId);
-    return first.page;
-  }
-  const found = accessible.find((entry) => entry.targetId === opts.targetId);
+  const found = opts.targetId
+    ? accessible.find((entry) => entry.targetId === opts.targetId)
+    : accessible[0];
   if (found) {
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
     return found.page;

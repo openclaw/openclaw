@@ -182,20 +182,12 @@ function renderTokensCell(row: GatewaySessionRow) {
       : percent >= CONTEXT_METER_WARN_PERCENT
         ? "warn"
         : "ok";
-  const title = t(
-    limit.fromLastPrompt
-      ? fresh
-        ? "sessionsView.promptBudgetUsage"
-        : "sessionsView.promptBudgetUsageApprox"
-      : fresh
-        ? "sessionsView.contextUsage"
-        : "sessionsView.contextUsageApprox",
-    {
-      percent: String(percent),
-      used: total.toLocaleString(),
-      context: context.toLocaleString(),
-    },
-  );
+  const titleKey = limit.fromLastPrompt ? "promptBudgetUsage" : "contextUsage";
+  const title = t(`sessionsView.${titleKey}${fresh ? "" : "Approx"}`, {
+    percent: String(percent),
+    used: total.toLocaleString(),
+    context: context.toLocaleString(),
+  });
   return html`
     <openclaw-tooltip .content=${title}>
       <div class="session-tokens">
@@ -267,14 +259,6 @@ function renderSkeletonRows(columnCount: number) {
         )}
       </tr>
     `,
-  );
-}
-
-function hasActiveFilters(props: SessionsProps): boolean {
-  return (
-    normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
-    parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
-    !props.includeGlobal
   );
 }
 
@@ -429,10 +413,10 @@ function categoryDropHandlers(props: SessionsProps, category: string | null) {
 
 function renderGroupHeaderRow(group: SessionRowGroup, props: SessionsProps) {
   const label = sessionGroupLabel(group, props);
-  const count =
-    group.rows.length === 1
-      ? t("sessionsView.groupRowCountOne", { count: "1" })
-      : t("sessionsView.groupRowCount", { count: String(group.rows.length) });
+  const count = t(
+    group.rows.length === 1 ? "sessionsView.groupRowCountOne" : "sessionsView.groupRowCount",
+    { count: String(group.rows.length) },
+  );
   const drop = categoryDropHandlers(props, group.id === UNGROUPED_ID ? null : group.id);
   return html`
     <tr
@@ -551,13 +535,20 @@ function renderSessionsTable(props: SessionsProps) {
       : null;
   const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
   const paginated = displayRows.slice(page * props.pageSize, (page + 1) * props.pageSize);
-  const emptyBecauseFiltered = rawRows.length === 0 && hasActiveFilters(props);
-  const emptyMessage =
-    props.statusFilter === "archived"
-      ? t("sessionsView.noArchivedSessions")
-      : props.statusFilter === "active"
-        ? t("sessionsView.noActiveSessions")
-        : t("sessionsView.noSessions");
+  const emptyBecauseFiltered =
+    rawRows.length === 0 &&
+    (normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
+      parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
+      !props.includeGlobal);
+  const emptyStateMessage = t(
+    emptyBecauseFiltered
+      ? "sessionsView.noSessionsMatchFilters"
+      : props.statusFilter === "archived"
+        ? "sessionsView.noArchivedSessions"
+        : props.statusFilter === "active"
+          ? "sessionsView.noActiveSessions"
+          : "sessionsView.noSessions",
+  );
 
   const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
@@ -565,14 +556,14 @@ function renderSessionsTable(props: SessionsProps) {
     extraClass = "",
   ) => {
     const isActive = props.sortColumn === col;
-    const nextDir = isActive && props.sortDir === "asc" ? ("desc" as const) : ("asc" as const);
+    const nextDir = !isActive || props.sortDir === "asc" ? "desc" : "asc";
     return html`
       <th
         class=${extraClass}
         data-sortable
         data-sort-dir=${isActive ? props.sortDir : ""}
         aria-sort=${isActive ? (props.sortDir === "asc" ? "ascending" : "descending") : nothing}
-        @click=${() => props.onSortChange(col, isActive ? nextDir : "desc")}
+        @click=${() => props.onSortChange(col, nextDir)}
       >
         <button class="data-table-sort-button" type="button">
           ${label}
@@ -582,9 +573,6 @@ function renderSessionsTable(props: SessionsProps) {
     `;
   };
 
-  const emptyStateMessage = emptyBecauseFiltered
-    ? t("sessionsView.noSessionsMatchFilters")
-    : emptyMessage;
   const paginatedKeys = groups ? new Set(paginated.map((row) => row.key)) : null;
   return html`
     <div
@@ -656,12 +644,10 @@ function renderSessionsTable(props: SessionsProps) {
                         !paginated.every((r) => props.selectedKeys.has(r.key))
                       }
                       @change=${() => {
-                        const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
-                        if (allSelected) {
-                          props.onDeselectPage(paginated.map((r) => r.key));
-                        } else {
-                          props.onSelectPage(paginated.map((r) => r.key));
-                        }
+                        const update = paginated.every((r) => props.selectedKeys.has(r.key))
+                          ? props.onDeselectPage
+                          : props.onSelectPage;
+                        update(paginated.map((r) => r.key));
                       }}
                       aria-label=${t("sessionsView.selectAllOnPage")}
                     />`
@@ -865,10 +851,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       }}
       @keydown=${(e: KeyboardEvent) => {
         openMenuFromEvent(e);
-        if (e.defaultPrevented) {
-          return;
-        }
-        if (isRowControlTarget(e.target)) {
+        if (e.defaultPrevented || isRowControlTarget(e.target)) {
           return;
         }
         if (e.key === "Enter" || e.key === " ") {

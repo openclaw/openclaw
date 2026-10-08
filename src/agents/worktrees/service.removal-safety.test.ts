@@ -9,7 +9,8 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import * as checkoutGitOwner from "./checkout-git-config.js";
 import * as checkoutInspection from "./checkout-inspection.js";
 import * as gitOwner from "./git.js";
-import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
+import { updateRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import {

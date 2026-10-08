@@ -27,6 +27,7 @@ import {
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
 import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
+import { prepareFreshSharedAuthStoreWriteAsync } from "./shared-store-bootstrap-async.js";
 import { prepareFreshSharedAuthStoreWrite } from "./shared-store-bootstrap.js";
 import {
   inspectAuthProfileJsonCell,
@@ -54,7 +55,7 @@ export function resolveAuthProfileStoreOwner(
   database: AuthProfileDatabase,
   env: NodeJS.ProcessEnv = process.env,
 ): AuthProfileStoreOwner | PreparedAuthProfileStoreOwner {
-  const prepared = authProfileTransactions.get(database)?.owner;
+  const prepared = authProfileTransactions.get(database);
   if (prepared) {
     return prepared;
   }
@@ -83,10 +84,7 @@ type AuthProfileDatabaseTarget =
   | { kind: "agent"; agentId: string; path: string; env: NodeJS.ProcessEnv }
   | { kind: "shared-state"; path: string; env: NodeJS.ProcessEnv };
 
-const authProfileTransactions = new WeakMap<
-  AuthProfileDatabase,
-  { owner: PreparedAuthProfileStoreOwner }
->();
+const authProfileTransactions = new WeakMap<AuthProfileDatabase, PreparedAuthProfileStoreOwner>();
 
 function inferAgentIdFromDir(agentDir: string): string {
   const normalized = path.normalize(agentDir);
@@ -321,14 +319,7 @@ export function writePersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): void {
-  const kind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const write = (target: AuthProfileDatabase) =>
-    writeAuthProfileJsonCell(target.db, "store", kind, payload);
-  if (database) {
-    write(database);
-  } else {
-    runAuthProfileWriteTransaction(agentDir, write);
-  }
+  mutateAuthProfileCell("store", payload, agentDir, database);
 }
 
 /** Deletes the persisted secrets-store row while leaving runtime state intact. */
@@ -336,14 +327,7 @@ export function deletePersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): void {
-  const kind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const remove = (target: AuthProfileDatabase) =>
-    deleteAuthProfileJsonCell(target.db, "store", kind);
-  if (database) {
-    remove(database);
-  } else {
-    runAuthProfileWriteTransaction(agentDir, remove);
-  }
+  mutateAuthProfileCell("store", undefined, agentDir, database, true);
 }
 
 /** Writes or deletes the persisted runtime-state payload. */
@@ -352,11 +336,21 @@ export function writePersistedAuthProfileStateRaw(
   agentDir?: string,
   database?: AuthProfileDatabase,
 ): void {
+  mutateAuthProfileCell("state", payload, agentDir, database, !payload);
+}
+
+function mutateAuthProfileCell(
+  target: "store" | "state",
+  payload: unknown,
+  agentDir: string | undefined,
+  database: AuthProfileDatabase | undefined,
+  deleteRow = false,
+): void {
   const kind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const write = (target: AuthProfileDatabase) =>
-    payload
-      ? writeAuthProfileJsonCell(target.db, "state", kind, payload)
-      : deleteAuthProfileJsonCell(target.db, "state", kind);
+  const write = (owner: AuthProfileDatabase) =>
+    deleteRow
+      ? deleteAuthProfileJsonCell(owner.db, target, kind)
+      : writeAuthProfileJsonCell(owner.db, target, kind, payload);
   if (database) {
     write(database);
   } else {
@@ -371,10 +365,9 @@ type AuthProfileWriteOptions = {
   assertEnvironment?: (env: NodeJS.ProcessEnv) => void;
 };
 
-export function prepareAuthProfileWriteTransaction(
-  agentDir: string | undefined,
+export function prepareAuthProfileWriteEnvironment(
   options: AuthProfileWriteOptions,
-) {
+): NodeJS.ProcessEnv {
   const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
   if (!options.env && options.stateDir) {
     env.OPENCLAW_STATE_DIR = options.stateDir;
@@ -382,6 +375,15 @@ export function prepareAuthProfileWriteTransaction(
   }
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   options.assertEnvironment?.(env);
+  return env;
+}
+
+/** Released synchronous SDK writes and Doctor one-shots retain their native preparation. */
+export function prepareAuthProfileWriteTransaction(
+  agentDir: string | undefined,
+  options: AuthProfileWriteOptions,
+) {
+  const env = prepareAuthProfileWriteEnvironment(options);
   const sharedStoreWrite = prepareFreshSharedAuthStoreWrite({
     agentDir,
     allowExplicitMain: options.sharedStoreWrite === true,
@@ -395,28 +397,41 @@ export function prepareAuthProfileWriteTransaction(
   return { databaseTarget, sharedOwner: prepareAuthProfileSharedOwner(env) };
 }
 
+export async function prepareAuthProfileWriteTransactionAsync(
+  agentDir: string | undefined,
+  options: AuthProfileWriteOptions,
+  assertCurrent?: () => void,
+) {
+  const env = prepareAuthProfileWriteEnvironment(options);
+  const capturedAgentDir = agentDir ? resolveUserPath(agentDir, env) : undefined;
+  const sharedStoreWrite = await prepareFreshSharedAuthStoreWriteAsync({
+    agentDir: capturedAgentDir,
+    allowExplicitMain: options.sharedStoreWrite === true,
+    env,
+    assertCurrent,
+  });
+  options.assertEnvironment?.(env);
+  assertCurrent?.();
+  const databaseTarget = resolveAuthProfileDatabaseOptions(
+    sharedStoreWrite ? undefined : capturedAgentDir,
+    env,
+  );
+  return { databaseTarget, sharedOwner: prepareAuthProfileSharedOwner(env) };
+}
+
 /** Runs an auth-profile database write transaction for store/state updates. */
 export function runAuthProfileWriteTransaction<T>(
   agentDir: string | undefined,
   operation: (database: AuthProfileDatabase, owner: PreparedAuthProfileStoreOwner) => T,
   options: AuthProfileWriteOptions = {},
 ): T {
-  return runPreparedAuthProfileWriteTransaction(
-    prepareAuthProfileWriteTransaction(agentDir, options),
-    operation,
-  );
-}
-
-function runPreparedAuthProfileWriteTransaction<T>(
-  { databaseTarget, sharedOwner }: ReturnType<typeof prepareAuthProfileWriteTransaction>,
-  operation: (database: AuthProfileDatabase, owner: PreparedAuthProfileStoreOwner) => T,
-): T {
+  const { databaseTarget, sharedOwner } = prepareAuthProfileWriteTransaction(agentDir, options);
   const run = (database: AuthProfileDatabase) => {
     const previous = authProfileTransactions.get(database);
-    const context = previous ?? { owner: { ...sharedOwner, databasePath: database.path } };
-    authProfileTransactions.set(database, context);
+    const owner = previous ?? { ...sharedOwner, databasePath: database.path };
+    authProfileTransactions.set(database, owner);
     try {
-      return operation(database, context.owner);
+      return operation(database, owner);
     } finally {
       if (!previous) {
         authProfileTransactions.delete(database);

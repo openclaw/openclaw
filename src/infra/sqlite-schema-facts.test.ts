@@ -3,6 +3,7 @@ import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readSessionNodesGeneration } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { hasSqliteSessionOwnerColumns } from "../config/sessions/session-accessor.sqlite-owner-projection.js";
 import { assertCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
@@ -75,6 +76,69 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
+  it.each([
+    "CREATE TEMP TABLE unexpected (id INTEGER)",
+    "CREATE TABLE unexpected (id INTEGER)",
+    "DROP TRIGGER temp.openclaw_session_nodes_cache_generation_update",
+    "ALTER TABLE temp.openclaw_session_nodes_cache_generation ADD COLUMN unexpected INTEGER",
+  ])("still revokes admission for ordinary DDL after tracker installation: %s", (sql) => {
+    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
+    readSessionNodesGeneration(database);
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(database, schemaMutation);
+    database.exec(sql);
+    expect(schemaMutation).toHaveBeenCalledWith(undefined);
+  });
+
+  it("observes reentrant TEMP DDL during a declared tracker installation", () => {
+    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(database, schemaMutation);
+    const nativeExec = DatabaseSync.prototype.exec.bind(database);
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementationOnce((sql) => {
+      database.exec("CREATE TEMP TABLE unexpected (id INTEGER)");
+      return nativeExec(sql);
+    });
+    try {
+      readSessionNodesGeneration(database);
+      expect(schemaMutation).toHaveBeenCalled();
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
+  it("revokes admission when tracker installation fails after creating its counter", () => {
+    const database = openDatabase();
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(database, schemaMutation);
+    expect(() => readSessionNodesGeneration(database)).toThrow(/session_nodes/u);
+    expect(schemaMutation).toHaveBeenCalled();
+  });
+
+  it.each([
+    "CREATE TEMP TABLE openclaw_session_nodes_cache_generation (id INTEGER PRIMARY KEY, generation INTEGER)",
+    "CREATE TEMP TRIGGER openclaw_session_nodes_cache_generation_update AFTER INSERT ON main.session_nodes BEGIN SELECT 1; END",
+  ])("revokes admission for a preexisting mismatched tracker object: %s", (sql) => {
+    const database = openDatabase(`CREATE TABLE session_nodes (id INTEGER); ${sql}`);
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(database, schemaMutation);
+    readSessionNodesGeneration(database);
+    expect(schemaMutation).toHaveBeenCalled();
+  });
+
+  it("retains readmitted facts when reinstalling the tracker's existing exact shapes", () => {
+    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
+    expect(readSessionNodesGeneration(database)).toBe(0);
+    database.exec("ALTER TABLE session_nodes ADD COLUMN value TEXT");
+    admitSqliteSchema(database);
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(database, schemaMutation);
+    expect(readSessionNodesGeneration(database)).toBe(1);
+    expect(schemaMutation).not.toHaveBeenCalled();
+    database.exec("INSERT INTO session_nodes (id) VALUES (1)");
+    expect(readSessionNodesGeneration(database)).toBe(2);
+  });
+
   it("refreshes writer admission after BEGIN despite an enclosing read operation", () => {
     const filename = path.join(tempDirs.make("openclaw-schema-writer-"), "agent.sqlite");
     const database = openDatabase(
@@ -137,7 +201,7 @@ describe("admitted SQLite schema facts", () => {
     },
   );
 
-  it("retains table and column facts across 100 foreign data commits", () => {
+  it("retains table and column facts with one statement per foreign data commit", () => {
     const filename = path.join(tempDirs.make("openclaw-schema-data-"), "state.sqlite");
     const reader = openDatabase(
       "CREATE TABLE session_nodes (id INTEGER); PRAGMA user_version = 1;",
@@ -166,9 +230,7 @@ describe("admitted SQLite schema facts", () => {
       expect(
         observation.queries.filter((sql) => /sqlite_schema|pragma_table_info/iu.test(sql)),
       ).toHaveLength(0);
-      expect(
-        observation.queries.filter((sql) => /PRAGMA schema_version/iu.test(sql)).length,
-      ).toBeLessThanOrEqual(100);
+      expect(observation.queries).toHaveLength(100);
       expect(schemaMutation).not.toHaveBeenCalled();
     } finally {
       observation.restore();
@@ -205,6 +267,18 @@ describe("admitted SQLite schema facts", () => {
     expect(adoptSqliteSchemaFacts(reader, facts!)).toBe(true);
     expect(hasSqliteSessionOwnerColumns(reader)).toBe(true);
   });
+  it.each(["data_version", "schema_version", "user_version"])(
+    "refuses a table shadowing the native %s observation",
+    (name) => {
+      const database = openDatabase(
+        `CREATE TABLE original (id); CREATE TABLE pragma_${name} (${name} INTEGER);
+         INSERT INTO pragma_${name} VALUES (999); PRAGMA user_version = 1;`,
+      );
+      expect(() =>
+        runSqliteReadOperationSync(database, () => tableExists(database, "original")),
+      ).toThrow(/not a function/iu);
+    },
+  );
 
   it.each(["transaction", "implicit snapshot"])(
     "observes foreign commits on the next read while preserving an active %s",
@@ -227,6 +301,10 @@ describe("admitted SQLite schema facts", () => {
       expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(true);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
       expect(schemaMutation).toHaveBeenCalledTimes(1);
+      expect(schemaMutation).toHaveBeenLastCalledWith({
+        schemaVersion: getAdmittedSqliteSchemaFacts(reader)?.schemaVersion,
+        userVersion: 2,
+      });
 
       const readSnapshot = () => {
         expect(hasTable("later")).toBe(false);
@@ -253,6 +331,10 @@ describe("admitted SQLite schema facts", () => {
       expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(false);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(3);
       expect(schemaMutation).toHaveBeenCalledTimes(2);
+      expect(schemaMutation).toHaveBeenLastCalledWith({
+        schemaVersion: getAdmittedSqliteSchemaFacts(reader)?.schemaVersion,
+        userVersion: 3,
+      });
       writer.exec("PRAGMA user_version = 2147483647");
       expect(() =>
         runSqliteReadOperationSync(reader, () =>
@@ -297,6 +379,8 @@ describe("admitted SQLite schema facts", () => {
     databases.push(writer);
     readSqliteDataVersion(reader);
     readSqliteDataVersion(reader);
+    readSqliteCacheDataVersion(reader);
+    readSqliteCacheDataVersion(reader);
     const prepare = vi.spyOn(reader, "prepare");
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
@@ -311,12 +395,10 @@ describe("admitted SQLite schema facts", () => {
         expect(readSqliteDataVersion(reader)).toBe(committedVersion);
       });
       expect(readSqliteCacheDataVersion(reader)).toBe(committedVersion);
-      expect(observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql))).toHaveLength(
-        4,
-      );
-      expect(
-        prepare.mock.calls.filter(([sql]) => /^PRAGMA data_version$/iu.test(sql)),
-      ).toHaveLength(0);
+      const isVersionProbe = (sql: string) =>
+        /^PRAGMA data_version$|\bpragma_data_version\(\)/iu.test(sql);
+      expect(observation.queries.filter(isVersionProbe)).toHaveLength(4);
+      expect(prepare.mock.calls.filter(([sql]) => isVersionProbe(sql))).toHaveLength(0);
     } finally {
       observation.restore();
       prepare.mockRestore();

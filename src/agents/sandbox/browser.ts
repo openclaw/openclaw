@@ -470,9 +470,8 @@ async function ensureSandboxBrowserContainer(
       params.assertCurrent?.();
       await execDocker(args);
     });
-    params.assertCurrent?.();
-    await execDocker(["start", containerName]);
-  } else if (!running) {
+  }
+  if (!hasContainer || !running) {
     params.assertCurrent?.();
     await execDocker(["start", containerName]);
   }

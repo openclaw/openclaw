@@ -8,6 +8,7 @@ export type PoolFixtureInput = {
   readStartupOptions?: boolean;
   exchanges?: number;
   consumeInput?: boolean;
+  notifications?: number;
   counters?: SharedArrayBuffer;
   wait?: boolean;
   exitCode?: number;
@@ -31,6 +32,9 @@ serveWorkerTasks<PoolFixtureResult>(
     if (input.exitCode !== undefined) {
       assert.ok(typeof input.exitCode === "number");
       process.exit(input.exitCode);
+    }
+    for (let index = 0; index < Number(input.notifications ?? 0); index++) {
+      channel?.notify({ label: input.label, index });
     }
     if (input.counters) {
       assert.ok(input.counters instanceof SharedArrayBuffer);

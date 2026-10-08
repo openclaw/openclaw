@@ -193,10 +193,12 @@ function fenceSlackReadFetch(
   };
 }
 
-function applySlackApiUrlAndProxyOptions(
-  options: WebClientOptions,
-  dispatcher?: SlackProxyDispatcher,
-): void {
+function resolveSlackClientOptions(
+  input: WebClientOptions,
+  dispatcher: SlackProxyDispatcher | undefined,
+  assertDirectAdapterHandoff: (() => void) | undefined,
+): WebClientOptions {
+  const options: WebClientOptions = Object.assign({}, input);
   const slackApiUrl = options.slackApiUrl ?? (process.env.SLACK_API_URL?.trim() || undefined);
   const fetch = options.fetch ?? buildSlackFetch(dispatcher);
   if (fetch) {
@@ -207,21 +209,15 @@ function applySlackApiUrlAndProxyOptions(
   } else {
     delete options.slackApiUrl;
   }
-}
-
-function applySlackRequestAuthority(
-  options: WebClientOptions,
-  dispatcher: SlackProxyDispatcher | undefined,
-  assertDirectAdapterHandoff: (() => void) | undefined,
-): void {
   const slackFetch = options.fetch ?? buildSlackFetch(dispatcher);
   if (!slackFetch) {
     if (assertDirectAdapterHandoff) {
       throw new Error("Slack request fetch is unavailable for live authority.");
     }
-    return;
+  } else {
+    options.fetch = fenceSlackReadFetch(slackFetch, assertDirectAdapterHandoff);
   }
-  options.fetch = fenceSlackReadFetch(slackFetch, assertDirectAdapterHandoff);
+  return options;
 }
 
 export function resolveSlackWebClientOptions(
@@ -229,9 +225,7 @@ export function resolveSlackWebClientOptions(
   dispatcher = resolveSlackProxyDispatcher(),
   assertDirectAdapterHandoff?: () => void,
 ): WebClientOptions {
-  const resolved: WebClientOptions = Object.assign({}, options);
-  applySlackApiUrlAndProxyOptions(resolved, dispatcher);
-  applySlackRequestAuthority(resolved, dispatcher, assertDirectAdapterHandoff);
+  const resolved = resolveSlackClientOptions(options, dispatcher, assertDirectAdapterHandoff);
   resolved.retryConfig ??= SLACK_DEFAULT_RETRY_OPTIONS;
   return resolved;
 }
@@ -253,9 +247,7 @@ export function resolveSlackWriteClientOptions(
   dispatcher = resolveSlackProxyDispatcher(),
   assertDirectAdapterHandoff?: () => void,
 ): WebClientOptions {
-  const resolved: WebClientOptions = Object.assign({}, options);
-  applySlackApiUrlAndProxyOptions(resolved, dispatcher);
-  applySlackRequestAuthority(resolved, dispatcher, assertDirectAdapterHandoff);
+  const resolved = resolveSlackClientOptions(options, dispatcher, assertDirectAdapterHandoff);
   resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
   // A caller's nonzero SDK retry policy already owns rate-limit recovery.
   if (resolved.rejectRateLimitedCalls !== true && resolved.retryConfig.retries === 0) {
@@ -307,9 +299,7 @@ export function resolveSlackLookupClientOptions(
   dispatcher = resolveSlackProxyDispatcher(),
   assertDirectAdapterHandoff?: () => void,
 ): WebClientOptions {
-  const resolved: WebClientOptions = Object.assign({}, options);
-  applySlackApiUrlAndProxyOptions(resolved, dispatcher);
-  applySlackRequestAuthority(resolved, dispatcher, assertDirectAdapterHandoff);
+  const resolved = resolveSlackClientOptions(options, dispatcher, assertDirectAdapterHandoff);
   // Slack otherwise sleeps through the full Retry-After window after receiving 429,
   // outside the Axios request timeout.
   resolved.rejectRateLimitedCalls = true;

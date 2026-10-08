@@ -137,6 +137,7 @@ export type SessionEntryReplacementPublication = {
   changedKeys: string[];
   membershipInvalidatedKeys: string[];
   sharingUnchangedKeys: string[];
+  generationUnchangedKeys: string[];
 };
 
 export type CreationDatabase =
@@ -187,6 +188,8 @@ export type PendingSessionEntryPublication = {
   ownerChanges: Map<string, Extract<SessionRowFacts, { kind: "owner" }>>;
   membershipInvalidated: Set<string>;
   sharingUnchanged: Set<string>;
+  /** Keys whose committed sessionId and lifecycleRevision are unchanged by this publication. */
+  generationUnchanged: Set<string>;
   settled: boolean;
   completion: Promise<void>;
 };

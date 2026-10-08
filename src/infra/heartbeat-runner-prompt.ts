@@ -19,12 +19,13 @@ import {
   buildExecEventPrompt,
   isCronSystemEvent,
   isConversationExecCompletion,
-  isExecCompletionEvent,
+  isExecCompletionSystemEvent,
   isHeartbeatDeliveryAwarenessEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
 import {
+  resolveHeartbeatChannelPlugin,
   resolveConfiguredHeartbeatPrompt,
   resolveHeartbeatResponseToolPrompt,
 } from "./heartbeat-runner-config.js";
@@ -42,9 +43,10 @@ import {
   type HeartbeatScheduledTask,
   type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
+import { heartbeatExecRouteKey } from "./outbound/heartbeat-route-context.js";
 import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import {
-  peekSystemEventEntries,
+  peekDeliverableSystemEventEntries,
   resolveSystemEventDeliveryContext,
   type SystemEvent,
 } from "./system-events.js";
@@ -59,7 +61,9 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   session: HeartbeatSessionSelection;
   /** Selection under the heartbeat's own isolation; differs from `session` only on a continuation. */
   heartbeatSession: HeartbeatSessionSelection;
-  pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
+  pendingEventEntries: ReturnType<typeof peekDeliverableSystemEventEntries>;
+  selectedEventEntries: SystemEvent[];
+  deferredEventEntries: SystemEvent[];
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
   /** Route of a conversation's own command completion; that conversation owns the turn. */
   conversationRoute?: DeliveryContext;
@@ -134,16 +138,15 @@ export async function resolveHeartbeatPreflight(params: {
     log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
   }
   const wakeFlags = resolveHeartbeatWakePayloadFlags(params);
-  const queue = resolveHeartbeatSession(
+  const queue = await resolveHeartbeatSession(
     params.cfg,
     params.agentId,
     params.heartbeat,
     params.sessionKey,
   );
-  const pendingEventEntries = peekSystemEventEntries(
+  const pendingEventEntries = peekDeliverableSystemEventEntries(
     resolveSystemEventQueueKey(queue.sessionKey, params.agentId),
   ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event));
-  const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
   const authoritativeScheduledTick =
     typeof params.scheduledEveryMs === "number" &&
     Number.isSafeInteger(params.scheduledEveryMs) &&
@@ -173,6 +176,42 @@ export async function resolveHeartbeatPreflight(params: {
     wakeFlags.isCronWake ||
     shouldInspectWakePendingEvents ||
     hasTaggedCronEvents;
+  const firstExec =
+    !params.scheduledTasks?.length && shouldInspectPendingEvents
+      ? pendingEventEntries.find(isExecCompletionSystemEvent)
+      : undefined;
+  const routeKey = (event: SystemEvent) =>
+    event.deliveryContext
+      ? heartbeatExecRouteKey(
+          event.deliveryContext,
+          resolveHeartbeatChannelPlugin(event.deliveryContext.channel ?? ""),
+        )
+      : undefined;
+  const isolateExecRoutes = firstExec && pendingEventEntries.some((event) => event.deliveryContext);
+  const firstRouteKey = firstExec ? routeKey(firstExec) : undefined;
+  const selectedEventEntries = isolateExecRoutes
+    ? pendingEventEntries.filter(
+        (event) =>
+          isExecCompletionSystemEvent(event) &&
+          Boolean(event.contextKey) === Boolean(firstExec.contextKey) &&
+          (!firstExec.deliveryContext
+            ? !event.deliveryContext
+            : event === firstExec ||
+              (firstRouteKey !== undefined && routeKey(event) === firstRouteKey)),
+      )
+    : pendingEventEntries;
+  const deferredEventEntries = isolateExecRoutes
+    ? pendingEventEntries.filter((event) => !selectedEventEntries.includes(event))
+    : [];
+  const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(
+    params.scheduledTasks?.length || !shouldInspectPendingEvents
+      ? []
+      : firstExec
+        ? selectedEventEntries.filter(
+            (event) => isExecCompletionSystemEvent(event) && event.contextKey != null,
+          )
+        : selectedEventEntries,
+  );
   const shouldBypassScratchGates =
     wakeFlags.isExecEventWake ||
     wakeFlags.isCronWake ||
@@ -184,6 +223,8 @@ export async function resolveHeartbeatPreflight(params: {
     session,
     heartbeatSession,
     pendingEventEntries,
+    selectedEventEntries,
+    deferredEventEntries,
     turnSourceDeliveryContext,
     ...(conversationRoute ? { conversationRoute } : {}),
     shouldInspectPendingEvents,
@@ -209,7 +250,8 @@ export async function resolveHeartbeatPreflight(params: {
     !basePreflight.authoritativeScheduledTick &&
     !params.scheduledTasks?.length &&
     !hasTaggedCronEvents &&
-    !pendingEventEntries.some((event) => isExecCompletionEvent(event.text))
+    !pendingEventEntries.some(isExecCompletionSystemEvent) &&
+    (!session.inspectsRunQueue || pendingEventEntries.length === 0)
   ) {
     return {
       ...basePreflight,
@@ -263,7 +305,7 @@ export function resolveHeartbeatRunPrompt(params: {
   scheduledTasks: readonly HeartbeatScheduledTask[];
   useHeartbeatResponseTool: boolean;
 }): HeartbeatPromptResolution {
-  const pendingEventEntries = params.preflight.pendingEventEntries;
+  const pendingEventEntries = params.preflight.selectedEventEntries;
   const genericEvents: SystemEvent[] = [];
   const cronEvents: SystemEvent[] = [];
   const execEvents: SystemEvent[] = [];
@@ -273,12 +315,12 @@ export function resolveHeartbeatRunPrompt(params: {
   for (const event of pendingEventEntries) {
     if (event.contextKey?.startsWith(SESSION_CREATED_NOTICE_CONTEXT_PREFIX)) {
       genericEvents.push(event);
-    } else if (isExecCompletionEvent(event.text)) {
+    } else if (isExecCompletionSystemEvent(event)) {
       if (params.preflight.shouldInspectPendingEvents) {
         execEvents.push(event);
       }
     } else if (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) {
-      (isCronSystemEvent(event.text) ? cronEvents : cronNoise).push(event);
+      (isCronSystemEvent(event) ? cronEvents : cronNoise).push(event);
     } else {
       genericEvents.push(event);
     }

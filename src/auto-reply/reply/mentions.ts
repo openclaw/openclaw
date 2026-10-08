@@ -226,10 +226,6 @@ const mentionPatternWarningCache = new Set<string>();
 const MAX_MENTION_PATTERN_WARNING_KEYS = 512;
 const log = createSubsystemLogger("mentions");
 
-function normalizeMentionPattern(pattern: string): string {
-  return pattern.replaceAll(BACKSPACE_CHAR, "\\b");
-}
-
 function warnRejectedMentionPattern(
   pattern: string,
   flags: string,
@@ -239,11 +235,10 @@ function warnRejectedMentionPattern(
   if (mentionPatternWarningCache.has(key)) {
     return;
   }
-  mentionPatternWarningCache.add(key);
-  if (mentionPatternWarningCache.size > MAX_MENTION_PATTERN_WARNING_KEYS) {
+  if (mentionPatternWarningCache.size >= MAX_MENTION_PATTERN_WARNING_KEYS) {
     mentionPatternWarningCache.clear();
-    mentionPatternWarningCache.add(key);
   }
+  mentionPatternWarningCache.add(key);
   log.warn("Ignoring unsupported group mention pattern", {
     pattern,
     flags,
@@ -260,13 +255,14 @@ function compileMentionPatternsCached(params: {
   if (params.patterns.length === 0) {
     return [];
   }
-  const cacheKey = `${params.flags}\u001e${params.patterns.join("\u001f")}`;
+  const patterns = params.patterns.map((pattern) => pattern.replaceAll(BACKSPACE_CHAR, "\\b"));
+  const cacheKey = `${params.flags}\u001e${patterns.join("\u001f")}`;
   const cached = params.cache.get(cacheKey);
   if (cached) {
     return [...cached];
   }
 
-  const compiled = compileConfigRegexes(params.patterns, params.flags);
+  const compiled = compileConfigRegexes(patterns, params.flags);
   if (params.warnRejected) {
     for (const rejected of compiled.rejected) {
       warnRejectedMentionPattern(rejected.pattern, rejected.flags, rejected.reason);
@@ -306,9 +302,8 @@ export function buildMentionRegexes(
     return [];
   }
   const resolved = resolveMentionPatterns(cfg, agentId);
-  const patterns = resolved.patterns.map(normalizeMentionPattern);
   return compileMentionPatternsCached({
-    patterns,
+    patterns: resolved.patterns,
     flags: resolved.unicode ? "iu" : "i",
     cache: mentionMatchRegexCompileCache,
     warnRejected: true,
@@ -363,10 +358,7 @@ export function stripStructuralPrefixes(text: string): string {
     afterEnvelope === text ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm : /^[ \t]*[^\n:]{1,120}:\s+/gm;
 
   const stripped = afterEnvelope.replace(senderPrefixPattern, "").replace(/\\n/g, " ").trim();
-  if (stripped.startsWith("/")) {
-    return stripped.replace(/[ \t]+/g, " ");
-  }
-  return stripped.replace(/\s+/g, " ");
+  return stripped.replace(stripped.startsWith("/") ? /[ \t]+/g : /\s+/g, " ");
 }
 
 export function stripMentions(
@@ -385,7 +377,7 @@ export function stripMentions(
     : undefined;
   const resolvedPatterns = resolveMentionPatterns(cfg, agentId);
   const configRegexes = compileMentionPatternsCached({
-    patterns: resolvedPatterns.patterns.map(normalizeMentionPattern),
+    patterns: resolvedPatterns.patterns,
     flags: resolvedPatterns.unicode ? "giu" : "gi",
     cache: mentionStripRegexCompileCache,
     warnRejected: true,
@@ -393,9 +385,7 @@ export function stripMentions(
   const providerRegexes =
     providerMentions?.stripRegexes?.({ ctx, cfg, agentId }) ??
     compileMentionPatternsCached({
-      patterns: (providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? []).map(
-        normalizeMentionPattern,
-      ),
+      patterns: providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? [],
       flags: "gi",
       cache: mentionStripRegexCompileCache,
       warnRejected: false,

@@ -28,10 +28,10 @@ import {
 import { retireCodexAppServerSessionGeneration } from "./session-retirement.js";
 import * as sharedClient from "./shared-client.js";
 import {
-  resetSharedCodexAppServerClientForTests,
   retainSharedCodexAppServerClientIfCurrent,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import {
   adaptCodexTestClientFactory,
   createInferenceReadyClientHarness,

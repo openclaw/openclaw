@@ -8,6 +8,7 @@ import {
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -71,6 +72,7 @@ async function withObserver(
     enableModel: () => void;
   }) => Promise<void>,
   persistDigests = false,
+  useDefaultStore = false,
 ) {
   await withOpenClawTestState({ label: "observer-worker" }, async ({ env, path }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -86,7 +88,7 @@ async function withObserver(
     const persisted = vi.fn<NonNullable<SessionObserverDeps["persistDigest"]>>(async () => true);
     let utilityModelRef: string | undefined;
     let now = 1_000;
-    const cfg = { session: { store: database.path } };
+    const cfg = { session: { store: useDefaultStore ? undefined : database.path } };
     const observer = createSessionObserver({
       getConfig: () => cfg,
       now: () => now,
@@ -161,42 +163,90 @@ async function withObserver(
 }
 
 it("moves observer admission, publication, terminal and companion reads off the caller and observes foreign resets", async () => {
-  await withObserver(async ({ observer, broadcast, resetLifecycle }) => {
-    const start = event({ stream: "lifecycle", data: { phase: "start" } });
-    const sql = observeMainThreadSql();
-    try {
-      observer.handleEvent(start);
-      expect(sql.count()).toBeGreaterThan(0);
-      sql.clear();
-      await observer.handleEventAsync({ ...start, runId: "worker-run" });
-      await observer.handleEventAsync(
-        event({
-          runId: "worker-run",
-          stream: "item",
-          data: { kind: "preamble", progressText: "Worker observation" },
-        }),
-      );
-      const snapshot = await observer.getCompanionSnapshotAsync(key, "main");
-      expect(snapshot.digest?.headline).toBe("Worker observation");
-      sql.expectIdle();
-      sql.restore();
-      await resetLifecycle();
-      const after = observeMainThreadSql();
+  await withObserver(
+    async ({ observer, broadcast, peer, resetLifecycle, advanceClock }) => {
+      const start = event({ stream: "lifecycle", data: { phase: "start" } });
+      let inventories = 0;
+      let entries = 0;
+      const run = projectionLane.pool.run.bind(projectionLane.pool);
+      vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
+        const result = await run(...args);
+        if (
+          result.ok &&
+          typeof result.value === "object" &&
+          result.value !== null &&
+          "kind" in result.value
+        ) {
+          inventories += Number(result.value.kind === "session-target-inventory");
+          entries += Number(result.value.kind === "session-exact-entries");
+        }
+        return result;
+      });
+      const sql = observeMainThreadSql();
       try {
-        expect((await observer.getCompanionSnapshotAsync(key, "main")).digest).toBeUndefined();
+        observer.handleEvent(start);
+        expect(sql.count()).toBeGreaterThan(0);
+        sql.clear();
+        await observer.handleEventAsync({ ...start, runId: "worker-run" });
+        inventories = 0;
+        entries = 0;
         await observer.handleEventAsync(
-          event({ runId: "worker-run", stream: "lifecycle", data: { phase: "end" } }),
+          event({
+            runId: "worker-run",
+            stream: "item",
+            data: { kind: "preamble", progressText: "Worker observation" },
+          }),
         );
-        await observer.disposeAsync();
-        expect(broadcast).toHaveBeenCalledTimes(1);
-        after.expectIdle();
+        expect(inventories).toBe(1);
+        expect(entries).toBeGreaterThanOrEqual(2);
+        const snapshot = await observer.getCompanionSnapshotAsync(key, "main");
+        expect(snapshot.digest?.headline).toBe("Worker observation");
+        sql.expectIdle();
+        sql.restore();
+        peer
+          .prepare(
+            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', 'life-b') WHERE session_key = ?",
+          )
+          .run(key);
+        advanceClock();
+        inventories = 0;
+        entries = 0;
+        const fresh = observeMainThreadSql();
+        try {
+          await observer.handleEventAsync(
+            event({
+              runId: "worker-run",
+              stream: "item",
+              data: { kind: "preamble", progressText: "Retired observation" },
+            }),
+          );
+          expect(inventories).toBe(0);
+          expect(entries).toBeGreaterThan(0);
+          expect(broadcast).toHaveBeenCalledTimes(1);
+          fresh.expectIdle();
+        } finally {
+          fresh.restore();
+        }
+        await resetLifecycle();
+        const after = observeMainThreadSql();
+        try {
+          expect((await observer.getCompanionSnapshotAsync(key, "main")).digest).toBeUndefined();
+          await observer.handleEventAsync(
+            event({ runId: "worker-run", stream: "lifecycle", data: { phase: "end" } }),
+          );
+          await observer.disposeAsync();
+          expect(broadcast).toHaveBeenCalledTimes(1);
+          after.expectIdle();
+        } finally {
+          after.restore();
+        }
       } finally {
-        after.restore();
+        sql.restore();
       }
-    } finally {
-      sql.restore();
-    }
-  });
+    },
+    false,
+    true,
+  );
 });
 
 it.for(["rewrite", "native rewrite", "close"] as const)(

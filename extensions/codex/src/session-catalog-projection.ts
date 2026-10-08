@@ -1,6 +1,6 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexThread, CodexThreadListResponse } from "./app-server/protocol.js";
 import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
 import { codexCatalogRowRecency } from "./session-catalog-index-order.js";
@@ -9,7 +9,6 @@ import type {
   CodexCatalogRolloutFingerprint,
 } from "./session-catalog-index-row.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
-import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import {
   readControlCursor,
   selectCodexCatalogPreviewInput,
@@ -22,7 +21,6 @@ import {
   copyCodexCatalogSource,
   getCodexCatalogSource,
   setCodexCatalogSource,
-  type CodexCatalogSource,
 } from "./session-catalog-source.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
@@ -30,25 +28,7 @@ type CodexCatalogProjectionParams = {
   localSessionsRoot?: string;
   diagnostics?: CodexCatalogPageDiagnostics | null;
   sanitize: typeof sanitizeTerminalText;
-  source?: CodexCatalogSource;
 };
-
-/** Single-thread responses remain owned by their native consumers. */
-export function projectCodexCatalogThread(thread: CodexThread, localSessionsRoot?: string) {
-  try {
-    const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
-    return projectCodexCatalogPage(
-      { data: [prepared] },
-      {
-        localSessionsRoot,
-        sanitize: sanitizeTerminalText,
-        source: getCodexCatalogSource(prepared),
-      },
-    );
-  } catch (error) {
-    return Promise.reject(toErrorObject(error, "Codex catalog projection failed"));
-  }
-}
 
 export class CodexCatalogProjectionCapacityError extends Error {
   constructor() {
@@ -131,7 +111,7 @@ export async function projectCodexCatalogPage(
             recencyAt: asFiniteNumber(thread.recencyAt) ?? null,
             page,
           },
-          params.source ?? getCodexCatalogSource(thread),
+          getCodexCatalogSource(thread),
         ),
       );
     }

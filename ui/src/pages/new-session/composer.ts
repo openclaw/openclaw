@@ -124,24 +124,9 @@ function handleComposerKeydown(
     return;
   }
   const hasSubmitModifier = event.metaKey || event.ctrlKey;
-  const isBackgroundShortcut = options.requiresModifier
-    ? hasSubmitModifier && event.shiftKey
-    : hasSubmitModifier && !event.shiftKey;
-  if (!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit) {
-    if (event.repeat) {
-      event.preventDefault();
-      return;
-    }
-    if (options.canSubmit || options.submitDisabledReason !== undefined) {
-      event.preventDefault();
-      resetSkillMenuState(options.textareaController.skillMenuState);
-      resetSlashMenuState(options.textareaController.slashMenuState);
-      options.textareaController.mentionMenu.close();
-      options.onBackgroundSubmit();
-    }
-    return;
-  }
-  if (event.shiftKey || (options.requiresModifier && !hasSubmitModifier)) {
+  const isBackgroundShortcut = hasSubmitModifier && event.shiftKey;
+  const background = Boolean(!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit);
+  if (!background && (event.shiftKey || (options.requiresModifier && !hasSubmitModifier))) {
     return;
   }
   if (event.repeat) {
@@ -153,7 +138,14 @@ function handleComposerKeydown(
   // Only silent gates (busy button, empty draft) keep Enter native.
   if (options.canSubmit || options.submitDisabledReason !== undefined) {
     event.preventDefault();
-    submitNewSession(options);
+    if (background) {
+      resetSkillMenuState(options.textareaController.skillMenuState);
+      resetSlashMenuState(options.textareaController.slashMenuState);
+      options.textareaController.mentionMenu.close();
+      options.onBackgroundSubmit?.();
+    } else {
+      submitNewSession(options);
+    }
   }
 }
 
@@ -293,10 +285,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     emojiMenu,
   );
   const menuAnnouncementId = paneDomId(skillMenuHost.paneId, "active-menu-announcement");
-  const ordinaryShortcut = options.requiresModifier ? "Control+Enter Meta+Enter" : "Enter";
-  const backgroundShortcut = options.requiresModifier
-    ? "Control+Shift+Enter Meta+Shift+Enter"
-    : "Control+Enter Meta+Enter";
+  const ordinaryShortcut = options.requiresModifier
+    ? "Control+Enter Meta+Enter"
+    : "Enter Control+Enter Meta+Enter";
+  const backgroundShortcut = "Control+Shift+Enter Meta+Shift+Enter";
   const keyShortcuts = options.onBackgroundSubmit
     ? `${ordinaryShortcut} ${backgroundShortcut}`
     : ordinaryShortcut;

@@ -4,13 +4,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { SessionsDeleteResult } from "../../packages/gateway-protocol/src/index.js";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { requireGit } from "../agents/worktrees/git.js";
-import {
-  getRegistryWorktree,
-  WorktreeRemovalContentionError,
-} from "../agents/worktrees/registry.js";
+import { WorktreeRemovalContentionError } from "../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../agents/worktrees/run-lease.js";
-import { managedWorktrees, WorktreeSnapshotError } from "../agents/worktrees/service.js";
+import {
+  managedWorktrees,
+  ManagedWorktreeService,
+  WorktreeSnapshotError,
+} from "../agents/worktrees/service.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
@@ -20,7 +23,10 @@ import {
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -100,7 +106,7 @@ test.each(["restore-failed", "placement-changed"] as const)(
     const restore =
       failure === "restore-failed"
         ? vi
-            .spyOn(managedWorktrees, "restore")
+            .spyOn(ManagedWorktreeService.prototype, "restore")
             .mockRejectedValueOnce(new Error("worktree checkout unavailable"))
         : undefined;
     const worktreeLifecycle = await import("../sessions/session-worktree-lifecycle.js");
@@ -191,7 +197,7 @@ test("sessions.create only allocates worktrees for lifecycle-manageable agent ow
   const { storePath } = await createSessionStoreDir();
   const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
   const allocatedWorktreeIds = new Set<string>();
-  const createWorktree = vi.spyOn(managedWorktrees, "createWithOutcome");
+  const createWorktree = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
   try {
     for (const owner of [{ agentId: "main" }, { key: "agent:main:dashboard:unconfigured-owner" }]) {
       const created = await directSessionReq<{
@@ -279,9 +285,9 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
   );
   let successorWorktreeId: string | undefined;
   const { promise: removalGate, resolve: releaseRemoval } = createDeferredCore();
-  const originalRemove = managedWorktrees.remove.bind(managedWorktrees);
+  const originalRemove = captureMethodCall("remove")(ManagedWorktreeService.prototype);
   const { promise: removalStarted, resolve: markRemovalStarted } = createDeferredCore();
-  const removeSpy = vi.spyOn(managedWorktrees, "remove");
+  const removeSpy = vi.spyOn(ManagedWorktreeService.prototype, "remove");
   try {
     const predecessor = await directSessionReq<{
       sessionId: string;
@@ -292,7 +298,7 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
     const predecessorWorktree = predecessor.payload!.worktree;
     await fs.writeFile(path.join(predecessorWorktree.path, "dirty.txt"), "keep me\n");
 
-    removeSpy.mockImplementation(async (params) => {
+    removeSpy.mockImplementation(async function (this: ManagedWorktreeService, params) {
       if (params.id === predecessorWorktree.id && params.reason === "session-delete") {
         expect(isSessionLifecycleMutationActive(storePath, [key, predecessorSessionId])).toBe(true);
         expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
@@ -302,7 +308,7 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
         markRemovalStarted();
         await removalGate;
       }
-      return await originalRemove(params);
+      return await originalRemove(this, params);
     });
 
     const deletion = directSessionReq<{ deleted: boolean }>("sessions.delete", {
@@ -415,9 +421,9 @@ test.each([
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:delete-worktree-preserved";
   const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
-  const originalRemove = managedWorktrees.remove.bind(managedWorktrees);
+  const originalRemove = captureMethodCall("remove")(ManagedWorktreeService.prototype);
   let worktreeId: string | undefined;
-  const removeSpy = vi.spyOn(managedWorktrees, "remove");
+  const removeSpy = vi.spyOn(ManagedWorktreeService.prototype, "remove");
   try {
     const created = await directSessionReq<{
       worktree: { id: string; path: string; branch: string };
@@ -425,14 +431,14 @@ test.each([
     expect(created.ok).toBe(true);
     const worktree = created.payload!.worktree;
     worktreeId = worktree.id;
-    removeSpy.mockImplementation(async (params) => {
+    removeSpy.mockImplementation(async function (this: ManagedWorktreeService, params) {
       if (params.id === worktree.id && params.reason === "session-delete") {
         if (scenario.finalized) {
-          await originalRemove(params);
+          await originalRemove(this, params);
         }
         throw scenario.failure();
       }
-      return await originalRemove(params);
+      return await originalRemove(this, params);
     });
 
     const deleted = await directSessionReq<SessionsDeleteResult>("sessions.delete", { key });
@@ -558,7 +564,7 @@ test("sessions.delete preserves an entry-bound worktree owned by another princip
       }),
     },
   });
-  const removeSpy = vi.spyOn(managedWorktrees, "remove");
+  const removeSpy = vi.spyOn(ManagedWorktreeService.prototype, "remove");
   try {
     const deleted = await directSessionReq<SessionsDeleteResult>("sessions.delete", {
       key,
@@ -589,6 +595,117 @@ test("sessions.delete preserves an entry-bound worktree owned by another princip
     if (getRegistryWorktree(process.env, foreignWorktree.id)?.removedAt === undefined) {
       await managedWorktrees.remove({
         id: foreignWorktree.id,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
+    }
+    await disposeSessionReadContexts();
+    testState.agentConfig = undefined;
+    await openClawState.cleanup();
+  }
+});
+
+async function createIncognitoSessionWithWorktree(workspace: string) {
+  const created = await directSessionReq<{ key: string }>("sessions.create", {
+    agentId: "main",
+    incognito: true,
+  });
+  expect(created.ok, JSON.stringify(created)).toBe(true);
+  const key = created.payload!.key;
+  const worktree = await managedWorktrees.create({
+    repoRoot: workspace,
+    ownerKind: "session",
+    ownerId: key,
+  });
+  await patchSessionEntryCore(
+    {
+      agentId: "main",
+      sessionKey: key,
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    },
+    (entry) => ({
+      ...entry!,
+      spawnedCwd: worktree.path,
+      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
+    }),
+  );
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.worktree?.id).toBe(worktree.id);
+  return { key, worktree };
+}
+
+test("sessions.reset removes an Incognito session worktree like sessions.delete", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-incognito-reset-worktree-",
+  });
+  const workspace = await initializeRemoteBackedGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  let worktreeId: string | undefined;
+  try {
+    const { key, worktree } = await createIncognitoSessionWithWorktree(workspace);
+    worktreeId = worktree.id;
+
+    const reset = await directSessionReq<SessionsDeleteResult>("sessions.reset", { key });
+
+    expect(reset).toMatchObject({ ok: true, payload: { deleted: true } });
+    expect(reset.payload).not.toHaveProperty("worktreePreserved");
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toBeUndefined();
+    expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toEqual(expect.any(Number));
+    await expect(fs.access(worktree.path)).rejects.toThrow();
+  } finally {
+    if (worktreeId && getRegistryWorktree(process.env, worktreeId)?.removedAt === undefined) {
+      await managedWorktrees.remove({
+        id: worktreeId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
+    }
+    await disposeSessionReadContexts();
+    testState.agentConfig = undefined;
+    await openClawState.cleanup();
+  }
+});
+
+test("sessions.reset reports a preserved Incognito worktree like sessions.delete", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-incognito-reset-worktree-busy-",
+  });
+  const workspace = await initializeRemoteBackedGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  let worktreeId: string | undefined;
+  let runLease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
+  try {
+    const { key, worktree } = await createIncognitoSessionWithWorktree(workspace);
+    worktreeId = worktree.id;
+    runLease = await acquireWorktreeRunLease(worktree.id);
+
+    const reset = await directSessionReq<SessionsDeleteResult>("sessions.reset", { key });
+
+    expect(reset).toMatchObject({
+      ok: true,
+      payload: {
+        deleted: true,
+        worktreePreserved: {
+          id: worktree.id,
+          path: worktree.path,
+          branch: worktree.branch,
+          reason: "busy",
+        },
+      },
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toBeUndefined();
+    expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
+    await fs.access(worktree.path);
+  } finally {
+    await runLease?.release();
+    if (worktreeId && getRegistryWorktree(process.env, worktreeId)?.removedAt === undefined) {
+      await managedWorktrees.remove({
+        id: worktreeId,
         reason: "test-cleanup",
         allowSnapshotLoss: true,
       });

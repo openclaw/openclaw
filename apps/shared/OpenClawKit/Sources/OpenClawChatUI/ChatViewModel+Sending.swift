@@ -384,15 +384,7 @@ extension OpenClawChatViewModel {
             if !healthOK, outbox != nil {
                 logDiagnostic(
                     "chat.ui send queued offline sessionKey=\(sessionKey) inputLen=\(draft.trimmed.count)")
-                let accepted = await enqueueOutboxCommand(
-                    text: draft.outgoingMessageText,
-                    draftInput: draft.input,
-                    draftRevision: draft.composerRevision,
-                    draftAttachments: draft.attachments,
-                    session: draft.session)
-                if accepted {
-                    self.finishAcceptedComposerSend(draft)
-                }
+                await self.enqueueOutboxDraft(draft)
                 return false
             }
         }
@@ -427,18 +419,22 @@ extension OpenClawChatViewModel {
         {
             logDiagnostic(
                 "chat.ui send routed behind outbox sessionKey=\(sessionKey) inputLen=\(draft.trimmed.count)")
-            let accepted = await enqueueOutboxCommand(
-                text: draft.outgoingMessageText,
-                draftInput: draft.input,
-                draftRevision: draft.composerRevision,
-                draftAttachments: draft.attachments,
-                session: draft.session)
-            if accepted {
-                self.finishAcceptedComposerSend(draft)
-            }
+            await self.enqueueOutboxDraft(draft)
             return false
         }
         return true
+    }
+
+    private func enqueueOutboxDraft(_ draft: SendDraft) async {
+        let accepted = await self.enqueueOutboxCommand(
+            text: draft.outgoingMessageText,
+            draftInput: draft.input,
+            draftRevision: draft.composerRevision,
+            draftAttachments: draft.attachments,
+            session: draft.session)
+        if accepted {
+            self.finishAcceptedComposerSend(draft)
+        }
     }
 
     private func attachmentPersistenceDecision(
@@ -611,22 +607,16 @@ extension OpenClawChatViewModel {
             ? false
             : self.adoptRemoteRunID(response.runId, replacing: attempt.runId)
 
-        if response.status == "ok" {
-            let historyContext = beginHistoryRequest(for: attempt.draft.session)
-            await refreshHistoryAfterRun(historyRequest: historyContext)
-            guard isCurrentSession(attempt.draft.session) else { return }
-            finishPendingRunAfterTerminalOkSendAck(response)
-            return
-        }
-        guard !finishPendingRunIfTerminalSendAck(response),
-              !reusedRunAlreadyFinal
-        else {
-            return
-        }
+        let terminalOK = response.status == "ok"
+        guard terminalOK || (!finishPendingRunIfTerminalSendAck(response) && !reusedRunAlreadyFinal) else { return }
 
         let historyContext = beginHistoryRequest(for: attempt.draft.session)
         let refresh = await refreshHistoryAfterRun(historyRequest: historyContext)
         guard isCurrentSession(attempt.draft.session) else { return }
+        if terminalOK {
+            finishPendingRunAfterTerminalOkSendAck(response)
+            return
+        }
         if refresh.hasInFlightRun || (refresh.applied && !refresh.runSnapshotApplied) ||
             !clearPendingRunIfAssistantMessagePresent(
                 runId: response.runId,

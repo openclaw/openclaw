@@ -81,23 +81,21 @@ export async function activateLibrarySelection(
   if (authorization.error) {
     throw new SessionMutationAuthorizationChangedError(authorization.error);
   }
-  const target = resolveSessionSharingTarget({
-    cfg: context.getRuntimeConfig(),
-    sessionKey: params.sessionKey,
-  });
+  const resolveTarget = () =>
+    resolveSessionSharingTarget({ cfg: context.getRuntimeConfig(), sessionKey: params.sessionKey });
+  const target = resolveTarget();
   if (!target) {
     throw new SkillLibraryError("NOT_FOUND", "Session not found.");
   }
   const authority = libraryAuthority(options);
   let plannedSelections: SkillLibrarySelection[] | undefined;
+  const sessionChanged = () =>
+    new SkillLibraryError("CONFLICT", "Session changed before activation; refresh and retry.");
   const assertCurrent = () => {
     authority.assertCurrent();
     authorization.authorization?.assertCurrent();
     assertPreparedSkillLibrarySelection(plannedSelections);
-    const current = resolveSessionSharingTarget({
-      cfg: context.getRuntimeConfig(),
-      sessionKey: params.sessionKey,
-    });
+    const current = resolveTarget();
     if (
       !current ||
       current.entry.sessionId !== target.entry.sessionId ||
@@ -105,10 +103,7 @@ export async function activateLibrarySelection(
       current.storePath !== target.storePath ||
       current.storeKey !== target.storeKey
     ) {
-      throw new SkillLibraryError(
-        "CONFLICT",
-        "Session changed before activation; refresh and retry.",
-      );
+      throw sessionChanged();
     }
     const ownershipError = resolvePluginSessionOwnershipError({
       action: "patch",
@@ -124,23 +119,19 @@ export async function activateLibrarySelection(
     { storePath: target.storePath, sessionKey: target.storeKey, agentId: target.agentId },
     async (current) => {
       assertCurrent();
-      const selections = await changeSkillLibrarySelection(
+      plannedSelections = await changeSkillLibrarySelection(
         authority,
         current.skillLibrarySelections ?? [],
         params,
       );
-      plannedSelections = selections;
       assertCurrent();
       // Existing runs keep their prepared snapshot; the next turn rebuilds against the new pins.
-      return { skillLibrarySelections: selections, updatedAt: Date.now() };
+      return { skillLibrarySelections: plannedSelections, updatedAt: Date.now() };
     },
     { assertCommitAllowed: assertCurrent },
   );
   if (!entry) {
-    throw new SkillLibraryError(
-      "CONFLICT",
-      "Session changed before activation; refresh and retry.",
-    );
+    throw sessionChanged();
   }
   return {
     sessionKey: target.canonicalKey,

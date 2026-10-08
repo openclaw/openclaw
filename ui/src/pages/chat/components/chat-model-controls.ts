@@ -201,19 +201,17 @@ function formatPickerModelLabel(label: string): string {
   return match?.[1] ?? label;
 }
 
+const MODEL_SELECTION_SCOPE_LABELS = new Map([
+  ["session", "chat.modelControls.selectionScopeSession"],
+  ["agent", "chat.modelControls.selectionScopeAgent"],
+  ["global", "chat.modelControls.selectionScopeGlobal"],
+]);
+
 function resolveModelSelectionScopeDescription(
   target: SessionsListResult["defaults"]["modelSelectionTarget"],
 ): string | undefined {
-  switch (target) {
-    case "session":
-      return t("chat.modelControls.selectionScopeSession");
-    case "agent":
-      return t("chat.modelControls.selectionScopeAgent");
-    case "global":
-      return t("chat.modelControls.selectionScopeGlobal");
-    default:
-      return undefined;
-  }
+  const label = MODEL_SELECTION_SCOPE_LABELS.get(target ?? "");
+  return label ? t(label) : undefined;
 }
 
 function resolveCatalogTriggerStatus(
@@ -411,6 +409,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     if (typeof catalogEntry?.supportsTools === "boolean") {
       pickerOption.supportsTools = catalogEntry.supportsTools;
     }
+    if (catalogEntry?.recommended) {
+      pickerOption.recommended = true;
+    }
     if (option.disabled) {
       pickerOption.disabled = true;
       pickerOption.unavailableReason = option.unavailableReason;
@@ -433,6 +434,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         supportsTools: choice.supportsTools,
         disabled: choice.available === false,
         unavailableReason: choice.unavailableReason,
+        ...(pickerOption.recommended ? { recommended: true } : {}),
       });
     }
     return options;

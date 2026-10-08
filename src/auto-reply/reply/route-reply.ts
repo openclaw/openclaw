@@ -162,14 +162,14 @@ async function routeReplyOperation(
   operation: ReplyDispatchOperation,
 ): Promise<RouteReplyResult> {
   const { channel, to, accountId, threadId, cfg, abortSignal } = params;
+  const suppress = (reason?: RouteReplyResult["reason"]): RouteReplyResult => ({
+    ok: true,
+    delivered: false,
+    ...(reason ? { suppressed: true, reason } : {}),
+  });
   const payload = operation.kind === "raw" ? operation.payload : operation.plan.payload;
   if (shouldSuppressReasoningPayload(payload)) {
-    return {
-      ok: true,
-      delivered: false,
-      suppressed: true,
-      reason: "reasoning_payload_not_external",
-    };
+    return suppress("reasoning_payload_not_external");
   }
   const normalizedChannel = normalizeMessageChannel(channel);
   const channelId =
@@ -195,15 +195,9 @@ async function routeReplyOperation(
     transformReplyPayload,
   });
   if (normalization.kind === "suppress") {
-    if (normalization.reason === "channel_transform") {
-      return {
-        ok: true,
-        delivered: false,
-        suppressed: true,
-        reason: normalization.reason,
-      };
-    }
-    return { ok: true, delivered: false };
+    return suppress(
+      normalization.reason === "channel_transform" ? normalization.reason : undefined,
+    );
   }
   const normalized = normalization.payload;
   const externalPayload: ReplyPayload = {
@@ -233,7 +227,7 @@ async function routeReplyOperation(
       },
     )
   ) {
-    return { ok: true, delivered: false };
+    return suppress();
   }
 
   const rejectBeforeSend = (error: string): RouteReplyResult => ({
@@ -392,12 +386,7 @@ async function routeReplyOperation(
         send.reason === "empty_after_message_sending_hook" ||
         send.reason === "empty_after_reply_payload_sending_hook")
     ) {
-      return {
-        ok: true,
-        delivered: false,
-        suppressed: true,
-        reason: send.reason,
-      };
+      return suppress(send.reason);
     }
     if (send.status === "suppressed" && durableMessageBatchMayHaveReachedRecipient(send)) {
       return {
@@ -409,11 +398,7 @@ async function routeReplyOperation(
     }
     const results = send.status === "sent" ? send.results : [];
     const delivery = summarizeVisibleRouteReplyDelivery(results);
-    return {
-      ok: true,
-      delivered: delivery.delivered,
-      messageId: delivery.messageId,
-    };
+    return { ok: true, ...delivery };
   } catch (err) {
     const message = formatErrorMessage(err);
     return {

@@ -51,6 +51,7 @@ import {
 } from "../test-utils/port-claims.js";
 import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { registerWorktreeListingOwnerTests } from "./local-state-owner-listing.test-support.js";
 
 const execFileAsync = promisify(execFile);
 const roots = useAutoCleanupTempDirTracker(afterAll);
@@ -90,6 +91,7 @@ describe("same-root local mutation routing", () => {
   let claim: TestPortClaim;
   let owner: GatewayLockHandle | null;
   let service: ManagedWorktreeService;
+  let repoFingerprint: string;
   const maintenanceClock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(maintenanceClock.clock);
   let maintenance: ReturnType<typeof startWorktreeMaintenance>;
@@ -144,6 +146,7 @@ describe("same-root local mutation routing", () => {
     vi.stubEnv("USERPROFILE", root);
     const cfg = { worktreeRoot: path.join(root, "gateway-worktrees"), worktreeAcceleration: false };
     service = new ManagedWorktreeService({ env, getConfig: () => cfg });
+    repoFingerprint = (await service.resolveRepositoryIdentity(repo)).fingerprint;
     owner = await acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
     expect(owner).not.toBeNull();
     const handlers = createWorktreesHandlers(service);
@@ -266,6 +269,24 @@ describe("same-root local mutation routing", () => {
       // A configured remote URL must not redirect this same-root operation.
       env: { ...env, OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:1" },
     });
+
+  registerWorktreeListingOwnerTests(
+    () => ({
+      root,
+      repo,
+      env,
+      service,
+      methods,
+      port: claim.port,
+      get owner() {
+        return owner;
+      },
+      set owner(value: GatewayLockHandle | null) {
+        owner = value;
+      },
+    }),
+    entrypoint,
+  );
 
   it("runs the CLI create in the live owner and exposes committed profile results", async () => {
     const result = await create(
@@ -413,12 +434,14 @@ describe("same-root local mutation routing", () => {
 
   async function prepareOperation(kind: Operation["kind"]) {
     const name = `mutation-${++sequence}`;
-    const record = await service.create({
+    const record = await materializeManagedWorktreeFixture({
+      env,
+      stateDir: env.OPENCLAW_STATE_DIR!,
       repoRoot: repo,
+      repoFingerprint,
       name,
-      baseRef: "HEAD",
+      now: Date.now(),
       ownerKind: kind === "gc" || kind === "gc-partial" ? "workboard" : "manual",
-      runSetupScript: false,
     });
     let args = ["remove", record.id];
     let cleanup = async () => {};
@@ -816,6 +839,7 @@ describe("offline local mutation custody", () => {
       nodeArgs: [...entrypoint, "exec-policy", "preset", "cautious", "--json"],
       env,
     });
+
     expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       preset: "cautious",

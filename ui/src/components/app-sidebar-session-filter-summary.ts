@@ -97,7 +97,7 @@ export function renderSidebarSessionFilter(
     aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
     @click=${(event: MouseEvent) => {
       if (event.currentTarget instanceof HTMLElement) {
-        host.sidebarMenus.toggleSessionSortMenu(event.currentTarget);
+        host.sidebarMenus.togglePositionedMenu("sessionSort", event.currentTarget);
       }
     }}
   >

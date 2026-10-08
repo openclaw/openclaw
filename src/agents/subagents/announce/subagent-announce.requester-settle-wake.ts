@@ -46,6 +46,7 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.js";
+import { hasUsableSessionEntry } from "./subagent-announce-delivery.runtime.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
@@ -53,7 +54,6 @@ import {
   selectCurrentRequesterCompletionRows,
 } from "./subagent-announce-output.js";
 import { SubagentAnnouncePreparationConflictError } from "./subagent-announce-result.js";
-import { hasUsableSessionEntry } from "./subagent-announce.js";
 import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
 import { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
@@ -148,6 +148,13 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const frozenBatchRunIds = currentState.batchRunIds;
   const frozen = Boolean(frozenBatchRunIds?.length);
   const currentRearmGeneration = currentState.rearmGeneration;
+  const hasCurrentWake = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
+    Boolean(entry?.requesterSettleWake) &&
+    entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration;
+  const hasSettled = (entry: SubagentRunRecord) =>
+    entry.execution.status !== "running" &&
+    entry.pauseReason !== "sessions_yield" &&
+    hasSubagentRunEnded(entry);
   let settledBatch: SubagentRunRecord[];
   if (pauseNotice) {
     settledBatch = [currentSettledEntry];
@@ -155,35 +162,15 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
     // Retired rows no longer own completion, but every surviving frozen member
     // must be terminal before this batch can wake its requester.
-    settledBatch = frozenBatchRunIds
-      .map((runId) => runsById.get(runId))
-      .filter(
-        (entry): entry is SubagentRunRecord =>
-          Boolean(entry?.requesterSettleWake) &&
-          entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
-      );
-    if (
-      settledBatch.some(
-        (entry) =>
-          entry.execution.status === "running" ||
-          entry.pauseReason === "sessions_yield" ||
-          !hasSubagentRunEnded(entry),
-      )
-    ) {
+    settledBatch = frozenBatchRunIds.map((runId) => runsById.get(runId)).filter(hasCurrentWake);
+    if (!settledBatch.every(hasSettled)) {
       return false;
     }
   } else {
     // An unfrozen wave cannot absorb a different requester-yield generation.
     // Its frozen cohort still owns its deadline, retry budget, and visible final.
     settledBatch = selectConnectedSettledSubagentWave(
-      requesterRuns.filter(
-        (entry) =>
-          entry.requesterSettleWake &&
-          entry.requesterSettleWake.rearmGeneration === currentRearmGeneration &&
-          entry.execution.status !== "running" &&
-          entry.pauseReason !== "sessions_yield" &&
-          hasSubagentRunEnded(entry),
-      ),
+      requesterRuns.filter((entry) => hasCurrentWake(entry) && hasSettled(entry)),
       currentSettledEntry,
     );
   }
@@ -237,6 +224,8 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     return true;
   };
   const selectedState = readSharedBatchState(settledBatch);
+  const failBatch = (state: RequesterSettleWakeBatchState, error: string) =>
+    completeBatch(settledBatch, state, { delivered: false, path: "none", error });
   const { batchKey: wakeKeyBase } = buildRequesterSettleWakeIdentity({
     requesterSessionKey,
     requesterAgentId,
@@ -363,11 +352,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       // an already completed sibling before the requester can receive it.
       const deferralCount = countTowardsLimit ? (state.deferralCount ?? 0) + 1 : 0;
       if (countTowardsLimit && deferralCount >= REQUESTER_SETTLE_WAKE_MAX_DEFERRALS) {
-        await completeBatch(settledBatch, state, {
-          delivered: false,
-          path: "none",
-          error: "requester settle wake deferred too many times",
-        });
+        await failBatch(state, "requester settle wake deferred too many times");
         return;
       }
       await transitionBatch({
@@ -417,11 +402,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     const requester = loadRequesterSessionEntry(requesterSessionKey, requesterAgentId);
     const requesterEntry = requester.entry;
     if (!hasUsableSessionEntry(requesterEntry)) {
-      await completeBatch(settledBatch, selectedState, {
-        delivered: false,
-        path: "none",
-        error: "requester session unavailable",
-      });
+      await failBatch(selectedState, "requester session unavailable");
       return false;
     }
 
@@ -508,11 +489,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       attemptIndex = Math.max(0, state.attemptCount - 1);
     } else {
       if (state.attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS) {
-        await completeBatch(settledBatch, state, {
-          delivered: false,
-          path: "none",
-          error: state.lastError ?? "requester settle wake attempts exhausted",
-        });
+        await failBatch(state, state.lastError ?? "requester settle wake attempts exhausted");
         return false;
       }
       attemptIndex = state.attemptCount;
@@ -677,11 +654,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         replayCount >= REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS ||
         retryDelayMs === undefined
       ) {
-        await completeBatch(settledBatch, state, {
-          delivered: false,
-          path: "none",
-          error: lastError,
-        });
+        await failBatch(state, lastError);
         return false;
       }
       state = {

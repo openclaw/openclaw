@@ -75,17 +75,15 @@ export function isReadableAuthAliasState(raw: unknown): boolean {
   if (!isRecord(raw)) {
     return false;
   }
+  const readableEntries = (value: unknown, accepts: (entry: unknown) => boolean) =>
+    value === undefined || (isRecord(value) && Object.values(value).every(accepts));
   return (
-    (raw.order === undefined ||
-      (isRecord(raw.order) &&
-        Object.values(raw.order).every(
-          (ids) => Array.isArray(ids) && ids.every((id) => typeof id === "string"),
-        ))) &&
-    (raw.lastGood === undefined ||
-      (isRecord(raw.lastGood) &&
-        Object.values(raw.lastGood).every((id) => typeof id === "string"))) &&
-    (raw.usageStats === undefined ||
-      (isRecord(raw.usageStats) && Object.values(raw.usageStats).every(isRecord)))
+    readableEntries(
+      raw.order,
+      (ids) => Array.isArray(ids) && ids.every((id) => typeof id === "string"),
+    ) &&
+    readableEntries(raw.lastGood, (id) => typeof id === "string") &&
+    readableEntries(raw.usageStats, isRecord)
   );
 }
 
@@ -105,24 +103,14 @@ export function allocateLegacyAuthProfileId(
     throw new Error(`Not a retired auth profile id: ${legacyProfileId}`);
   }
   const { provider, suffix } = target;
-  const direct = `${provider}:${suffix}`;
-  if (!occupied.has(direct)) {
-    occupied.add(direct);
-    return direct;
-  }
+  let candidate = `${provider}:${suffix}`;
   const collisionPrefix = isLegacyOpenAICodexProfileId(legacyProfileId) ? "chatgpt" : "cli";
   const chatgpt = `${provider}:${collisionPrefix}-${suffix}`;
-  if (!occupied.has(chatgpt)) {
-    occupied.add(chatgpt);
-    return chatgpt;
+  for (let index = 1; occupied.has(candidate); index += 1) {
+    candidate = index === 1 ? chatgpt : `${chatgpt}-${index}`;
   }
-  for (let index = 2; ; index += 1) {
-    const candidate = `${chatgpt}-${index}`;
-    if (!occupied.has(candidate)) {
-      occupied.add(candidate);
-      return candidate;
-    }
-  }
+  occupied.add(candidate);
+  return candidate;
 }
 
 export function canonicalizeLegacyAuthProfileEntries(

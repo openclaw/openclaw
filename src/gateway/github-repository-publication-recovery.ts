@@ -253,9 +253,14 @@ export function createRepositoryGitHubPublicationRecovery(params: {
     },
     async resumeSessionRequests(): Promise<void> {
       const failures: Error[] = [];
-      for (let row of listRepositoryGitHubPublications({ ownerProfileId: null, pending: true })) {
+      const rows = listRepositoryGitHubPublications({ ownerProfileId: null, pending: true });
+      const currentPlacements = await placements.getManyAsync(rows.map((row) => row.session_id));
+      for (let row of rows) {
         try {
-          if (placements.get(row.session_id)?.turnClaim || params.isExecuting(row.request_id)) {
+          if (
+            currentPlacements.get(row.session_id)?.turnClaim ||
+            params.isExecuting(row.request_id)
+          ) {
             continue;
           }
           await placements.withRepositoryWorkspaceReservation(

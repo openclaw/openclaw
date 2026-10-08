@@ -1,3 +1,4 @@
+import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import {
   withOwnedSessionTranscriptWrites,
@@ -93,75 +94,42 @@ export async function compactEmbeddedRunForRecovery(
     sessionId: activeSession.id,
     sessionKey: input.resolvedSessionKey,
   };
-  const reason =
-    recovery.trigger === "budget"
-      ? "context budget recovery"
-      : recovery.trigger === "overflow"
-        ? "overflow recovery"
-        : "timeout recovery";
+  const recoveryKind = recovery.trigger === "timeout_recovery" ? "timeout" : recovery.trigger;
+  const reason = `${recoveryKind === "budget" ? "context budget" : recoveryKind} recovery`;
   await input.runOwnsCompactionBeforeHook(reason);
   owner.assertActive();
   const runtimeContext = {
-    ...buildEmbeddedCompactionRuntimeContext({
-      sessionKey: runParams.sessionKey,
-      sandboxSessionKey: runParams.sandboxSessionKey,
-      sandboxAgentId: runParams.sandboxAgentId,
-      messageChannel: runParams.messageChannel,
-      messageProvider: runParams.messageProvider,
-      clientCaps: runParams.clientCaps,
-      pinnedWidgetAuthoring: runParams.pinnedWidgetAuthoring,
-      chatType: runParams.chatType,
-      agentAccountId: runParams.agentAccountId,
-      conversationRoutePeerId: runParams.conversationRoutePeerId,
-      currentChannelId: runParams.currentChannelId,
-      currentThreadTs: runParams.currentThreadTs,
-      currentMessageId: runParams.currentMessageId,
-      authProfileId: input.modelSelection.authProfileId,
-      authProfileIdSource: input.modelSelection.authProfileIdSource,
-      runtimeAuthPlan: input.runtimeAuthPlan,
-      workspaceDir: input.workspaceDir,
-      bootstrapWorkspaceDir: runParams.bootstrapWorkspaceDir,
-      permissionMode: runParams.permissionMode,
-      sessionRoot: runParams.sessionRoot,
-      requireWorkspaceOnly: runParams.requireWorkspaceOnly,
-      requireWritableSandbox: runParams.requireWritableSandbox,
-      agentDir: input.agentDir,
-      config: runParams.config,
-      toolOverrides: runParams.toolOverrides,
-      toolsAllow: runParams.toolsAllow,
-      skillsSnapshot: runParams.skillsSnapshot,
-      senderId: runParams.senderId,
-      provider: input.modelSelection.provider,
-      modelId: input.modelSelection.model,
-      harnessRuntime: input.harnessRuntime,
-      modelSelectionLocked: runParams.modelSelectionLocked,
-      modelFallbacksOverride: runParams.modelFallbacksOverride,
-      thinkLevel: input.thinkLevel,
-      reasoningLevel: runParams.reasoningLevel,
-      execOverrides: runParams.execOverrides,
-      bashElevated: runParams.bashElevated,
-      extraSystemPrompt: runParams.extraSystemPrompt,
-      sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
-      ownerNumbers: runParams.ownerNumbers,
-      activeProcessSessions: listActiveProcessSessionReferences({
-        scopeKey: resolveProcessToolScopeKey({
-          sessionKey: runParams.sessionKey,
-          sessionId: activeSession.id,
-          agentId: input.sessionAgentId,
+    ...buildEmbeddedCompactionRuntimeContext(
+      {
+        ...runParams,
+        authProfileId: input.modelSelection.authProfileId,
+        authProfileIdSource: input.modelSelection.authProfileIdSource,
+        runtimeAuthPlan: input.runtimeAuthPlan,
+        workspaceDir: input.workspaceDir,
+        agentDir: input.agentDir,
+        provider: input.modelSelection.provider,
+        modelId: input.modelSelection.model,
+        harnessRuntime: input.harnessRuntime,
+        thinkLevel: input.thinkLevel,
+        activeProcessSessions: listActiveProcessSessionReferences({
+          scopeKey: resolveProcessToolScopeKey({
+            sessionKey: runParams.sessionKey,
+            sessionId: activeSession.id,
+            agentId: input.sessionAgentId,
+          }),
         }),
-      }),
-    }),
+      },
+      "recovery",
+    ),
     ...resolveContextEngineCapabilities({
       config: runParams.config,
       sessionKey: runParams.sessionKey,
       explicitAgentId: input.contextEngineAgentId,
       contextEnginePluginId: input.resolveContextEnginePluginId(),
       purpose:
-        recovery.trigger === "budget"
+        recoveryKind === "budget"
           ? "context-engine.compaction"
-          : recovery.trigger === "overflow"
-            ? "context-engine.overflow-compaction"
-            : "context-engine.timeout-compaction",
+          : `context-engine.${recoveryKind}-compaction`,
     }),
     onCompactionHookMessages: input.onCompactionHookMessages,
     ...(input.attempt.promptCache ? { promptCache: input.attempt.promptCache } : {}),
@@ -499,6 +467,10 @@ export function createEmbeddedRunCompactionRuntime(input: {
     if (!accepted.previousSessionId) {
       recordAccepted(accepted);
     }
+    if (params.replyOperation && accepted.admissionTransition) {
+      assertAdmittedActive();
+      await acknowledgeReplySessionTransition(params.replyOperation, accepted.admissionTransition);
+    }
     assertRecoveryActive();
     sessionPromptState.notifyCompactionSessionAdopted(accepted.previousSessionId);
     assertRecoveryActive();
@@ -524,51 +496,43 @@ export function createEmbeddedRunCompactionRuntime(input: {
     });
     assertRecoveryActive();
   };
-  const runOwnsCompactionBeforeHook = async (reason: string) => {
-    assertRecoveryActive();
-    if (contextEngine.info.ownsCompaction !== true || !hookRunner?.hasHooks("before_compaction")) {
-      return;
-    }
-    try {
-      await hookRunner.runBeforeCompaction(
-        { messageCount: -1, sessionFile: sessionPromptState.sessionFile },
-        resolveActiveHookContext(),
-      );
-    } catch (error) {
-      assertRecoveryActive();
-      log.warn(`before_compaction hook failed during ${reason}: ${String(error)}`);
-    }
-    assertRecoveryActive();
-  };
-  const runOwnsCompactionAfterHook = async (
+  const runOwnsCompactionHook = async (
     reason: string,
-    compactResult: CompactionResult,
+    compactResult?: CompactionResult,
     previousSessionId?: string,
   ) => {
     assertRecoveryActive();
+    const hook = compactResult ? "after_compaction" : "before_compaction";
     if (
       contextEngine.info.ownsCompaction !== true ||
-      !compactResult.ok ||
-      !hookRunner?.hasHooks("after_compaction")
+      (compactResult && !compactResult.ok) ||
+      !hookRunner?.hasHooks(hook)
     ) {
       return;
     }
     try {
-      await hookRunner.runAfterCompaction(
-        {
-          messageCount: -1,
-          compactedCount: compactResult.compacted ? -1 : 0,
-          tokenCount: compactResult.result?.tokensAfter,
-          sessionFile:
-            resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
-            sessionPromptState.sessionFile,
-          ...(previousSessionId ? { previousSessionId } : {}),
-        },
-        resolveActiveHookContext(),
-      );
+      if (compactResult) {
+        await hookRunner.runAfterCompaction(
+          {
+            messageCount: -1,
+            compactedCount: compactResult.compacted ? -1 : 0,
+            tokenCount: compactResult.result?.tokensAfter,
+            sessionFile:
+              resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
+              sessionPromptState.sessionFile,
+            ...(previousSessionId ? { previousSessionId } : {}),
+          },
+          resolveActiveHookContext(),
+        );
+      } else {
+        await hookRunner.runBeforeCompaction(
+          { messageCount: -1, sessionFile: sessionPromptState.sessionFile },
+          resolveActiveHookContext(),
+        );
+      }
     } catch (error) {
       assertRecoveryActive();
-      log.warn(`after_compaction hook failed during ${reason}: ${String(error)}`);
+      log.warn(`${hook} hook failed during ${reason}: ${String(error)}`);
     }
     assertRecoveryActive();
   };
@@ -579,7 +543,11 @@ export function createEmbeddedRunCompactionRuntime(input: {
     prepareRecoverySession,
     adoptCompactionTranscript,
     onCompactionHookMessages,
-    runOwnsCompactionBeforeHook,
-    runOwnsCompactionAfterHook,
+    runOwnsCompactionBeforeHook: (reason: string) => runOwnsCompactionHook(reason),
+    runOwnsCompactionAfterHook: (
+      reason: string,
+      compactResult: CompactionResult,
+      previousSessionId?: string,
+    ) => runOwnsCompactionHook(reason, compactResult, previousSessionId),
   };
 }

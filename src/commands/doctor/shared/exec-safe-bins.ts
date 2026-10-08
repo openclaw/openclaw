@@ -86,19 +86,21 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
   return scopes;
 }
 
+function inspectSafeBinProfiles(scope: ExecSafeBinScopeRef) {
+  const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
+  const riskyHits = listRiskyConfiguredSafeBins(scope.safeBins);
+  const riskyBins = new Set(riskyHits.map((hit) => hit.bin));
+  const missingBins = scope.safeBins.filter(
+    (bin) => !scope.mergedProfiles[bin] && !riskyBins.has(normalizeSafeBinName(bin)),
+  );
+  return { interpreterBins, riskyHits, missingBins };
+}
+
 export function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverageHit[] {
   const hits: ExecSafeBinCoverageHit[] = [];
   for (const scope of collectExecSafeBinScopes(cfg)) {
-    const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
-    const riskyHits = listRiskyConfiguredSafeBins(scope.safeBins);
-    const riskyBins = new Set(riskyHits.map((hit) => hit.bin));
-    for (const bin of scope.safeBins) {
-      if (scope.mergedProfiles[bin]) {
-        continue;
-      }
-      if (riskyBins.has(normalizeSafeBinName(bin))) {
-        continue;
-      }
+    const { interpreterBins, riskyHits, missingBins } = inspectSafeBinProfiles(scope);
+    for (const bin of missingBins) {
       hits.push({
         scopePath: scope.scopePath,
         bin,
@@ -225,15 +227,10 @@ export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
   const warnings: string[] = [];
 
   for (const scope of collectExecSafeBinScopes(next)) {
-    const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
-    const riskyHits = listRiskyConfiguredSafeBins(scope.safeBins);
-    const riskyBins = new Set(riskyHits.map((hit) => hit.bin));
+    const { interpreterBins, riskyHits, missingBins } = inspectSafeBinProfiles(scope);
     for (const hit of riskyHits) {
       warnings.push(`- ${scope.scopePath}.safeBins includes '${hit.bin}': ${hit.warning}`);
     }
-    const missingBins = scope.safeBins.filter(
-      (bin) => !scope.mergedProfiles[bin] && !riskyBins.has(normalizeSafeBinName(bin)),
-    );
     if (missingBins.length === 0) {
       continue;
     }

@@ -234,7 +234,20 @@ Signing in returns to the same thread and applies the person's existing
 permissions; it does not grant editing or access to other sessions. A signed-in
 person without private access can still read the public version. Private,
 missing, and ambiguous anonymous targets show the same unavailable page without
-revealing names or candidate sessions.
+revealing names or candidate sessions. While the protected login handoff checks
+access, a private-thread page shows **Loading conversation**, not an unavailable
+error. A failed access check offers reload or login instead of claiming access
+was denied. Without JavaScript, the generic unavailable page remains readable.
+
+Token/password operators with a saved credential for this Gateway automatically
+continue into the Control UI when reopening, reloading, or following a chat link.
+The browser uses its session token or paired-device credential; passwords remain
+in memory only. This also works on loopback HTTP, which permits public readers.
+The anonymous private-thread document initially returns `404`, then the browser
+opens the app through the session-entry handoff with a `200` response. No extra
+**Log in** click is needed. Without a saved credential, **Log in** opens the normal
+login gate. On non-secure ingress where public transcripts are unavailable,
+token/password deployments serve the app shell directly.
 
 Assigning another owner does not transfer public-sharing authority. If the
 controls are unavailable, confirm that the session is saved, is not incognito,
@@ -255,6 +268,10 @@ visible. **Older messages** opens earlier pages without automatic refresh;
 **Back to latest** returns to the live view. Pages and long messages are bounded,
 with visible omission notices. The initial conversation and social metadata
 work without JavaScript.
+
+Public reads wait for current sharing facts when a session changes during the
+request. If the page changes while it is being prepared, the reader can return a
+temporary-unavailable response; retrying reads the current publication.
 
 ### Revocation and older links
 
