@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tempFile } from "@openclaw/fs-safe/advanced";
 import { root } from "@openclaw/fs-safe/root";
-import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
@@ -108,26 +108,34 @@ export async function writeTranscriptArtifactFile(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   const target = await root(params.rootDir);
-  await withTempWorkspace(
-    { rootDir: params.rootDir, prefix: ".openclaw-transcript-", mode: 0o600 },
-    async (stage) => {
-      const source = await stage.store.root();
-      await params.write(stage.path(params.fileName));
-      // copyIn retains the former best-effort file/parent fsync behavior on every platform.
-      await target.copyIn(
-        params.fileName,
-        { root: source, relativePath: params.fileName },
-        {
-          mode: 0o600,
-          durable: true,
-          maxBytes: Infinity,
-          sourceHardlinks: "reject",
-          signal: params.signal,
-          assertBeforeMutation: params.assertBeforeMutation,
-        },
-      );
+  // Match the former output owner's staging contract for roots under shared ancestors.
+  const stage = await tempFile({
+    rootDir: params.rootDir,
+    prefix: "openclaw-transcript",
+    fileName: params.fileName,
+    onCleanupError(error) {
+      throw error;
     },
-  );
+  });
+  try {
+    const source = await root(stage.dir);
+    await params.write(stage.path);
+    // copyIn retains the former best-effort file/parent fsync behavior on every platform.
+    await target.copyIn(
+      params.fileName,
+      { root: source, relativePath: path.basename(stage.path) },
+      {
+        mode: 0o600,
+        durable: true,
+        maxBytes: Infinity,
+        sourceHardlinks: "reject",
+        signal: params.signal,
+        assertBeforeMutation: params.assertBeforeMutation,
+      },
+    );
+  } finally {
+    await stage.cleanup();
+  }
 }
 
 export async function removeTranscriptArtifact(

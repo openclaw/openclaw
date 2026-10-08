@@ -719,8 +719,11 @@ describe("TranscriptsStore", () => {
     expect(fs.existsSync(store.sessionDir(session("phantom-export")))).toBe(false);
   });
 
-  it("stores summaries in SQLite and materializes explicit artifacts", async () => {
+  it("stores summaries in SQLite and materializes artifacts beneath a shared export parent", async () => {
     const { stateDir, store } = createStore();
+    const exportRoot = path.join(stateDir, "transcripts");
+    fs.mkdirSync(exportRoot, { recursive: true });
+    fs.chmodSync(exportRoot, 0o770);
     const target = {
       ...session("ansi-\u001b[31mprovider\u001b[0m", "2026-05-22T10:00:00.000Z"),
       title: "ANSI import",
