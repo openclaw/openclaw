@@ -397,7 +397,6 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   const prepareSelectedAccountCatalog = async (
     assertCurrent: () => void,
     options: {
-      allowDiscovery: boolean;
       refresh?: boolean;
       withCurrent?: CurrentReadAuthority["withCurrent"];
       beforeRequest?: () => void;
@@ -424,6 +423,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         profileId,
         credential,
         ...options,
+        allowDiscovery: options.refresh === true,
         load: async () => {
           assertCurrent();
           const provider = params.pluginRegistry?.providers.find(

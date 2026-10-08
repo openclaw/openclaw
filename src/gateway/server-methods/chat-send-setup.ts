@@ -91,6 +91,7 @@ export async function prepareAndAdmitChatSend(
     context,
     client,
     isDirectExternalUser: options?.isDirectExternalUser,
+    assertCurrent,
   });
   if (!loadedSession.ok) {
     respond(

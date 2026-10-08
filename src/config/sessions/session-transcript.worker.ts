@@ -130,6 +130,10 @@ serveOwnedWorkerTasks(
         const execute = await prepareSessionHistoryReadOperation(request);
         return execute();
       }
+      if (request.kind === "session-cleanup") {
+        const { readSessionCleanupSnapshot } = await import("./cleanup-service-read.worker.js");
+        return readSessionCleanupSnapshot(request);
+      }
       if (request.kind === "lifecycle-artifact-plan") {
         const { readSessionLifecycleArtifactCleanup } =
           await import("./session-accessor.sqlite-lifecycle-artifacts.js");

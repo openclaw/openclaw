@@ -189,6 +189,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
           queueWaitMs: Math.round(timing.startedAt - startedAt),
           writerExecutionMs: Math.round(timing.finishedAt - timing.startedAt),
           completionDelayMs: Math.round(completedAt - timing.finishedAt),
+          reentrant: timing.reentrant,
         }
       : {}),
   });
@@ -224,21 +225,24 @@ export async function runExclusiveSqliteSessionWrite<T>(
     completedAt = performance.now();
     if (completedAt - startedAt >= SQLITE_SESSION_SLOW_WRITE_MS) {
       getChildLogger({ subsystem: "session-sqlite" }).warn(
-        "slow SQLite session write",
         logFields(completedAt),
+        "slow SQLite session write",
       );
     }
     return result;
   } catch (error) {
     outcome = "error";
     completedAt = performance.now();
-    getChildLogger({ subsystem: "session-sqlite" }).warn("SQLite session write failed", {
-      ...logFields(completedAt),
-      error: truncateUtf16Safe(
-        formatErrorMessageWithCode(error),
-        SQLITE_SESSION_WRITE_ERROR_MAX_CHARS,
-      ),
-    });
+    getChildLogger({ subsystem: "session-sqlite" }).warn(
+      {
+        ...logFields(completedAt),
+        error: truncateUtf16Safe(
+          formatErrorMessageWithCode(error),
+          SQLITE_SESSION_WRITE_ERROR_MAX_CHARS,
+        ),
+      },
+      "SQLite session write failed",
+    );
     throw error;
   } finally {
     if (sessionWriteDiagnostics.hasSubscribers) {

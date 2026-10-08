@@ -27,6 +27,10 @@ import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
 } from "./activity-summary-source.types.js";
+import type {
+  SessionCleanupReadInput,
+  SessionCleanupReadResult,
+} from "./cleanup-service-read.types.js";
 import type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
 import type {
   ConversationRowsWorkerInput,
@@ -347,6 +351,7 @@ type BoardWidgetDocumentWorkerInput = BoardReadWorkerInput<
 
 export type SessionHistoryWorkerInput =
   | TrajectoryRetentionWorkerInput
+  | SessionCleanupReadInput
   | BoardSnapshotWorkerInput
   | BoardWidgetDocumentWorkerInput
   | SessionStoreProjectionWorkerInput
@@ -424,6 +429,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     kind: "trajectory-retention";
     plan: TrajectoryRuntimeRetentionPlan;
   };
+  "session-cleanup": SessionCleanupReadResult;
   "transcript-raw-delta": { kind: "transcript-raw-delta"; result: SessionTranscriptRawDeltaResult };
   "transcript-visible-delta": {
     kind: "transcript-visible-delta";
@@ -576,6 +582,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
     input: Omit<TrajectoryRetentionWorkerInput, "kind" | "database">,
     options: { signal?: AbortSignal; timeoutMs: number },
   ) => Promise<TrajectoryRuntimeRetentionPlan>;
+  readCleanup: SessionHistoryReader<SessionCleanupReadInput>;
   readRawDelta: CancellableSessionHistoryReader<
     Extract<SessionTranscriptDeltaWorkerInput, { kind: "transcript-raw-delta" }>,
     SessionTranscriptRawDeltaResult

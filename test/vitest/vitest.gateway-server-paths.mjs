@@ -260,6 +260,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils-store-lookup.freshness.test.ts",
   "src/gateway/session-utils-store-lookup.test.ts",
   "src/gateway/session-utils.agent-models.test.ts",
+  "src/gateway/session-utils.deleted-agent.test.ts",
   "src/gateway/session-utils.queued-collector-admission.test.ts",
   "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
   "src/gateway/session-utils.queued-collector-settlement.test.ts",
