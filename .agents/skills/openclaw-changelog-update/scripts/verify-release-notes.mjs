@@ -19,10 +19,12 @@ import {
   loadReleaseChangelog,
   writeReleaseChangelog,
 } from "../../../../scripts/lib/release-changelog.mjs";
+import { parseReleaseVersion } from "../../../../scripts/lib/release-version.mjs";
 import {
   extractChangelogReleaseSections,
   formatContributionRecordProvenance,
   formatShippedBaselineExclusions,
+  loadReleaseNotesForTag,
   parseContributionRecordProvenance,
   parseShippedBaselineExclusions,
   releaseNotesVersionForTag,
@@ -87,10 +89,11 @@ function fail(message) {
 function printUsage() {
   console.log(`Usage:
   node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \\
-    --base <tag-or-sha> --target <tag-or-sha> --version <version> [options]
+    [--base <tag-or-sha|npm-beta>] --target <tag-or-sha> --version <version> [options]
 
 Required:
-  --base <ref>          Release range start.
+  --base <ref>          Release range start; beta versions default to npm-beta.
+                       Capture npm beta before publication; reuse the resolved tag on retries.
   --target <ref>        Release range end.
   --version <version>   Release changelog version heading to verify.
 
@@ -175,6 +178,9 @@ export function parseArgs(argv) {
   }
 
   if (!options.help) {
+    if (!options.base && parseReleaseVersion(options.version ?? "")?.channel === "beta") {
+      options.base = "npm-beta";
+    }
     for (const name of ["base", "target", "version"]) {
       if (!options[name]) {
         fail(`--${name} is required`);
@@ -811,9 +817,9 @@ function shippedBaselineFor(ref) {
   git(["rev-parse", `${tagRef}^{commit}`]);
   const rootDir = process.cwd();
   const changelog = loadChangelogCollection({ rootDir, ref: tagRef, recordsOnly: true });
-  const source = loadReleaseChangelog({ rootDir, ref: tagRef, version });
+  const source = loadReleaseNotesForTag({ rootDir, ref: tagRef, tag: ref, version });
   completeContributionRecord(
-    sectionFor(source.record ?? source.section, version),
+    sectionFor(source.record ?? source.section, source.version),
     `shipped baseline ${ref}`,
   );
   return {
@@ -2359,9 +2365,10 @@ export function countTopLevelSectionBullets(sectionSource, heading) {
 
 export function highlightCountError(sectionSource) {
   const count = countTopLevelSectionBullets(sectionSource, "Highlights");
-  return count >= 5 && count <= 8
+  const minimum = /^## [^\n]+-beta\.[1-9][0-9]*\r?(?:\n|$)/u.test(sectionSource) ? 0 : 5;
+  return count >= minimum && count <= 8
     ? undefined
-    : `### Highlights must contain 5-8 top-level bullets; found ${count}`;
+    : `### Highlights must contain ${minimum}-8 top-level bullets; found ${count}`;
 }
 
 export function ledgerChecks(section, pullRequests, nodes, directCommits, shippedBaselines = []) {
@@ -2612,6 +2619,54 @@ function main() {
   if (options.help) {
     printUsage();
     return;
+  }
+  if (options.base === "npm-beta") {
+    const candidate = parseReleaseVersion(options.version);
+    if (candidate?.channel !== "beta") {
+      fail("--base npm-beta requires an exact beta changelog version");
+    }
+    const previous = JSON.parse(
+      run("npm", [
+        "view",
+        "openclaw@beta",
+        "version",
+        "--json",
+        "--registry=https://registry.npmjs.org",
+      ]),
+    );
+    const baseline = typeof previous === "string" ? parseReleaseVersion(previous) : null;
+    if (!baseline || baseline.channel === "alpha" || baseline.patch >= 33) {
+      fail("npm beta did not resolve to a supported regular release version");
+    }
+    const compareBase =
+      candidate.year - baseline.year ||
+      candidate.month - baseline.month ||
+      candidate.patch - baseline.patch;
+    if (
+      compareBase < 0 ||
+      (compareBase === 0 &&
+        (baseline.channel !== "beta" || baseline.betaNumber >= candidate.betaNumber))
+    ) {
+      fail(
+        "npm beta already points to this candidate or a newer version; reuse the previously captured --base tag for verification or recovery",
+      );
+    }
+    // Resolve once before discovery. The manifest and contribution provenance
+    // retain this tag; publication/verification never consult a moving selector.
+    options.base = `v${baseline.version}`;
+  }
+  if (
+    parseReleaseVersion(options.version)?.channel === "beta" &&
+    /^v[0-9]/u.test(options.base) &&
+    !gitIsAncestor(options.base, options.target)
+  ) {
+    // Stable closeout may forward-port a release without retaining tag ancestry.
+    // Keep the reachable range strict and subtract the shipped record through
+    // its existing owner rather than documenting already-shipped PRs again.
+    if (!options.shippedRefs.includes(options.base)) {
+      options.shippedRefs.push(options.base);
+    }
+    options.base = git(["merge-base", options.base, options.target]);
   }
   const rootDir = process.cwd();
   const releaseSource = loadReleaseChangelog({ rootDir, version: options.version });

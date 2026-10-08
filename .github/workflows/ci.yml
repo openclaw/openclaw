@@ -5387,12 +5387,18 @@ jobs:
           mkdir -p "apps/ios/build/LifecycleTestResults"
           test_args=(
             -only-testing:OpenClawTests/CloudflareAccessClientTests
+            -only-testing:OpenClawTests/CloudflareAccessBrowserPresenterTests
             -only-testing:OpenClawTests/CloudflareAccessTransferTests
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
             -only-testing:OpenClawTests/GatewayIngressControllerTests
+            -only-testing:OpenClawTests/GatewayIngressLoginPreparationTests
             -only-testing:OpenClawTests/GatewayConnectionControllerTests
+            -only-testing:OpenClawTests/LegacyManualGatewayMigrationTests
+            -only-testing:OpenClawTests/GatewayOperatorFleetTests
+            -only-testing:OpenClawTests/IOSMediaArtifactLoaderTests
+            -only-testing:OpenClawTests/OpenClawTypographyTests
             -only-testing:OpenClawTests/GatewayConnectionSecurityTests
             -only-testing:OpenClawTests/GatewaySettingsStoreTests
           )
@@ -5431,6 +5437,7 @@ jobs:
             -collect-test-diagnostics "$diagnostic_collection" \
             "${test_args[@]}" \
             "$test_action"
+          python3 scripts/ios-access-restart-proof.py "${IOS_SIMULATOR_ID:?}"
           if [[ "$IOS_CI_PHASE" == "tests" && "$IOS_MAIN_TIER" != "true" ]]; then
             run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.log xcodebuild \
               -project apps/ios/OpenClaw.xcodeproj \

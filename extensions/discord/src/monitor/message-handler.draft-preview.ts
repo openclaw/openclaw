@@ -177,21 +177,6 @@ export function createDiscordDraftPreviewController(params: {
     onCleanupFailure: (err) => params.log(`discord: draft cleanup failed: ${String(err)}`),
   });
 
-  const resetProgressState = () => {
-    lastPartialText = "";
-    draftText = "";
-    hasStreamedAssistantText = false;
-    draftChunker?.reset();
-  };
-
-  const forceNewMessageIfNeeded = () => {
-    if (shouldSplitPreviewMessages && hasStreamedAssistantText) {
-      params.log("discord: calling forceNewMessage() for draft stream");
-      draftStream?.forceNewMessage();
-    }
-    resetProgressState();
-  };
-
   const beginNewProgressTurn = (options?: { force?: boolean }) => {
     const beganNewTurn = progressDraft.beginNewTurn(options);
     if (beganNewTurn) {
@@ -205,7 +190,14 @@ export function createDiscordDraftPreviewController(params: {
         draftStream?.forceNewMessage("discard");
       }
     } else {
-      forceNewMessageIfNeeded();
+      if (shouldSplitPreviewMessages && hasStreamedAssistantText) {
+        params.log("discord: calling forceNewMessage() for draft stream");
+        draftStream?.forceNewMessage();
+      }
+      lastPartialText = "";
+      draftText = "";
+      hasStreamedAssistantText = false;
+      draftChunker?.reset();
     }
     return beganNewTurn;
   };

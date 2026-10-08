@@ -284,6 +284,11 @@ Opening a session as a viewer leaves its unread marker intact, including shared 
 
 **Delete** removes the confirmed selection from loaded session lists immediately and leaves any deleted conversation that is open. The Gateway finishes deletion in the background, safely stopping and reclaiming an attached cloud worker first. If deletion fails, the affected session can reappear with an error; other successful deletions and any navigation you made in the meantime are preserved. Browser drafts are retired only after deletion is confirmed, not while the request is pending. In-memory draft handoffs are retired immediately on confirmation. Switching Gateways during storage cleanup preserves the other Gateway's drafts and queued messages. If the connection or signed-in owner changes before storage cleanup starts, or recovery readiness takes more than ten seconds, stored drafts remain untouched and the UI reports the cleanup failure.
 
+Deleting a nested session keeps the remaining child list usable while the request
+is pending. A session hidden by pending deletion does not make an otherwise complete
+child list incomplete. If the Gateway cannot return a complete child list after
+bounded retries, the sidebar still shows the list error and offers **Retry**.
+
 On the Sessions page, checkbox selections survive paging through the loaded list.
 When the list refreshes, sessions that have disappeared, left the current filter,
 or been replaced are deselected. A replacement never inherits the old session's

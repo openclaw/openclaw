@@ -10,7 +10,10 @@ import {
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
 import {
   resolveDiscordComponentSpec,
@@ -149,9 +152,7 @@ export async function sendDiscordOutboundPayload(params: {
       voiceFailure = { error: err };
     }
     if (!voiceFailure) {
-      await payloadContext.onDeliveryResult?.(
-        attachChannelToResult("discord", toDiscordOutboundDeliveryResult(lastResult)),
-      );
+      await onDeliveryResult(lastResult);
       if (payload.text?.trim()) {
         lastResult = await sendContext.send(sendContext.target, payload.text, {
           verbose: false,
@@ -182,12 +183,7 @@ export async function sendDiscordOutboundPayload(params: {
     return completeDelivery(lastResult);
   }
 
-  const discordData =
-    payload.channelData?.discord &&
-    typeof payload.channelData.discord === "object" &&
-    !Array.isArray(payload.channelData.discord)
-      ? (payload.channelData.discord as Record<string, unknown>)
-      : {};
+  const discordData = asOptionalRecord(payload.channelData?.discord) ?? {};
   const filename = normalizeOptionalString(discordData.filename);
   const componentSpec = await resolveDiscordComponentSpec(payload);
   const nativeComponents =

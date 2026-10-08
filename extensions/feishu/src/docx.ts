@@ -274,6 +274,24 @@ async function deleteBlockChildren(
   assertFeishuApiSuccess(res);
 }
 
+async function deleteChildBlock(
+  client: Lark.Client,
+  docToken: string,
+  parentId: string,
+  blockId: string,
+): Promise<boolean> {
+  const children = await client.docx.documentBlockChildren.get({
+    path: { document_id: docToken, block_id: parentId },
+  });
+  assertFeishuApiSuccess(children);
+  const index = (children.data?.items ?? []).findIndex((item) => item.block_id === blockId);
+  if (index === -1) {
+    return false;
+  }
+  await deleteBlockChildren(client, docToken, parentId, index, index + 1);
+  return true;
+}
+
 async function clearDocumentContent(client: Lark.Client, docToken: string) {
   const existing = await client.docx.documentBlock.list({
     path: { document_id: docToken },
@@ -320,6 +338,11 @@ async function uploadImageToDocx(
   if (!fileToken) {
     throw new Error("Image upload failed: no file_token returned");
   }
+  const patchRes = await client.docx.documentBlock.patch({
+    path: { document_id: docToken, block_id: blockId },
+    data: { replace_image: { token: fileToken } },
+  });
+  assertFeishuApiSuccess(patchRes);
   return fileToken;
 }
 
@@ -351,21 +374,7 @@ async function processImages(
         maxBytes,
         remoteReadTimeoutMs: imageReadTimeoutMs,
       });
-      const fileToken = await uploadImageToDocx(
-        client,
-        blockId,
-        upload.buffer,
-        upload.fileName,
-        docToken,
-      );
-
-      const patchRes = await client.docx.documentBlock.patch({
-        path: { document_id: docToken, block_id: blockId },
-        data: {
-          replace_image: { token: fileToken },
-        },
-      });
-      assertFeishuApiSuccess(patchRes);
+      await uploadImageToDocx(client, blockId, upload.buffer, upload.fileName, docToken);
 
       processed++;
     } catch (err) {
@@ -476,12 +485,6 @@ async function uploadImageBlock(
     docToken, // drive_route_token for multi-datacenter routing
   );
 
-  const patchRes = await client.docx.documentBlock.patch({
-    path: { document_id: docToken, block_id: imageBlockId },
-    data: { replace_image: { token: fileToken } },
-  });
-  assertFeishuApiSuccess(patchRes);
-
   return {
     success: true,
     block_id: imageBlockId,
@@ -516,15 +519,7 @@ async function uploadFileBlock(
   }
 
   const parentId = placeholderBlock.parent_id ?? blockId;
-  const childrenRes = await client.docx.documentBlockChildren.get({
-    path: { document_id: docToken, block_id: parentId },
-  });
-  assertFeishuApiSuccess(childrenRes);
-  const items = childrenRes.data?.items ?? [];
-  const placeholderIdx = items.findIndex((item) => item.block_id === placeholderBlock.block_id);
-  if (placeholderIdx >= 0) {
-    await deleteBlockChildren(client, docToken, parentId, placeholderIdx, placeholderIdx + 1);
-  }
+  await deleteChildBlock(client, docToken, parentId, placeholderBlock.block_id);
 
   const fileRes = await client.drive.media.uploadAll({
     data: {
@@ -914,17 +909,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           case "delete_block": {
             const { block } = await getBlock(client, p.doc_token, p.block_id);
             const parentId = block?.parent_id ?? p.doc_token;
-            const children = await client.docx.documentBlockChildren.get({
-              path: { document_id: p.doc_token, block_id: parentId },
-            });
-            assertFeishuApiSuccess(children);
-            const index = (children.data?.items ?? []).findIndex(
-              (item) => item.block_id === p.block_id,
-            );
-            if (index === -1) {
+            if (!(await deleteChildBlock(client, p.doc_token, parentId, p.block_id))) {
               throw new Error("Block not found");
             }
-            await deleteBlockChildren(client, p.doc_token, parentId, index, index + 1);
             return json({ success: true, deleted_block_id: p.block_id });
           }
           case "create_table":

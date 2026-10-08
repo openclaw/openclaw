@@ -18,6 +18,7 @@ struct GatewayIngressAuthorization: Sendable {
 @MainActor
 @Observable
 final class GatewayIngressController {
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "CloudflareAccess")
     typealias RequestDeadline = @Sendable (
         TimeInterval, @escaping @Sendable () async throws -> (Data, HTTPURLResponse)) async throws
         -> (Data, HTTPURLResponse)
@@ -195,9 +196,11 @@ final class GatewayIngressController {
         let preCommitOrdinary = self.routes[key]?.ordinaryAdmission
         // A cached host grant must not make an independently admitted profile depend
         // on browser sign-out or expiry. Existing service headers and WARP go first.
+        Self.logger.info("Access challenge discovery started")
         let ordinaryChallenge = try await client.discover(
             gatewayURL: route.url,
             customHeaders: self.customHeaders(route.stableID))
+        Self.logger.info("Access challenge discovery completed managed=\(ordinaryChallenge != nil)")
         try self.checkRegistration(registration)
         guard let ordinaryChallenge else {
             try await self.admitOrdinary(
@@ -238,6 +241,7 @@ final class GatewayIngressController {
             throw CloudflareAccessError.storageFailed
         }
         if let application {
+            Self.logger.info("Access interactive sign-in required userInitiated=\(userInitiated)")
             let attentionID = UUID()
             self.showAttention(route, message: "Sign in to Cloudflare Access to connect this gateway.", id: attentionID)
             if let snapshot {
@@ -275,12 +279,20 @@ final class GatewayIngressController {
     }
 
     func hasSession(stableID: String) -> Bool {
-        guard let origin = origin(stableID: stableID) else { return false }
-        return self.sessions.snapshot(for: origin) != nil
+        self.sessionOrigin(stableID: stableID) != nil
     }
 
-    func signOut(stableID: String) async {
-        guard let origin = origin(stableID: stableID) else { return }
+    func sessionOrigin(stableID: String) -> CloudflareAccessOrigin? {
+        guard let origin = origin(stableID: stableID),
+              self.sessions.snapshot(for: origin) != nil
+        else { return nil }
+        return origin
+    }
+
+    func signOut(stableID: String, expectedOrigin: CloudflareAccessOrigin? = nil) async {
+        guard let origin = origin(stableID: stableID),
+              expectedOrigin == nil || expectedOrigin == origin
+        else { return }
         _ = self.retireManagedAdmissions(origin: origin, revision: self.sessions.currentRevision(for: origin))
         if self.foregroundIntent?.application.origin == origin {
             self.cancelSignIn()
@@ -525,19 +537,32 @@ final class GatewayIngressController {
                     }
                 }
                 try Task.checkCancellation()
-                let task = self.sessions.signIn(application: application) { [weak self] url in
+                let cancelBrowser = { [weak self] in
                     guard let self, let intent = self.foregroundIntent, intent.id == intentID,
-                          self.liveParticipant(in: intent) != nil else { throw CancellationError() }
-                    try await self.browser.open(url, intentID: intentID) { [weak self] in
-                        guard let self, let intent = self.foregroundIntent, intent.id == intentID,
-                              self.liveParticipant(in: intent) != nil else { return }
-                        self.cancelSignIn()
-                    }
+                          self.liveParticipant(in: intent) != nil else { return }
+                    self.cancelSignIn()
                 }
                 do {
+                    guard let intent = self.foregroundIntent, intent.id == intentID,
+                          self.liveParticipant(in: intent) != nil else { throw CancellationError() }
+                    // Sign in without the transfer query first. Some identity providers cannot
+                    // finish login with the longer nested return address carried by CLI transfer.
+                    // Website completion grants nothing; explicit Continue starts verified transfer.
+                    Self.logger.info("Access website sign-in started")
+                    try await self.browser.prepare(application.origin, intentID: intentID, onCancel: cancelBrowser)
+                    try Task.checkCancellation()
+                    guard let intent = self.foregroundIntent, intent.id == intentID,
+                          self.liveParticipant(in: intent) != nil else { throw CancellationError() }
+                    Self.logger.info("Access encrypted transfer started")
+                    let task = self.sessions.signIn(application: application) { [weak self] url in
+                        guard let self, let intent = self.foregroundIntent, intent.id == intentID,
+                              self.liveParticipant(in: intent) != nil else { throw CancellationError() }
+                        try await self.browser.open(url, intentID: intentID, onCancel: cancelBrowser)
+                    }
                     let snapshot = try await task.value
                     try Task.checkCancellation()
                     guard self.foregroundIntent?.id == intentID else { throw CancellationError() }
+                    Self.logger.info("Access session verified")
                     self.blockedRevisions.removeValue(forKey: application.origin)
                     await self.browser.dismiss(intentID: intentID)
                     try Task.checkCancellation()
@@ -545,6 +570,7 @@ final class GatewayIngressController {
                     self.signingIn = false
                     return snapshot
                 } catch {
+                    Self.logger.info("Access sign-in stopped before admission")
                     if let intent = self.foregroundIntent, intent.id == intentID {
                         if let participant = self.liveParticipant(in: intent),
                            self.attention?.id == intent.attentionID

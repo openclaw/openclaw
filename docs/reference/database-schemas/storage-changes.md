@@ -1371,6 +1371,14 @@ health row are not one atomic transaction. Synchronous config readers and writer
 keep their existing APIs; config parsing, validation, and plugin preparation retain
 their own execution paths.
 
+GitHub OAuth reconciliation loads persisted config through the asynchronous config
+owner. A runtime-config replacement or changed OAuth record during the read leaves
+the pending outcome for a later reconciliation. Health comparisons use conditional
+writes against every original raw field, including nulls; audit appends read their
+sequence and retention count together within the existing write transaction.
+Foreign commits remain visible on each new operation. These changes preserve
+schemas, retention, synchronous cold-load compatibility, and update behavior.
+
 The native Gateway host supplies snapshot preparation through its registered
 config owner. Those reads prepare deferred migration and plugin metadata with the
 existing shared-state actor. Each read captures one exact owner before awaiting

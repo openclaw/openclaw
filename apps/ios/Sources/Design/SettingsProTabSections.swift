@@ -936,6 +936,55 @@ extension SettingsProTab {
                     }
                 }
             }
+            if !self.appModel.isLocalGatewayFixtureEnabled,
+               let attention = Self.gatewayAccessAttention(
+                   in: self.gatewayRegistry, ingress: self.gatewayController.ingress)
+            {
+                Text(attention.message)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+                if self.gatewayController.ingress.signingIn {
+                    Button {
+                        self.gatewayController.ingress.cancelSignIn()
+                    } label: {
+                        Text("Cancel sign-in").font(OpenClawType.body)
+                    }
+                } else if attention.canSignIn {
+                    Button {
+                        Task { await self.reconnectGateway(ingressAttention: attention) }
+                    } label: {
+                        Text("Sign in to Cloudflare Access").font(OpenClawType.body)
+                    }
+                    .disabled(self.isReconnectingGateway)
+                }
+            }
+            if !self.appModel.isLocalGatewayFixtureEnabled,
+               let target = Self.gatewayAccessSessionTarget(
+                   in: self.gatewayRegistry, ingress: self.gatewayController.ingress)
+            {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Access Host")
+                        .font(OpenClawType.body)
+                    Text(verbatim: target.origin.url.absoluteString)
+                        .font(OpenClawType.subhead)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button {
+                    Task {
+                        await self.gatewayController.ingress.signOut(
+                            stableID: target.stableID, expectedOrigin: target.origin)
+                    }
+                } label: {
+                    Text("Sign out of Cloudflare Access").font(OpenClawType.body)
+                }
+                Text("Signs out gateways using this host’s Access session. Your browser may stay signed in.")
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+            }
             Button(role: .destructive) {
                 self.showResetOnboardingAlert = true
             } label: {

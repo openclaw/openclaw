@@ -248,28 +248,36 @@ export type AgentCommandOpts = {
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 };
 
-type AgentCommandGatewayOnlyKey =
-  | "clientCaps"
-  | "gatewayUiCommandTarget"
-  | "toolBindings"
-  | "taskSuggestionDeliveryMode"
-  | "runtimeContextFragments"
-  | "mainRestartRecoveryOwnerLease"
-  | "mainRestartRecoveryAdmitted"
-  | "mainRestartRecoveryAttempt"
-  | "pinnedWidgetAuthoring"
-  | "executionIdentityAdmission"
-  | "operationalRunInstance"
-  | "operatorAuthority"
-  | "privateCompletion"
-  | "assertSourceCurrent"
-  | "skillLibraryAuthoring"
-  | "cronCreatorAuthorityCapability"
-  | "onAdmittedRunContext"
-  | "onPostAdmittedRunContext"
-  | "beforeTerminalDelivery"
-  | "prepareAssistantTranscriptMessage"
-  | "internalDeliverySuppressErrors";
+/** Public ingress clears the same host-owned fields its option type excludes. */
+export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
+  clientCaps: undefined,
+  gatewayUiCommandTarget: undefined,
+  toolBindings: undefined,
+  taskSuggestionDeliveryMode: undefined,
+  runtimeContextFragments: undefined,
+  senderIsOwner: false,
+  mainRestartRecoveryOwnerLease: undefined,
+  mainRestartRecoveryAdmitted: undefined,
+  mainRestartRecoveryAttempt: undefined,
+  pinnedWidgetAuthoring: undefined,
+  executionIdentityAdmission: undefined,
+  operationalRunInstance: undefined,
+  assertSourceCurrent: undefined,
+  operatorAuthority: undefined,
+  privateCompletion: undefined,
+  skillLibraryAuthoring: undefined,
+  cronCreatorAuthorityCapability: undefined,
+  onAdmittedRunContext: undefined,
+  onPostAdmittedRunContext: undefined,
+  beforeTerminalDelivery: undefined,
+  prepareAssistantTranscriptMessage: undefined,
+  internalDeliverySuppressErrors: undefined,
+} satisfies Partial<AgentCommandOpts>);
+
+type AgentCommandGatewayOnlyKey = Exclude<
+  keyof typeof AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS,
+  "senderIsOwner"
+>;
 
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<

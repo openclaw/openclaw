@@ -217,7 +217,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       }),
     );
   });
-  it("hands five retained predecessor sessions to restart recovery without startup warnings", async () => {
+  it("reconciles retained predecessor sessions during startup without waiting for a sweep", async () => {
     const startedAt = Math.floor(performance.timeOrigin) - 60_000;
     const generation = getAgentEventLifecycleGeneration();
     const records = Array.from({ length: 5 }, (_, index) =>
@@ -263,7 +263,6 @@ describe("subagent orphan recovery — faithful restart path", () => {
         });
         await initSubagentRegistry();
         await activateGatewayRuntime();
-        await testing.sweepOnceForTests();
         await fixture.settle();
         for (const entry of records) {
           expect(
