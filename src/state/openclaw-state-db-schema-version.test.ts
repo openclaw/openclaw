@@ -54,23 +54,28 @@ function openDatabase(
   return database;
 }
 
-const read = (database: DatabaseSync) =>
-  runSqliteReadOperationSync(database, () => readStateSchemaContentVersion(database));
+const read = (database: DatabaseSync, published?: number) =>
+  runSqliteReadOperationSync(database, () => readStateSchemaContentVersion(database, published));
 
 describe("shared-state content version facts", () => {
-  it.each([undefined, 11])("reuses marker %s while probing each unpinned operation", (marker) => {
+  it.each([
+    { marker: undefined, expected: [13, 7, 5] },
+    { marker: 11, expected: [13, 11, 11] },
+  ])("reuses marker $marker without retaining the caller's floor", ({ marker, expected }) => {
     const database = openDatabase({ marker });
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
-      for (let index = 0; index < 3; index += 1) {
-        expect(read(database)).toBe(marker ?? 7);
+      for (const [index, published] of [13, undefined, 5].entries()) {
+        expect(read(database, published)).toBe(expected[index]);
       }
       expect(
         observation.queries.filter((sql) => /from "config_machine_state"/iu.test(sql)),
       ).toHaveLength(1);
-      expect(observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql))).toHaveLength(
-        3,
-      );
+      expect(
+        observation.queries.filter((sql) =>
+          /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql.trim()),
+        ),
+      ).toHaveLength(3);
     } finally {
       observation.restore();
     }
