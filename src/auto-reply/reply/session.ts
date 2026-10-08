@@ -72,6 +72,7 @@ import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
   normalizeMainKey,
+  toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { resolveAgentHarnessSessionContextError } from "../../sessions/agent-harness-session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
@@ -146,7 +147,7 @@ import {
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
 import { resolveReplySessionRolloverState } from "./session-rollover-state.js";
-import { stripThreadFromSessionRoute, stripThreadId } from "./session-route-reset.js";
+import { withoutThreadDelivery } from "./session-route-reset.js";
 
 const log = createSubsystemLogger("session-init");
 
@@ -218,17 +219,6 @@ async function resolveInitSessionStateAttemptContext(
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     }),
   };
-}
-
-function withoutThreadDelivery(entry: SessionEntry | undefined) {
-  if (entry?.delivery?.kind === "internal") {
-    return entry.delivery;
-  }
-  return normalizeSessionDeliveryState({
-    route: stripThreadFromSessionRoute(sessionDeliveryRoute(entry)),
-    context: stripThreadId(deliveryContextFromSession(entry)),
-    origin: stripThreadId(sessionDeliveryOrigin(entry)),
-  });
 }
 
 type ReplySessionPreprocessingState = {
@@ -1035,7 +1025,9 @@ async function initSessionStateAttemptLocked(
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       await cleanupBrowserSessionsForLifecycleEnd({
         cfg,
-        sessionKeys: [previousSessionEntry.sessionId, sessionKey, runtimePolicySessionKey],
+        sessionKeys: [previousSessionEntry.sessionId, sessionKey, runtimePolicySessionKey].map(
+          (requestKey) => toAgentStoreSessionKey({ agentId, requestKey }),
+        ),
         onWarn: (message) => log.warn(message),
         onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
       });
