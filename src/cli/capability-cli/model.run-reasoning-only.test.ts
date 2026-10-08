@@ -25,10 +25,12 @@ vi.mock("./shared.js", async (importOriginal) => ({
   resolveLocalCapabilityRuntimeConfig: vi.fn(async () => ({})),
 }));
 
+// mock-isolation: Keep local account secret reads out of this command diagnostic test.
 vi.mock("./local-account-secrets.js", () => ({
   prepareLocalCapabilityAccountSecrets: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Supply controlled provider completions without opening auth stores or transports.
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
   acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
     async [Symbol.asyncDispose]() {},
