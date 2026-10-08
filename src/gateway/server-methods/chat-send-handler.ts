@@ -254,7 +254,8 @@ async function handleChatSendWithOptions(
       mentionInbox: context.mentionInbox,
       assertOriginalInputCommit: composeSessionSourceAssertion([
         assertInputAdmissionCurrent,
-        sessionMutationAuthorization?.assertCurrent,
+        // Ordinary chat can bind a session created after request authorization.
+        commitInitialInput ? sessionMutationAuthorization?.assertCurrent : undefined,
       ]),
       goalCommitGuard,
     });
