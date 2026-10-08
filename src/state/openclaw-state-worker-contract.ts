@@ -33,6 +33,7 @@ import type {
 } from "../gateway/session-group-catalog.types.js";
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
+import type { RestartLifecycleWorkerOperations } from "../infra/restart-lifecycle.worker.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type {
   SqliteWalPeriodicRequest,
@@ -74,6 +75,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
+  RestartLifecycleWorkerOperations &
   SandboxRegistryOperations &
   WorktreeTemplateWorkerOperations &
   WorkspaceStateWorkerOperations &
@@ -249,6 +251,7 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | "database.walMaintenance"
       | "agentDatabases.releaseExitedLease"
       | "worktrees.reserveCapacity"
+      | keyof RestartLifecycleWorkerOperations
       | Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>
       | keyof CaptureWorkerOperations
       | keyof PluginStateWorkerOperations
