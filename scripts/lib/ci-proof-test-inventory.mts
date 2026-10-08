@@ -4047,7 +4047,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/components/app-sidebar.background-scope.test.ts",
   "ui/src/components/app-sidebar.catalog-discovery.test.ts",
   "ui/src/components/app-sidebar.catalog-events.test.ts",
-  "ui/src/components/app-sidebar.catalog-hidden-pages.test.ts",
   "ui/src/components/app-sidebar.catalog.test.ts",
   "ui/src/components/app-sidebar.child-history-freshness.test.ts",
   "ui/src/components/app-sidebar.child-lineage-successor.test.ts",
