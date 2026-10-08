@@ -64,19 +64,12 @@ type DiscordGatewayTransportErrorDetails = {
   statusCode?: number;
 };
 
-function readStringProperty(value: object, key: string): string | undefined {
-  const property = (value as Record<string, unknown>)[key];
-  return typeof property === "string" && property ? property : undefined;
-}
-
-function readNumberProperty(value: object, key: string): number | undefined {
-  return asFiniteNumber((value as Record<string, unknown>)[key]);
-}
-
 function describeDiscordGatewayTransportError(error: Error): DiscordGatewayTransportErrorDetails {
-  const code = readStringProperty(error, "code");
-  const closeCode = readNumberProperty(error, "closeCode");
-  const statusCode = readNumberProperty(error, "statusCode");
+  const fields = error as Error & Record<string, unknown>;
+  const rawCode = fields.code;
+  const code = typeof rawCode === "string" && rawCode ? rawCode : undefined;
+  const closeCode = asFiniteNumber(fields.closeCode);
+  const statusCode = asFiniteNumber(fields.statusCode);
   return {
     ...(error.name ? { name: error.name } : {}),
     message: error.message,
@@ -144,7 +137,6 @@ function shouldLogDiscordGatewayTransportClose(params: {
   lastError?: DiscordGatewayTransportErrorDetails;
 }): boolean {
   return (
-    params.code === DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE ||
     (params.code !== 1000 && params.code !== 1001) ||
     params.reason.length > 0 ||
     params.lastError !== undefined
@@ -183,9 +175,7 @@ export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayInten
 }
 
 function createGatewayPlugin(params: {
-  options: {
-    intents: number;
-  };
+  intents: number;
   gatewayInfoTimeoutMs: number;
   endpoint?: DiscordGatewayEndpoint;
   fetchImpl: DiscordGatewayFetch;
@@ -198,7 +188,7 @@ function createGatewayPlugin(params: {
     private gatewayInfoUsedFallback = false;
 
     constructor() {
-      super(params.options);
+      super({ intents: params.intents });
     }
 
     override registerClient(client: DiscordGatewayClient) {
@@ -439,9 +429,7 @@ export function createDiscordGatewayPlugin(params: {
   }
 
   return createGatewayPlugin({
-    options: {
-      intents,
-    },
+    intents,
     gatewayInfoTimeoutMs,
     ...(endpoint ? { endpoint } : {}),
     fetchImpl,

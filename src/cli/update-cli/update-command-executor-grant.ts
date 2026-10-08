@@ -123,6 +123,16 @@ export function resolveUpdateCommandChildBinding(
   const slotChild = slot ? store.read(slot.childKey) : undefined;
   const retained = retainedFields ? store.read(grant.retainedParent!.key) : undefined;
   const retainedChild = retainedFields ? store.read(grant.retainedChildKey!) : undefined;
+  const childIsCurrent = (
+    observed: ReturnType<typeof store.read> | undefined,
+    helper: typeof spawner.executor,
+    version?: 2,
+  ): observed is Extract<ReturnType<typeof store.read>, { kind: "current" }> =>
+    observed?.kind === "current" &&
+    observed.lease.owner === runId &&
+    observed.lease.action.kind === "update" &&
+    (version === 2 ? observed.lease.version === 2 : observed.lease.version !== 3) &&
+    isDeepStrictEqual(observed.lease.helper, helper);
   for (const read of [parent, originalChild, child, slotChild, retained, retainedChild]) {
     if (read?.kind === "unreadable") {
       throw new UpdateCommandRecoveryPendingError(
@@ -156,11 +166,7 @@ export function resolveUpdateCommandChildBinding(
         (slot.spawner.key !== slot.parent.key &&
           (!slot.spawner.key.startsWith(`${slot.parent.key}/.openclaw-update-child-`) ||
             slot.spawner.owner !== runId)) ||
-        slotChild?.kind !== "current" ||
-        slotChild.lease.version !== 2 ||
-        slotChild.lease.action.kind !== "update" ||
-        slotChild.lease.owner !== runId ||
-        !isDeepStrictEqual(slotChild.lease.helper, slot.spawner.executor))) ||
+        !childIsCurrent(slotChild, slot.spawner.executor, 2))) ||
     (retainedFields &&
       (retained?.kind !== "current" ||
         !isDeepStrictEqual(retained.lease, grant.retainedParent) ||
@@ -169,11 +175,7 @@ export function resolveUpdateCommandChildBinding(
         retained.lease.version === 3 ||
         !isDeepStrictEqual(retained.lease.executor, original.executor) ||
         !isDeepStrictEqual(retained.lease.helper, original.executor) ||
-        retainedChild?.kind !== "current" ||
-        retainedChild.lease.owner !== runId ||
-        retainedChild.lease.action.kind !== "update" ||
-        retainedChild.lease.version === 3 ||
-        !isDeepStrictEqual(retainedChild.lease.helper, spawner.executor))) ||
+        !childIsCurrent(retainedChild, spawner.executor))) ||
     (!legacyGrant && databasePath !== grant.databasePath) ||
     grant.runId !== runId ||
     grant.root !== resolveUpdateInstallRoot(root) ||
@@ -190,21 +192,13 @@ export function resolveUpdateCommandChildBinding(
     spawner.version === 3 ||
     (spawner.key !== original.key &&
       (!spawner.key.startsWith(childPrefix) || spawner.owner !== runId)) ||
-    process.ppid !== spawner.executor.pid ||
+    (process.platform !== "win32" && process.ppid !== spawner.executor.pid) ||
     !(grant.originalChildKey ?? grant.childKey).startsWith(
       `${spawner.key}/.openclaw-update-child-`,
     ) ||
     !grant.childKey.startsWith(`${parent.lease.key}/.openclaw-update-child-`) ||
-    originalChild.kind !== "current" ||
-    originalChild.lease.owner !== runId ||
-    originalChild.lease.action.kind !== "update" ||
-    originalChild.lease.version === 3 ||
-    !isDeepStrictEqual(originalChild.lease.helper, spawner.executor) ||
-    child.kind !== "current" ||
-    child.lease.owner !== runId ||
-    child.lease.action.kind !== "update" ||
-    child.lease.version === 3 ||
-    !isDeepStrictEqual(child.lease.helper, spawner.executor)
+    !childIsCurrent(originalChild, spawner.executor) ||
+    !childIsCurrent(child, spawner.executor)
   ) {
     throw new UpdateCommandRecoveryPendingError(
       "Candidate executor binding does not match its parent.",

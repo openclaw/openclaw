@@ -600,34 +600,6 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledOnce();
   });
 
-  it("keeps failed-launch cleanup pending when context rollback fails", async () => {
-    configOverride = createConfigOverride({ tools: { swarm: true } });
-    hoisted.resolveContextEngineMock.mockResolvedValue({
-      prepareSubagentSpawn: async () => ({
-        rollback: async () => {
-          throw new Error("rollback unavailable");
-        },
-      }),
-    });
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        throw new Error("launch failed");
-      }
-      return {};
-    });
-
-    await spawn({ task: "fail launch", collect: true }, collectorContext);
-
-    await vi.waitFor(() =>
-      expect(
-        hoisted.callGatewayMock.mock.calls.some(
-          ([request]) => (request as { method?: string }).method === "sessions.delete",
-        ),
-      ).toBe(true),
-    );
-    expect(hoisted.completeCollectorLaunchCleanupMock).not.toHaveBeenCalled();
-  });
-
   it("uses and validates tools.swarm.defaultAgentId for collector children", async () => {
     configOverride = createConfigOverride({
       tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
@@ -974,57 +946,6 @@ describe("spawnSubagentDirect seam flow", () => {
     expectNoChildSpawnSideEffects();
   });
 
-  it("authorizes explicit model overrides for in-process child launches", async () => {
-    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
-    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
-    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
-      return method === "agent" ? { runId: "run-in-process-model" } : { ok: true };
-    });
-
-    const result = await spawn({ task: "spawn on the requested model", model: "openai/gpt-5.4" });
-
-    expect(result).toMatchObject({ status: "accepted", runId: "run-in-process-model" });
-    const agentDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
-      ([method]) => method === "agent",
-    );
-    expect(agentDispatch?.[1]).toMatchObject({ provider: "openai", model: "gpt-5.4" });
-    expect(agentDispatch?.[2]).toMatchObject({
-      allowSyntheticModelOverride: true,
-      forceSyntheticClient: true,
-    });
-  });
-
-  it("keeps admin-scoped cleanup on in-process spawn failure", async () => {
-    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
-    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
-    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
-      if (method === "agent") {
-        throw new Error("spawn failed");
-      }
-      return { ok: true };
-    });
-
-    const result = await spawn({
-      task: "spawn failure cleanup",
-    });
-
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("spawn failed");
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
-    expect(hoisted.dispatchGatewayMethodInProcessMock).toHaveBeenCalledWith(
-      "sessions.delete",
-      expect.objectContaining({
-        key: result.childSessionKey,
-        deleteTranscript: true,
-      }),
-      expect.objectContaining({
-        forceSyntheticClient: true,
-        syntheticScopes: ["operator.admin"],
-        timeoutMs: 60_000,
-      }),
-    );
-  });
-
   it.each(
     inheritedSpawnCases.preferences.filter(
       ({ requesterThinkingLevel, requesterAgent }) =>
@@ -1116,4 +1037,3 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalled();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -23,19 +23,13 @@ function markReasoningMessage(formatted: string): string {
   return withoutHeader.replace(/^_/u, "🧠 _");
 }
 const REASONING_TAG_PREFIXES = [
-  "<think",
-  "<thinking",
-  "<thought",
-  "<internal",
-  "<antthinking",
-  "<mm:think",
-  "</think",
-  "</thinking",
-  "</thought",
-  "</internal",
-  "</antthinking",
-  "</mm:think",
-];
+  "think",
+  "thinking",
+  "thought",
+  "internal",
+  "antthinking",
+  "mm:think",
+].flatMap((name) => [`<${name}`, `</${name}`]);
 const THINKING_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 
@@ -67,14 +61,14 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
 }
 
 function isPartialReasoningTagPrefix(text: string): boolean {
-  const trimmed = text.trim().replace(/^<\s*(\/?)\s+/u, "<$1");
-  if (!trimmed.startsWith("<")) {
+  const trimmed = text
+    .trim()
+    .replace(/^<\s*(\/?)\s+/u, "<$1")
+    .toLowerCase();
+  if (!trimmed.startsWith("<") || trimmed.includes(">")) {
     return false;
   }
-  if (trimmed.includes(">")) {
-    return false;
-  }
-  return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed.toLowerCase()));
+  return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed));
 }
 
 type TelegramReasoningSplit = {

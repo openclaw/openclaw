@@ -13,7 +13,6 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js"
 import { isRestartEnabled } from "../config/commands.flags.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewayRestartPolicy } from "../infra/restart.js";
@@ -57,6 +56,7 @@ import {
   revokeActiveSkillReviewsBeforeConfigPublication,
 } from "./server-reload-utils.js";
 import { startGatewayCronWithLogging } from "./server-runtime-services.js";
+import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
@@ -266,9 +266,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     let recoveryRestartScheduled = false;
     const laneConcurrency = resolveGatewayLaneConcurrency(nextConfig);
     // Use one candidate env snapshot before publication and through later channel starts.
-    const shouldSkipChannelRestart =
-      isTruthyEnvValue(candidateEnv.OPENCLAW_SKIP_CHANNELS) ||
-      isTruthyEnvValue(candidateEnv.OPENCLAW_SKIP_PROVIDERS);
+    const shouldSkipChannelRestart = isChannelStartupSuppressedByEnvironment(candidateEnv);
     const channelReloadTargets = () =>
       new Set<ChannelKind>([...channelsToRestart, ...restartChannelAccounts.keys()]);
     const getChannelAutostartSuppression = () => params.getChannelAutostartSuppression?.() ?? null;

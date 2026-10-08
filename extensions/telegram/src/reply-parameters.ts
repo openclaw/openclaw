@@ -36,8 +36,7 @@ export function resolveTelegramSendThreadSpec(params: {
   if (params.targetDirectMessagesTopicId != null) {
     return { id: params.targetDirectMessagesTopicId, scope: "direct-messages" };
   }
-  const messageThreadId =
-    params.messageThreadId != null ? params.messageThreadId : params.targetMessageThreadId;
+  const messageThreadId = params.messageThreadId ?? params.targetMessageThreadId;
   if (messageThreadId == null) {
     return undefined;
   }
@@ -127,12 +126,7 @@ export function isTelegramQuoteParamError(err: unknown): boolean {
   return QUOTE_PARAM_RE.test(formatErrorMessage(err));
 }
 
-function removeTelegramNativeQuoteParam(
-  params: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-  if (!params) {
-    return {};
-  }
+function removeTelegramNativeQuoteParam(params: Record<string, unknown>): Record<string, unknown> {
   const replyMessageId = getTelegramNativeQuoteReplyMessageId(params);
   const { reply_parameters: _ignored, ...rest } = params;
   if (replyMessageId != null) {

@@ -515,9 +515,6 @@ async function drainStoredChatOutbox(
       }
       return "blocked";
     }
-    if (result === "failed") {
-      continue;
-    }
   }
 }
 

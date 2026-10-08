@@ -123,11 +123,15 @@ function formatDisabledCodexPluginWarning(params: {
   ].join("\n");
 }
 
-function collectCodexAppServerCommandWarnings(cfg: OpenClawConfig): string[] {
+function readCodexPluginConfig(cfg: OpenClawConfig) {
   const plugins = asMutableRecord(cfg.plugins);
   const entries = asMutableRecord(plugins?.entries);
   const codex = asMutableRecord(entries?.codex);
-  const config = asMutableRecord(codex?.config);
+  return asMutableRecord(codex?.config);
+}
+
+function collectCodexAppServerCommandWarnings(cfg: OpenClawConfig): string[] {
+  const config = readCodexPluginConfig(cfg);
   const appServer = asMutableRecord(config?.appServer);
   if (typeof appServer?.command !== "string" || !appServer.command.trim()) {
     return [];
@@ -307,10 +311,7 @@ export function collectCodexRuntimeCompatibilityWarnings(
 }
 
 function collectCodexComputerUseWarnings(cfg: OpenClawConfig): string[] {
-  const plugins = asMutableRecord(cfg.plugins);
-  const entries = asMutableRecord(plugins?.entries);
-  const codex = asMutableRecord(entries?.codex);
-  const config = asMutableRecord(codex?.config);
+  const config = readCodexPluginConfig(cfg);
   const computerUse = asMutableRecord(config?.computerUse);
   if (!computerUse) {
     return [];
@@ -325,12 +326,7 @@ function collectCodexComputerUseWarnings(cfg: OpenClawConfig): string[] {
     return [];
   }
   const cadence =
-    computerUse.healthCheckIntervalMinutes === 30 ||
-    computerUse.healthCheckIntervalMinutes === 60 ||
-    computerUse.healthCheckIntervalMinutes === 120 ||
-    computerUse.healthCheckIntervalMinutes === 240
-      ? computerUse.healthCheckIntervalMinutes
-      : 60;
+    [30, 60, 120, 240].find((minutes) => computerUse.healthCheckIntervalMinutes === minutes) ?? 60;
   const healthCheckLine =
     computerUse.healthCheckEnabled === true
       ? `- Periodic Computer Use health checks are enabled with a ${cadence}-minute cadence.`
@@ -356,33 +352,25 @@ export function collectCodexRouteWarnings(params: {
   blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): string[] {
   const env = params.env ?? process.env;
+  const compactionContext = { cfg: params.cfg, env };
   const blockedProviderPlan =
     params.blockedProviderPlan ?? collectBlockedLegacyOpenAICodexProviderPlan(params.cfg);
   const blockedModelIdentities = new Set(blockedProviderPlan.blockedModelIdentities);
   const hits = collectConfigModelRefs(params.cfg, blockedModelIdentities);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg, env);
-  const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs({
-    cfg: params.cfg,
-    env,
-  });
+  const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs(compactionContext);
   const legacyLosslessCompactionPaths = new Set(
     legacyLosslessCompactionConfigs.flatMap((hit) =>
       hit.modelPath ? [hit.providerPath, hit.modelPath] : [hit.providerPath],
     ),
   );
-  const unsupportedCompactionOverrides = collectUnsupportedCodexCompactionOverrides({
-    cfg: params.cfg,
-    env,
-  }).filter((hit) => !legacyLosslessCompactionPaths.has(hit.path));
-  const sharedDefaultCompactionConsumers = getSharedDefaultCompactionOverrideConsumers({
-    cfg: params.cfg,
-    env,
-  });
+  const unsupportedCompactionOverrides = collectUnsupportedCodexCompactionOverrides(
+    compactionContext,
+  ).filter((hit) => !legacyLosslessCompactionPaths.has(hit.path));
+  const sharedDefaultCompactionConsumers =
+    getSharedDefaultCompactionOverrideConsumers(compactionContext);
   const sharedLosslessDefaultHasNonCodexConsumer =
-    sharedDefaultLosslessCompactionHasNonCodexConsumer({
-      cfg: params.cfg,
-      env,
-    });
+    sharedDefaultLosslessCompactionHasNonCodexConsumer(compactionContext);
   const warnings = [
     ...(blockedProviderPlan.warning ? [blockedProviderPlan.warning] : []),
     ...collectCodexRuntimeCompatibilityWarnings(params.cfg, env),

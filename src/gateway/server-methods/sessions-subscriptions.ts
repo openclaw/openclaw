@@ -130,6 +130,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
       let read: ReturnType<typeof retainSessionScopedRead>;
       let prepared: PreparedSessionApprovalReplay | undefined;
+      let approvalReplay;
       try {
         mark?.("retainedReadAdmission");
         sessionMutationAuthorization?.assertCurrent();
@@ -142,7 +143,6 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         options.sessionMutationCommitGuard?.();
         if (connId) {
           mark?.("observerCommit");
-          let approvalReplay;
           if (p.includeApprovals === true) {
             // Subscribe before the authoritative snapshot so a transition cannot
             // land between replay and live delivery. Clients reconcile by id.
@@ -223,27 +223,16 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               throw error;
             }
           }
-          mark?.("response");
-          respond(
-            true,
-            {
-              subscribed: true,
-              key: canonicalKey,
-              agentId: requestedAgentId,
-              ...(p.includeApprovals === true
-                ? {
-                    approvalReplay,
-                  }
-                : {}),
-            },
-            undefined,
-          );
-          return;
         }
         mark?.("response");
         respond(
           true,
-          { subscribed: false, key: canonicalKey, agentId: requestedAgentId },
+          {
+            subscribed: Boolean(connId),
+            key: canonicalKey,
+            agentId: requestedAgentId,
+            ...(connId && p.includeApprovals === true ? { approvalReplay } : {}),
+          },
           undefined,
         );
       } catch (error) {

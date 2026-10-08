@@ -4,6 +4,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
@@ -90,4 +94,8 @@ export async function invokeProjectMethod(
     ownedProjection?.dispose();
     releaseForegroundWork();
   }
+}
+
+export function withProjectState(run: (state: OpenClawTestState) => Promise<void>) {
+  return withOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" }, run);
 }

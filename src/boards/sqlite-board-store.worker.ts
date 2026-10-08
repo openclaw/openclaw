@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readRefusedSessionSource } from "../config/sessions/session-entry-patch.worker.js";
 import type { SessionSourcePredicate } from "../config/sessions/session-source-authority.js";
+import { readRefusedSessionSource } from "../config/sessions/session-source-predicate.worker.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,

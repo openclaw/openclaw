@@ -172,11 +172,10 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
   private openReference() {
     this.referenceSubmitted = false;
     const value = this.inspection;
-    if (value?.kind === "reference") {
-      this.reference = { ...value.ref };
-    } else {
-      this.reference = { source: "env", provider: "default", id: "" };
-    }
+    this.reference =
+      value?.kind === "reference"
+        ? { ...value.ref }
+        : { source: "env", provider: "default", id: "" };
     this.dialogOpen = true;
   }
 
@@ -308,28 +307,19 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
                     ${credentialSources.map((source) => html`<option value=${source} ?selected=${source === this.reference.source}>${t(`pluginsPage.credentials.sources.${source}`)}</option>`)}
                   </select></label
                 >
-                <label
-                  >${t("pluginsPage.credentials.provider")}<input
-                    class="settings-input"
-                    .value=${this.reference.provider}
-                    ?disabled=${blocked}
-                    @input=${(event: Event) => {
-                      if (event.currentTarget instanceof HTMLInputElement) {
-                        this.reference = { ...this.reference, provider: event.currentTarget.value };
-                      }
-                    }}
-                /></label>
-                <label
-                  >${t("pluginsPage.credentials.identifier")}<input
-                    class="settings-input"
-                    .value=${this.reference.id}
-                    ?disabled=${blocked}
-                    @input=${(event: Event) => {
-                      if (event.currentTarget instanceof HTMLInputElement) {
-                        this.reference = { ...this.reference, id: event.currentTarget.value };
-                      }
-                    }}
-                /></label>
+                ${(["provider", "id"] as const).map(
+                  (key) => html`<label
+                    >${t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}<input
+                      class="settings-input"
+                      .value=${this.reference[key]}
+                      ?disabled=${blocked}
+                      @input=${(event: Event) => {
+                        if (event.currentTarget instanceof HTMLInputElement) {
+                          this.reference = { ...this.reference, [key]: event.currentTarget.value };
+                        }
+                      }}
+                  /></label>`,
+                )}
                 <p class="muted">${t(`pluginsPage.credentials.help.${this.reference.source}`)}</p>
                 ${this.inspection?.kind === "reference" && this.inspection.unresolved ? html`<p class="callout warn">${t("pluginsPage.credentials.unresolved")}</p>` : nothing}
               `

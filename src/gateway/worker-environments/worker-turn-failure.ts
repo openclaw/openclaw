@@ -67,7 +67,7 @@ export async function failHandedOffTurn(params: {
     if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
       throw error;
     }
-    const current = params.placements.get(params.placement.sessionId);
+    const current = await params.placements.getAsync(params.placement.sessionId);
     const exactDrainOwner =
       current?.state === "draining" &&
       current.generation === params.placement.generation + 1 &&

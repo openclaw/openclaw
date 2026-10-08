@@ -16,26 +16,21 @@ type CodexStatusProbes = Awaited<ReturnType<typeof readCodexStatusProbes>>;
 export function formatCodexStatus(probes: CodexStatusProbes): string {
   const connected =
     probes.models.ok || probes.account.ok || probes.limits.ok || probes.mcps.ok || probes.skills.ok;
-  const lines = [`Codex app-server: ${connected ? "connected" : "unavailable"}`];
-  if (probes.models.ok) {
-    lines.push(
-      `Models: ${
-        probes.models.value.models
+  return [
+    `Codex app-server: ${connected ? "connected" : "unavailable"}`,
+    `Models: ${formatProbe(
+      probes.models,
+      ({ models }) =>
+        models
           .map((model) => formatCodexDisplayText(model.id))
           .slice(0, 8)
-          .join(", ") || "none"
-      }`,
-    );
-  } else {
-    lines.push(`Models: ${formatCodexDisplayText(probes.models.error)}`);
-  }
-  lines.push(
+          .join(", ") || "none",
+    )}`,
     `Account: ${formatProbe(probes.account, formatCodexAccountSummary)}`,
     `Rate limits: ${formatProbe(probes.limits, formatCodexRateLimitSummary)}`,
     `MCP servers: ${formatProbe(probes.mcps, summarizeArrayLike)}`,
     `Skills: ${formatProbe(probes.skills, summarizeCodexSkills)}`,
-  );
-  return lines.join("\n");
+  ].join("\n");
 }
 
 function formatProbe<T>(probe: SafeValue<T>, format: (value: T) => string): string {
@@ -273,17 +268,12 @@ export function formatCodexAccountLine(value: string): string {
   if (!safe.trim()) {
     return "";
   }
-  const emailPattern = /[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+/gu;
-  let formatted = "";
-  let lastIndex = 0;
-  for (const match of safe.matchAll(emailPattern)) {
-    const index = match.index ?? 0;
-    formatted += escapeCodexChatText(safe.slice(lastIndex, index));
-    formatted += escapeCodexChatTextPreservingAt(match[0]);
-    lastIndex = index + match[0].length;
-  }
-  formatted += escapeCodexChatText(safe.slice(lastIndex));
-  return formatted;
+  return safe
+    .split(/([^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+)/gu)
+    .map((part, index) =>
+      index % 2 === 1 ? escapeCodexChatTextPreservingAt(part) : escapeCodexChatText(part),
+    )
+    .join("");
 }
 
 export function buildHelp(): string {

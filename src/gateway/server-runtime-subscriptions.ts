@@ -23,6 +23,7 @@ import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-reg
 import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -209,6 +210,7 @@ export function startGatewayEventSubscriptions(params: {
         continue;
       }
       entry.projectSessionActive = false;
+      notifyGatewayWorkMetricsChanged();
       queueMicrotask(() => {
         const current = params.chatAbortControllers.get(candidateRunId);
         if (

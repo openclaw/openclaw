@@ -173,27 +173,11 @@ internal fun VoiceNoteRecordingControls(
         phase = TalkWaveformPhase.Listening(level = level, speechActive = false),
         modifier = Modifier.weight(1f).height(30.dp),
       )
-      Surface(
-        onClick = onCancel,
-        modifier = Modifier.size(ClawTheme.spacing.touchTarget),
-        shape = CircleShape,
-        color = Color.Transparent,
-        contentColor = ClawTheme.colors.text,
-      ) {
-        Box(modifier = Modifier.padding(8.dp).background(ClawTheme.colors.canvas, CircleShape), contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Cancel voice note"), modifier = Modifier.size(17.dp))
-        }
+      ChatRoundButton(onCancel, contentColor = ClawTheme.colors.text, background = ClawTheme.colors.canvas) {
+        Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Cancel voice note"), modifier = Modifier.size(17.dp))
       }
-      Surface(
-        onClick = onDone,
-        modifier = Modifier.size(ClawTheme.spacing.touchTarget),
-        shape = CircleShape,
-        color = Color.Transparent,
-        contentColor = ClawTheme.colors.primaryText,
-      ) {
-        Box(modifier = Modifier.padding(8.dp).background(ClawTheme.colors.primary, CircleShape), contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Check, contentDescription = nativeString("Finish voice note"), modifier = Modifier.size(17.dp))
-        }
+      ChatRoundButton(onDone, contentColor = ClawTheme.colors.primaryText, background = ClawTheme.colors.primary) {
+        Icon(imageVector = Icons.Default.Check, contentDescription = nativeString("Finish voice note"), modifier = Modifier.size(17.dp))
       }
     }
   }
@@ -206,3 +190,26 @@ internal fun VoiceNoteRecorderError(state: VoiceNoteRecorderState) {
 }
 
 internal fun ChatMessageContent.isAudioAttachment(): Boolean = type == "audio" || mimeType?.startsWith("audio/") == true
+
+@Composable
+internal fun ChatRoundButton(
+  onClick: () -> Unit,
+  contentColor: Color,
+  background: Color,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  content: @Composable () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    enabled = enabled,
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget).then(modifier),
+    shape = CircleShape,
+    color = Color.Transparent,
+    contentColor = contentColor,
+  ) {
+    Box(modifier = Modifier.padding(8.dp).background(background, CircleShape), contentAlignment = Alignment.Center) {
+      content()
+    }
+  }
+}

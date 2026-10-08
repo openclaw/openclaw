@@ -5,13 +5,11 @@ import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as commandExec from "../../process/exec.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { deleteRegistryWorktree, getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
-import { acquireWorktreeRunLease, hasLiveWorktreeRunLease } from "./run-lease.js";
+import { deleteRegistryWorktree, updateRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
+import * as runLease from "./run-lease.js";
 import { resolveRepository } from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
@@ -43,8 +41,8 @@ describe("interrupted ordinary worktree removal recovery", () => {
         await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
       }
       if (cleanupId) {
-        expect(hasLiveWorktreeRunLease(env, cleanupId)).toBe(false);
-        deleteRegistryWorktree(env, cleanupId);
+        expect(runLease.hasLiveWorktreeRunLease(env, cleanupId)).toBe(false);
+        await deleteRegistryWorktree(env, cleanupId);
       }
       cleanup();
     }),
@@ -110,6 +108,20 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await fs.unlink(path.join(record.path, ".git"));
   });
   const recover = () => service.recoverRemoval({ id: record.id, snapshot });
+  const observeRemovalClaim = () => {
+    const claim = runLease.claimWorktreeRemoval;
+    let token: string | undefined;
+    vi.spyOn(runLease, "claimWorktreeRemoval").mockImplementation(async (...args) => {
+      await claim(...args);
+      token = args[1].token;
+    });
+    return () => {
+      if (!token) {
+        throw new Error("Recovery has not claimed removal");
+      }
+      return token;
+    };
+  };
   const pinsPreserved = async () => {
     expect(await git(repo, "rev-parse", `refs/openclaw/snapshots/${record.id}`)).toBe(snapshot);
     expect(await git(repo, "rev-parse", `refs/openclaw/removals/${record.id}`)).toBe(snapshot);
@@ -192,7 +204,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await fs.writeFile(path.join(record.path, ".git"), `gitdir: ${admin}\n`);
     // Model a pre-existing consumer; new admission correctly refuses a pending removal.
     await git(repo, "update-ref", "-d", `refs/openclaw/removals/${record.id}`, snapshot);
-    const lease = await acquireWorktreeRunLease(record.id, { env });
+    const lease = await runLease.acquireWorktreeRunLease(record.id, { env });
     try {
       await pinSnapshot();
       await expect(recover()).rejects.toThrow(/busy|in use/);
@@ -219,6 +231,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
   it.each(["early-identity", "identity", "registry", "pending"])(
     "rejects a %s race before deletion",
     async (kind) => {
+      const removalToken = observeRemovalClaim();
       const early = kind === "early-identity";
       const foreignText = early ? "new owner\n" : "new owner's work\n";
       await fs.unlink(path.join(record.path, "README.md"));
@@ -240,14 +253,11 @@ describe("interrupted ordinary worktree removal recovery", () => {
           } else if (kind === "pending") {
             await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, head);
           } else {
-            // Simulate a foreign lifecycle writer that bypassed the public removal claim.
-            runOpenClawStateWriteTransaction(
-              ({ db }) => {
-                db.prepare("UPDATE worktrees SET last_active_at=last_active_at+1 WHERE id=?").run(
-                  record.id,
-                );
-              },
-              { env },
+            await updateRegistryWorktree(
+              env,
+              record.id,
+              { lastActiveAt: record.lastActiveAt + 1 },
+              { removalToken: removalToken() },
             );
           }
         }
@@ -257,6 +267,9 @@ describe("interrupted ordinary worktree removal recovery", () => {
         early ? "Checkout or original index changed" : undefined,
       );
       expect(injected).toBe(true);
+      if (kind === "registry") {
+        expect(getRegistryWorktree(env, record.id)?.lastActiveAt).toBe(record.lastActiveAt + 1);
+      }
       expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
       expect(await git(repo, "rev-parse", `refs/openclaw/snapshots/${record.id}`)).toBe(snapshot);
       if (kind === "identity" || early) {
@@ -304,6 +317,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
   });
 
   it("preserves the pending pin when registry custody changes after removal publication", async () => {
+    const removalToken = observeRemovalClaim();
     const run = commandExec.runCommandWithTimeout;
     let injected = false;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
@@ -314,18 +328,16 @@ describe("interrupted ordinary worktree removal recovery", () => {
         getRegistryWorktree(env, record.id)?.removedAt !== undefined
       ) {
         injected = true;
-        runOpenClawStateWriteTransaction(
-          ({ db }) => {
-            db.prepare("UPDATE worktrees SET last_active_at=last_active_at+1 WHERE id=?").run(
-              record.id,
-            );
-          },
-          { env },
+        await updateRegistryWorktree(
+          env,
+          record.id,
+          { lastActiveAt: record.lastActiveAt + 1 },
+          { removalToken: removalToken() },
         );
       }
       return result;
     });
-    await expect(recover()).rejects.toThrow("Completed removal lifecycle changed");
+    await expect(recover()).rejects.toThrow("Worktree registry changed during recovery");
     expect(injected).toBe(true);
     expect(await git(repo, "rev-parse", `refs/openclaw/removals/${record.id}`)).toBe(snapshot);
     expect(await git(repo, "rev-parse", `refs/openclaw/snapshots/${record.id}`)).toBe(snapshot);

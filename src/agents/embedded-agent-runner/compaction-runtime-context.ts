@@ -40,7 +40,13 @@ type NullableCompactionContextKey =
 
 type EmbeddedCompactionRuntimeContextParams = Omit<
   Partial<CompactEmbeddedAgentSessionParams>,
-  NullableCompactionContextKey | "workspaceDir" | "model"
+  | NullableCompactionContextKey
+  | "workspaceDir"
+  | "model"
+  | "senderName"
+  | "senderUsername"
+  | "senderE164"
+  | "trigger"
 > & {
   [Key in NullableCompactionContextKey]?: CompactEmbeddedAgentSessionParams[Key] | null;
 } & {
@@ -171,10 +177,7 @@ export function resolveEmbeddedCompactionTarget(params: {
         manifestPlugins: params.manifestPlugins,
       }).byAlias.get(aliasKey)
     : undefined;
-  if (alias) {
-    return assembleTarget(alias.ref.provider, alias.ref.model);
-  }
-  return assembleTarget(provider, override);
+  return assembleTarget(alias?.ref.provider ?? provider, alias?.ref.model ?? override);
 }
 
 /** Binds harness ownership without repeating model or alias selection. */
@@ -188,9 +191,7 @@ export function resolveCompactionTargetRuntime(
   const selectedHarnessRuntime = normalizeOptionalAgentRuntimeId(harnessRuntime);
   // Provider defaults choose new runs; they cannot move an existing transcript.
   const useNativeHarnessRuntime =
-    selectedHarnessRuntime !== undefined &&
-    selectedHarnessRuntime !== "openclaw" &&
-    !isDefaultAgentRuntimeId(selectedHarnessRuntime);
+    selectedHarnessRuntime !== "openclaw" && !isDefaultAgentRuntimeId(selectedHarnessRuntime);
   const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({ provider });
   const routedRuntimeProvider = runtimeProvider === provider ? undefined : runtimeProvider;
   return {
@@ -215,11 +216,9 @@ function hasBareConfiguredModelForProvider(params: {
     if (slashIdx <= 0 || rawRef.endsWith("/*")) {
       continue;
     }
-    const rawProvider = rawRef.slice(0, slashIdx);
-    const rawModel = rawRef.slice(slashIdx + 1);
     if (
-      normalizeLowercaseStringOrEmpty(rawProvider) === providerKey &&
-      normalizeLowercaseStringOrEmpty(rawModel) === modelKey
+      normalizeLowercaseStringOrEmpty(rawRef.slice(0, slashIdx)) === providerKey &&
+      normalizeLowercaseStringOrEmpty(rawRef.slice(slashIdx + 1)) === modelKey
     ) {
       return true;
     }
@@ -292,15 +291,11 @@ export function resolveCompactionContextTokenBudget(params: {
 
 export function buildEmbeddedCompactionRuntimeContext(
   params: EmbeddedCompactionRuntimeContextParams,
+  profile: "full" | "after-turn" | "recovery" = "full",
 ) {
-  const resolved = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    authProfileId: params.authProfileId,
-    harnessRuntime: params.harnessRuntime,
-    modelSelectionLocked: params.modelSelectionLocked,
-  });
+  // After-turn maintenance and overflow recovery forward narrower run context.
+  const afterTurn = profile === "after-turn";
+  const resolved = resolveEmbeddedCompactionTarget(params);
   const agentHarnessId = params.harnessRuntime?.trim() || undefined;
   const runtimeAuthPlan =
     params.runtimeAuthPlan &&
@@ -324,11 +319,11 @@ export function buildEmbeddedCompactionRuntimeContext(
     sandboxAgentId: params.sandboxAgentId,
     messageChannel: params.messageChannel ?? undefined,
     messageProvider: params.messageProvider ?? undefined,
-    clientCaps: params.clientCaps,
-    pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
-    chatType: params.chatType ?? undefined,
+    clientCaps: afterTurn ? undefined : params.clientCaps,
+    pinnedWidgetAuthoring: afterTurn ? undefined : params.pinnedWidgetAuthoring,
+    chatType: afterTurn ? undefined : (params.chatType ?? undefined),
     agentAccountId: params.agentAccountId ?? undefined,
-    conversationRoutePeerId: params.conversationRoutePeerId,
+    conversationRoutePeerId: afterTurn ? undefined : params.conversationRoutePeerId,
     currentChannelId: params.currentChannelId ?? undefined,
     currentThreadTs: params.currentThreadTs ?? undefined,
     currentMessageId: params.currentMessageId ?? undefined,
@@ -338,29 +333,29 @@ export function buildEmbeddedCompactionRuntimeContext(
     agentHarnessId,
     modelSelectionLocked: params.modelSelectionLocked,
     workspaceDir: params.workspaceDir,
-    bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
-    cwd: params.cwd ?? undefined,
-    permissionMode: params.permissionMode,
-    sessionRoot: params.sessionRoot,
-    requireWorkspaceOnly: params.requireWorkspaceOnly,
-    requireWritableSandbox: params.requireWritableSandbox,
+    bootstrapWorkspaceDir: afterTurn ? undefined : params.bootstrapWorkspaceDir,
+    cwd: profile === "recovery" ? undefined : (params.cwd ?? undefined),
+    permissionMode: afterTurn ? undefined : params.permissionMode,
+    sessionRoot: afterTurn ? undefined : params.sessionRoot,
+    requireWorkspaceOnly: afterTurn ? undefined : params.requireWorkspaceOnly,
+    requireWritableSandbox: afterTurn ? undefined : params.requireWritableSandbox,
     agentDir: params.agentDir,
     config: params.config,
-    toolOverrides: params.toolOverrides,
+    toolOverrides: afterTurn ? undefined : params.toolOverrides,
     toolsAllow: params.toolsAllow,
     skillsSnapshot: params.skillsSnapshot,
-    senderIsOwner: params.senderIsOwner,
+    senderIsOwner: profile === "full" ? params.senderIsOwner : undefined,
     senderId: params.senderId ?? undefined,
     provider: resolved.provider,
     runtimeProvider: resolved.runtimeProvider,
     model: resolved.model,
-    modelFallbacksOverride: params.modelFallbacksOverride,
+    modelFallbacksOverride: afterTurn ? undefined : params.modelFallbacksOverride,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
-    execOverrides: params.execOverrides,
+    execOverrides: afterTurn ? undefined : params.execOverrides,
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    sourceReplyDeliveryMode: afterTurn ? undefined : params.sourceReplyDeliveryMode,
     ownerNumbers: params.ownerNumbers,
     ...(activeProcessSessions.length > 0 ? { activeProcessSessions } : {}),
   };

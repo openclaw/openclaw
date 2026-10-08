@@ -393,6 +393,51 @@ export async function delegateMemoryAudience(
   return mintMemoryAudience({ ...audience }, child.sessionKey, record);
 }
 
+/** Join admitted session publications without weakening the synchronous final guard. */
+export function prepareMemoryAudienceRead(audience: MemoryAudience): Promise<void> | undefined {
+  const record = audienceRecords.get(audience);
+  if (!record) {
+    throw new Error("memory audience was not minted by this host");
+  }
+  const pending: Promise<void>[] = [];
+  try {
+    // Delegated grants depend on every captured parent, not just the current session.
+    for (let current: AudienceRecord | undefined = record; current; current = current.parent) {
+      if (current.state !== "current") {
+        assertRecordCurrent(current);
+      }
+      for (const lease of current.leases) {
+        const publication = lease.prepareRead();
+        if (publication) {
+          pending.push(publication);
+        }
+      }
+    }
+  } catch (error) {
+    // A later ancestor can reject after earlier leases started waiting on publication.
+    // Observe those promises without hiding the synchronous authority failure.
+    void Promise.all(pending).catch(() => {});
+    throw error;
+  }
+  if (pending.length > 0) {
+    // A successor may have been admitted while the exact publication promises settled.
+    return Promise.all(pending).then(() => prepareMemoryAudienceRead(audience));
+  }
+  assertRecordCurrent(record);
+  return undefined;
+}
+
+/** Prepare only the host-owned audience; callers still recheck their full authority after await. */
+export function prepareMemoryCallerRead(context: MemoryCallerContext): Promise<void> | undefined {
+  context.signal?.throwIfAborted();
+  const { authority } = context;
+  if (authority.kind === "session" && authority.audience) {
+    assertMemoryAudienceSession(authority.audience, authority.sessionKey);
+    return prepareMemoryAudienceRead(authority.audience);
+  }
+  return undefined;
+}
+
 /** Reject a retained audience after any captured session incarnation changes. */
 export function assertMemoryAudienceCurrent(audience: MemoryAudience): void {
   const record = audienceRecords.get(audience);

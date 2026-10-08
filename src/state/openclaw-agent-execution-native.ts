@@ -36,6 +36,7 @@ import {
 import {
   captureOpenClawAgentDatabaseAdmissionPublication,
   getOpenClawAgentDatabaseValidationForTransfer,
+  invalidateOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import { cleanupRetiredAgentDatabaseLease } from "./openclaw-agent-execution-cleanup.js";
 import type {
@@ -337,6 +338,14 @@ export function createAgentDatabaseNativeGeneration(
                 : !expectedIdentity &&
                   readDatabasePathIdentitySync(pathname).key.startsWith("path:"));
             if (creating) {
+              if (
+                !lease &&
+                getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: pathname })
+              ) {
+                // Absence ends retained proof even if Linux reuses the inode. Later open
+                // checkpoints must preserve the publication captured by the lease handoff.
+                invalidateOpenClawAgentDatabaseValidation(pathname);
+              }
               registration.begin();
             }
           }

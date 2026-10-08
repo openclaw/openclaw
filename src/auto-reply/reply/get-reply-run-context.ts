@@ -46,7 +46,7 @@ import {
   formatActiveGoalContext,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
-import { buildReplyPromptEnvelopeBase } from "./prompt-prelude.js";
+import { buildReplyPromptEnvelope, buildReplyPromptEnvelopeBase } from "./prompt-prelude.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
@@ -250,26 +250,19 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     fullAccessAvailable: fullAccessState.available,
     fullAccessBlockedReason: fullAccessState.blockedReason,
   });
-  const extraSystemPromptParts = [
-    inboundMetaPrompt,
+  const staticSystemPromptParts = [
     sessionStableConversationContext,
     groupIntro,
     groupSystemPrompt,
     execOverridePromptHint,
   ].filter(Boolean);
+  const extraSystemPromptParts = [inboundMetaPrompt, ...staticSystemPromptParts].filter(Boolean);
   const sourceConversationContextPromptOffset = sessionStableConversationContext
     ? inboundMetaPrompt
       ? inboundMetaPrompt.length + 2
       : 0
     : undefined;
-  const extraSystemPromptStatic = [
-    sessionStableConversationContext,
-    groupIntro,
-    groupSystemPrompt,
-    execOverridePromptHint,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const extraSystemPromptStatic = staticSystemPromptParts.join("\n\n");
   const cliSessionBindingFacts = {
     extraSystemPromptStatic,
     ...(sessionPromptSourceReplyDeliveryMode
@@ -423,7 +416,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     );
   };
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
-  const promptEnvelopeBase = buildReplyPromptEnvelopeBase({
+  const getPromptEnvelopeParams = (): Parameters<typeof buildReplyPromptEnvelopeBase>[0] => ({
     ctx,
     sessionCtx,
     baseBody: baseBodyFinal,
@@ -439,6 +432,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     inboundEventKind,
     sourceReplyDeliveryMode,
   });
+  const promptEnvelopeBase = buildReplyPromptEnvelopeBase(getPromptEnvelopeParams());
   const prefixedBodyBase = applySessionHints({
     baseBody: promptEnvelopeBase.effectiveBaseBody,
     abortedLastRun,
@@ -471,20 +465,20 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     baseBodyTrimmedRaw,
     effectiveResetTriggered,
     isBareSessionReset,
-    startupAction,
-    startupContextPrelude,
-    softResetTail,
     workspaceDir,
     skillsWorkspaceDir: configuredWorkspaceDir,
-    baseBodyFinal,
     hasUserBody,
     shouldInjectGroupIntro,
     typingMode,
     prefixedBodyBase,
     sessionEntry,
     isMainSession,
-    inboundUserContextPromptJoiner,
-    getInboundContext: () => ({ activeGoalContext, inboundUserContext }),
+    buildPromptBodies: (
+      additions: Pick<
+        Parameters<typeof buildReplyPromptEnvelope>[0],
+        "prefixedBody" | "threadContextNote" | "systemEventBlocks" | "media"
+      >,
+    ) => buildReplyPromptEnvelope({ ...getPromptEnvelopeParams(), ...additions }),
     refreshInboundContextAfterAdmissionWait,
     terminalReplyExpectation,
   } as const;

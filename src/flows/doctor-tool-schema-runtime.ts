@@ -45,12 +45,8 @@ async function collectBundleMcpRuntimeToolSchemaFindings(params: {
     warn: () => {},
   });
   return collectNormalizedToolSchemaFindings({
-    agentId: params.agentId,
+    ...params,
     tools: activeBundleTools,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    modelRef: params.modelRef,
-    model: params.model,
     normalizationFailureFinding: bundleMcpRuntimeNormalizationFailureFinding,
   });
 }

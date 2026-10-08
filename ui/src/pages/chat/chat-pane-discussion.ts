@@ -163,20 +163,12 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     const sessionKey = state?.sessionKey.trim() ?? "";
     const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
     if (
-      !state?.connected ||
-      !state.client ||
+      !state ||
       !sessionKey ||
       known === undefined ||
       known === "none" ||
-      !canCallGatewayMethod(
-        this.context.gateway.snapshot,
-        "session.discussion.info",
-        "operator.read",
-      )
+      !this.buildSessionDiscussionPanel(state, sessionKey)
     ) {
-      return null;
-    }
-    if (!this.buildSessionDiscussionPanel(state, sessionKey)) {
       return null;
     }
     const active = state.sidebarLayout.columns.some((column) =>

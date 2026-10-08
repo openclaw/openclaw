@@ -9,7 +9,7 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
@@ -118,10 +118,10 @@ describe("native profile-bound input admission", () => {
       }
       const entered = createDeferred();
       const release = createDeferred();
-      const read = historyLane.pool.run.bind(historyLane.pool);
+      const read = projectionLane.pool.run.bind(projectionLane.pool);
       let held = false;
       const workerRead = vi
-        .spyOn(historyLane.pool, "run")
+        .spyOn(projectionLane.pool, "run")
         .mockImplementation(async (prepare, options) => {
           if (typeof prepare !== "function") {
             return read(prepare, options);
@@ -201,7 +201,7 @@ describe("native profile-bound input admission", () => {
       let request: ReturnType<typeof fixture.send> | undefined;
       try {
         if (boundary === "reservation") {
-          const normalized = normalizeChatSendRequest({
+          const normalized = await normalizeChatSendRequest({
             params: fixture.params,
             client: fixture.client,
           });

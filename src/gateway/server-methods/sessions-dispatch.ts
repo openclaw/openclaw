@@ -7,7 +7,9 @@ import {
   validateSessionsMoveParams,
   validateSessionsReclaimParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { readLiveRegistryWorktreeByOwner } from "../../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
+import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
@@ -18,6 +20,7 @@ import { resolveDevicePlacementEligibility } from "../worker-environments/device
 import { selectDevicePlacementCandidates } from "../worker-environments/device-placement-selector.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "../worker-environments/device-provider-identity.js";
 import { deviceUnavailableText } from "../worker-environments/device-provider.js";
+import type { WorkerPlacementAuthorization } from "../worker-environments/placement-authorization.js";
 import {
   resolveProjectProfileDestination,
   resolveWorkerPlacementDestination,
@@ -36,6 +39,8 @@ import {
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/placement-target.js";
+import type { WorkerPlacementDispatchRequest } from "../worker-environments/service-contract.js";
+import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import type { WorkerSessionWorkspace } from "../worker-environments/session-workspace.js";
 import { listGatewayEnvironments } from "./environments.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -44,7 +49,12 @@ import {
   loadAccessorSessionEntryForGatewayTarget,
   requireSessionKey,
 } from "./sessions-shared.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  RespondFn,
+  SessionMutationAuthorization,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function respondInvalidWorkerSession(respond: RespondFn, message: string): void {
@@ -52,6 +62,26 @@ function respondInvalidWorkerSession(respond: RespondFn, message: string): void 
 }
 
 const MAX_AUTO_DEVICE_PLACEMENT_ATTEMPTS = 3;
+
+async function withWorkerPlacementAuthorization<T>(
+  authorization: SessionMutationAuthorization | undefined,
+  operation: (authorize: WorkerPlacementAuthorization | undefined) => Promise<T>,
+): Promise<T> {
+  const assertCurrent = authorization?.assertCurrent;
+  const prepared = await authorization?.prepareWorkerGrant?.();
+  try {
+    return await operation(
+      prepared
+        ? Object.assign(() => prepared.assertCurrent(), {
+            assertWorkerGrant: prepared.assertCurrent,
+            assertWorkerLifetime: prepared.assertLifetimeCurrent,
+          })
+        : assertCurrent,
+    );
+  } finally {
+    await prepared?.release();
+  }
+}
 
 function resolveWorkerSessionTarget(
   method: "dispatch" | "move" | "reclaim",
@@ -80,13 +110,16 @@ function resolveWorkerSessionTarget(
     respond(false, undefined, requestedAgent.error);
     return undefined;
   }
-  const destination = resolveWorkerPlacementDestination({
-    cfg,
-    profileId: params.profileId,
-    deviceId: params.deviceId,
-    machineClass: params.machineClass,
-    os: params.os,
-  });
+  const destination =
+    method === "dispatch"
+      ? resolveWorkerPlacementDestination({
+          cfg,
+          profileId: params.profileId,
+          deviceId: params.deviceId,
+          machineClass: params.machineClass,
+          os: params.os,
+        })
+      : { ok: true as const, value: undefined };
   if (!destination.ok) {
     respondInvalidWorkerSession(respond, destination.error);
     return undefined;
@@ -118,7 +151,9 @@ async function resolveSessionWorkspace(params: {
   agentId: string;
   method: "sessions.dispatch" | "sessions.move" | "sessions.reclaim";
   respond: RespondFn;
+  assertCurrent?: () => void;
 }): Promise<WorkerSessionWorkspace | undefined> {
+  const worktreeContext = captureWorktreeRunEndContext(process.env);
   if (params.entry.repositoryWorkspaceId) {
     const repository = await getSessionRepositoryWorkspaceStore().get(
       params.entry.repositoryWorkspaceId,
@@ -142,7 +177,12 @@ async function resolveSessionWorkspace(params: {
     respondInvalidWorkerSession(params.respond, "The session repository workspace owner changed.");
     return undefined;
   }
-  const worktree = managedWorktrees.findLiveByOwner("session", params.sessionKey);
+  const worktree = await readLiveRegistryWorktreeByOwner(
+    worktreeContext,
+    "session",
+    params.sessionKey,
+  );
+  params.assertCurrent?.();
   if (
     params.entry.worktree?.id &&
     worktree &&
@@ -221,11 +261,17 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsDispatchParams, "sessions.dispatch", respond)) {
       return;
     }
+    try {
+      assertRequiredWorkerSelection(context.getRuntimeConfig(), params);
+    } catch (error) {
+      respondWorkerDispatchError(error, respond);
+      return;
+    }
     const resolved = resolveWorkerSessionTarget("dispatch", params, context, respond);
     if (!resolved) {
       return;
     }
-    const { cfg, entry, session, service: dispatchService, reader: placementReader } = resolved;
+    const { cfg, entry, session, service: dispatchService } = resolved;
     const { sessionId, sessionKey, agentId } = session;
     let { dispatchTarget } = resolved;
     const autoDevice = params.autoDevice === true;
@@ -292,7 +338,10 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         config: cfg,
         getPendingDispatchCount: (deviceId) =>
           dispatchService.getPendingDeviceDispatchCount?.(deviceId, sessionId) ?? 0,
-        getAdmittedSessionCounts: () => dispatchService.getAdmittedDeviceSessionCounts?.(sessionId),
+        getAdmittedSessionCounts: () =>
+          dispatchService.getAdmittedDeviceSessionCountsAsync
+            ? dispatchService.getAdmittedDeviceSessionCountsAsync(sessionId)
+            : dispatchService.getAdmittedDeviceSessionCounts?.(sessionId),
       });
       if (!selection.ok) {
         respondInvalidWorkerSession(respond, selection.error);
@@ -317,7 +366,8 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!autoDevice && dispatchTarget && !(await validateExecutionMode(dispatchTarget))) {
       return;
     }
-    const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    const existingPlacement = await readSessionWorkerPlacementAsync({ context, sessionId });
+    sessionMutationAuthorization?.assertCurrent();
     if (
       existingPlacement?.state === "failed" &&
       !isFailedWorkerPlacementEnvironmentGone({
@@ -360,6 +410,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       ...session,
       method: "sessions.dispatch",
       respond,
+      assertCurrent: sessionMutationAuthorization?.assertCurrent,
     });
     if (!workspace) {
       return;
@@ -379,106 +430,118 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (canUseProjectProfile && !(await validateExecutionMode(dispatchTarget))) {
       return;
     }
-    let lastEligibilityError: string | undefined;
-    const candidates = autoDevice ? automaticDeviceIds : [dispatchTarget.deviceId];
-    for (let attempt = 0; attempt < candidates.length; attempt += 1) {
-      if (attempt > 0) {
-        const destination = resolveWorkerPlacementDestination({
-          cfg,
-          deviceId: candidates[attempt],
-        });
-        if (!destination.ok || !destination.value) {
-          respondInvalidWorkerSession(
-            respond,
-            destination.ok ? "automatic device placement did not select a node" : destination.error,
-          );
-          return;
-        }
-        dispatchTarget = destination.value;
-      }
-      if (autoDevice) {
-        const eligibility = await resolveDevicePlacementEligibility({
-          environmentService: context.workerEnvironmentService,
-          deviceId: candidates[attempt]!,
-          runtimeId: sessionRuntime,
-          executionMode,
-          requirement: devicePlacement,
-          config: cfg,
-          currentNode: context.nodeRegistry.get(candidates[attempt]!),
-        });
-        if (!eligibility.ok) {
-          lastEligibilityError = eligibility.error;
-          continue;
-        }
-        // Recheck after asynchronous eligibility, before dispatch registers its pending owner.
-        if (
-          devicePlacement?.consumesWorkerSlot &&
-          eligibility.availableSlots <=
-            (dispatchService.getPendingDeviceDispatchCount?.(candidates[attempt]!, sessionId) ?? 0)
-        ) {
-          lastEligibilityError = deviceUnavailableText(candidates[attempt]!, {
-            available: false,
-            unavailableReason: "at-capacity",
-          });
-          continue;
-        }
-      }
-      let attemptedPlacement: WorkerSessionPlacementRecord | undefined;
-      try {
-        const placement = await dispatchService.dispatch(
-          {
-            ...session,
-            executionMode,
-            runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
-            ...dispatchTarget,
-            ...(devicePlacement ? { devicePlacement } : {}),
-          },
-          (observed) => {
-            attemptedPlacement = { ...observed };
-            emitSessionsChanged(context, {
-              reason: "dispatch",
-              sessionKey,
+    const initialDispatchTarget = dispatchTarget;
+    try {
+      const result = await withWorkerPlacementAuthorization<
+        { placement: WorkerSessionPlacementRecord } | { invalid: string }
+      >(sessionMutationAuthorization, async (authorize) => {
+        let candidateTarget = initialDispatchTarget;
+        let lastEligibilityError: string | undefined;
+        const candidates = autoDevice ? automaticDeviceIds : [candidateTarget.deviceId];
+        for (let attempt = 0; attempt < candidates.length; attempt += 1) {
+          if (attempt > 0) {
+            const destination = resolveWorkerPlacementDestination({
+              cfg,
+              deviceId: candidates[attempt],
             });
-          },
-          sessionMutationAuthorization?.assertCurrent,
-          signal,
+            if (!destination.ok || !destination.value) {
+              return {
+                invalid: destination.ok
+                  ? "automatic device placement did not select a node"
+                  : destination.error,
+              };
+            }
+            candidateTarget = destination.value;
+          }
+          if (autoDevice) {
+            const eligibility = await resolveDevicePlacementEligibility({
+              environmentService: context.workerEnvironmentService,
+              deviceId: candidates[attempt]!,
+              runtimeId: sessionRuntime,
+              executionMode,
+              requirement: devicePlacement,
+              config: cfg,
+              currentNode: context.nodeRegistry.get(candidates[attempt]!),
+            });
+            if (!eligibility.ok) {
+              lastEligibilityError = eligibility.error;
+              continue;
+            }
+            // Keep the final capacity check and pending-owner registration in one synchronous turn.
+            if (
+              devicePlacement?.consumesWorkerSlot &&
+              eligibility.availableSlots <=
+                (dispatchService.getPendingDeviceDispatchCount?.(candidates[attempt]!, sessionId) ??
+                  0)
+            ) {
+              lastEligibilityError = deviceUnavailableText(candidates[attempt]!, {
+                available: false,
+                unavailableReason: "at-capacity",
+              });
+              continue;
+            }
+          }
+          let attemptedPlacement: WorkerSessionPlacementRecord | undefined;
+          try {
+            const request: WorkerPlacementDispatchRequest = {
+              ...session,
+              executionMode,
+              runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
+              ...candidateTarget,
+              ...(devicePlacement ? { devicePlacement } : {}),
+            };
+            const placement = await dispatchService.dispatch(
+              request,
+              (observed) => {
+                attemptedPlacement = { ...observed };
+                emitSessionsChanged(context, {
+                  reason: "dispatch",
+                  sessionKey,
+                });
+              },
+              authorize,
+              signal,
+            );
+            return { placement };
+          } catch (error) {
+            if (error instanceof SessionMutationAuthorizationChangedError) {
+              throw error;
+            }
+            if (
+              !autoDevice ||
+              !candidateTarget.deviceId ||
+              !canRetryDeviceDispatch({
+                error,
+                deviceId: candidateTarget.deviceId,
+                ...session,
+                attempted: attemptedPlacement,
+                current: await readSessionWorkerPlacementAsync({ context, sessionId }),
+                environments: context.workerEnvironmentService,
+              })
+            ) {
+              throw error;
+            }
+            lastEligibilityError = formatErrorMessage(error);
+          }
+        }
+        throw new Error(
+          `automatic device placement failed after ${candidates.length} attempts; ${lastEligibilityError ?? "no eligible host remains; reconnect a paired session-host node and retry"}`,
         );
+      });
+      if ("invalid" in result) {
+        respondInvalidWorkerSession(respond, result.invalid);
+      } else {
         respondWorkerPlacement({
           respond,
           key: sessionKey,
           sessionId,
           context,
-          placement,
+          placement: result.placement,
         });
-        return;
-      } catch (error) {
-        if (error instanceof SessionMutationAuthorizationChangedError) {
-          throw error;
-        }
-        if (
-          !autoDevice ||
-          !dispatchTarget.deviceId ||
-          !canRetryDeviceDispatch({
-            error,
-            deviceId: dispatchTarget.deviceId,
-            ...session,
-            attempted: attemptedPlacement,
-            current: placementReader.getMany([sessionId]).get(sessionId),
-            environments: context.workerEnvironmentService,
-          })
-        ) {
-          respondWorkerDispatchError(error, respond);
-          return;
-        }
-        lastEligibilityError = formatErrorMessage(error);
       }
+    } catch (error) {
+      respondWorkerDispatchError(error, respond);
     }
-    respondWorkerDispatchError(
-      new Error(
-        `automatic device placement failed after ${candidates.length} attempts; ${lastEligibilityError ?? "no eligible host remains; reconnect a paired session-host node and retry"}`,
-      ),
-      respond,
-    );
   },
   "sessions.move": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsMoveParams, "sessions.move", respond)) {
@@ -488,13 +551,14 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { entry, session, service: placementService, reader: placementReader } = resolved;
+    const { entry, session, service: placementService } = resolved;
     const { sessionId, sessionKey } = session;
     if (entry.archivedAt !== undefined) {
       respondInvalidWorkerSession(respond, "cannot move an archived session");
       return;
     }
-    const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    const existingPlacement = await readSessionWorkerPlacementAsync({ context, sessionId });
+    sessionMutationAuthorization?.assertCurrent();
     const retryAbandonment =
       "abandonSource" in params && isForceAbandonedWorkerPlacement(existingPlacement);
     if (
@@ -514,24 +578,29 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         ...session,
         method: "sessions.move",
         respond,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
       }))
     ) {
       return;
     }
     try {
-      const placement = await placementService.move!(
-        {
-          ...session,
-          source: params.expected,
-          target: params.target,
-          ...("abandonSource" in params ? { abandonSource: true } : {}),
-        },
-        () =>
-          emitSessionsChanged(context, {
-            reason: "move",
-            sessionKey,
-          }),
-        sessionMutationAuthorization?.assertCurrent,
+      const placement = await withWorkerPlacementAuthorization(
+        sessionMutationAuthorization,
+        (authorize) =>
+          placementService.move!(
+            {
+              ...session,
+              source: params.expected,
+              target: params.target,
+              ...("abandonSource" in params ? { abandonSource: true } : {}),
+            },
+            () =>
+              emitSessionsChanged(context, {
+                reason: "move",
+                sessionKey,
+              }),
+            authorize,
+          ),
       );
       respond(
         true,
@@ -563,9 +632,10 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { entry, session, service: placementService, reader: placementReader } = resolved;
+    const { entry, session, service: placementService } = resolved;
     const { sessionId, sessionKey } = session;
-    const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    const existingPlacement = await readSessionWorkerPlacementAsync({ context, sessionId });
+    sessionMutationAuthorization?.assertCurrent();
     const reportPlacementChange = (placement: WorkerSessionPlacementRecord | undefined): void => {
       if (
         !placement ||
@@ -589,6 +659,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         ...session,
         method: "sessions.reclaim",
         respond,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
       }))
     ) {
       return;
@@ -606,7 +677,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
-      reportPlacementChange(placementReader.getMany([sessionId]).get(sessionId));
+      reportPlacementChange(await readSessionWorkerPlacementAsync({ context, sessionId }));
       respondWorkerDispatchError(error, respond);
       return;
     }

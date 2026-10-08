@@ -45,7 +45,7 @@ import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { RootedExecutionRequest } from "../rooted-run-params.js";
-import type { EmbeddedRunTrigger } from "../run-trigger.js";
+import type { EmbeddedRunTrigger, IsolatedCompletionPurpose } from "../run-trigger.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import type { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
@@ -101,6 +101,8 @@ export type RunCliAgentParams = {
   executionMode?: CliBackendExecutionMode;
   /** Internal one-shot inference path: suppress transcript, hook, context-engine, and delivery work. */
   isolatedCompletion?: true;
+  /** Diagnostic attribution only; must not change execution policy or timeout selection. */
+  isolatedCompletionPurpose?: IsolatedCompletionPurpose;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
   /** Internal backend control command: reuse the native session without recording a conversation turn. */
   controlOperation?: "compact";

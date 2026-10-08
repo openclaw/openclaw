@@ -23,7 +23,7 @@ import { withWorktreeAllocationLease } from "./allocation.js";
 import * as checkout from "./checkout.js";
 import * as eviction from "./eviction.js";
 import { requireGit } from "./git.js";
-import { getRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
 import * as runLease from "./run-lease.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";

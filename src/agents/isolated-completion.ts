@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 /**
  * Fresh, prompt-only inference through the selected runtime.
  *
@@ -6,10 +10,7 @@
  * literal empty native tool surface or fail before inference starts, except
  * Agents API: its restricted sessions may retain service-owned helpers.
  */
-import { randomUUID } from "node:crypto";
-import path from "node:path";
-import { withTempWorkspace } from "@openclaw/fs-safe/temp";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { requiredWorkerHelperError } from "../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { Model } from "../llm/types.js";
@@ -52,6 +53,7 @@ import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
 } from "./provider-secret-egress.js";
+import type { IsolatedCompletionPurpose } from "./run-trigger.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
@@ -64,6 +66,7 @@ import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
 import type { UsageLike } from "./usage.js";
 
 type RunIsolatedCompletionParams = {
+  purpose?: IsolatedCompletionPurpose;
   config?: OpenClawConfig;
   provider: string;
   model: string;
@@ -188,6 +191,7 @@ async function runCliIsolatedCompletion(
           cleanupBundleMcpOnRunEnd: true,
           requireExplicitMessageTarget: true,
           isolatedCompletion: true,
+          isolatedCompletionPurpose: request.purpose ?? "isolated-completion",
           outputTextPolicy: request.outputTextPolicy,
         });
         if (hasCliSideEffectEvidence(result)) {
@@ -358,6 +362,10 @@ async function runIsolatedCompletionOwned(
         workspaceDir: lease.snapshot.workspaceDir ?? requestedWorkspaceDir,
       };
       const { config, agentDir, workspaceDir } = context;
+      const blocked = requiredWorkerHelperError(config);
+      if (blocked) {
+        throw new IsolatedCompletionError("unsupported", blocked.error);
+      }
       const request = { ...input, ...context, assertCurrent };
       await ensureSelectedAgentHarnessPlugin({
         provider,

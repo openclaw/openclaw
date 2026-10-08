@@ -74,18 +74,21 @@ function resolveTelegramQuoteContext(params: {
     replyQuoteText && !context.ctxPayload.ReplyToIsExternal
       ? resolveTelegramReplyId(context.ctxPayload.ReplyToId)
       : undefined;
+  const replyQuotePosition =
+    typeof context.ctxPayload.ReplyToQuotePosition === "number"
+      ? context.ctxPayload.ReplyToQuotePosition
+      : undefined;
+  const replyQuoteEntities = Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
+    ? context.ctxPayload.ReplyToQuoteEntities
+    : undefined;
   const replyQuoteTargetsBotMessage = context.msg.reply_to_message?.from?.is_bot === true;
   const replyQuoteByMessageId: TelegramNativeQuoteCandidateByMessageId = {};
   if (replyToMode !== "off") {
     if (replyQuoteText && replyQuoteMessageId != null) {
       addTelegramNativeQuoteCandidate(replyQuoteByMessageId, replyQuoteMessageId, {
         text: replyQuoteText,
-        ...(typeof context.ctxPayload.ReplyToQuotePosition === "number"
-          ? { position: context.ctxPayload.ReplyToQuotePosition }
-          : {}),
-        ...(Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
-          ? { entities: context.ctxPayload.ReplyToQuoteEntities }
-          : {}),
+        ...(replyQuotePosition !== undefined ? { position: replyQuotePosition } : {}),
+        ...(replyQuoteEntities ? { entities: replyQuoteEntities } : {}),
       });
     }
     addTelegramNativeQuoteCandidate(
@@ -118,14 +121,9 @@ function resolveTelegramQuoteContext(params: {
   return {
     draftReplyToMessageId,
     replyQuoteByMessageId,
-    replyQuoteEntities: Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
-      ? context.ctxPayload.ReplyToQuoteEntities
-      : undefined,
+    replyQuoteEntities,
     replyQuoteMessageId,
-    replyQuotePosition:
-      typeof context.ctxPayload.ReplyToQuotePosition === "number"
-        ? context.ctxPayload.ReplyToQuotePosition
-        : undefined,
+    replyQuotePosition,
     replyQuoteText,
   };
 }

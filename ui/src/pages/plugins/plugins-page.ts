@@ -10,6 +10,7 @@ import {
 } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -34,7 +35,6 @@ import {
 } from "./detail-tabs.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import { PluginHelpController } from "./plugin-help-controller.ts";
-import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
 import { PluginMcpLoginController } from "./plugin-mcp-login-controller.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
 import { PluginSettingsController } from "./plugin-settings-controller.ts";
@@ -455,11 +455,7 @@ class PluginsPage extends OpenClawLightDomElement {
       return;
     }
     const catalogId = this.activeRoutePluginId;
-    if (catalogId) {
-      await this.showCatalogDetail(catalogId);
-    } else {
-      await this.discovery.refresh();
-    }
+    return catalogId ? this.showCatalogDetail(catalogId) : this.discovery.refresh();
   }
 
   private selectHubTab(tab: PluginsHubTab) {
@@ -625,7 +621,16 @@ class PluginsPage extends OpenClawLightDomElement {
         }
         await this.refreshCatalog(client);
       },
-      { action: "uninstall", confirm: () => confirmPluginUninstall(name) },
+      {
+        action: "uninstall",
+        confirm: () =>
+          showConfirmDialog({
+            title: t("pluginsPage.removeConfirmTitle", { name }),
+            message: t("pluginsPage.removeConfirmMessage"),
+            confirmLabel: t("pluginsPage.remove"),
+            danger: true,
+          }),
+      },
     );
   }
 

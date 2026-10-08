@@ -79,6 +79,19 @@ it("splits at exact rendered budgets while retaining source and formatting", () 
   }
 });
 
+it("bisects overflowing chunks instead of rendering every shorter prefix", () => {
+  const ir = markdownToIR("**a < b** ".repeat(600));
+  let renders = 0;
+  const chunks = renderStringChunks(ir, 1_000, (chunk) => {
+    renders += 1;
+    return renderEscapedHtml(chunk);
+  });
+
+  expect(chunks.map((chunk) => chunk.source.text).join("")).toBe(ir.text);
+  expect(chunks.every((chunk) => chunk.rendered.length <= 1_000)).toBe(true);
+  expect(renders).toBeLessThan(200);
+});
+
 it.each(["A".repeat(128), `${"A".repeat(230)}😀`])(
   "keeps internal code whitespace away from message edges: %s",
   (first) => {

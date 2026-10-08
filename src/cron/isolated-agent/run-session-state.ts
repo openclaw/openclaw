@@ -227,8 +227,13 @@ export function createPersistCronSessionEntry(params: {
           committedEntry = { ...persistedEntry, ...creationStamp };
           mergedLiveEntry = { ...liveEntry, ...creationStamp };
         }
+        // A reused in-place revision is shared with the session's other writers, so
+        // revision equality alone cannot prove this run still holds the incarnation it
+        // last committed; a same-revision session-id replacement must reject.
         const ownsCurrentRevision =
-          currentEntry?.lifecycleRevision === params.cronSession.lifecycleRevision;
+          currentEntry?.lifecycleRevision === params.cronSession.lifecycleRevision &&
+          (params.cronSession.initialSessionEntry === undefined ||
+            currentEntry?.sessionId === params.cronSession.initialSessionEntry.sessionId);
         const currentRevisionActive = Boolean(
           currentEntry?.lifecycleRevision &&
           isSessionWorkAdmissionActive(params.cronSession.storePath, [

@@ -11,10 +11,10 @@ import * as allocation from "./allocation.js";
 import * as worktreeGit from "./git.js";
 import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
 import {
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
 } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import * as runLease from "./run-lease.js";
 import { ManagedWorktreeService, WorktreeSnapshotError } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";

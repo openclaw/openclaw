@@ -144,29 +144,17 @@ describe("SQLite trajectory runtime store", () => {
       0,
     );
     const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
-    const prepare = database.db.prepare.bind(database.db);
-    let materializedEvents = 0;
-    const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
-      const statement = prepare(sql);
-      const iterate = statement.iterate.bind(statement);
-      vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
-        for (const row of iterate(...args)) {
-          if (typeof row.event_json === "string") {
-            materializedEvents += 1;
-          }
-          yield row;
-        }
-        return undefined;
-      });
-      return statement;
-    });
+    const counter = trackSqliteStatementExecutions(database.db, ["window"], (sql) =>
+      /^select\b/i.test(sql) && sql.includes('"trajectory_runtime_events"') ? "window" : null,
+    );
     try {
       appendSqliteTrajectoryRuntimeEvents({ maxRuntimeBytes, sessionId: "session-1", storePath }, [
         newest,
       ]);
-      expect(materializedEvents).toBe(0);
+      expect(counter.counts.window).toBe(1);
+      expect(counter.textBytes.window).toBe(0);
     } finally {
-      prepareSpy.mockRestore();
+      counter.restore();
     }
     await expect(
       loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),

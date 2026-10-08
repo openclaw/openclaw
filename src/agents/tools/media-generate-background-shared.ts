@@ -360,6 +360,12 @@ export function scheduleMediaGenerationTaskCompletion(params: {
   run: () => Promise<MediaGenerationExecutionResult>;
   onWakeFailure: (message: string, meta?: Record<string, unknown>) => void;
 }) {
+  const reportFailure = (message: string, meta?: { error: unknown }) =>
+    params.onWakeFailure(message, {
+      taskId: params.handle.taskId,
+      runId: params.handle.runId,
+      ...meta,
+    });
   const runBackgroundWork = async () => {
     let executed: MediaGenerationExecutionResult;
     if (!isMediaGenerationOperationCurrent(params.handle.runId)) {
@@ -394,17 +400,10 @@ export function scheduleMediaGenerationTaskCompletion(params: {
             }),
         });
         if (wakeOutcome.status !== "delivered") {
-          params.onWakeFailure(`${params.toolName} failure completion delivery was not confirmed`, {
-            taskId: params.handle.taskId,
-            runId: params.handle.runId,
-          });
+          reportFailure(`${params.toolName} failure completion delivery was not confirmed`);
         }
       } catch (wakeError) {
-        params.onWakeFailure(`${params.toolName} failure wake failed`, {
-          taskId: params.handle.taskId,
-          runId: params.handle.runId,
-          error: wakeError,
-        });
+        reportFailure(`${params.toolName} failure wake failed`, { error: wakeError });
       }
       params.lifecycle.failTaskRun({ handle: params.handle, error });
       return;
@@ -421,11 +420,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
           progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
         });
       } catch (error) {
-        params.onWakeFailure(`${params.toolName} completion progress update failed`, {
-          taskId: params.handle.taskId,
-          runId: params.handle.runId,
-          error,
-        });
+        reportFailure(`${params.toolName} completion progress update failed`, { error });
       }
     };
     recordCompletionDeliveryProgress();
@@ -448,23 +443,15 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       if (wakeOutcome.status !== "delivered") {
         const failureReason = "completion delivery was not confirmed after successful generation";
         terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(failureReason);
-        params.onWakeFailure(`${params.toolName} ${failureReason}`, {
-          taskId: params.handle.taskId,
-          runId: params.handle.runId,
-        });
+        reportFailure(`${params.toolName} ${failureReason}`);
       }
     } catch (error) {
       terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
         formatErrorMessage(error),
       );
-      params.onWakeFailure(
-        `${params.toolName} completion wake failed after successful generation`,
-        {
-          taskId: params.handle.taskId,
-          runId: params.handle.runId,
-          error,
-        },
-      );
+      reportFailure(`${params.toolName} completion wake failed after successful generation`, {
+        error,
+      });
     }
     terminalResult = retainBlockedMediaReferences(terminalResult, executed.attachments);
     try {
@@ -475,11 +462,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
         mediaUrls: executed.mediaUrls,
       });
     } catch (error) {
-      params.onWakeFailure(`${params.toolName} blocked completion retention failed`, {
-        taskId: params.handle.taskId,
-        runId: params.handle.runId,
-        error,
-      });
+      reportFailure(`${params.toolName} blocked completion retention failed`, { error });
     }
     try {
       params.lifecycle.completeTaskRun({
@@ -490,11 +473,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
         terminalResult,
       });
     } catch (error) {
-      params.onWakeFailure(`${params.toolName} completion state update failed`, {
-        taskId: params.handle.taskId,
-        runId: params.handle.runId,
-        error,
-      });
+      reportFailure(`${params.toolName} completion state update failed`, { error });
       params.lifecycle.failTaskRun({
         handle: params.handle,
         error,

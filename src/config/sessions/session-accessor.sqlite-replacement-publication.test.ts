@@ -134,6 +134,10 @@ it.each([
       category: "before",
     };
     writeSessionEntry(database, sessionKey, original);
+    addSessionMember(
+      { agentId: "main", storePath: database.path, sessionKey },
+      { identityId: "member", addedBy: "owner", addedAt: 1 },
+    );
     const identity = readOpenClawAgentDatabaseIdentity(database).identity;
     if (typeof identity !== "string") {
       throw new Error("Expected durable fixture");
@@ -191,9 +195,15 @@ it.each([
     delivery.afterResult = () => {
       executions++;
       whileWaiting = sharing.readCurrent();
-      expect(generation.assertCurrent).toThrow(
-        expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-      );
+      // Only a held write that changes the incarnation fences generation reads; a
+      // replaced writer database leaves the retained source unverifiable either way.
+      if (boundary === "newer native write after reset" || boundary === "late writer") {
+        expect(generation.assertCurrent).toThrow(
+          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+        );
+      } else {
+        generation.assertCurrent();
+      }
       if (boundary === "lost result") {
         throw failure;
       }
@@ -455,15 +465,21 @@ it.each([
             lifecycleRevision,
             owner: initialOwner,
           });
-          expect(generation.assertCurrent).toThrow(
-            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-          );
+          const assertHeldGeneration = () => {
+            // An identity-preserving held write leaves the generation readable.
+            if (reset) {
+              expect(generation.assertCurrent).toThrow(
+                expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+              );
+            } else {
+              generation.assertCurrent();
+            }
+          };
+          assertHeldGeneration();
           if (boundary === "reply") {
             assignNewOwner();
             // An owner-only publication cannot restore the old lifecycle before settlement.
-            expect(generation.assertCurrent).toThrow(
-              expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-            );
+            assertHeldGeneration();
             if (reset) {
               expect(sharing.readCurrent()).toBeUndefined();
             }
@@ -594,7 +610,7 @@ it.each(["alias membership", "metadata only"] as const)(
 );
 
 it.each([false, true])(
-  "invalidates rehomed membership while preserving newer native metadata (%s)",
+  "publishes rehomed membership while preserving newer native metadata (%s)",
   async (newerNative) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -655,7 +671,14 @@ it.each([false, true])(
         expect(
           listSessionMembersInDatabase(database, sessionKey).map((member) => member.identityId),
         ).toEqual(["alias-member", "target-member"]);
-        expect(sharing.readCurrent()).toBeUndefined();
+        expect(sharing.readCurrent()).toEqual(
+          newerNative
+            ? undefined
+            : {
+                entry: projectSessionSharingEntry(entry),
+                membership: new Set(["alias-member", "target-member"]),
+              },
+        );
       } finally {
         delivery.afterResult = undefined;
         sharing.release();

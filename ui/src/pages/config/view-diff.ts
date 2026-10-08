@@ -52,12 +52,9 @@ function computeDiff(
     if (origKeys.length !== currKeys.length) {
       return true;
     }
-    for (const key of origKeys) {
-      if (!Object.hasOwn(curr, key) || valuesDiffer(orig[key], curr[key], depth + 1)) {
-        return true;
-      }
-    }
-    return false;
+    return origKeys.some(
+      (key) => !Object.hasOwn(curr, key) || valuesDiffer(orig[key], curr[key], depth + 1),
+    );
   }
 
   function valuesDiffer(orig: unknown, curr: unknown, depth: number): boolean {
@@ -103,9 +100,11 @@ function computeDiff(
       return;
     }
     if (Array.isArray(orig) || Array.isArray(curr)) {
-      if (Array.isArray(orig) && Array.isArray(curr) && arrayValuesDiffer(orig, curr, depth + 1)) {
-        pushChange(path, orig, curr);
-      } else if (!Array.isArray(orig) || !Array.isArray(curr)) {
+      if (
+        !Array.isArray(orig) ||
+        !Array.isArray(curr) ||
+        arrayValuesDiffer(orig, curr, depth + 1)
+      ) {
         pushChange(path, orig, curr);
       }
       return;

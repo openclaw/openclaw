@@ -35,7 +35,7 @@ export function createGitHubPublicationRuntime(params: {
     }
   };
   const publishAcceptedWorkspace = async (claim: WorkerSessionTurnClaim) => {
-    const placement = params.placements.get(claim.sessionId);
+    const placement = await params.placements.getAsync(claim.sessionId);
     if (!placement) {
       params.warn(`GitHub publication deferred because placement ${claim.sessionId} disappeared.`);
       return;

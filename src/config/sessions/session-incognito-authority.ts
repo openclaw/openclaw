@@ -89,6 +89,10 @@ export function createIncognitoSessionClaims(owner: {
           assertReadable();
           return structuredClone(current(sessionKey)?.sharing);
         },
+        readSteering(this: void, sessionKey: string) {
+          assertReadable();
+          return structuredClone(current(sessionKey)?.steering);
+        },
         readCapability(this: void, sessionKey: string) {
           assertReadable();
           return structuredClone(current(sessionKey)?.capability);

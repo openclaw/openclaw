@@ -231,16 +231,20 @@ function refreshLogbookSilently(
   return refresh;
 }
 
-/** Stops background polling; wired into tab-switch and disconnect cleanup. */
-export function stopLogbookPolling(host: object): void {
-  const state = logbookStates.get(host);
-  if (state?.pollTimer) {
+function clearLogbookPolling(state: LogbookControllerState): void {
+  if (state.pollTimer) {
     clearInterval(state.pollTimer);
     state.pollTimer = null;
   }
+  state.pollClient = null;
+  state.backgroundRefreshQueued = false;
+}
+
+/** Stops background polling; wired into tab-switch and disconnect cleanup. */
+export function stopLogbookPolling(host: object): void {
+  const state = logbookStates.get(host);
   if (state) {
-    state.pollClient = null;
-    state.backgroundRefreshQueued = false;
+    clearLogbookPolling(state);
     // PluginPage retires this host immediately after stop returns. Let its loads
     // settle; host identity keeps their results out of the replacement view.
   }
@@ -251,12 +255,7 @@ export function configureLogbookPolling(
   client: GatewayBrowserClient | null,
 ): void {
   if (!client) {
-    if (state.pollTimer) {
-      clearInterval(state.pollTimer);
-      state.pollTimer = null;
-    }
-    state.pollClient = null;
-    state.backgroundRefreshQueued = false;
+    clearLogbookPolling(state);
     // Unlike stopLogbookPolling's detached-host path, this state can render
     // again after reconnect. Retire every old async owner before reuse.
     bindClient(state, null);

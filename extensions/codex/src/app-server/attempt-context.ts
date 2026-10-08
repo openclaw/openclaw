@@ -204,29 +204,22 @@ function buildCodexSkillReportEntries(
 
 function buildCodexToolReportEntry(tool: CodexDynamicToolFunctionSpec): CodexToolReportEntry {
   const summary = tool.description.trim();
+  const deferred = tool.deferLoading === true;
+  const schema = deferred ? null : tool.inputSchema;
+  let schemaChars = 0;
+  if (!deferred) {
+    try {
+      schemaChars = JSON.stringify(schema).length;
+    } catch {
+      schemaChars = 0;
+    }
+  }
+  const properties =
+    isJsonObject(schema) && isJsonObject(schema.properties) ? schema.properties : null;
   return {
     name: tool.name,
     summaryChars: summary.length,
     summaryHash: sha256Text(summary),
-    ...(tool.deferLoading === true
-      ? { schemaChars: 0, schemaHash: stableJsonHash(null), propertiesCount: null }
-      : buildCodexToolSchemaStats(tool.inputSchema)),
-  };
-}
-
-function buildCodexToolSchemaStats(
-  schema: JsonValue,
-): Pick<CodexToolReportEntry, "schemaChars" | "schemaHash" | "propertiesCount"> {
-  const schemaChars = (() => {
-    try {
-      return JSON.stringify(schema).length;
-    } catch {
-      return 0;
-    }
-  })();
-  const properties =
-    isJsonObject(schema) && isJsonObject(schema.properties) ? schema.properties : null;
-  return {
     schemaChars,
     schemaHash: stableJsonHash(schema),
     propertiesCount: properties ? Object.keys(properties).length : null,
@@ -486,13 +479,7 @@ export function resolveCodexDeliveryHintPreservedInputRange(params: {
   }
   const promptWithoutDeliveryHintStart = prompt.length - promptWithoutDeliveryHint.length;
   const inputStart = Math.max(promptInputRange.start, promptWithoutDeliveryHintStart);
-  const inputEnd = Math.max(
-    inputStart,
-    Math.min(
-      promptInputRange.end,
-      promptWithoutDeliveryHint.length + promptWithoutDeliveryHintStart,
-    ),
-  );
+  const inputEnd = Math.max(inputStart, promptInputRange.end);
   const decoratedPromptSuffixStart = decoratedPrompt.length - promptWithoutDeliveryHint.length;
   const requestHeader = "Current user request:\n";
   const requestHeaderStart = decoratedPromptSuffixStart - requestHeader.length;

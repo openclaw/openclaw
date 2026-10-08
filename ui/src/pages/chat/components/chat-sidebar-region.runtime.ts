@@ -532,18 +532,13 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
 
   private renderDivider(column: SidebarColumn) {
     const dock = sidebarDock(this.layout);
+    const dimension = dock === "bottom" ? "height" : "width";
     const measure = () => {
       const shell = this.parentElement;
       const primary = shell?.querySelector<HTMLElement>('[data-region="main"]');
       const panel = shell?.querySelector<HTMLElement>('[data-region="side"]:not([hidden])');
-      const primarySize =
-        dock === "bottom"
-          ? (primary?.getBoundingClientRect().height ?? 0)
-          : (primary?.getBoundingClientRect().width ?? 0);
-      const panelSize =
-        dock === "bottom"
-          ? (panel?.getBoundingClientRect().height ?? column.height)
-          : (panel?.getBoundingClientRect().width ?? column.width);
+      const primarySize = primary?.getBoundingClientRect()[dimension] ?? 0;
+      const panelSize = panel?.getBoundingClientRect()[dimension] ?? column[dimension];
       // Grid columns mirror in RTL; divider ratios follow physical left/top movement.
       const panelBeforeMain =
         dock !== "bottom" &&
@@ -565,11 +560,9 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       onResize: (event) => {
         const bounds = this.parentElement?.getBoundingClientRect();
         const regionSize =
-          dock === "bottom"
-            ? (bounds?.height ?? 0)
-            : this.availableWidth > 0
-              ? this.availableWidth
-              : (bounds?.width ?? 0);
+          dimension === "width" && this.availableWidth > 0
+            ? this.availableWidth
+            : (bounds?.[dimension] ?? 0);
         const measured = measure();
         const total = measured.total || regionSize;
         const requested =

@@ -14,6 +14,7 @@ import {
   isSessionTranscriptIndexStatusClean,
   maintainSessionTranscriptIndexStatus,
 } from "./session-transcript-index-status.worker.js";
+import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
@@ -75,6 +76,18 @@ function settle(db: DatabaseSync) {
   }
   throw new Error("Bounded projection maintenance did not finish");
 }
+
+it("does not reconcile an empty transcript because of orphaned or another session's projection", () => {
+  const db = createDatabase();
+  seedCleanSession(db, "empty");
+  seedCleanSession(db, "other");
+  db.exec(`DELETE FROM transcript_events WHERE session_id = 'empty';
+    UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = 'empty';
+    UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = 'other';`);
+  expect(sessionTranscriptIndexNeedsReconcile(db, "empty")).toBe(false);
+  expect(sessionTranscriptIndexNeedsReconcile(db, "missing")).toBe(false);
+  expect(sessionTranscriptIndexNeedsReconcile(db, "other")).toBe(true);
+});
 
 it("bounds admission, detects writes behind its cursor, and stops reading clean source tables", () => {
   const db = createDatabase();

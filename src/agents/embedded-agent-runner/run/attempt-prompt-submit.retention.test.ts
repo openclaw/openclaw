@@ -20,8 +20,8 @@ import {
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { markPendingFinalDelivery } from "../../subagent-test-fixtures.test-helpers.js";
 import { useSubagentControlFixture } from "../../subagents/registry/subagent-control.test-support.js";
-import { markPendingFinalDelivery } from "../../subagents/registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../../subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../subagents/registry/subagent-registry-persistence.js";
 import {

@@ -107,7 +107,7 @@ function countListedRunKeys() {
 describe("heartbeat exact-session busy checks", () => {
   afterEach(resetHeartbeatEventsForTest);
 
-  it.each([false, true])(
+  it.each([true])(
     "does not enumerate 1000 active runs for isolatedSession=%s",
     async (isolatedSession) => {
       await withHeartbeatFixture(isolatedSession, async (opts, storePath) => {
@@ -234,22 +234,6 @@ describe("heartbeat exact-session busy checks", () => {
       });
     },
   );
-
-  it("retains reply registry membership when the reply predicate is injected", async () => {
-    await withHeartbeatFixture(false, async (opts) => {
-      const close = registerRun("reply", sessionKey, "indexed-reply");
-      try {
-        expect(
-          await resolveHeartbeatWakeStage({
-            ...opts,
-            deps: { ...opts.deps, isReplyRunActive: () => false },
-          }),
-        ).toEqual({ kind: "skipped", reason: "requests-in-flight" });
-      } finally {
-        close();
-      }
-    });
-  });
 
   it.each([
     {

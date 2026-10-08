@@ -18,10 +18,7 @@ export function shouldApplyStartupContext(params: {
     return false;
   }
   const applyOn = startupContext?.applyOn;
-  if (!Array.isArray(applyOn) || applyOn.length === 0) {
-    return true;
-  }
-  return applyOn.includes(params.action);
+  return !Array.isArray(applyOn) || applyOn.length === 0 || applyOn.includes(params.action);
 }
 
 function shiftDateStampByCalendarDays(stamp: string, offsetDays: number): string {
@@ -57,10 +54,9 @@ function buildStartupMemoryDateStamps(params: {
 
 function trimStartupMemoryContent(content: string, maxChars: number): string {
   const trimmed = content.trim();
-  if (trimmed.length <= maxChars) {
-    return trimmed;
-  }
-  return `${truncateUtf16Safe(trimmed, maxChars)}\n...[truncated]...`;
+  return trimmed.length <= maxChars
+    ? trimmed
+    : `${truncateUtf16Safe(trimmed, maxChars)}\n...[truncated]...`;
 }
 
 function sanitizeStartupMemoryLabel(value: string): string {

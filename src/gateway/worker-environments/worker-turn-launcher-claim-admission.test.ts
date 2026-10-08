@@ -274,9 +274,14 @@ describe("worker turn launcher claim admission", () => {
       },
     });
     const claimOps = createPlacementTurnClaimFixtureOps(database);
-    vi.spyOn(placements, "listPendingWorkspaceResultsAsync").mockImplementationOnce(async () => {
-      claimOps.releaseTurn(priorClaim);
-      return [];
+    const claimTurn = placements.claimTurn.bind(placements);
+    vi.spyOn(placements, "claimTurn").mockImplementationOnce(async (...args) => {
+      try {
+        return await claimTurn(...args);
+      } catch (error) {
+        claimOps.releaseTurn(priorClaim);
+        throw error;
+      }
     });
     const provider = createWorkerSessionTurnPlacementProvider({
       environments: unusedEnvironments(),
@@ -311,12 +316,15 @@ describe("worker turn launcher claim admission", () => {
       runId: "remote-result-run",
       owner: placementTurnOwner(active),
     });
-    await placements.markWorkspaceResultPending(priorClaim);
-    const listPendingWorkspaceResultsAsync = vi.spyOn(
-      placements,
-      "listPendingWorkspaceResultsAsync",
-    );
-    listPendingWorkspaceResultsAsync.mockResolvedValueOnce([]);
+    const claimTurn = placements.claimTurn.bind(placements);
+    vi.spyOn(placements, "claimTurn").mockImplementationOnce(async (...args) => {
+      try {
+        return await claimTurn(...args);
+      } catch (error) {
+        await placements.markWorkspaceResultPending(priorClaim);
+        throw error;
+      }
+    });
     const waitForRelease = vi.spyOn(placements, "waitForTurnClaimRelease");
     const provider = createWorkerSessionTurnPlacementProvider({
       environments: unusedEnvironments(),

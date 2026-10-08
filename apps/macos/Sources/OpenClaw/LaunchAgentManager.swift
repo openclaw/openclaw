@@ -168,13 +168,9 @@ final class LaunchAgentManager {
     @discardableResult
     @concurrent
     private static func executeLaunchctl(_ args: [String]) async -> Int32 {
-        do {
-            return try await BoundedProcess.run(
-                path: "/bin/launchctl",
-                arguments: args,
-                timeout: 5).terminationStatus
-        } catch {
-            return -1
-        }
+        await (try? BoundedProcess.run(
+            path: "/bin/launchctl",
+            arguments: args,
+            timeout: 5).terminationStatus) ?? -1
     }
 }

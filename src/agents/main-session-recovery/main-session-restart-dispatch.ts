@@ -474,6 +474,21 @@ async function resumeMainSessionWithinAdmission(
     const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
       agentParams,
       gatewayRuntime: params.gatewayRuntime,
+      ...(sourceRunId && params.entry.restartRecoveryOperatorSource
+        ? {
+            restartRecoveryOperatorTarget: {
+              ...target,
+              sessionId: params.entry.sessionId,
+              sourceRunId,
+              recoveryRunId,
+            },
+          }
+        : {}),
+      assertAdmissionCurrent: () => {
+        if (params.shouldContinue?.() === false || !taskRemainsOwed()) {
+          throw new Error("Restart recovery admission is no longer current.");
+        }
+      },
       onSettled: () => {
         dispatchSettled = true;
         stopTyping?.();

@@ -6,6 +6,7 @@ import android.Manifest
 import android.content.ContentProviderOperation
 import android.content.ContentResolver
 import android.content.Context
+import android.database.Cursor
 import android.provider.ContactsContract
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -70,16 +71,9 @@ private object SystemContactsDataSource : ContactsDataSource {
         ContactsContract.Contacts._ID,
         ContactsContract.Contacts.DISPLAY_NAME_PRIMARY,
       )
-    val selection: String?
-    val selectionArgs: Array<String>?
-    if (request.query.isNullOrBlank()) {
-      selection = null
-      selectionArgs = null
-    } else {
-      // Escape wildcard characters so user text remains a substring search, not a LIKE pattern.
-      selection = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} LIKE ? ESCAPE '\\'"
-      selectionArgs = arrayOf("%${escapeSqlLikeLiteral(request.query)}%")
-    }
+    // Escape wildcard characters so user text remains a substring search, not a LIKE pattern.
+    val selectionArgs = request.query?.takeUnless(String::isBlank)?.let { arrayOf("%${escapeSqlLikeLiteral(it)}%") }
+    val selection = selectionArgs?.let { "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} LIKE ? ESCAPE '\\'" }
     val sortOrder = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} COLLATE NOCASE ASC LIMIT ${request.limit}"
     resolver
       .query(
@@ -145,11 +139,12 @@ private object SystemContactsDataSource : ContactsDataSource {
     }
 
     val results = resolver.applyBatch(ContactsContract.AUTHORITY, operations)
-    val rawContactUri =
-      results.firstOrNull()?.uri
-        ?: throw IllegalStateException("contact insert failed")
     val rawContactId =
-      rawContactUri.lastPathSegment?.toLongOrNull()
+      results
+        .firstOrNull()
+        ?.uri
+        ?.lastPathSegment
+        ?.toLongOrNull()
         ?: throw IllegalStateException("contact insert failed")
     val contactId =
       // Android returns the RawContact id; resolve the aggregate Contact id used by search APIs.
@@ -192,8 +187,30 @@ private object SystemContactsDataSource : ContactsDataSource {
     contactId: Long,
     fallbackDisplayName: String,
   ): ContactRecord {
-    val nameRow = loadNameRow(resolver, contactId)
-    val organization = loadOrganization(resolver, contactId)
+    val nameRow =
+      loadContactData(
+        resolver,
+        contactId,
+        ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE,
+        arrayOf(
+          ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME,
+          ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME,
+          ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME,
+        ),
+      ) { cursor ->
+        NameRow(
+          givenName = cursor.getString(0)?.trim()?.ifEmpty { null },
+          familyName = cursor.getString(1)?.trim()?.ifEmpty { null },
+          displayName = cursor.getString(2)?.trim()?.ifEmpty { null },
+        )
+      } ?: NameRow(givenName = null, familyName = null, displayName = null)
+    val organization =
+      loadContactData(
+        resolver,
+        contactId,
+        ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE,
+        arrayOf(ContactsContract.CommonDataKinds.Organization.COMPANY),
+      ) { it.getString(0)?.trim()?.ifEmpty { null } }
     val phones =
       queryContactValues(
         resolver = resolver,
@@ -233,54 +250,23 @@ private object SystemContactsDataSource : ContactsDataSource {
     val displayName: String?,
   )
 
-  private fun loadNameRow(
+  private inline fun <T> loadContactData(
     resolver: ContentResolver,
     contactId: Long,
-  ): NameRow {
-    val projection =
-      arrayOf(
-        ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME,
-        ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME,
-        ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME,
-      )
+    mimeType: String,
+    projection: Array<String>,
+    read: (Cursor) -> T,
+  ): T? =
     resolver
       .query(
         ContactsContract.Data.CONTENT_URI,
         projection,
         "${ContactsContract.Data.CONTACT_ID}=? AND ${ContactsContract.Data.MIMETYPE}=?",
-        arrayOf(
-          contactId.toString(),
-          ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE,
-        ),
+        arrayOf(contactId.toString(), mimeType),
         null,
       ).use { cursor ->
-        if (cursor == null || !cursor.moveToFirst()) {
-          return NameRow(givenName = null, familyName = null, displayName = null)
-        }
-        val given = cursor.getString(0)?.trim()?.ifEmpty { null }
-        val family = cursor.getString(1)?.trim()?.ifEmpty { null }
-        val display = cursor.getString(2)?.trim()?.ifEmpty { null }
-        return NameRow(givenName = given, familyName = family, displayName = display)
+        if (cursor != null && cursor.moveToFirst()) read(cursor) else null
       }
-  }
-
-  private fun loadOrganization(
-    resolver: ContentResolver,
-    contactId: Long,
-  ): String? {
-    val projection = arrayOf(ContactsContract.CommonDataKinds.Organization.COMPANY)
-    resolver
-      .query(
-        ContactsContract.Data.CONTENT_URI,
-        projection,
-        "${ContactsContract.Data.CONTACT_ID}=? AND ${ContactsContract.Data.MIMETYPE}=?",
-        arrayOf(contactId.toString(), ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE),
-        null,
-      ).use { cursor ->
-        if (cursor == null || !cursor.moveToFirst()) return null
-        return cursor.getString(0)?.trim()?.ifEmpty { null }
-      }
-  }
 
   private fun queryContactValues(
     resolver: ContentResolver,

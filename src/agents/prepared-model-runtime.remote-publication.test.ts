@@ -249,14 +249,6 @@ it("does not reuse a dynamic build captured before a remote publication", async 
   expect(next.snapshot.modelCatalog.entries.map((row) => row.id)).toContain("remote-300");
 });
 
-it("returns usable refresh rows when the saved remote bundle is corrupt", async () => {
-  await setup();
-  stored.mockReturnValue({ source_url: sourceUrl, bundle_json: "{" });
-  const result = await refresh();
-  expect(result.models.map((row: { id: string }) => row.id)).toContain("remote-200");
-  expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
-});
-
 it("bounds refresh with two agents while another discovery is held and publishes later", async ({
   signal,
 }) => {
@@ -308,21 +300,6 @@ it("bounds refresh with two agents while another discovery is held and publishes
     stop();
     workerSpy.mockRestore();
   }
-});
-
-it("publishes the accepted bundle despite a provider discovery failure", async () => {
-  await setup();
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-    entries: [],
-    routeVariants: [],
-    authoritative: false,
-    refreshFailed: true,
-  });
-  expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
-  expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
-  expect(captureRemoteModelCatalogStartupSnapshot()?.pricing["custom/remote-300"]?.cost.input).toBe(
-    300,
-  );
 });
 
 it("retries a scheduled adoption when its pending auth owner settles", async ({

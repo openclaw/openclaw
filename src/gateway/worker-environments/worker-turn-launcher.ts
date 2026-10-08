@@ -1,10 +1,10 @@
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import type { SandboxContext } from "../../agents/sandbox/types.js";
 import type {
-  LocalTurnPlacementClaim,
   PreparedSessionPlacementSandbox,
   SessionPlacementAdmissionProvider,
 } from "../../agents/session-placement-admission.js";
+import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.types.js";
 import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
@@ -219,13 +219,14 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       if (!current || current.state === "local") {
         return await runLocalTurn();
       }
-      const hasPendingWorkspaceResultToSettle = async (sessionId: string, runId: string) =>
-        (await options.placements.listPendingWorkspaceResultsAsync(sessionId)).some(
-          (pending) =>
-            pending.sessionId === sessionId &&
-            // A restarted run has no live claim, even when it reuses the retained run ID.
-            (pending.runId !== runId || !options.placements.get(sessionId)?.turnClaim),
+      const hasPendingWorkspaceResultToSettle = async (sessionId: string, runId: string) => {
+        const facts = await options.placements.readProjection([sessionId], { current: true });
+        const pending = facts.pendingResults.get(sessionId);
+        // A restarted run has no live claim, even when it reuses the retained run ID.
+        return Boolean(
+          pending && (pending.runId !== runId || !facts.placements.get(sessionId)?.turnClaim),
         );
+      };
       let identity = resolvePlacementIdentity(claim, current);
       const reportProvisioning = () =>
         emitAgentRunStatusEvent({
@@ -251,9 +252,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         },
       );
       // An admission wait ends without authority; retry from the durable placement.
-      const readRoutablePlacement = (message: string, cause?: unknown) => {
+      const readRoutablePlacement = async (message: string, cause?: unknown) => {
+        const refreshed = await options.placements.getAsync(identity.sessionId);
         assertAdmissionCurrent();
-        const refreshed = options.placements.get(identity.sessionId);
         if (!refreshed) {
           throw new Error(message, cause === undefined ? undefined : { cause });
         }
@@ -311,7 +312,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             sessionId: identity.sessionId,
             ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
           });
-          routablePlacement = readRoutablePlacement(
+          routablePlacement = await readRoutablePlacement(
             "Cloud worker placement disappeared after workspace reconciliation",
           );
           continue;
@@ -333,7 +334,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 reason: "worker:runtime_refresh",
               }),
           });
-          routablePlacement = readRoutablePlacement(
+          routablePlacement = await readRoutablePlacement(
             "Cloud worker placement disappeared while waiting for runtime refresh",
           );
           continue;
@@ -379,7 +380,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
             });
           }
-          routablePlacement = readRoutablePlacement(
+          routablePlacement = await readRoutablePlacement(
             refreshing
               ? "Cloud worker placement disappeared during runtime refresh admission"
               : "Cloud worker placement disappeared after workspace reconciliation",
@@ -388,7 +389,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           continue;
         }
         if (!admitted) {
-          routablePlacement = readRoutablePlacement(
+          routablePlacement = await readRoutablePlacement(
             "Cloud worker placement disappeared after workspace reconciliation",
           );
           continue;
@@ -604,7 +605,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             if (!disconnectedBeforeHandoff) {
               await options.reconcileActivePlacement(placement.environmentId);
             }
-            const reconciled = options.placements.get(placement.sessionId);
+            const reconciled = await options.placements.getAsync(placement.sessionId);
             if (canRecoverAdmission) {
               assertAdmissionCurrent();
               turn.abortSignal?.throwIfAborted();
@@ -678,7 +679,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             await releaseClaimIfOwned(options.placements, turnClaim);
             throw error;
           }
-          const settledPlacement = options.placements.get(turnClaim.sessionId);
+          const settledPlacement = await options.placements.getAsync(turnClaim.sessionId);
           if (
             (remoteExec || error instanceof WorkerTurnExecutionError) &&
             settledPlacement?.state === "active" &&

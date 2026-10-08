@@ -475,6 +475,7 @@ export function createGatewayRequestContext(
         });
       }
     },
+    sharedGatewaySessionGenerationState,
     disconnectClientsUsingSharedGatewayAuth: () => {
       disconnectStaleSharedGatewayAuthClients({
         clients,

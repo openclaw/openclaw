@@ -40,9 +40,9 @@ import { createCodexRuntimeTestBindingStateStore } from "./session-binding.sqlit
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
-  resetSharedCodexAppServerClientForTests,
   resolveCodexNativeConfigFenceKey,
 } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import {
   codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
@@ -272,8 +272,11 @@ export async function createCanonicalForkFixture(params: {
             buildAttemptParams: () => attempt,
             pluginConfig,
             computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig }),
-            startupAuthProfileId: null,
-            startupAuthBindingFingerprint: undefined,
+            clientOptions: {
+              authProfileId: null,
+              authBindingFingerprint: undefined,
+              authRequirement: undefined,
+            },
             startupAuthAccountCacheKey: undefined,
             startupEnvApiKeyCacheKey: undefined,
             sessionAgentId: "main",

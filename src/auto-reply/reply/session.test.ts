@@ -1343,7 +1343,7 @@ describe("initSessionState RawBody", () => {
         resolveGatewaySessionStoreTargetWithStore,
         resolveCanonicalSessionEntryFromStoreKeys,
         managedWorktrees: {
-          findLiveByOwner: (_kind, ownerId) => ({
+          findLiveByOwner: async (_kind, ownerId) => ({
             id: worktree.id,
             ownerId,
             path: worktree.repoRoot,

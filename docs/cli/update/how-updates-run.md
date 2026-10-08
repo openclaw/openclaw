@@ -32,6 +32,13 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 ### Validation and activation
 
+On Windows, candidate commands verify their recorded handoff lease and their own
+PID/start identity even when the launcher process tree changes. A different
+immediate parent no longer causes a valid candidate to fail with `Candidate
+executor binding does not match its parent`. The update owner must remain live,
+and changed or revoked leases still refuse mutation. This check runs in the
+candidate, so it also accepts valid handoffs from older installed updaters.
+
 Channel health collection timeouts are warnings during post-update verification.
 The Gateway must still answer, report the expected version and build, pass HTTP
 readiness, and remain in the same running generation. An explicit negative channel

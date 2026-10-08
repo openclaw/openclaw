@@ -1,8 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
+import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import type {
   AcpSessionReadCommand,
+  AcpSessionReadInput,
   AcpSessionReadResult,
+  AcpSessionRow,
 } from "../acp/runtime/session-meta-read.types.js";
 import type { McpOAuthReadOnlyOperations } from "../agents/mcp-oauth-store.kernel.js";
 import type {
@@ -44,6 +47,10 @@ import type {
 } from "../cron/store/run-recovery-read.types.js";
 import type { CronQuarantinedJob } from "../cron/types-shared.js";
 import type { FleetCellRecord } from "../fleet/registry.types.js";
+import type {
+  PlacementGrantReadInput,
+  PlacementGrantRows,
+} from "../gateway/operator-approval-placement-grants.read.js";
 import type {
   CronStandingGrantListing,
   CronStandingGrantLookupInput,
@@ -190,6 +197,7 @@ export type OpenClawStateReadCommand =
     }
   | { type: "operatorApprovals.listCronGrants"; input: { limit?: number } }
   | { type: "operatorApprovals.validateCronGrant"; input: CronStandingGrantLookupInput }
+  | { type: "operatorApprovals.placementGrant"; input: PlacementGrantReadInput }
   | PluginBlobReadCommand
   | { type: "subagents.sessionList" }
   | { type: "subagents.restore" }
@@ -227,7 +235,8 @@ export type OpenClawStateReadCommand =
   | UserProfileAvatarReadCommand
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
-  | { type: "userProfiles.authority.resolve"; profileId: string }
+  | { type: "userProfiles.authority.resolve"; profileId: string; includeProfile?: boolean }
+  | { type: "userProfiles.aliases.resolve"; profileId: string }
   | ({ type: "userProfiles.githubIdentity.cached" } & CachedGitHubIdentityBinding)
   | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
@@ -256,6 +265,7 @@ export type OpenClawStateReadCommand =
   | { type: "updateRuns.status" }
   | { type: "updateRuns.historyStatus" }
   | { type: "worktrees.cleanupState" }
+  | { type: "worktrees.list" }
   | { type: "fleet.list" }
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "fleet.get"; tenantId: string }
@@ -266,6 +276,13 @@ export type OpenClawStateReadCommand =
   | {
       type: "sessionRepositoryWorkspaces.find";
       owners: readonly RepositoryWorkspaceOwner[];
+    }
+  | {
+      type: "sessionRows.sharedFacts";
+      entries: readonly {
+        acp?: AcpSessionReadInput;
+        repositoryWorkspace?: RepositoryWorkspaceOwner & { workspaceId: string };
+      }[];
     }
   | { type: "workspace.snapshot"; workspaceDir: string }
   | { type: "sandboxRegistry.list" }
@@ -344,6 +361,7 @@ export type OpenClawStateReadResult =
     }
   | { type: "operatorApprovals.listCronGrants"; grants: CronStandingGrantListing[] }
   | { type: "operatorApprovals.validateCronGrant"; result: ConsumeCronStandingGrantResult }
+  | { type: "operatorApprovals.placementGrant"; rows: PlacementGrantRows }
   | ReadResult<PluginBlobReadReply>
   | {
       type: "capture.readOnlyEvents";
@@ -479,8 +497,9 @@ export type OpenClawStateReadResult =
     }
   | {
       type: "userProfiles.authority.resolve";
-      profile: UserProfileAuthority | undefined;
+      profile: (UserProfileAuthority & { listItem?: UserProfileListItem }) | undefined;
     }
+  | { type: "userProfiles.aliases.resolve"; profileId: string; aliases: string[] }
   | {
       type: "userProfiles.githubIdentity.cached";
       identity: CachedGitHubIdentity | undefined;
@@ -521,6 +540,7 @@ export type OpenClawStateReadResult =
       records: ManagedWorktreeRecord[];
       leases: ReturnType<typeof readWorktreeRunLeaseStateInDatabase>;
     }
+  | { type: "worktrees.list"; records: ManagedWorktreeRecord[] }
   | { type: "fleet.list"; cells: FleetCellRecord[] }
   | {
       type: "workerPlacements.changeSnapshot";
@@ -534,6 +554,13 @@ export type OpenClawStateReadResult =
   | {
       type: "sessionRepositoryWorkspaces.find";
       workspaces: SessionRepositoryWorkspaceRecord[];
+    }
+  | {
+      type: "sessionRows.sharedFacts";
+      rows: {
+        acp?: AcpSessionRow | null;
+        repositoryWorkspace?: SessionRepositoryWorkspaceRecord | null;
+      }[];
     }
   | { type: "workspace.snapshot"; snapshot: WorkspaceStateSnapshot }
   | {

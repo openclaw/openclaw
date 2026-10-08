@@ -83,15 +83,11 @@ export function hasVisibleAgentPayload(
       }
       const record = payload as ReplyPayload & { visible?: unknown };
       if (
-        options.requireTerminalContent &&
-        (record.visible === false || !isReplyPayloadTerminalContent(record))
+        (options.requireTerminalContent &&
+          (record.visible === false || !isReplyPayloadTerminalContent(record))) ||
+        (options.includeErrorPayloads === false && record.isError === true) ||
+        (options.includeReasoningPayloads === false && record.isReasoning === true)
       ) {
-        return false;
-      }
-      if (options.includeErrorPayloads === false && record.isError === true) {
-        return false;
-      }
-      if (options.includeReasoningPayloads === false && record.isReasoning === true) {
         return false;
       }
       const visibleText =

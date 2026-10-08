@@ -73,6 +73,7 @@ packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts
 packages/memory-host-sdk/src/host/sqlite-vec-platform-variant.ts
 packages/memory-host-sdk/src/host/sqlite-vec.ts
 packages/model-catalog-core/package.json
+packages/model-catalog-core/src/canonical-model-key.ts
 packages/model-catalog-core/src/configured-model-refs.ts
 packages/model-catalog-core/src/index.ts
 packages/model-catalog-core/src/model-catalog-context-windows.ts
@@ -787,7 +788,9 @@ src/infra/agent-run-registry.ts
 src/infra/agent-run-usage.ts
 src/infra/approval-resolution-ref.ts
 src/infra/backoff.ts
+src/infra/backup-audit-paths.ts
 src/infra/backup-scratch.ts
+src/infra/backup-volatile-filter.ts
 src/infra/boundary-file-read.ts
 src/infra/boundary-path.ts
 src/infra/bun-sqlite-close-probe.ts
@@ -1038,6 +1041,7 @@ src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-retirement.ts
 src/infra/sqlite-snapshot-single-flight.ts
+src/infra/sqlite-temp-generation-schema.ts
 src/infra/sqlite-snapshot-source.ts
 src/infra/sqlite-snapshot-staging-allocation.ts
 src/infra/sqlite-snapshot-staging-error.ts
@@ -1091,6 +1095,7 @@ src/infra/tmp-openclaw-dir.ts
 src/infra/update-channels.ts
 src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-result.ts
+src/infra/update-failure-facts-format.ts
 src/infra/update-failure-facts.ts
 src/infra/update-failure-public-codes.ts
 src/infra/update-failure-public-identifiers.ts
@@ -1174,6 +1179,7 @@ src/logging/redact-internal.ts
 src/logging/redact-json-tokens.ts
 src/logging/redact-json.ts
 src/logging/redact-linear-matchers.ts
+src/logging/redact-mask.ts
 src/logging/redact-pattern-runtime.ts
 src/logging/redact-patterns.ts
 src/logging/redact-pem.ts
@@ -1609,6 +1615,7 @@ src/state/openclaw-agent-context-engine-turn-outbox-schema.ts
 src/state/openclaw-agent-db-additive-columns.ts
 src/state/openclaw-agent-db-admission.ts
 src/state/openclaw-agent-db-contract.ts
+src/state/openclaw-agent-db-discovery-paths.ts
 src/state/openclaw-agent-db-disposal.ts
 src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts

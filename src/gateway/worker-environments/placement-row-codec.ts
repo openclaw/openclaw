@@ -4,6 +4,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type {
   DB as StateDatabase,
@@ -143,6 +144,17 @@ export function readWorkerPlacementsForReconcileInDatabase(
   return executeSqliteQuerySync(db, select.orderBy("updated_at_ms").orderBy("session_id")).rows.map(
     fromRow,
   );
+}
+
+export function readWorkerPlacementsInDatabase(
+  db: DatabaseSync,
+  sessionIds?: readonly string[],
+): WorkerSessionPlacementRecord[] {
+  let select = query(db).selectFrom("worker_session_placements").selectAll();
+  if (sessionIds) {
+    select = select.where("session_id", "in", sqliteStringSet(sessionIds));
+  }
+  return executeSqliteQuerySync(db, select.orderBy("session_id")).rows.map(fromRow);
 }
 
 export function readWorkerPlacementChangeSnapshotInDatabase(
@@ -360,12 +372,14 @@ export function updateTransition(
       .where("session_id", "=", current.sessionId)
       .where("state", "=", current.state)
       .where("transition_generation", "=", current.generation)
-      .where("turn_claim_owner", "is", null),
+      .where("turn_claim_owner", "is", null)
+      .returningAll(),
   );
-  if (result.numAffectedRows !== 1n) {
+  const row = result.rows[0];
+  if (!row) {
     throw new Error(`Worker session placement ${current.sessionId} changed during transition`);
   }
-  const updated = getRequired(db, current.sessionId);
+  const updated = fromRow(row);
   if (updated.state === "active") {
     // Activation and demand are one commit. Teardown may run before refill observes
     // the placement, so cleanup timestamps cannot stand in for successful demand.

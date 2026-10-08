@@ -563,8 +563,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       pullRequestsGateway: this.context.gateway,
       pullRequestsSessionId: selectedSession?.sessionId,
       pullRequestsBranch: this.sessionPullRequestsBranch,
+      pullRequestsBranchDismissed: this.sessionPullRequestsBranchDismissed,
       pullRequestsStatus: this.sessionPullRequestsStatus,
       onDismissPullRequest: this.dismissSessionPullRequest,
+      onDismissPullRequestsBranch: this.dismissSessionPullRequestsBranch,
       // Until catalog success, a lowercase name may be a hidden/ambiguous alias.
       // Do not mint a checkout link that can prefetch the wrong repository.
       githubRepo: projectCatalog.result ? this.githubRepo : null,

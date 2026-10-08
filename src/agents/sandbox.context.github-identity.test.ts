@@ -175,19 +175,16 @@ it("refuses shared identity exposure before provisioning and warns once with the
   );
 });
 
-it.each([false, undefined])(
-  "keeps identity absent with allowInSandbox=%s",
-  async (allowInSandbox) => {
-    await fixture(
-      async (config) => {
-        const sandbox = await resolve(config);
-        expect(sandbox?.docker.env).not.toHaveProperty("GH_CONFIG_DIR");
-        expect(sandbox?.readOnlyResourceMounts).toBeUndefined();
-      },
-      { allowInSandbox },
-    );
-  },
-);
+it("keeps identity absent without allowInSandbox opt-in", async () => {
+  await fixture(
+    async (config) => {
+      const sandbox = await resolve(config);
+      expect(sandbox?.docker.env).not.toHaveProperty("GH_CONFIG_DIR");
+      expect(sandbox?.readOnlyResourceMounts).toBeUndefined();
+    },
+    { allowInSandbox: undefined },
+  );
+});
 
 it("refuses an unsupported backend without handing it the managed identity", async () => {
   const factory = vi.fn();

@@ -135,15 +135,14 @@ export async function buildMessagePayload(params: {
   });
   const topLevelFilename = readToolStringParam(actionParams, "filename");
   const topLevelMimeType = readToolStringParam(actionParams, "contentType");
+  const attachmentEntries = attachmentSources.map((source) => ({
+    url: source.value,
+    filename: source.filename,
+    mimeType: source.contentType,
+    type: resolveReplyMediaAttachmentType(source.attachment.type),
+  }));
   const attachmentByUrl = new Map(
-    attachmentSources.map((source) => [
-      normalizeOptionalString(source.value),
-      {
-        filename: source.filename,
-        mimeType: source.contentType,
-        type: resolveReplyMediaAttachmentType(source.attachment.type),
-      },
-    ]),
+    attachmentEntries.map(({ url, ...metadata }) => [normalizeOptionalString(url), metadata]),
   );
   const mediaEntries: Array<{
     url: string;
@@ -170,12 +169,8 @@ export async function buildMessagePayload(params: {
   for (const mediaUrlHint of mediaUrlHints) {
     pushMedia(mediaUrlHint, attachmentByUrl.get(normalizeOptionalString(mediaUrlHint)));
   }
-  for (const attachmentSource of attachmentSources) {
-    pushMedia(attachmentSource.value, {
-      filename: attachmentSource.filename,
-      mimeType: attachmentSource.contentType,
-      type: resolveReplyMediaAttachmentType(attachmentSource.attachment.type),
-    });
+  for (const { url, ...metadata } of attachmentEntries) {
+    pushMedia(url, metadata);
   }
 
   const normalizedMedia = await Promise.all(

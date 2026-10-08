@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { retainRuntimePluginWork } from "../agents/runtime-plugin-work.js";
+import * as configJournal from "../config/config-journal-snapshot.js";
+import * as configAudit from "../config/io.audit.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "../plugins/plugin-instance.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  closeTestConfigReloaders,
+  createReloaderHarness,
+  makeSnapshot,
+} from "./config-reload.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import type { RecoveryFixtureFactory } from "./server-plugin-reload.recovery.test-support.js";
 
@@ -36,7 +44,10 @@ function resourceConfig(mode: string): OpenClawConfig {
   };
 }
 
-export async function verifySharedResourceReplacement(createFixture: RecoveryFixtureFactory) {
+export async function verifySharedResourceReplacement(
+  createFixture: RecoveryFixtureFactory,
+  cleanup: "gateway_stop" | "runtime-lifecycle",
+) {
   const events: string[] = [];
   let shared: { closed: boolean; mode: unknown } | undefined;
   const fixture = await createFixture({
@@ -68,7 +79,18 @@ export async function verifySharedResourceReplacement(createFixture: RecoveryFix
         resource.closed = true;
         shared = undefined;
       };
-      api.on("gateway_stop", close);
+      if (cleanup === "gateway_stop") {
+        api.on("gateway_stop", close);
+      } else {
+        api.lifecycle.registerRuntimeLifecycle({
+          id: "shared-resource",
+          cleanup({ reason }) {
+            if (reason === "restart" || reason === "disable") {
+              close();
+            }
+          },
+        });
+      }
     },
   });
   const sibling = fixture.previousRegistry.plugins.find((record) => record.id === "sibling");
@@ -362,9 +384,133 @@ async function verifyExplicitDrainWait(
   }
 }
 
+async function verifyDrainConfigObservation(
+  createFixture: RecoveryFixtureFactory,
+  kind: "retained work" | "retained consumer" | "active call",
+  observation: "install echo" | "external edit",
+) {
+  const initialConfig = resourceConfig("old");
+  const installedConfig = resourceConfig("installed");
+  const fixture = await createFixture({ config: initialConfig, abortOnCandidateStart: false });
+  const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
+  assert(instance);
+  const released = createDeferredCore();
+  const consumer = kind === "retained consumer" ? instance.retainConsumer() : undefined;
+  const release =
+    kind === "retained work"
+      ? instance.retainWork()
+      : consumer
+        ? () => consumer.release()
+        : () => released.resolve();
+  const call = kind === "active call" ? instance.run(() => released.promise) : undefined;
+  const drainEntered = createDeferredCore();
+  const waitForWork = instance.waitForRetainedWork.bind(instance);
+  const drain = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
+    const pending = waitForWork(...args);
+    if (
+      kind === "retained work" ||
+      (kind === "active call" && args[1]?.includeCalls) ||
+      (kind === "retained consumer" && args[1]?.includeConsumers)
+    ) {
+      drainEntered.resolve();
+    }
+    return pending;
+  });
+  const audit = vi.spyOn(configAudit, "appendConfigAuditRecord").mockResolvedValue(undefined);
+  const readJournal = vi
+    .spyOn(configJournal, "readLatestConfigSnapshotAuditRecordAsync")
+    .mockResolvedValue(null);
+  const writeJournal = vi
+    .spyOn(configJournal, "upsertConfigSnapshotAuditRecordAsync")
+    .mockResolvedValue(null);
+  let snapshot = makeSnapshot({ config: installedConfig, hash: "installed" });
+  let observedDuringDrain = false;
+  const readSnapshot = vi.fn(async () => {
+    if (observedDuringDrain) {
+      expect(fixture.firstStop).not.toHaveBeenCalled();
+    }
+    return snapshot;
+  });
+  vi.useFakeTimers();
+  const harness = createReloaderHarness(readSnapshot, {
+    initialConfig,
+    onHotReload: async (plan, config, ownership) => {
+      const result = await fixture.reload(config, ["first"], plan.changedPaths, {
+        checkpoint: ownership.checkpoint,
+        isAborted: () => !ownership.isCurrent(),
+      });
+      ownership.markRuntimeCommitted(config, plan);
+      return { status: "applied", runtime: result.runtime };
+    },
+  });
+  await harness.reloader.ready;
+  const reloading = harness.reloader.applyPluginLifecycleChange({
+    config: installedConfig,
+    write: { persistedHash: "installed", persistedSourceConfig: installedConfig },
+    pluginIds: ["first"],
+    reason: "install",
+  });
+  void reloading.catch(() => {});
+  try {
+    await awaitGateBeforeSettlement(
+      drainEntered.promise,
+      reloading,
+      `Plugin replacement did not wait for ${kind}`,
+    );
+    expect(fixture.firstStop).not.toHaveBeenCalled();
+    expect(fixture.candidates).toHaveLength(0);
+    if (observation === "external edit") {
+      snapshot = makeSnapshot({ config: resourceConfig("external"), hash: "external" });
+    }
+    // The watcher invalidates the source revision while this install owns the reload queue.
+    observedDuringDrain = true;
+    harness.watcher.emit("change");
+    release();
+    await call;
+    if (observation === "install echo") {
+      await expect(reloading).resolves.toMatchObject({ pluginIds: ["first"] });
+      expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
+      expect(fixture.firstStop).toHaveBeenCalledOnce();
+      expect(fixture.candidates).toHaveLength(1);
+    } else {
+      await expect(reloading).rejects.toMatchObject({
+        details: { phase: "drain", committed: false },
+        message: expect.stringContaining("superseded"),
+      });
+      expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+      expect(fixture.firstStop).not.toHaveBeenCalled();
+      expect(fixture.candidates).toHaveLength(0);
+      expect(instance.run(() => "still serving")).toBe("still serving");
+    }
+    expect(harness.onHotReload).toHaveBeenCalledOnce();
+    expect(fixture.siblingStop).not.toHaveBeenCalled();
+  } finally {
+    release();
+    await call;
+    await reloading.catch(() => {});
+    await closeTestConfigReloaders();
+    harness.watcher.restore();
+    drain.mockRestore();
+    audit.mockRestore();
+    readJournal.mockRestore();
+    writeJournal.mockRestore();
+    vi.useRealTimers();
+  }
+}
+
 export function registerPluginRetainedWorkReloadTests(
   createRecoveryFixture: RecoveryFixtureFactory,
 ) {
+  it.each([
+    ["retained work", "install echo"],
+    ["retained work", "external edit"],
+    ["retained consumer", "install echo"],
+    ["retained consumer", "external edit"],
+    ["active call", "install echo"],
+    ["active call", "external edit"],
+  ] as const)("reconciles an %s drain's %s before stopping services", (kind, observation) =>
+    verifyDrainConfigObservation(createRecoveryFixture, kind, observation),
+  );
   it.each([
     ["retained work", "complete"],
     ["retained work", "cancel"],

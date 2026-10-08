@@ -11,7 +11,7 @@ import {
   bindWorkerTurnCapabilities,
 } from "../gateway/worker-environments/placement-turn-claim-events.js";
 import { createWorkerGatewayToolRuntime } from "../gateway/worker-environments/worker-gateway-tool-runtime.js";
-import { resolveWorkerTurnTranscriptTarget } from "../gateway/worker-environments/worker-turn-transcript-target.js";
+import { captureWorkerTurnTranscriptSource } from "../gateway/worker-environments/worker-turn-transcript-target.js";
 import {
   claimAgentRunDelegatedAuthority,
   registerAgentRunContext,
@@ -34,9 +34,7 @@ export async function bindWorkerFixtureTurnSource(
     expectedLifecycleRevision: entry.lifecycleRevision,
     expectedWriterRunId: entry.activeWriterRunId,
   };
-  const assertSourceCurrent = () => {
-    resolveWorkerTurnTranscriptTarget({ ...sessionTarget, sessionTarget });
-  };
+  const assertSourceCurrent = captureWorkerTurnTranscriptSource(sessionTarget);
   const operationalRunInstance = createOperationalRunInstanceRef(claim.runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance, assertSourceCurrent);
   const lifetime = new AbortController();

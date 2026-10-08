@@ -13,6 +13,7 @@ import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.
 import { CronService } from "../cron/service.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
+import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-schedule.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -103,9 +104,9 @@ tasks:
   } as OpenClawConfig;
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   const cron = createTestCronService(storePath, cfg, nowMs);
-  const spec = resolveHeartbeatMonitorPlan(cfg, []).specs.find(
-    (entry) => entry.input.agentId === agentId,
-  );
+  const spec = resolveHeartbeatMonitorPlan(cfg, [], {
+    schedulerSeed: resolveHeartbeatSchedulerSeed(undefined, { env }),
+  }).specs.find((entry) => entry.input.agentId === agentId);
   if (!spec) {
     throw new Error("expected heartbeat monitor spec");
   }

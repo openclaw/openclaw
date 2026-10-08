@@ -190,39 +190,15 @@ export async function sendDiscordOutboundPayload(params: {
       : {};
   const filename = normalizeOptionalString(discordData.filename);
   const componentSpec = await resolveDiscordComponentSpec(payload);
-  if (!componentSpec) {
-    const nativeComponents = Array.isArray(discordData.components)
+  const nativeComponents =
+    !componentSpec && Array.isArray(discordData.components)
       ? (discordData.components as DiscordSendComponents)
       : undefined;
-    const embeds = Array.isArray(discordData.embeds)
+  const embeds =
+    !componentSpec && Array.isArray(discordData.embeds)
       ? (discordData.embeds as DiscordSendEmbeds)
       : undefined;
-    if (nativeComponents || embeds?.length || filename) {
-      const result = await sendPayloadMediaSequenceOrFallback({
-        text: payload.text ?? "",
-        mediaUrls,
-        fallbackResult: createDiscordUnknownPayloadResult(sendContext.target),
-        sendNoMedia: async () =>
-          await sendContext.send(sendContext.target, payload.text ?? "", {
-            verbose: false,
-            components: nativeComponents,
-            embeds,
-            filename,
-            ...formattedDeliveryOptions(),
-            onDeliveryResult,
-          }),
-        send: async ({ text, mediaUrl, isFirst }) =>
-          await sendContext.send(sendContext.target, text, {
-            verbose: false,
-            ...mediaDeliveryOptions(mediaUrl),
-            components: isFirst ? nativeComponents : undefined,
-            embeds: isFirst ? embeds : undefined,
-            filename: isFirst ? filename : undefined,
-            onDeliveryResult,
-          }),
-      });
-      return completeDelivery(result);
-    }
+  if (!componentSpec && !nativeComponents && !embeds?.length && !filename) {
     const result = await sendTextMediaPayload({
       channel: "discord",
       ctx: payloadContext,
@@ -235,15 +211,23 @@ export async function sendDiscordOutboundPayload(params: {
     text: payload.text ?? "",
     mediaUrls,
     fallbackResult: createDiscordUnknownPayloadResult(sendContext.target),
-    sendNoMedia: async () => {
-      return await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
-        ...formattedDeliveryOptions(),
-        filename,
-        onDeliveryResult,
-      });
-    },
+    sendNoMedia: async () =>
+      componentSpec
+        ? await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
+            ...formattedDeliveryOptions(),
+            filename,
+            onDeliveryResult,
+          })
+        : await sendContext.send(sendContext.target, payload.text ?? "", {
+            verbose: false,
+            components: nativeComponents,
+            embeds,
+            filename,
+            ...formattedDeliveryOptions(),
+            onDeliveryResult,
+          }),
     send: async ({ text, mediaUrl, isFirst }) => {
-      if (isFirst) {
+      if (componentSpec && isFirst) {
         return await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
           ...mediaDeliveryOptions(mediaUrl),
           filename,
@@ -253,6 +237,13 @@ export async function sendDiscordOutboundPayload(params: {
       return await sendContext.send(sendContext.target, text, {
         verbose: false,
         ...mediaDeliveryOptions(mediaUrl),
+        ...(!componentSpec
+          ? {
+              components: isFirst ? nativeComponents : undefined,
+              embeds: isFirst ? embeds : undefined,
+              filename: isFirst ? filename : undefined,
+            }
+          : {}),
         onDeliveryResult,
       });
     },

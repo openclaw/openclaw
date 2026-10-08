@@ -1,7 +1,8 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import {
@@ -120,14 +121,8 @@ async function scanJsonlFile(filePath: string): Promise<JsonlFileScan> {
         if (recordCount > CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS) {
           break;
         }
-        let obj: unknown;
-        try {
-          obj = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        const rec = obj as Record<string, unknown> | null;
-        if ((rec?.message as Record<string, unknown> | undefined)?.role === "assistant") {
+        const message = safeParseJsonRecord(line)?.message;
+        if (isRecord(message) && message.role === "assistant") {
           return { fileExists: true, hasAssistant: true };
         }
       }
@@ -239,17 +234,11 @@ export async function claudeCliSessionTranscriptHasOrphanedToolUse(
       if (!line.trim()) {
         continue;
       }
-      let obj: unknown;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      const rec = obj as Record<string, unknown> | null;
+      const rec = safeParseJsonRecord(line);
       if (rec?.isSidechain === true) {
         continue;
       }
-      const message = rec?.message as Record<string, unknown> | undefined;
+      const message = asOptionalRecord(rec?.message);
       const role = message?.role;
       if (role === "assistant") {
         lastAssistantToolUseIds = new Set();
@@ -465,26 +454,17 @@ export function createAcpVisibleTextAccumulator() {
           pendingSilentPrefix = leadCandidate;
           return null;
         }
-        if (startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)) {
-          const stripped = stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN);
-          if (stripped) {
-            pendingSilentPrefix = "";
-            rawVisibleText = leadCandidate;
-            visibleText = stripped;
-            return { text: stripped, delta: stripped };
-          }
+        const text = startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
+          ? stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN)
+          : leadCandidate;
+        if (!text) {
           pendingSilentPrefix = leadCandidate;
           return null;
         }
-        if (pendingSilentPrefix) {
-          pendingSilentPrefix = "";
-          rawVisibleText = leadCandidate;
-          visibleText = leadCandidate;
-          return {
-            text: visibleText,
-            delta: leadCandidate,
-          };
-        }
+        pendingSilentPrefix = "";
+        rawVisibleText = leadCandidate;
+        visibleText = text;
+        return { text, delta: text };
       }
 
       const delta =

@@ -34,6 +34,7 @@ import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-co
 import {
   createIsolatedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
+  type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
@@ -72,11 +73,29 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       : undefined;
   assertScheduledCodexAppAuthorityRuntime(connection, params);
   const attemptAuthProfileStore = preparedAuthBinding?.authProfileStore ?? params.authProfileStore;
-  prewarmCodexAttemptClient({
-    connection,
+  const clientOptions: CodexAppServerClientOptions = {
+    startOptions: appServer.start,
+    pluginConfig,
+    ...(startupPreparedAuth
+      ? { preparedAuth: startupPreparedAuth }
+      : { authProfileId: startupClientAuthProfileId }),
+    authRequirement: connection.startupAuthRequirement,
     authProfileStore: attemptAuthProfileStore,
     authBindingFingerprint: preparedAuthBinding?.fingerprint,
-  });
+    ...(connection.runtimeArtifactRequest
+      ? {
+          runtimeArtifactMode: "capture" as const,
+          ...(connection.runtimeArtifactRequest.expected
+            ? { expectedRuntimeArtifact: connection.runtimeArtifactRequest.expected }
+            : {}),
+        }
+      : {}),
+    agentDir,
+    config: params.config,
+    abandonSignal: runAbortController.signal,
+    timeoutMs: appServer.requestTimeoutMs,
+  };
+  prewarmCodexAttemptClient({ connection, clientOptions });
   const effectiveContextWindowInfo = usesSupervisionConnection
     ? undefined
     : params.contextWindowInfo;
@@ -152,9 +171,8 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
             agentDir,
             config: params.config,
           });
-  const startupEnvApiKeyCacheKey = usesSupervisionConnection
-    ? undefined
-    : startupPreparedAuth || startupAuthProfileId
+  const startupEnvApiKeyCacheKey =
+    usesSupervisionConnection || startupPreparedAuth || startupAuthProfileId
       ? undefined
       : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start });
   preDynamicStartupStages.mark("auth-cache");
@@ -231,28 +249,9 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     params.hostCapabilities.retainSourceAuthority
   ) {
     const client = await attemptClientFactory({
+      ...clientOptions,
       assertCurrent: connection.assertCurrent,
-      startOptions: appServer.start,
-      pluginConfig,
-      ...(startupPreparedAuth
-        ? { preparedAuth: startupPreparedAuth }
-        : { authProfileId: startupClientAuthProfileId }),
-      authRequirement: connection.startupAuthRequirement,
-      authProfileStore: attemptAuthProfileStore,
-      authBindingFingerprint: preparedAuthBinding?.fingerprint,
-      ...(connection.runtimeArtifactRequest
-        ? {
-            runtimeArtifactMode: "capture" as const,
-            ...(connection.runtimeArtifactRequest.expected
-              ? { expectedRuntimeArtifact: connection.runtimeArtifactRequest.expected }
-              : {}),
-          }
-        : {}),
       agentId: sessionAgentId,
-      agentDir,
-      config: params.config,
-      abandonSignal: runAbortController.signal,
-      timeoutMs: appServer.requestTimeoutMs,
     });
     try {
       connection.assertCurrent();
@@ -350,6 +349,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   preDynamicStartupStages.mark("context-engine-support");
   return {
     connection,
+    clientOptions,
     preparedAuthBinding,
     runtimeParams,
     effectiveContextWindowInfo,

@@ -27,6 +27,7 @@ import {
   observeUpdateCandidateStartup,
   waitForUpdateCandidateReadiness,
 } from "./update-candidate-canary-readiness.js";
+import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
 import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
@@ -82,6 +83,8 @@ type CanaryResult = {
 /** Rehearse the exact candidate against private SQLite snapshots while the serving generation stays up. */
 export async function validateUpdateCandidateCanary(params: {
   root: string;
+  /** Serving updater's discovery, not the staged worker's package. */
+  sourceBundledPlugins?: UpdateCandidateBundledSource;
   config: OpenClawConfig;
   stateDir: string;
   timeoutMs?: number;
@@ -243,6 +246,7 @@ export async function validateUpdateCandidateCanary(params: {
     await beginStep({ name: "candidate-state-snapshot", command: "Preparing update checks" });
     rehearsal = await prepareUpdateCandidateRehearsal({
       candidateRoot: params.root,
+      sourceBundledPlugins: params.sourceBundledPlugins,
       config: params.config,
       stateDir: params.stateDir,
       env: sourceEnv,

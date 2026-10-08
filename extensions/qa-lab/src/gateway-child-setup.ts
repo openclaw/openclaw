@@ -173,7 +173,10 @@ export async function prepareQaGatewayChild(
   lifetime: QaGatewayChildLifecycle,
 ) {
   const tempParentDir = params.command?.tempParentDir ?? resolvePreferredOpenClawTmpDir();
-  const tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
+  lifetime.tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
+  // Store discovery returns physical paths; macOS /tmp aliases must not split
+  // the fixture's configured roots from their captured database custody.
+  const tempRoot = await fs.realpath(lifetime.tempRoot);
   lifetime.tempRoot = tempRoot;
   const runtimeCwd = tempRoot;
   const distEntryPath = path.join(params.repoRoot, "dist", "index.js");

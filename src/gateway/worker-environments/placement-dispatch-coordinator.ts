@@ -372,9 +372,17 @@ export function coordinateWorkerPlacementDispatch(
         );
         return await admitDispatch(
           request,
-          (signal) =>
+          (signal, assertSessionCurrent) =>
             runSessionOperation(request.sessionId, signal, () =>
-              service.dispatch(request, report, authorize, signal),
+              service.dispatch(
+                request,
+                report,
+                () => {
+                  authorize?.();
+                  assertSessionCurrent?.();
+                },
+                signal,
+              ),
             ),
           authorize,
           callerSignal,
@@ -437,9 +445,17 @@ export function coordinateWorkerPlacementDispatch(
         await Promise.allSettled(predecessors.map((pending) => pending.operation));
         return await admitDispatch(
           request,
-          (signal) =>
+          (signal, assertSessionCurrent) =>
             runSessionOperation(request.sessionId, signal, () =>
-              service.move(request, report, authorize, signal),
+              service.move(
+                request,
+                report,
+                () => {
+                  authorize?.();
+                  assertSessionCurrent?.();
+                },
+                signal,
+              ),
             ),
           authorize,
         );
@@ -535,10 +551,12 @@ export function coordinateWorkerPlacementDispatch(
           },
           report,
           (runRecovery) =>
-            admitDispatch(placement, async (signal) => {
+            admitDispatch(placement, async (signal, assertSessionCurrent) => {
               try {
                 signal?.throwIfAborted();
+                assertSessionCurrent?.();
                 const recovered = await runRecovery(signal);
+                assertSessionCurrent?.();
                 if (providerPending) {
                   foreground.resolve(recovered);
                 }

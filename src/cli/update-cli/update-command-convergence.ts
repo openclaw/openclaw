@@ -149,9 +149,6 @@ export async function convergeUpdatePlugins(params: {
     withUpdateEnv(compatibilityEnv, async () => {
       let postCorePluginUpdate;
       const doctorWarnings: string[] = [];
-      const collectDoctorWarnings = (warnings: string[]) => {
-        doctorWarnings.push(...warnings);
-      };
       let targetRuntimeConverged = false;
       let maintenanceDeferred = false;
       if (shouldResumePostCoreInFreshProcess) {
@@ -265,7 +262,9 @@ export async function convergeUpdatePlugins(params: {
           yes: params.opts.yes === true,
           json: params.opts.json === true,
           timeoutMs: params.updateStepTimeoutMs,
-          onWarnings: collectDoctorWarnings,
+          onWarnings: (warnings) => {
+            doctorWarnings.push(...warnings);
+          },
           ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
         }).catch((error: unknown) => {
           if (
@@ -277,7 +276,7 @@ export async function convergeUpdatePlugins(params: {
           maintenanceDeferred = true;
           postCorePluginUpdate = { ...producedPluginUpdate, status: "warning" };
           if (!doctorWarnings.includes(error.message)) {
-            collectDoctorWarnings([error.message]);
+            doctorWarnings.push(error.message);
           }
           return undefined;
         });

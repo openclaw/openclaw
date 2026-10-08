@@ -54,7 +54,6 @@ import {
   buildDynamicTools,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
-import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -134,10 +133,14 @@ import {
   attachSqliteSessionTarget,
   readTranscriptMessagesByIdentity,
 } from "./sqlite-session.test-helpers.js";
-import { createCodexTestModel, createCodexTestOAuthProfile } from "./test-support.js";
+import {
+  createCodexTestModel,
+  createCodexTestOAuthProfile,
+  withoutCodexSkillDiscovery,
+} from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import {
-  startOrResumeAttemptThread as startOrResumeThread,
+  startOrResumeAttemptThreadWithoutSkills as startOrResumeThread,
   createAppServerOptions as createBaseAppServerOptions,
   createCodexLifecycleHarness,
   createLeasedCodexLifecycleHarness,
@@ -147,18 +150,6 @@ import { buildThreadStartParams } from "./thread-requests.js";
 import { buildTurnStartParams } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
-
-const testing = {
-  buildDeveloperInstructions,
-  buildDynamicTools,
-  filterCodexDynamicTools,
-  resolveCodexDynamicToolDirectNames,
-  shouldEnableCodexAppServerNativeToolSurface,
-};
-
-function flushDiagnosticEvents() {
-  return waitForDiagnosticEventsDrained();
-}
 
 function expectResumeRequest(
   requests: Array<{ method: string; params: unknown }>,
@@ -218,7 +209,7 @@ async function buildDynamicToolsForTest(
   workspaceDir: string,
   options: Partial<
     Pick<
-      Parameters<typeof testing.buildDynamicTools>[0],
+      Parameters<typeof buildDynamicTools>[0],
       "forceHeartbeatTool" | "ignoreDisableMessageTool" | "ignoreRuntimePlan"
     >
   > = {},
@@ -227,7 +218,7 @@ async function buildDynamicToolsForTest(
   if (!sandboxSessionKey) {
     throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
   }
-  return testing.buildDynamicTools({
+  return buildDynamicTools({
     params,
     resolvedWorkspace: workspaceDir,
     effectiveWorkspace: workspaceDir,
@@ -268,7 +259,7 @@ async function buildCodexTurnContextForTest(
     cwd: workspaceDir,
     dynamicTools,
     appServer: resolveCodexAppServerRuntimeOptions({}),
-    developerInstructions: testing.buildDeveloperInstructions(params, { dynamicTools }),
+    developerInstructions: buildDeveloperInstructions(params, { dynamicTools }),
     refreshableInstructions: [
       workspaceBootstrapContext.personaInstructions,
       workspaceBootstrapContext.memoryInstructions,
@@ -325,7 +316,7 @@ function createCodexToolBridgeForTest(
     tools,
     registeredTools,
     signal,
-    directToolNames: testing.resolveCodexDynamicToolDirectNames(
+    directToolNames: resolveCodexDynamicToolDirectNames(
       params,
       registeredTools,
       hostSystemAgentActive,
@@ -348,8 +339,8 @@ async function startThreadWithDisabledNativeSurfaceForTest(
   if (!sandboxSessionKey) {
     throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
   }
-  const nativeToolSurfaceEnabled = testing.shouldEnableCodexAppServerNativeToolSurface(params);
-  const dynamicTools = await testing.buildDynamicTools({
+  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+  const dynamicTools = await buildDynamicTools({
     params,
     resolvedWorkspace: workspaceDir,
     effectiveWorkspace: workspaceDir,
@@ -952,11 +943,8 @@ describe("runCodexAppServerAttempt", () => {
       backendId: "codex-test-sandbox",
       workspaceAccess: "rw",
     } as never;
-    const nativeToolSurfaceEnabled = testing.shouldEnableCodexAppServerNativeToolSurface(
-      params,
-      sandbox,
-    );
-    const dynamicTools = await testing.buildDynamicTools({
+    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
+    const dynamicTools = await buildDynamicTools({
       params,
       resolvedWorkspace: workspaceDir,
       effectiveWorkspace: workspaceDir,
@@ -1064,12 +1052,12 @@ describe("runCodexAppServerAttempt", () => {
           },
         },
       } as never;
-      const nativeToolSurfaceEnabled = testing.shouldEnableCodexAppServerNativeToolSurface(
+      const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
         params,
         sandbox as never,
         { sandboxExecServerEnabled: true },
       );
-      const dynamicTools = await testing.buildDynamicTools({
+      const dynamicTools = await buildDynamicTools({
         params,
         resolvedWorkspace: workspaceDir,
         effectiveWorkspace: "/workspace",
@@ -1560,7 +1548,7 @@ describe("runCodexAppServerAttempt", () => {
       [createRuntimeDynamicTool("message")],
       registeredTools,
     );
-    const normalInstructions = testing.buildDeveloperInstructions(createHeartbeatRunParams(), {
+    const normalInstructions = buildDeveloperInstructions(createHeartbeatRunParams(), {
       dynamicTools: normalBridge.availableSpecs,
     });
     const heartbeatParams = createHeartbeatRunParams("heartbeat");
@@ -1569,7 +1557,7 @@ describe("runCodexAppServerAttempt", () => {
       [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("heartbeat_respond")],
       registeredTools,
     );
-    const heartbeatInstructions = testing.buildDeveloperInstructions(heartbeatParams, {
+    const heartbeatInstructions = buildDeveloperInstructions(heartbeatParams, {
       dynamicTools: heartbeatBridge.availableSpecs,
     });
     const nextNormalParams = createHeartbeatRunParams();
@@ -1638,7 +1626,7 @@ describe("runCodexAppServerAttempt", () => {
       });
       await fixture.endTurn("thread-stable-heartbeat");
     }
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
+    expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",
@@ -2571,7 +2559,7 @@ describe("runCodexAppServerAttempt", () => {
       });
       await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
       await run;
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       stopDiagnostics();
     }
@@ -2628,7 +2616,7 @@ describe("runCodexAppServerAttempt", () => {
       });
       await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
       await run;
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       stopDiagnostics();
     }
@@ -3468,7 +3456,7 @@ describe("runCodexAppServerAttempt", () => {
     await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
       "invalid image_url base64 payload",
     );
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",
@@ -3491,7 +3479,7 @@ describe("runCodexAppServerAttempt", () => {
     await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
       "unsupported image input",
     );
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -3551,7 +3539,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -3617,7 +3605,7 @@ describe("runCodexAppServerAttempt", () => {
     await harness.waitForMethod("turn/start");
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -4477,7 +4465,7 @@ describe("runCodexAppServerAttempt", () => {
   it.each([2])("restarts after %i app-server closes during startup", async (closeCount) => {
     const { result, requests, client } = await runSharedClientRestartTest(closeCount);
     expect(readAttemptTerminal(result).aborted).toBe(false);
-    expect(requests).toEqual([
+    expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
       ...Array.from({ length: closeCount }, () => [
         "config/read",
         "configRequirements/read",
@@ -4500,7 +4488,7 @@ describe("runCodexAppServerAttempt", () => {
     await expect(
       runSharedClientRestartTest(1, { denyReplacementShell: true, requests }),
     ).rejects.toThrow("Codex native code mode requires shell_tool");
-    expect(requests).toEqual([
+    expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
       ["config/read", "configRequirements/read", "thread/read", "thread/resume"],
       ["config/read", "configRequirements/read"],
     ]);

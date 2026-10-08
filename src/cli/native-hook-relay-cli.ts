@@ -4,6 +4,7 @@ import {
   isNativeHookRelayBridgeStaleRegistrationError,
   renderNativeHookRelayUnavailableResponse,
 } from "../agents/harness/native-hook-relay-client.js";
+import { invokeRemoteNativeHookRelay } from "../agents/harness/native-hook-relay-remote-client.js";
 import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
@@ -21,6 +22,7 @@ const NATIVE_HOOK_RELAY_VALUE_FLAGS = {
   "--provider": "provider",
   "--relay-id": "relayId",
   "--state-db": "stateDb",
+  "--remote-credential": "remoteCredential",
   "--generation": "generation",
   "--event": "event",
   "--pre-tool-use-unavailable": "preToolUseUnavailable",
@@ -109,6 +111,28 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
       }
       writeText(stderr, formatRelayCliError("failed to read native hook input", error));
       return 1;
+    }
+
+    if (opts.remoteCredential) {
+      try {
+        return writeResponse(
+          await withNativeHookRelayDeadline(
+            deadline,
+            invokeRemoteNativeHookRelay(
+              opts.remoteCredential,
+              { provider, relayId, generation, event, rawPayload },
+              deadline.signal,
+            ),
+          ),
+        );
+      } catch (error) {
+        if (isNativeHookRelayDeadlineError(error)) {
+          return timedOut(error);
+        }
+        writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
+        // Dedicated mode never falls back to local storage or operator credentials.
+        return unavailable();
+      }
     }
 
     try {

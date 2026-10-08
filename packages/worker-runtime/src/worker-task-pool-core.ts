@@ -464,7 +464,9 @@ export class WorkerTaskPoolCore<Input, Output> {
     if (
       task &&
       isRecord(message) &&
-      (message.status === "request" || message.status === "consumed")
+      (message.status === "request" ||
+        message.status === "consumed" ||
+        message.status === "notification")
     ) {
       try {
         this.receiveExchange(slot, task, message);
@@ -485,13 +487,11 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     // SAFETY: The private worker entry owns Output; the transport discriminant is checked above.
     const reply = message as WorkerReply<Output>;
+    const retainInput = Boolean(
+      task.exchange || (task.options.onInputConsumed && !task.inputConsumed),
+    );
     if (reply.status === "failed") {
-      this.finish(
-        task,
-        new WorkerTaskError(reply.error, "failed"),
-        undefined,
-        Boolean(task.exchange) || (Boolean(task.options.onInputConsumed) && !task.inputConsumed),
-      );
+      this.finish(task, new WorkerTaskError(reply.error, "failed"), undefined, retainInput);
       return;
     }
     try {
@@ -502,12 +502,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       return;
     }
     // A result cannot release inputs whose consumption receipt never arrived.
-    this.finish(
-      task,
-      undefined,
-      reply.value,
-      Boolean(task.exchange) || Boolean(task.options.onInputConsumed && !task.inputConsumed),
-    );
+    this.finish(task, undefined, reply.value, retainInput);
   }
 
   private armTimeout(task: Task<Input, Output>, timeoutMs: number): void {
@@ -527,6 +522,10 @@ export class WorkerTaskPoolCore<Input, Output> {
   ): void {
     if (message.taskId !== task.id) {
       this.fail(slot, new WorkerTaskError("stale worker exchange", "unavailable"));
+      return;
+    }
+    if (message.status === "notification") {
+      task.options.onNotification?.(message.value);
       return;
     }
     if (message.status === "consumed") {

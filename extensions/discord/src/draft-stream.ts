@@ -34,10 +34,6 @@ export function createDiscordDraftStream(params: {
   let channelId = params.channelId;
   const rest = params.rest;
   const flags = resolveDiscordMessageFlags({ suppressEmbeds: params.suppressEmbeds });
-  const resolveReplyToMessageId = () =>
-    typeof params.replyToMessageId === "function"
-      ? params.replyToMessageId()
-      : params.replyToMessageId;
 
   const streamState = { stopped: false, final: false };
   let streamMessage: DiscordDraftMessage | undefined;
@@ -54,7 +50,6 @@ export function createDiscordDraftStream(params: {
       return false;
     }
     if (trimmed.length > maxChars) {
-      // Discord messages cap at 2000 chars.
       // Stop streaming once we exceed the cap to avoid repeated API failures.
       streamState.stopped = true;
       params.warn?.(`discord stream preview stopped (text length ${trimmed.length} > ${maxChars})`);
@@ -86,7 +81,11 @@ export function createDiscordDraftStream(params: {
         }
         return true;
       }
-      const replyToMessageId = resolveReplyToMessageId()?.trim();
+      const replyToMessageId = (
+        typeof params.replyToMessageId === "function"
+          ? params.replyToMessageId()
+          : params.replyToMessageId
+      )?.trim();
       const messageReference = replyToMessageId
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
@@ -123,11 +122,6 @@ export function createDiscordDraftStream(params: {
     }
   };
 
-  const clearMessageId = () => {
-    streamMessage = undefined;
-    lastSentText = "";
-    loop.resetThrottleWindow();
-  };
   const lifecycle = createFinalizableDraftLifecycle<DiscordDraftMessage, DiscordDraftUpdate>({
     throttleMs,
     coalesceInFlight: true,
@@ -136,7 +130,11 @@ export function createDiscordDraftStream(params: {
     emptyValue: { text: "", complete: false },
     isEmpty: (value) => !value.text,
     readMessageId: () => streamMessage,
-    clearMessageId,
+    clearMessageId: () => {
+      streamMessage = undefined;
+      lastSentText = "";
+      loop.resetThrottleWindow();
+    },
     isValidMessageId: (value): value is DiscordDraftMessage => value !== undefined,
     deleteMessage: (message) => deleteChannelMessage(rest, message.channelId, message.messageId),
     warn: params.warn,

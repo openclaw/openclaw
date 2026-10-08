@@ -163,13 +163,7 @@ export async function buildStatusAllReportData(params: {
 }) {
   const gatewaySnapshot = params.overview.gatewaySnapshot;
   const [{ configPath, diagnosis }, summary] = await Promise.all([
-    resolveStatusAllLocalDiagnosis({
-      overview: params.overview,
-      progress: params.progress,
-      nodeOnlyGateway: params.nodeOnlyGateway,
-      timeoutMs: params.timeoutMs,
-      gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
-    }),
+    resolveStatusAllLocalDiagnosis(params),
     params.overview.runtimeDegradation ??
       resolveStatusSummaryFromOverview({ overview: params.overview }),
   ]);

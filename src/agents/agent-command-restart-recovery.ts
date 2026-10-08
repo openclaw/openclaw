@@ -7,7 +7,7 @@ import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidenceResult,
 } from "../config/sessions/restart-recovery-types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import {
@@ -118,23 +118,21 @@ export function constrainRestartRecoveryDeliveryPayloads(
         },
       ),
     );
-    if (visibleReplyIndex >= 0) {
-      const visibleReply = constrained[visibleReplyIndex];
-      if (visibleReply) {
-        // Recovery owns the exact artifacts; merge them with the actual final
-        // reply so automatic delivery cannot emit a caption before its media.
-        const [mergedReply] =
-          mergeAttemptToolMediaPayloads({
-            payloads: [visibleReply],
-            toolMediaUrls: exactMediaUrls,
-            hostOwnedToolMediaUrls: exactMediaUrls,
-            toolTrustedLocalMedia: true,
-            sourceReplyDeliveryMode: "automatic",
-          }) ?? [];
-        if (mergedReply) {
-          constrained[visibleReplyIndex] = mergedReply;
-          return constrained;
-        }
+    const visibleReply = constrained[visibleReplyIndex];
+    if (visibleReply) {
+      // Recovery owns the exact artifacts; merge them with the actual final
+      // reply so automatic delivery cannot emit a caption before its media.
+      const [mergedReply] =
+        mergeAttemptToolMediaPayloads({
+          payloads: [visibleReply],
+          toolMediaUrls: exactMediaUrls,
+          hostOwnedToolMediaUrls: exactMediaUrls,
+          toolTrustedLocalMedia: true,
+          sourceReplyDeliveryMode: "automatic",
+        }) ?? [];
+      if (mergedReply) {
+        constrained[visibleReplyIndex] = mergedReply;
+        return constrained;
       }
     }
   }
@@ -327,6 +325,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   entry: SessionEntry;
   forceRestartSafeTools?: boolean;
   runId: string;
+  operatorSource?: SessionEntry["restartRecoveryOperatorSource"];
   sourceIngress?: SessionEntry["restartRecoverySourceIngress"];
   sourceRunId?: string;
   sourceReplyDeliveryMode?: SessionEntry["restartRecoverySourceReplyDeliveryMode"];
@@ -340,6 +339,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   | "restartRecoveryDeliverySourceRunId"
   | "restartRecoveryHarnessCompletion"
   | "restartRecoveryForceSafeTools"
+  | "restartRecoveryOperatorSource"
   | "restartRecoverySourceIngress"
   | "restartRecoverySourceReplyDeliveryMode"
   | "restartRecoverySuppressTextDelivery"
@@ -363,6 +363,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       restartRecoverySuppressTextDelivery: entry.restartRecoverySuppressTextDelivery,
       restartRecoveryDeliveryRunId: params.runId,
       restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+      restartRecoveryOperatorSource: entry.restartRecoveryOperatorSource,
       restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
       restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
       restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
@@ -389,6 +390,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       createsScopedDeliveryClaim && params.suppressTextDelivery === true ? true : undefined,
     restartRecoveryDeliveryRunId: createsScopedDeliveryClaim ? params.runId : undefined,
     restartRecoveryDeliverySourceRunId: params.sourceRunId,
+    restartRecoveryOperatorSource: createsScopedDeliveryClaim ? params.operatorSource : undefined,
     restartRecoverySourceIngress: createsScopedDeliveryClaim ? params.sourceIngress : undefined,
     restartRecoverySourceReplyDeliveryMode: params.sourceRunId
       ? params.sourceReplyDeliveryMode

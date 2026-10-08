@@ -34,7 +34,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.mocked(spawn).mockReset();
 });
-const skipBroker = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBroker = process.platform === "win32";
 
 function createAuthDatabase(key = "synthetic", metadata?: Record<string, string>) {
   const source = path.join(tempDirs.make("openclaw-auth-transport-"), "source.sqlite");

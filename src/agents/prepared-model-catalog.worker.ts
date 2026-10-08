@@ -14,6 +14,10 @@ import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  nativeReferenceProgress,
+  type NativeReferenceProgress,
+} from "../plugins/plugin-native-reference.js";
 import { withPluginSourceCaptureDirectory } from "../plugins/plugin-package-metadata-capture.js";
 import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
@@ -206,6 +210,7 @@ async function runCatalogRequest(
   request: PreparedModelWorkerRequest,
   work: AsyncWorkScope,
   prepareGeneration: () => Promise<WorkerGeneration>,
+  beginDiscovery: () => Promise<void>,
 ): Promise<PreparedModelWorkerResult> {
   const directoryOwner = value.input.agentId
     ? { agentId: value.input.agentId, agentDir: value.input.agentDir, env: value.input.env }
@@ -280,6 +285,9 @@ async function runCatalogRequest(
           ...(value.input.workspaceDir ? { workspaceDir: value.input.workspaceDir } : {}),
         }),
       );
+    if (request.kind === "auth-refresh") {
+      await beginDiscovery();
+    }
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
     const authStore = refreshAuthStore({
@@ -365,6 +373,7 @@ async function runCatalogRequest(
       }
     }
     const staticOwner = acquiredGeneration ?? prepared;
+    await beginDiscovery();
     const staticProviderIds = new Set([
       ...staticOwner.staticProviderIds,
       ...exactAgentFacts.providerIds,
@@ -568,12 +577,26 @@ if (parentPort) {
     string | undefined,
     { fingerprint: string; prepared: WorkerGeneration }
   >();
-  serveWorkerTasks(async (input) => {
+  serveWorkerTasks(async (input, channel) => {
     // SAFETY: The typed catalog host is the sole producer of this private task envelope.
     const { value, request } = input as PreparedModelCatalogWorkerTask;
     if (!isRecord(value) || !isWorkerRequest(request)) {
       throw new Error("invalid prepared model catalog worker request");
     }
+    let reportAfter = 0;
+    let reportedPlugin: string | undefined;
+    const reportProgress = (notification: unknown) => {
+      // SAFETY: The native-reference owner publishes this internal diagnostic payload.
+      const progress = notification as NativeReferenceProgress;
+      const now = performance.now();
+      if (now >= reportAfter || progress.pluginId !== reportedPlugin) {
+        reportAfter = now + 1_000;
+        reportedPlugin = progress.pluginId;
+        channel?.notify(progress);
+      }
+    };
+    nativeReferenceProgress.subscribe(reportProgress);
+    const stopProgress = () => nativeReferenceProgress.unsubscribe(reportProgress);
     return withRemoteModelCatalogSnapshot(freezeJsonSnapshot(value.remoteCatalog), () =>
       withPluginSourceCaptureDirectory(
         data.sourceCaptureDirectory,
@@ -588,12 +611,27 @@ if (parentPort) {
             const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
               withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
                 work.run(() =>
-                  runCatalogRequest(value, request, work, async () => {
-                    if (previous?.fingerprint === fingerprint) {
-                      return previous.prepared;
-                    }
-                    return (attempted = await prepareWorkerGeneration(value));
-                  }),
+                  runCatalogRequest(
+                    value,
+                    request,
+                    work,
+                    async () => {
+                      if (previous?.fingerprint === fingerprint) {
+                        return previous.prepared;
+                      }
+                      return (attempted = await prepareWorkerGeneration(value));
+                    },
+                    async () => {
+                      // Admission can outlast a refresh on slow filesystems; only completed
+                      // generation preparation starts the provider-discovery deadline.
+                      stopProgress();
+                      const response = await channel?.request(null);
+                      response?.consumed();
+                      if (response && response.input !== true) {
+                        throw new Error("prepared model catalog request retired before discovery");
+                      }
+                    },
+                  ),
                 ),
               ),
             );
@@ -613,6 +651,6 @@ if (parentPort) {
         },
         data.sourceCaptureManagedRoot,
       ),
-    );
+    ).finally(stopProgress);
   });
 }

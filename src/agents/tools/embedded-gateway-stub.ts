@@ -41,14 +41,6 @@ async function borrowSessionRowProjection() {
   return projection;
 }
 
-function readOffsetParam(params: Record<string, unknown>): number | undefined {
-  const offset = readNonNegativeIntegerParam(params, "offset");
-  if (params.offset !== undefined && offset === undefined) {
-    throw new Error("offset must be a non-negative integer");
-  }
-  return offset;
-}
-
 async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
   return rt.listProjectedSessions({
@@ -156,7 +148,10 @@ async function handleChatHistory(params: Record<string, unknown>) {
   const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   const requestedAgentId = agentId ?? parsedAgentId;
   const limit = readPositiveIntegerParam(params, "limit");
-  const offset = readOffsetParam(params);
+  const offset = readNonNegativeIntegerParam(params, "offset");
+  if (params.offset !== undefined && offset === undefined) {
+    throw new Error("offset must be a non-negative integer");
+  }
   const wireMessageId = readToolStringParam(params, "messageId", {
     required: params.messageId !== undefined,
   });

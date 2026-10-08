@@ -40,10 +40,6 @@ const reportedStorageOwners = new Set<string>();
 
 const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime.ts");
 
-function durableComposerOwnerKey(scope: DurableComposerDraftScope): string {
-  return JSON.stringify([scope.gatewayOwner, scope.recoveryScope]);
-}
-
 export function durableComposerScopeIdentity(scope: DurableComposerDraftScope): string {
   return JSON.stringify([scope.gatewayOwner, scope.recoveryScope, scope.scopeKey]);
 }
@@ -52,7 +48,7 @@ export function reportDurableComposerStorageError(
   scope: DurableComposerDraftScope,
   onStorageError: () => void,
 ) {
-  const owner = durableComposerOwnerKey(scope);
+  const owner = JSON.stringify([scope.gatewayOwner, scope.recoveryScope]);
   if (reportedStorageOwners.has(owner)) {
     return;
   }

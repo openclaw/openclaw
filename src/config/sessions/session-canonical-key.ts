@@ -532,7 +532,7 @@ export function assertCanonicalSqliteSessionKeysCurrent(
     const inMemory = typeof identity?.identity === "symbol";
     if (!inMemory && !canonicalReady) {
       // A copied clean projection is not first-admission proof for an unknown file.
-      deferCanonicalSessionValidation(database);
+      deferCanonicalSessionValidation(database, true);
       const metadata: ValidatedSessionMetadata | undefined = collectMetadata
         ? { dataVersion: readSqliteDataVersion(database.db), entries: new Map(), keys: [] }
         : undefined;
@@ -547,7 +547,7 @@ export function assertCanonicalSqliteSessionKeysCurrent(
       remember();
       return undefined;
     }
-    deferCanonicalSessionValidation(database);
+    deferCanonicalSessionValidation(database, false);
     if (!collectMetadata) {
       const query = canonicalSessionValidationQuery(database).where(
         "session_nodes.session_key",

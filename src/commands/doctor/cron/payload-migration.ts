@@ -178,25 +178,22 @@ function migrateLegacyOpenAICodexModelRefs(
   shouldMigrate: (modelRef: string, legacyModelRef: string) => boolean,
 ): boolean {
   let mutated = false;
+  const migrateRef = (value: unknown) => {
+    const route = readLegacyOpenAICodexCronModelRoute(value);
+    return route && shouldMigrate(route.canonicalModelRef, route.legacyModelRef)
+      ? route.canonicalModelRef
+      : undefined;
+  };
 
-  const model = readLegacyOpenAICodexCronModelRoute(payload.model);
-  if (
-    model &&
-    shouldMigrate(model.canonicalModelRef, model.legacyModelRef) &&
-    payload.model !== model.canonicalModelRef
-  ) {
-    payload.model = model.canonicalModelRef;
+  const model = migrateRef(payload.model);
+  if (model !== undefined && payload.model !== model) {
+    payload.model = model;
     mutated = true;
   }
 
   const fallbacks = payload.fallbacks;
   if (Array.isArray(fallbacks)) {
-    const next = fallbacks.map((fallback) => {
-      const route = readLegacyOpenAICodexCronModelRoute(fallback);
-      return route && shouldMigrate(route.canonicalModelRef, route.legacyModelRef)
-        ? route.canonicalModelRef
-        : fallback;
-    });
+    const next = fallbacks.map((fallback) => migrateRef(fallback) ?? fallback);
     if (next.some((fallback, index) => fallback !== fallbacks[index])) {
       payload.fallbacks = next;
       mutated = true;

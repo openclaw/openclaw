@@ -23,18 +23,16 @@ import {
   broadcastChatTerminal,
   isSourceReplyTranscriptMirrorPayload,
 } from "./chat-broadcast.js";
-import {
-  captureWebchatReplyMediaScope,
-  withPreparedWebchatReplyMedia,
-  type WebchatReplyMediaRequesterContext,
-} from "./chat-reply-media.js";
+import { withPreparedWebchatReplyMedia } from "./chat-reply-media.js";
 import {
   buildTranscriptReplyTextFromInputs,
   readChatSendReplyPayload,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
-import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
+import {
+  createChatSendReplyFinalizationAuthority,
+  type ChatSendReplyFinalizationParams,
+} from "./chat-send-delivery-authority.js";
 import {
   assistantTranscriptScope,
   publishAssistantTranscriptRewrite,
@@ -43,7 +41,6 @@ import {
   type SourceReplyTranscriptMirror,
   type SourceReplyTranscriptRewrite,
 } from "./chat-transcript-persistence.js";
-import type { GatewayRequestContext } from "./types.js";
 
 function selectChatSendAgentReplyInputs(params: {
   deliveredReplies: readonly DeliveredChatSendReply[];
@@ -60,24 +57,12 @@ function selectChatSendAgentReplyInputs(params: {
     .map((entry) => entry.input);
 }
 
-type FinalizeChatSendAgentRepliesBase = {
-  requesterContext?: WebchatReplyMediaRequesterContext;
-  abortSignal?: AbortSignal;
-  accountId: string | undefined;
-  context: GatewayRequestContext;
-  emitFirstAssistantServerTiming: () => void;
-  session: Pick<
-    PreparedChatSendSession,
-    "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "sessionKey" | "sessionLoadOptions"
-  >;
-};
-
 type ChatSendAgentReplyFinalization =
   | { kind: "delivered"; hasSourceReplyTranscriptMirror: boolean }
   | { kind: "dropped"; reason: "no-visible-content" };
 
 export function createChatSendLateReplyFinalizer(
-  params: Omit<FinalizeChatSendAgentRepliesBase, "emitFirstAssistantServerTiming">,
+  params: Omit<ChatSendReplyFinalizationParams, "emitFirstAssistantServerTiming">,
 ) {
   return async ({
     runId: runtimeRunId,
@@ -209,33 +194,21 @@ export function createChatSendLateReplyFinalizer(
 }
 
 async function finalizeChatSendAgentReplyPayloads(
-  params: FinalizeChatSendAgentRepliesBase & {
+  params: ChatSendReplyFinalizationParams & {
     inputs: readonly ReplyDispatchOperation[];
     suppressFinal?: boolean;
     publishMessage?: (message: Record<string, unknown>, deliveryAuthorized: () => boolean) => void;
     isCurrent?: () => boolean;
   },
 ): Promise<ChatSendAgentReplyFinalization> {
-  const { accountId, context, emitFirstAssistantServerTiming, session } = params;
-  const { agentId, backingSessionId, cfg, clientRunId, sessionKey, sessionLoadOptions } = session;
+  const { context, emitFirstAssistantServerTiming, session } = params;
+  const { agentId, backingSessionId, clientRunId, sessionKey, sessionLoadOptions } = session;
   const agentRunReplyPayloads = params.inputs.map(readChatSendReplyPayload);
   if (agentRunReplyPayloads.length === 0) {
     return { kind: "dropped", reason: "no-visible-content" };
   }
-  const deliveryAuthorized = () =>
-    (!params.isCurrent || params.isCurrent()) &&
-    agentRunReplyPayloads.every((payload) =>
-      isChatSendReplyDeliveryAuthorized({ agentId, payload, sessionLoadOptions }),
-    );
-  const authorizeDelivery = (stage: string) => {
-    if (deliveryAuthorized()) {
-      return true;
-    }
-    context.logGateway.warn(
-      `webchat settled final reply skipped: session writer changed before ${stage}`,
-    );
-    return false;
-  };
+  const { deliveryAuthorized, authorizeDelivery, captureMediaScope } =
+    createChatSendReplyFinalizationAuthority(params, agentRunReplyPayloads);
   if (!authorizeDelivery("finalization")) {
     return { kind: "dropped", reason: "no-visible-content" };
   }
@@ -243,19 +216,7 @@ async function finalizeChatSendAgentReplyPayloads(
   const hasSourceReplyTranscriptMirror = agentRunReplyPayloads.some(
     isSourceReplyTranscriptMirrorPayload,
   );
-  const mediaScope = captureWebchatReplyMediaScope({
-    requesterContext: params.requesterContext,
-    cfg,
-    sessionKey,
-    agentId,
-    sessionLoadOptions,
-    accountId,
-    assertCurrent: () => {
-      if (!deliveryAuthorized()) {
-        throw new Error("Chat media delivery is no longer authorized.");
-      }
-    },
-  });
+  const mediaScope = captureMediaScope();
   const { storePath: latestStorePath, entry: latestEntry } =
     await loadGatewaySessionEntryReadOnlyInWorker({
       cfg: context.getRuntimeConfig(),
@@ -437,7 +398,7 @@ async function finalizeChatSendAgentReplyPayloads(
 
 /** Persist and broadcast agent-run source/status replies that bypass the normal model turn. */
 export async function finalizeChatSendSourceReplies(
-  params: FinalizeChatSendAgentRepliesBase & {
+  params: ChatSendReplyFinalizationParams & {
     deliveredReplies: readonly DeliveredChatSendReply[];
     hasReturnedAgentErrorPayloads: boolean;
     suppressFinal?: boolean;

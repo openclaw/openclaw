@@ -180,6 +180,16 @@ Vitest without dropping coverage. Production sources remain free to change and
 are still exercised. Extra Vitest arguments, including cache-warming collection,
 retain the existing Vitest path.
 
+A changed shared setup fingerprint invalidates the entire native cohort.
+Refreshing those fingerprints requires fresh qualification of the retained
+entries; tests without matching proof keep their Vitest coverage.
+CI preflight inspects the recorded fingerprints once per workflow attempt. When
+shared setup, test, or fixture-helper inputs change or become unreadable, it adds
+one notice and a job-summary section listing the stale entries and affected
+inputs. This report does not change runtime selection or fail CI. Shards do not
+repeat the notice; local planning and historical targets without the inspector
+remain silent.
+
 Native Bun receives explicit file paths, the existing hermetic environment setup,
 the repository tsconfig, and the shared test deadline. It disables automatic env
 file loading and runs one test process inside the existing plan and worker budget.
@@ -222,6 +232,11 @@ existing CI resource budgets. Precise PR targets use the existing
 test-project planner to find their owners. The runtime owner admits only qualified
 configs, exact files, and partitions; ambiguous selections retain Node. No tests
 are removed from the selected inventory.
+
+The complete CLI and embedded-agent-run leaf configs also support Bun. Their
+existing pools, exclusions, and worker limits remain in effect. CLI-process and
+other agent owners keep their separate qualification policies. Dual validation
+runs each complete selected owner on Node before Bun in the same worker slot.
 
 Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`),
 OpenAI realtime worker messaging (`extensions/openai/realtime-quicksilver-peer-worker.test.ts`),
@@ -547,8 +562,8 @@ Main, including hourly `validation_tier=main` dispatches, prepares its smoke tar
 JavaScript, plugin assets, Control UI, metadata, and public SDK declarations;
 the canonical packer still runs its complete tarball integrity check. The
 scheduler consumes that tarball through `OPENCLAW_CURRENT_PACKAGE_TGZ` without
-rebuilding it. Full-tier manual and release CI retain the declaration-complete full
-package build.
+rebuilding it. Full Release Validation children use the same smoke package;
+ordinary full-tier manual CI retains the declaration-complete full package build.
 
 Ordinary canonical manual CI retains the survivor and adds
 `cron-mcp-cleanup`, `fleet-cache`, `mcp-channels`, `mcp-code-mode-gateway`, and
@@ -557,8 +572,10 @@ child in `full`, `npm-beta`, and `npm-stable` scopes. Frozen targets
 must declare the Docker seed capability; targets without `resolveDockerSeedLanes`
 retain the survivor fallback. CI loads the target's Docker tier planner directly.
 
-The scheduler retains one 16-class Blacksmith runner on eligible main pushes
-and its existing serial main/manual lane admission. Pull requests and their
+The scheduler retains one 16-class Blacksmith runner on eligible main pushes.
+Full Release Validation children also use that class when no release runner group
+is configured; hosted outage overrides and retries retain hosted recovery.
+Main, release, and ordinary manual CI retain serial weighted admission. Pull requests and their
 exact-head fallback dispatches do not select this proof. Installed-driver
 upgrade coverage remains required on every admitted canonical main run and
 ordinary manual/release CI; the existing infrastructure timeout stays unchanged.

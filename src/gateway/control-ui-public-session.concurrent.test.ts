@@ -66,7 +66,7 @@ it("serves twenty concurrent HTTP readers through real publication, history, and
         throw new Error("HTTP fixture has no address");
       }
       const path = buildControlUiPublicSessionSharePath({
-        token: loadPublicSessionShareTokenCodec().mint(locator),
+        token: (await loadPublicSessionShareTokenCodec()).mint(locator),
       });
       const origin = `http://127.0.0.1:${address.port}`;
       const paths = [path, "/chat/main/public-concurrency-bbbbbbbbaaaa40008000000000000001"];

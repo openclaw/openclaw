@@ -37,6 +37,10 @@ commands, skills, replies, and background task notifications retain the
 agent selected by the route or explicit request.
 Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
+Renaming, pinning, or editing session metadata retains the existing message
+preview without rereading the transcript. New messages, transcript replacements,
+and completed transcript repairs refresh previews; changes to model selection
+or fallback state refresh the relevant model facts.
 Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
 the selected conversation. Another agent's active turn and queued messages are
 preserved even when the agents use the same session key.
@@ -226,6 +230,15 @@ the original caller's permission to run worktree setup scripts.
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
 A completed reply or a later user message closes that turn to replay.
+
+For authenticated operator turns, recovery revalidates the original caller's
+recorded permissions against current profile, role, access-grant, and device
+policy. A Control UI administrator can therefore continue authorized automation
+work after a restart without losing `operator.admin`. Recovery cannot gain scopes
+the original caller lacked, and revocation still stops the recovered run.
+Older interrupted turns without a recorded authorization source remain restricted;
+send a fresh authenticated message to continue privileged work. Session ownership
+or a saved display name never grants recovery permissions.
 
 This also covers parent turns started by subagent completion or pause notices.
 An interrupted parent continues independently of later child completions, and a

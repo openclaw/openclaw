@@ -306,7 +306,10 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
   const selectedIds = new Set(props.selectedByProvider[provider.providerId] ?? []);
   const groups = groupMemoryItems(provider.items);
   const applying = props.applyingProviderId === provider.providerId;
-  const backfillMutating =
+  const disabled =
+    props.loading ||
+    props.applyingProviderId !== null ||
+    props.error !== null ||
     props.backfillBusy === "apply" ||
     props.backfillBusy === "rollback" ||
     props.backfillRollbackPending;
@@ -334,16 +337,7 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
               : nothing
           }
           ${groups.map((group) =>
-            renderCollection(
-              provider,
-              group,
-              selectedIds,
-              props.onToggleCollection,
-              props.loading ||
-                props.applyingProviderId !== null ||
-                props.error !== null ||
-                backfillMutating,
-            ),
+            renderCollection(provider, group, selectedIds, props.onToggleCollection, disabled),
           )}
           ${renderSettingsRow({
             title:
@@ -354,13 +348,7 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
               <button
                 class="btn primary"
                 data-test-id="memory-import-provider-button"
-                ?disabled=${
-                  selectedIds.size === 0 ||
-                  props.applyingProviderId !== null ||
-                  backfillMutating ||
-                  props.loading ||
-                  props.error !== null
-                }
+                ?disabled=${selectedIds.size === 0 || disabled}
                 @click=${() => props.onRequestImport(provider.providerId)}
               >
                 ${applying ? t("common.importing") : t("memoryImport.importSelected")}

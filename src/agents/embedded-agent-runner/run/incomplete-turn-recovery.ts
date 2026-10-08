@@ -40,6 +40,16 @@ const REJECTED_TOOL_CALL_RETRY_INSTRUCTION =
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 
+type IncompleteTurnRecoveryParams = {
+  provider?: string;
+  modelId?: string;
+  modelApi?: string;
+  executionContract?: string;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+};
+
 export function shouldRetrySilentErrorAssistantTurn(params: {
   attempt: Pick<
     EmbeddedRunAttemptResult,
@@ -147,15 +157,9 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
  * Builds the retry instruction for reasoning-only turns that consumed provider
  * output budget but produced no visible assistant text.
  */
-export function resolveReasoningOnlyRetryInstruction(params: {
-  provider?: string;
-  modelId?: string;
-  modelApi?: string;
-  executionContract?: string;
-  aborted: boolean;
-  timedOut: boolean;
-  attempt: IncompleteTurnAttempt;
-}): string | null {
+export function resolveReasoningOnlyRetryInstruction(
+  params: IncompleteTurnRecoveryParams,
+): string | null {
   if (shouldSkipNonVisibleTurnRetry(params) || !shouldApplyNonVisibleTurnRetryGuard(params)) {
     return null;
   }
@@ -324,18 +328,13 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
 }
 
 /** Builds one fresh continuation after settled tools ended without a visible final answer. */
-export function resolveSettledToolTerminalContinuationInstruction(params: {
-  provider?: string;
-  modelId?: string;
-  modelApi?: string;
-  executionContract?: string;
-  allowEmptyStopContinuation?: boolean;
-  payloadCount: number;
-  hasTerminalToolPresentation?: boolean;
-  aborted: boolean;
-  timedOut: boolean;
-  attempt: IncompleteTurnAttempt;
-}): string | null {
+export function resolveSettledToolTerminalContinuationInstruction(
+  params: IncompleteTurnRecoveryParams & {
+    allowEmptyStopContinuation?: boolean;
+    payloadCount: number;
+    hasTerminalToolPresentation?: boolean;
+  },
+): string | null {
   const { attempt } = params;
   const {
     assistant: toolBatchAssistant,
@@ -400,16 +399,9 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
  * Builds the retry instruction for empty assistant turns when the provider/model
  * is eligible for non-visible turn recovery.
  */
-export function resolveEmptyResponseRetryInstruction(params: {
-  provider?: string;
-  modelId?: string;
-  modelApi?: string;
-  executionContract?: string;
-  payloadCount: number;
-  aborted: boolean;
-  timedOut: boolean;
-  attempt: IncompleteTurnAttempt;
-}): string | null {
+export function resolveEmptyResponseRetryInstruction(
+  params: IncompleteTurnRecoveryParams & { payloadCount: number },
+): string | null {
   const assistantState = classifyAssistantTurn(params);
   const assistant = assistantState.assistant ?? null;
   // Error turns are never silent replies, so this checks model output directly:

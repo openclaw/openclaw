@@ -2244,32 +2244,12 @@ jobs:
         if: needs.preflight.outputs.ui_test_runtime_policy == 'bun-compatible' || needs.preflight.outputs.ui_test_runtime_policy == 'dual'
         uses: ./.ci-harness/.github/actions/setup-test-bun
 
-      - &cache_playwright_chromium
-        name: Cache Playwright Chromium
-        if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.compatibility_target != 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-chromium-1.63.0
-
       - &install_playwright_chromium
         name: Install Playwright Chromium
-        env:
-          FROZEN_TARGET: *frozen_target
-        run: |
-          if [[ "${COMPATIBILITY_TARGET:-false}" == "true" ]]; then
-            # Legacy Vitest configs cannot pass a discovered system browser to Playwright.
-            # Install the managed browser revision pinned by the selected target instead.
-            pnpm --dir ui exec playwright install chromium
-          elif [[ -f scripts/ensure-playwright-chromium.mts ]]; then
-            # A cache miss must not substitute the runner image's unrelated Chromium revision.
-            node --import tsx scripts/ensure-playwright-chromium.mts --require-playwright-chromium
-          elif [[ "$FROZEN_TARGET" == "true" && -f scripts/ensure-playwright-chromium.mjs ]]; then
-            node scripts/ensure-playwright-chromium.mjs
-          else
-            echo "Target does not provide a supported Playwright Chromium installer." >&2
-            exit 1
-          fi
+        uses: ./.ci-harness/.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: *cache_mode
+          compatibility-target: *historical_target
 
       - name: Lint Control UI window.open usage
         if: ${{ matrix.shard == 1 }}
@@ -2332,7 +2312,6 @@ jobs:
           dependency-cache: &trusted_first_attempt_dependency_cache ${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || runner.environment != 'self-hosted' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           restore-test-caches: *restore_test_caches
 
-      - *cache_playwright_chromium
       - *install_playwright_chromium
 
       - name: Test Control UI end-to-end
@@ -2424,7 +2403,6 @@ jobs:
           install-bun: "false"
           dependency-cache: *trusted_first_attempt_dependency_cache
 
-      - *cache_playwright_chromium
       - *install_playwright_chromium
 
       - name: Build runtime and Control UI artifacts for real-Gateway tests
@@ -2690,13 +2668,7 @@ jobs:
 
       - name: Install ripgrep for baseline ratchets
         if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          if command -v rg >/dev/null 2>&1; then
-            exit 0
-          fi
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ripgrep
+        uses: ./.ci-harness/.github/actions/setup-ripgrep
 
       - name: Run baseline ratchets
         env:
@@ -3348,13 +3320,7 @@ jobs:
 
       - name: Install ripgrep for native grep tests
         if: matrix.requires_ripgrep == true && runner.os == 'Linux'
-        shell: bash
-        run: |
-          if command -v rg >/dev/null 2>&1; then
-            exit 0
-          fi
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ripgrep
+        uses: ./.ci-harness/.github/actions/setup-ripgrep
 
       - name: Prepare Docker sandbox image
         if: matrix.requires_sandbox_image == true && runner.os == 'Linux'
@@ -5425,6 +5391,10 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/GatewayIngressControllerTests
+            -only-testing:OpenClawTests/GatewayConnectionControllerTests
+            -only-testing:OpenClawTests/GatewayConnectionSecurityTests
+            -only-testing:OpenClawTests/GatewaySettingsStoreTests
           )
           if [[ "$IOS_CI_PHASE" == "tests" ]]; then
             test_args+=(
@@ -6184,7 +6154,9 @@ jobs:
     name: docker-seed-e2e
     needs: [preflight]
     if: needs.preflight.outputs.run_docker_seed_e2e == 'true'
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
+    # Release validation children use the hourly-main Blacksmith row with the smoke package and
+    # serial lanes; the hosted full-build path took ~91m (FRV 37607411898).
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && github.repository == 'openclaw/openclaw' && github.run_attempt == 1 && (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github') && vars.OPENCLAW_RELEASE_RUNNER_GROUP == '' && 'blacksmith-16vcpu-ubuntu-2404' || ((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04'))) }}
     # Hosted six-lane budget: 6810s (run 36506671071); 60m cancelled run 36486786689.
     timeout-minutes: 115
     steps:
@@ -6243,7 +6215,7 @@ jobs:
 
       # Smoke keeps runtime and SDK types.
       - name: Prepare Docker smoke package
-        if: github.event_name == 'pull_request' || (inputs.release_gate && needs.preflight.outputs.ci_qualification != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main'
+        if: github.event_name == 'pull_request' || (inputs.release_gate && needs.preflight.outputs.ci_qualification != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && github.repository == 'openclaw/openclaw')
         run: |
           set -euo pipefail
           pnpm clean:dist

@@ -160,7 +160,6 @@ function createSelectComponent(params: {
   select.minValues = params.spec.minValues;
   select.maxValues = params.spec.maxValues;
   select.placeholder = params.spec.placeholder;
-  select.disabled = false;
   const labels: Record<DiscordComponentSelectType, string> = {
     string: "select",
     user: "user select",
