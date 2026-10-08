@@ -502,6 +502,55 @@ it("joins full retirement if retained reader custody is revoked during discovery
   }
 });
 
+it("joins pending search status before releasing cancelled reader custody", async () => {
+  const request = input();
+  const statusStarted = createDeferredCore();
+  const statusFinished = createDeferredCore<boolean>();
+  const cancelled = createDeferredCore();
+  const task = new AbortController();
+  observed.run.mockImplementation(async (_input, options) => {
+    assert(options.onRequest);
+    const exchange = options.onRequest("transcript-index-status", {
+      signal: task.signal,
+      yieldSignal: new AbortController().signal,
+    });
+    void exchange.catch(() => {});
+    await cancelled.promise;
+    task.abort();
+    throw new Error("reader cancelled");
+  });
+  const searching = withSessionHistoryWorkerDatabase(request.database, (owner) =>
+    owner.searchTranscripts({ agentId: "main", query: "needle" }, async () => {
+      statusStarted.resolve();
+      return statusFinished.promise;
+    }),
+  );
+  const settled = vi.fn();
+  void searching.then(settled, settled);
+  const rejected = expect(searching).rejects.toThrow("reader cancelled");
+  await statusStarted.promise;
+  const resource = observed.resources.at(-1)!;
+  resource.revoke();
+  const closing = resource.close();
+  const closed = vi.fn();
+  void closing.then(closed);
+  try {
+    cancelled.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(observed.rotate).toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+    expect(closed).not.toHaveBeenCalled();
+    statusFinished.resolve(false);
+    await Promise.all([rejected, closing]);
+    expect(settled).toHaveBeenCalledOnce();
+    expect(closed).toHaveBeenCalledOnce();
+  } finally {
+    cancelled.resolve();
+    statusFinished.resolve(false);
+    await Promise.allSettled([searching, closing]);
+  }
+});
+
 it.each([
   { pending: false, capable: false },
   { pending: false, capable: true },

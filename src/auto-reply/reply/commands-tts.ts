@@ -39,6 +39,7 @@ import {
   persistCommandSession,
   sessionEntryPersistenceConflictReply,
 } from "./commands-session-store.js";
+import { splitCommandAction } from "./commands-slash-parse.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 const log = createSubsystemLogger("auto-reply/commands-tts");
@@ -50,11 +51,8 @@ function parseTtsCommand(normalized: string) {
   if (rest === null) {
     return null;
   }
-  const [action = "", ...tail] = (rest || "status").split(/\s+/);
-  return {
-    action: action.toLowerCase(),
-    args: tail.join(" "),
-  };
+  const parsed = splitCommandAction(rest, "status");
+  return { ...parsed, args: parsed.args.split(/\s+/).join(" ") };
 }
 
 function ttsUsage(): CommandHandlerResult {

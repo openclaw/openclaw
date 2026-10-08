@@ -1,13 +1,14 @@
+import {
+  resolveWorkerPoolSize,
+  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
+} from "../../infra/worker-pool-sizing.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import {
-  createSessionTranscriptReadPool,
-  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
-} from "./session-transcript-read-pools.js";
+import { createSessionTranscriptReadPool } from "./session-transcript-read-pools.js";
 import type {
   SessionEntryWorkerInput,
   SessionResetRecallWorkerInput,
@@ -25,7 +26,7 @@ const modelContextReads = createSessionTranscriptReadPool<
 // Background transcript exports cannot occupy the foreground context worker.
 const sessionEntries = createSessionTranscriptReadPool<
   SessionEntryWorkerInput | SessionResetRecallWorkerInput
->(1, true);
+>(resolveWorkerPoolSize("singleton"), true);
 
 export async function readSessionTranscriptModelContextInWorker(
   target: SessionTranscriptRuntimeTarget,

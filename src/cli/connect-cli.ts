@@ -1,6 +1,7 @@
 // One-paste node onboarding from setup codes or single-use Gateway join URLs.
 import fs from "node:fs/promises";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
   buildCloudflareAccessHeaders,
@@ -191,7 +192,7 @@ async function resolveConnectTarget(
   if (target) {
     return target;
   }
-  const filePath = targetFile?.trim();
+  const filePath = readNonBlankString(targetFile);
   if (!filePath) {
     return undefined;
   }

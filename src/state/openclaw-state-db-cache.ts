@@ -570,7 +570,6 @@ function retireOpenClawStateDatabaseHandles(
   return found;
 }
 
-/** Close one cached shared state database handle by exact pathname. */
 export function closeOpenClawStateDatabaseByPath(
   pathname: string,
   options?: OpenClawStateDatabaseCloseOptions,
@@ -582,7 +581,6 @@ export function closeOpenClawStateDatabaseByPath(
   );
 }
 
-/** Close all cached shared state database handles. */
 export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseOptions): void {
   retireOpenClawStateDatabaseHandles(undefined, options);
 }
@@ -629,7 +627,6 @@ export async function closeOpenClawStateDatabaseAsync(
   });
 }
 
-/** Test whether a cached shared state database handle is still open, optionally at one path. */
 export function isOpenClawStateDatabaseOpen(pathname?: string): boolean {
   if (pathname !== undefined) {
     return cachedDatabases.get(resolveDatabasePath({ path: pathname }))?.db.isOpen === true;

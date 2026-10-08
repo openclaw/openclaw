@@ -433,11 +433,11 @@ export class CustodianSessionStore {
     this.sessionClient = client;
     this.sessionOwnershipKey = this.sessionOwner.key(this.context?.gateway ?? null);
     this.sessionStarted = true;
-    void this.initializeSession(
-      client,
-      { sessionId: this.sessionId, ...custodianChatParams(this.variant) },
-      loadTranscript,
-    );
+    void this.initializeSession(client, this.initialChatParams(), loadTranscript);
+  }
+
+  private initialChatParams(): SystemAgentChatParams {
+    return { sessionId: this.sessionId, ...custodianChatParams(this.variant) };
   }
 
   private replaceSessionId(sessionId?: string): void {
@@ -483,11 +483,7 @@ export class CustodianSessionStore {
     const variantChanged = this.sessionStarted && this.sessionVariant !== this.variant;
     const ownershipKey = this.sessionOwner.key(context.gateway);
     const reconnected = this.sessionStarted && client !== null && this.activeClient === null;
-    const clientReplaced =
-      this.sessionStarted &&
-      client !== null &&
-      this.sessionClient !== null &&
-      client !== this.sessionClient;
+    const clientReplaced = this.sessionStarted && client !== null && client !== this.sessionClient;
     const ownershipChanged =
       this.sessionOwnershipKey !== null && ownershipKey !== this.sessionOwnershipKey;
     if (
@@ -545,10 +541,7 @@ export class CustodianSessionStore {
         // The reconnect rejoin races the interrupted turn the same way a
         // reload does; arm one barrier refresh behind it.
         this.rejoinBarrierPending = true;
-        void this.initializeSession(client, {
-          sessionId: this.sessionId,
-          ...custodianChatParams(this.variant),
-        });
+        void this.initializeSession(client, this.initialChatParams());
       } else {
         void this.refreshTranscriptIfIdle();
       }
@@ -743,7 +736,7 @@ export class CustodianSessionStore {
         if (inferenceUnavailable) {
           this.inferenceState = "unverified";
           // Recheck the runtime without replaying a user turn that may have reached the Gateway.
-          this.retryParams = { sessionId: this.sessionId, ...custodianChatParams(this.variant) };
+          this.retryParams = this.initialChatParams();
         }
         if (sessionInvalidated && hasCustodianUserInput(params)) {
           // Retained transcript rows are display context only; the next turn needs a fresh id.

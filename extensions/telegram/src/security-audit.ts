@@ -86,25 +86,25 @@ export async function collectTelegramSecurityAuditFindings(params: {
   );
   collectInvalidAllowFrom(groupAllowFrom);
 
+  const groupScopes = Object.values(groups ?? {}).flatMap((value) => {
+    if (!value || typeof value !== "object") {
+      return [];
+    }
+    const group = value as Record<string, unknown>;
+    const topics = group.topics;
+    const scopes: unknown[] = [group];
+    if (topics && typeof topics === "object") {
+      for (const topic of Object.values(topics)) {
+        scopes.push(topic);
+      }
+    }
+    return scopes;
+  });
   let anyGroupOverride = false;
-  if (groups) {
-    for (const value of Object.values(groups)) {
-      if (!value || typeof value !== "object") {
-        continue;
-      }
-      const group = value as Record<string, unknown>;
-      anyGroupOverride = collectInvalidAllowFrom(group.allowFrom) || anyGroupOverride;
-      const topics = group.topics;
-      if (!topics || typeof topics !== "object") {
-        continue;
-      }
-      for (const topicValue of Object.values(topics as Record<string, unknown>)) {
-        if (!topicValue || typeof topicValue !== "object") {
-          continue;
-        }
-        const topic = topicValue as Record<string, unknown>;
-        anyGroupOverride = collectInvalidAllowFrom(topic.allowFrom) || anyGroupOverride;
-      }
+  for (const scope of groupScopes) {
+    if (scope && typeof scope === "object") {
+      anyGroupOverride =
+        collectInvalidAllowFrom((scope as Record<string, unknown>).allowFrom) || anyGroupOverride;
     }
   }
 

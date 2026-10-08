@@ -19,6 +19,7 @@ import {
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
 import { renderAgentConfigActions, type AgentConfigActions } from "./config-actions.ts";
+import { renderAgentPanelAction } from "./panel-ui.ts";
 
 registerSettingsEnglish();
 
@@ -39,11 +40,8 @@ export function renderAgentSkills(
     onDisableAll: (agentId: string) => void;
   },
 ) {
-  const editable =
-    params.canUpdateConfig &&
-    Boolean(params.configForm) &&
-    !params.configLoading &&
-    !params.configSaving;
+  const configReady = Boolean(params.configForm) && !params.configLoading && !params.configSaving;
+  const editable = params.canUpdateConfig && configReady;
   const config = resolveAgentConfig(params.configForm, params.agentId);
   const explicitAllowlist = Array.isArray(config.entry?.skills)
     ? normalizeStringEntries(config.entry.skills)
@@ -52,12 +50,7 @@ export function renderAgentSkills(
   const allowSet = new Set(allowlist ?? []);
   const usingAllowlist = allowlist !== undefined;
   const inheritedAllowlist = explicitAllowlist === undefined && usingAllowlist;
-  const canClear =
-    params.canPatchConfig &&
-    explicitAllowlist !== undefined &&
-    Boolean(params.configForm) &&
-    !params.configLoading &&
-    !params.configSaving;
+  const canClear = params.canPatchConfig && explicitAllowlist !== undefined && configReady;
   const reportReady = Boolean(params.report && params.activeAgentId === params.agentId);
   const rawSkills = reportReady ? (params.report?.skills ?? []) : [];
   const filter = normalizeLowercaseStringOrEmpty(params.filter);
@@ -80,17 +73,15 @@ export function renderAgentSkills(
         ? html`<div class="callout info">${t("agents.skillsPanel.loadConfig")}</div>`
         : nothing
     }
-    ${
-      usingAllowlist
-        ? html`<div class="callout info">
-            ${t(
-              inheritedAllowlist
-                ? "agents.skillsPanel.inheritedAllowlist"
-                : "agents.skillsPanel.customAllowlist",
-            )}
-          </div>`
-        : html`<div class="callout info">${t("agents.skillsPanel.allEnabled")}</div>`
-    }
+    <div class="callout info">
+      ${t(
+        usingAllowlist
+          ? inheritedAllowlist
+            ? "agents.skillsPanel.inheritedAllowlist"
+            : "agents.skillsPanel.customAllowlist"
+          : "agents.skillsPanel.allEnabled",
+      )}
+    </div>
     ${
       !reportReady && !params.loading
         ? html`<div class="callout info">${t("agents.skillsPanel.loadAgent")}</div>`
@@ -103,26 +94,12 @@ export function renderAgentSkills(
         description: html`${t("agents.skillsPanel.subtitle")}
         ${totalCount > 0 ? html`<span class="mono">${enabledCount}/${totalCount}</span>` : nothing}`,
         actions: html`
-          <button
-            class="btn btn--sm"
-            ?disabled=${!editable}
-            @click=${() => params.onDisableAll(params.agentId)}
-          >
-            ${t("agentTools.disableAll")}
-          </button>
-          <button
-            class="btn btn--sm"
-            ?disabled=${!canClear}
-            @click=${() => params.onClear(params.agentId)}
-          >
-            ${t("common.reset")}
-          </button>
+          ${renderAgentPanelAction(t("agentTools.disableAll"), !editable, () => params.onDisableAll(params.agentId))}
+          ${renderAgentPanelAction(t("common.reset"), !canClear, () => params.onClear(params.agentId))}
           ${renderAgentConfigActions(
             params,
             html`
-              <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-                ${params.loading ? t("common.loading") : t("common.refresh")}
-              </button>
+              ${renderAgentPanelAction(params.loading ? t("common.loading") : t("common.refresh"), params.loading, params.onRefresh)}
             `,
           )}
         `,
@@ -177,20 +154,18 @@ export function renderAgentSkills(
                                   >
                                   <span class="settings-row__desc">${skill.description}</span>
                                   ${renderSkillStatusChips({ skill })}
-                                  ${
-                                    missing.length > 0
+                                  ${(
+                                    [
+                                      ["agents.skillsPanel.missing", missing],
+                                      ["agents.skillsPanel.reason", reasons],
+                                    ] as const
+                                  ).map(([label, items]) =>
+                                    items.length > 0
                                       ? html`<span class="settings-row__desc">
-                                          ${t("agents.skillsPanel.missing", { items: missing.join(", ") })}
+                                          ${t(label, { items: items.join(", ") })}
                                         </span>`
-                                      : nothing
-                                  }
-                                  ${
-                                    reasons.length > 0
-                                      ? html`<span class="settings-row__desc">
-                                          ${t("agents.skillsPanel.reason", { items: reasons.join(", ") })}
-                                        </span>`
-                                      : nothing
-                                  }
+                                      : nothing,
+                                  )}
                                   ${
                                     learned
                                       ? html`<span class="settings-row__desc">

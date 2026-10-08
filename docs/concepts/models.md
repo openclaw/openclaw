@@ -116,7 +116,9 @@ and native apps. Chat and session metadata read published rows without starting
 provider discovery. Ordinary `models.list` requests reuse the published catalog;
 provider response-cache expiry alone does not rebuild it. Startup, changed
 configuration or credentials, plugin and hosted metadata updates, and explicit
-**Refresh** own catalog acquisition. A selected native model can load its own
+**Refresh** own catalog acquisition. A provider whose discovery fails keeps its
+saved or built-in rows and retries in the background after 30 seconds, backing off
+to 30 minutes while it keeps failing. A selected native model can load its own
 metadata while that acquisition is still running.
 
 In chat apps, `/models` and model picker buttons return the newest completed list
