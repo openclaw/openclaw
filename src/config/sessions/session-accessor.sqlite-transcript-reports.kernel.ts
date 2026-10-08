@@ -139,6 +139,19 @@ function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
   ).facts();
 }
 
+function readReportEvent(database: OpenClawAgentDatabase, sessionId: string, seq: number) {
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("transcript_events")
+      .select(transcriptEventJsonSql(database.db).as("event_json"))
+      .where("session_id", "=", sessionId)
+      .where("seq", "=", seq),
+  );
+  const event: unknown = row ? JSON.parse(row.event_json) : undefined;
+  return asOptionalRecord(event);
+}
+
 function latestCustomReport(
   database: OpenClawAgentDatabase,
   sessionId: string,
@@ -153,16 +166,8 @@ function latestCustomReport(
     ) {
       continue;
     }
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("transcript_events")
-        .select(transcriptEventJsonSql(database.db).as("event_json"))
-        .where("session_id", "=", sessionId)
-        .where("seq", "=", entry.seq),
-    );
-    const record: unknown = row ? JSON.parse(row.event_json) : undefined;
-    if (isRecord(record)) {
+    const record = readReportEvent(database, sessionId, entry.seq);
+    if (record) {
       return { customType: entry.customType, content: record.content, details: record.details };
     }
   }
@@ -179,7 +184,14 @@ export function prepareTranscriptReportSelection(
     selection.kind === "assistant"
       ? branch.path.some((entry) => entry.assistantResponseId === selection.responseId)
       : selection.suppressWhenAssistantRun !== undefined &&
-        branch.path.some((entry) => entry.assistantRunId === selection.suppressWhenAssistantRun);
+        branch.path.some((entry) => {
+          if (entry.assistantRunId !== selection.suppressWhenAssistantRun) {
+            return false;
+          }
+          // Progress and commentary cannot stand in for a durable failure outcome.
+          const message = readReportEvent(database, resolved.sessionId, entry.seq)?.message;
+          return isRecord(message) && message.stopReason === "error";
+        });
   return {
     appendParentId: branch.appendParentId,
     suppressed,
@@ -244,16 +256,7 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
     if (candidate.assistantRunId !== partial.runId) {
       continue;
     }
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("transcript_events")
-        .select(transcriptEventJsonSql(database.db).as("event_json"))
-        .where("session_id", "=", resolved.sessionId)
-        .where("seq", "=", candidate.seq),
-    );
-    const event: unknown = row ? JSON.parse(row.event_json) : undefined;
-    const message = isRecord(event) ? event.message : undefined;
+    const message = readReportEvent(database, resolved.sessionId, candidate.seq)?.message;
     if (
       !isRecord(message) ||
       readSessionTranscriptRunId(message) !== partial.runId ||
