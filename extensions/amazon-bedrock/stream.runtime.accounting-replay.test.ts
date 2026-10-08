@@ -329,6 +329,14 @@ describe("Bedrock prompt cache ownership", () => {
             runtimeContext: {},
           },
         ],
+        // Tool blocks require a toolConfig on the request; this context sends one.
+        tools: [
+          {
+            name: "read",
+            description: "Read a file",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
       };
       const first = await captureMessages(model, context, { cacheRetention: "short" });
       expect(first[2]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
@@ -411,6 +419,14 @@ describe("Bedrock prompt cache ownership", () => {
               content: [{ type: "text", text: "later stable tool output" }],
               isError: false,
               timestamp: 2,
+            },
+          ],
+          // Tool blocks require a toolConfig on the request; this context sends one.
+          tools: [
+            {
+              name: "read",
+              description: "Read a file",
+              parameters: { type: "object", properties: {} },
             },
           ],
         } as never,
@@ -517,6 +533,14 @@ describe("Bedrock tool-result images", () => {
             toolName: "read",
             content: [{ type: "text", text: "plain result" }],
             isError: false,
+          },
+        ],
+        // Tool blocks require a toolConfig on the request; this context sends one.
+        tools: [
+          {
+            name: "inspect",
+            description: "Inspect",
+            parameters: { type: "object", properties: {} },
           },
         ],
       };
