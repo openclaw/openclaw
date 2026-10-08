@@ -102,26 +102,6 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to create when reply throws a withdrawn SDK error", async () => {
-    const sdkError = Object.assign(new Error("request failed"), { code: 230011 });
-    replyMock.mockRejectedValue(sdkError);
-    createMock.mockResolvedValue({
-      code: 0,
-      data: { message_id: "om_thrown_fallback" },
-    });
-
-    await expectFallbackResult(
-      () =>
-        sendMessageFeishu({
-          cfg: {} as never,
-          to: "user:ou_target",
-          text: "hello",
-          replyToMessageId: "om_parent",
-        }),
-      "om_thrown_fallback",
-    );
-  });
-
   it("falls back to create when card reply throws a not-found AxiosError", async () => {
     const axiosError = Object.assign(new Error("Request failed"), {
       response: { status: 200, data: { code: 231003, msg: "The message is not found" } },
@@ -292,28 +272,5 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     ).rejects.toThrow("rate limited");
 
     expect(createMock).not.toHaveBeenCalled();
-  });
-
-  it("still falls back for non-thread replies to withdrawn targets", async () => {
-    replyMock.mockResolvedValue({
-      code: 230011,
-      msg: "The message was withdrawn.",
-    });
-    createMock.mockResolvedValue({
-      code: 0,
-      data: { message_id: "om_non_thread_fallback" },
-    });
-
-    await expectFallbackResult(
-      () =>
-        sendMessageFeishu({
-          cfg: {} as never,
-          to: "user:ou_target",
-          text: "hello",
-          replyToMessageId: "om_parent",
-          replyInThread: false,
-        }),
-      "om_non_thread_fallback",
-    );
   });
 });

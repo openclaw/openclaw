@@ -10,6 +10,7 @@ import {
 } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { recordChannelFeedbackEvent } from "../channels/feedback-reflection.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   replaceSessionEntry,
   loadSessionEntryReadOnly,
@@ -43,7 +44,7 @@ import {
   withSessionTranscriptWriteLock,
 } from "./session-transcript-runtime.js";
 
-async function seed(env: NodeJS.ProcessEnv) {
+async function seed(env: NodeJS.ProcessEnv, locator: "physical" | "logical" = "physical") {
   const target = {
     agentId: "main",
     sessionId: "append-session",
@@ -51,7 +52,13 @@ async function seed(env: NodeJS.ProcessEnv) {
     env,
   };
   await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-  return { ...target, storePath: openOpenClawAgentDatabase(target).path };
+  return {
+    ...target,
+    storePath:
+      locator === "logical"
+        ? resolveSessionStorePathCore(undefined, { agentId: target.agentId, env })
+        : openOpenClawAgentDatabase(target).path,
+  };
 }
 
 const messageIds = (scope: Awaited<ReturnType<typeof seed>>) =>
@@ -170,21 +177,24 @@ it("rechecks the Codex prepared guard at the worker commit grant", async () => {
   });
 });
 
-it("retains the prepared owner's target binding for a locked write", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const scope = await seed(env);
-    const other = { ...scope, sessionId: "other-session", sessionKey: "agent:main:other" };
-    await replaceSessionEntry(other, { sessionId: other.sessionId, updatedAt: 1 });
-    await expect(
-      withSessionTranscriptWriteAssertion(scope, composeSessionTranscriptWriteAssertion([]), () =>
-        withSessionTranscriptWriteLock(other, (locked) =>
-          locked.appendMessage({ message: { role: "assistant", content: "wrong target" } }),
+it.each(["physical", "logical"] as const)(
+  "retains the prepared owner's %s target binding for a locked write",
+  async (locator) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const scope = await seed(env, locator);
+      const other = { ...scope, sessionId: "other-session", sessionKey: "agent:main:other" };
+      await replaceSessionEntry(other, { sessionId: other.sessionId, updatedAt: 1 });
+      await expect(
+        withSessionTranscriptWriteAssertion(scope, composeSessionTranscriptWriteAssertion([]), () =>
+          withSessionTranscriptWriteLock(other, (locked) =>
+            locked.appendMessage({ message: { role: "assistant", content: "wrong target" } }),
+          ),
         ),
-      ),
-    ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
-    expect(messageIds(other)).toEqual([]);
-  });
-});
+      ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+      expect(messageIds(other)).toEqual([]);
+    });
+  },
+);
 
 it.each(["locked", "mirror"] as const)(
   "persists %s through its real entry without MAIN SQL",
@@ -217,6 +227,53 @@ it.each(["locked", "mirror"] as const)(
         sql.restore();
       }
       expect(loadTranscriptEventsSync(scope).length).toBeGreaterThan(0);
+    });
+  },
+);
+
+it.each([
+  { locator: "physical", adapter: "source" },
+  { locator: "logical", adapter: "source" },
+  { locator: "physical", adapter: "preparer" },
+  { locator: "logical", adapter: "preparer" },
+] as const)(
+  "retains the $locator owner through the native $adapter adapter",
+  async ({ locator, adapter }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const scope = await seed(env, locator);
+      const databasePath = openOpenClawAgentDatabase(scope).path;
+      const assertCurrent = () => {};
+      const authority =
+        adapter === "source" ? assertCurrent : composeSessionTranscriptWriteAssertion([]);
+      const updates: unknown[] = [];
+      const off = onInternalSessionTranscriptUpdate((update) => updates.push(update));
+      try {
+        await withSessionTranscriptWriteAssertion(scope, authority, () =>
+          withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
+            const appended = await locked.appendMessageWithMessageSequence({
+              eventId: "owned",
+              message: { role: "assistant", content: "owned", idempotencyKey: "owned" },
+              ...(adapter === "preparer"
+                ? { prepareMessageAfterIdempotencyCheck: (message: unknown) => message }
+                : {}),
+            });
+            expect(appended.result?.messageId).toBe("owned");
+            expect(appended.messageSeq).toEqual(expect.any(Number));
+            const facts = await locked.readMessageFacts({ idempotencyKeys: ["owned"] });
+            expect(facts.existingIdempotencyKeys.has("owned")).toBe(true);
+            await locked.publishUpdate({ messageId: "owned" });
+          }),
+        );
+        expect(messageIds(scope)).toEqual(["owned"]);
+        expect(updates).toEqual([
+          expect.objectContaining({
+            target: expect.objectContaining({ storePath: databasePath }),
+            messageId: "owned",
+          }),
+        ]);
+      } finally {
+        off();
+      }
     });
   },
 );
@@ -402,34 +459,37 @@ it("joins accepted appends in FIFO order before admitting feedback after the cal
   });
 });
 
-it("refuses an append when its retained writer authority is revoked during preparation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const scope = await seed(env);
-    let current = true;
-    await expect(
-      withSessionTranscriptWriteAssertion(
-        scope,
-        composeSessionSourceAssertion([], () => {
-          if (!current) {
-            throw new Error("Writer revoked");
-          }
-        }),
-        () =>
-          withSessionTranscriptWriteLock(scope, (locked) =>
-            locked.appendMessage({
-              eventId: "revoked",
-              message: { role: "assistant", content: "must not persist" },
-              prepareMessageAfterIdempotencyCheckAsync: async (message) => {
-                current = false;
-                return message;
-              },
-            }),
-          ),
-      ),
-    ).rejects.toThrow("Writer revoked");
-    expect(messageIds(scope)).toEqual([]);
-  });
-});
+it.each(["physical", "logical"] as const)(
+  "refuses an append when its retained %s writer authority is revoked during preparation",
+  async (locator) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const scope = await seed(env, locator);
+      let current = true;
+      await expect(
+        withSessionTranscriptWriteAssertion(
+          scope,
+          composeSessionSourceAssertion([], () => {
+            if (!current) {
+              throw new Error("Writer revoked");
+            }
+          }),
+          () =>
+            withSessionTranscriptWriteLock(scope, (locked) =>
+              locked.appendMessage({
+                eventId: "revoked",
+                message: { role: "assistant", content: "must not persist" },
+                prepareMessageAfterIdempotencyCheckAsync: async (message) => {
+                  current = false;
+                  return message;
+                },
+              }),
+            ),
+        ),
+      ).rejects.toThrow("Writer revoked");
+      expect(messageIds(scope)).toEqual([]);
+    });
+  },
+);
 
 it.each(["worker", "released sync callback"] as const)(
   "refreshes its own %s append snapshot without accepting an external byte rewrite",
@@ -612,4 +672,83 @@ it("settles two unawaited worker appends FIFO across the real Gateway close prel
     await Promise.allSettled([writing, closing, ...accepted]);
     await fixture.cleanup();
   }
+});
+
+it.each(["live", "revoked", "foreign"] as const)(
+  "retains logical mirror writer binding (%s)",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const physical = await seed(env);
+      const scope = {
+        ...physical,
+        storePath: resolveSessionStorePathCore(undefined, { agentId: physical.agentId, env }),
+      };
+      expect(scope.storePath).not.toBe(physical.storePath);
+      const target =
+        mode === "foreign"
+          ? { ...scope, sessionId: "foreign-mirror", sessionKey: "agent:main:foreign-mirror" }
+          : scope;
+      if (mode === "foreign") {
+        await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      }
+      let current = true;
+      const guard = composeSessionTranscriptWriteAssertion([], () => {
+        if (!current) {
+          throw new Error("Logical mirror writer revoked");
+        }
+      });
+      const operation = withSessionTranscriptWriteAssertion(scope, guard, () => {
+        if (mode === "revoked") {
+          current = false;
+        }
+        return appendAssistantMirrorMessageByIdentity({
+          ...target,
+          text: "Owned terminal fallback",
+          idempotencyKey: "logical-owned-mirror",
+        });
+      });
+      if (mode === "live") {
+        await expect(operation).resolves.toMatchObject({ ok: true });
+      } else if (mode === "revoked") {
+        await expect(operation).rejects.toThrow("Logical mirror writer revoked");
+      } else {
+        await expect(operation).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+      }
+      expect(messageIds(physical)).toHaveLength(mode === "live" ? 1 : 0);
+      if (mode === "foreign") {
+        expect(messageIds(target)).toEqual([]);
+      }
+    });
+  },
+);
+
+it("cannot retarget owned authority by mutating a logical selector after dispatch", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const physical = await seed(state.env);
+    const requested = {
+      ...physical,
+      storePath: resolveSessionStorePathCore(undefined, {
+        agentId: physical.agentId,
+        env: state.env,
+      }),
+    };
+    const owner = {
+      ...physical,
+      storePath: state.statePath("other-owner", "openclaw-agent.sqlite"),
+    };
+    await replaceSessionEntry(owner, { sessionId: owner.sessionId, updatedAt: 1 });
+    await expect(
+      withSessionTranscriptWriteAssertion(owner, composeSessionTranscriptWriteAssertion([]), () => {
+        const pending = withTranscriptWriteLock(requested, (locked) =>
+          locked.appendMessage({
+            message: { role: "assistant", content: "must not cross stores" },
+          }),
+        );
+        requested.storePath = owner.storePath;
+        return pending;
+      }),
+    ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+    expect(messageIds(physical)).toEqual([]);
+    expect(messageIds(owner)).toEqual([]);
+  });
 });

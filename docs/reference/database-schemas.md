@@ -34,6 +34,10 @@ lock-wait budgets, schemas, stored data, and update behavior are unchanged.
 
 The admitted catalog includes index names and trigger definitions alongside tables.
 Canonical session validation consumes these definitions without another catalog scan.
+Canonical index admission shares the schema contract reader's batched metadata snapshot
+instead of querying each table and index separately. Shadowed PRAGMA names retain
+native inspection, and authorization, drift detection, transactional repair, and
+integrity checks remain unchanged.
 First-use schema owners skip additive DDL only when all their tables and indexes
 are present in the current facts. Foreign schema changes, local DDL, rollback, and
 connection replacement invalidate those facts through the same connection owner;

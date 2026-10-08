@@ -167,9 +167,8 @@ internal fun VoiceHomeMode(
   val liveVoiceDescription = stringResource(R.string.talk)
   val liveClickLabel =
     when {
-      ttsOnly -> stringResource(R.string.stop_speaking)
+      ttsOnly || realtimeActive -> stringResource(R.string.stop_speaking)
       recoverMicrophone -> stringResource(if (voice.microphoneSettingsRequired) R.string.open_settings else R.string.retry)
-      realtimeActive -> stringResource(R.string.stop_speaking)
       else -> stringResource(R.string.speak_to_agent)
     }
   val dictateClickLabel = stringResource(R.string.dictate)
@@ -400,7 +399,6 @@ private fun TextLayoutResult.fitsVoiceViewport(
   }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VoiceGestureLabel(
   label: WearVoiceLabel,

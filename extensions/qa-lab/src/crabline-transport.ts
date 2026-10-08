@@ -619,7 +619,7 @@ function createQaCrablineTransport(params: {
         ],
         reportNotes: [
           ...createOpenClawCrablineChannelReportNotes(selection),
-          "Provider readiness records the strict startup probe before Gateway traffic; the same provider instance passed its final health probe.",
+          "Provider readiness records the strict startup check before Gateway traffic; the same provider instance passed its final health check.",
           `Full unmodified runtime transcript: ${path.relative(outputDir, adapter.manifest.recorderPath)}.`,
         ],
       };

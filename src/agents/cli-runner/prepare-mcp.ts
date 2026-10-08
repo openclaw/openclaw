@@ -33,7 +33,7 @@ export function resolveCliNativeMcpPolicy(
     sessionKey: options.policySessionKey,
     agentId: options.policyAgentId,
   });
-  const capabilityProfile = resolveConversationCapabilityProfile({
+  return resolveConversationCapabilityProfile({
     ...projectNativeMcpRunContext(run),
     config: options.config,
     sessionKey: options.policySessionKey,
@@ -53,7 +53,6 @@ export function resolveCliNativeMcpPolicy(
     runtimeToolAllowlist: options.runtimeToolsAllowPolicy,
     inheritRuntimeToolAllowlist: true,
   });
-  return { capabilityProfile, sandboxStatus };
 }
 
 /** Project the CLI tool surface before prompt construction, retaining its exact run admission. */
@@ -63,32 +62,23 @@ export async function prepareCliMcpToolProjection(
     agentId: string;
     context: McpScope["context"];
     runtimeToolsAllowPolicy?: string[];
-    rootedToolsAllow?: string[];
     defaultMediatedToolNames?: readonly string[];
     scope: Pick<
       McpScope,
-      | "cfg"
-      | "rootedExecution"
-      | "skillLibraryAuthoring"
-      | "authProfileStore"
-      | "authProfileStoreAgentDir"
+      "cfg" | "skillLibraryAuthoring" | "authProfileStore" | "authProfileStoreAgentDir"
     >;
     resolvePolicyTools: ResolveMcpTools;
     resolveScopedTools: ResolveMcpTools;
   },
 ) {
   const requestedToolsAllow =
-    options.runtimeToolsAllowPolicy ??
-    (options.scope.rootedExecution
-      ? options.rootedToolsAllow
-      : params.cliToolAvailability?.openClaw);
+    options.runtimeToolsAllowPolicy ?? params.cliToolAvailability?.openClaw;
   const context =
     requestedToolsAllow !== undefined
       ? { ...options.context, toolsAllow: [...requestedToolsAllow] }
       : options.context;
   const resolveTools =
-    options.runtimeToolsAllowPolicy !== undefined ||
-    (options.scope.rootedExecution && options.rootedToolsAllow === undefined)
+    options.runtimeToolsAllowPolicy !== undefined
       ? options.resolvePolicyTools
       : options.resolveScopedTools;
   const admittedParams = await admitCliRunParams(params, options.agentId);
@@ -109,7 +99,6 @@ export function resolveCliMcpToolOwnership(
     backend: ResolvedCliBackend;
     enabled: boolean;
     nodePlacement: boolean;
-    rooted: boolean;
     skipPreparation: boolean;
   },
 ) {
@@ -122,7 +111,6 @@ export function resolveCliMcpToolOwnership(
       agentId: run.agentId,
       sessionKey: run.sessionKey,
     }).host !== "node" &&
-    !options.rooted &&
     run.cliToolAvailability === undefined &&
     options.backend.nativeToolMode === "selectable" &&
     options.backend.toolAvailabilityEnforcement === "execution-args" &&

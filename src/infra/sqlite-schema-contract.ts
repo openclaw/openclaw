@@ -423,10 +423,11 @@ function buildSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
 }
 
 function collectSqliteSchemaContract(database: DatabaseSync): SqliteSchemaContract {
+  // Authorize catalog ownership even when there are no tables to inspect.
   const rows = database
     .prepare(
       `
-        SELECT name, sql
+        SELECT name, sql, tbl_name
         FROM main.sqlite_schema
         WHERE type = 'table'
           AND name NOT LIKE 'sqlite_%'

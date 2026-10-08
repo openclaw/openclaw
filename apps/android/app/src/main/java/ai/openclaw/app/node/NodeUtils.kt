@@ -23,6 +23,17 @@ internal fun nodeInvokeError(
   message: String,
 ): GatewaySession.InvokeResult = GatewaySession.InvokeResult.error(code, "$code: $message")
 
+internal inline fun nodeInvokeJson(
+  unavailableCode: String,
+  fallbackMessage: String,
+  encode: () -> String,
+): GatewaySession.InvokeResult =
+  try {
+    GatewaySession.InvokeResult.ok(encode())
+  } catch (err: Throwable) {
+    nodeInvokeError(unavailableCode, err.message ?: fallbackMessage)
+  }
+
 /** Parses invoke params into a JSON object, returning null for absent/malformed input. */
 fun parseJsonParamsObject(paramsJson: String?): JsonObject? {
   if (paramsJson.isNullOrBlank()) return null

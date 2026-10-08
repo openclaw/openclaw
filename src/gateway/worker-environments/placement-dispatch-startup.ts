@@ -1,8 +1,10 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
+import {
+  sameWorkerBuild,
+  supportsCurrentWorkerLaunch,
+} from "../../worker/worker-build-identity.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
-import { supportsCurrentWorkerLaunch } from "./admission.js";
 import {
   DevicePlacementUnavailableError,
   resolveDevicePlacementEligibility,

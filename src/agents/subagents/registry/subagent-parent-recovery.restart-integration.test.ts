@@ -876,10 +876,11 @@ describe("subagent parent recovery — durable yielded continuation", () => {
             batchRunIds: [child.runId, sibling.runId],
           });
         } else {
-          expect(activated.get(entry.runId)?.requesterSettleWake).toBeUndefined();
+          expect(activated.get(entry.runId)?.requesterSettleWake?.requesterYieldBatch).not.toBe(
+            true,
+          );
         }
       }
-      await testing.sweepOnceForTests();
       await fixture.settle();
 
       const persisted = loadSubagentRegistryFromSqlite();

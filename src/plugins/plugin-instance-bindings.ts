@@ -126,9 +126,12 @@ type PluginInstanceBindingOwner = {
 
 /** Registration facts and captured stream scopes share the instance's lifetime. */
 export function createPluginInstanceBindings(bindings: PluginInstanceBindingOwner) {
-  const factories = new WeakSet<object>();
-  const admitFactory = (factory: (...args: never[]) => unknown): void => {
-    factories.add(factory);
+  const factories = new WeakMap<object, true | readonly PropertyKey[]>();
+  const admitFactory = (
+    factory: (...args: never[]) => unknown,
+    resultCallbacks?: readonly PropertyKey[],
+  ): void => {
+    factories.set(factory, resultCallbacks ?? true);
   };
   return {
     admitFactory,
@@ -144,7 +147,7 @@ export function createPluginInstanceBindings(bindings: PluginInstanceBindingOwne
 /** Builds callable views while the exact instance continues to own admission and leases. */
 function createPluginBindings(
   bindings: PluginInstanceBindingOwner,
-  factories: WeakSet<object>,
+  factories: WeakMap<object, true | readonly PropertyKey[]>,
   admit: <T>(run: () => T) => T,
   admitCallback: <T>(run: () => T) => T,
 ) {
@@ -182,17 +185,18 @@ function createPluginBindings(
       },
     };
   };
-  const isFactory = (value: object) => {
+  const factoryBinding = (value: object) => {
     for (
       let source: object | undefined = value;
       source;
       source = getPluginOriginalValue(source, instance)
     ) {
-      if (factories.has(source)) {
-        return true;
+      const binding = factories.get(source);
+      if (binding) {
+        return binding;
       }
     }
-    return false;
+    return undefined;
   };
   const wrapped = new WeakMap<object, unknown>();
   const factory = {};
@@ -215,18 +219,31 @@ function createPluginBindings(
       ? wrap(value)
       : value;
   // Factory arrays contain executable registrations, not ordinary result payloads.
-  const bindFactoryResult = <T>(value: T): T => {
+  const bindFactoryResult = <T>(value: T, binding: true | readonly PropertyKey[]): T => {
+    const callbacks = binding === true ? undefined : binding;
+    if (
+      callbacks &&
+      value !== null &&
+      typeof value === "object" &&
+      !callbacks.some((key) => typeof Reflect.get(value, key) === "function")
+    ) {
+      return value;
+    }
     if (!Array.isArray(value)) {
-      return wrap(value);
+      return wrap(value, "", undefined, callbacks);
     }
     // SAFETY: Each member keeps its declared shape while native iteration sees its bound methods.
-    return value.map((entry) => wrap(entry)) as T;
+    return value.map((entry) => wrap(entry, "", undefined, callbacks)) as T;
   };
-  const wrapResult = <T>(result: T, callerData?: unknown[], executable = false): T => {
+  const wrapResult = <T>(
+    result: T,
+    callerData?: unknown[],
+    executable?: true | readonly PropertyKey[],
+  ): T => {
     const completion = resolvePluginReturnPromise(result);
     if (completion) {
       const pending = mapPluginReturnPromise(completion, (resolved) =>
-        executable ? bindFactoryResult(resolved) : passResult(resolved),
+        executable ? bindFactoryResult(resolved, executable) : passResult(resolved),
       );
       if (pending.host) {
         valueInstances.setHost(pending.value, bindings.instance);
@@ -239,12 +256,17 @@ function createPluginBindings(
     return callerData?.includes(result)
       ? result
       : executable
-        ? bindFactoryResult(result)
+        ? bindFactoryResult(result, executable)
         : passResult(result);
   };
 
   /** Callables retain their instance; schemas remain data for host validators. */
-  const wrap = <T>(value: T, field = "", callbackIndex?: 0 | null): T => {
+  const wrap = <T>(
+    value: T,
+    field = "",
+    callbackIndex?: 0 | null,
+    resultCallbacks?: readonly PropertyKey[],
+  ): T => {
     if ((!value || typeof value !== "object") && typeof value !== "function") {
       return value;
     }
@@ -329,6 +351,10 @@ function createPluginBindings(
           iteration.close();
         }
       }
+      // Mixed result envelopes declare their executable slots; all other values remain data.
+      if (resultCallbacks && !resultCallbacks.includes(key)) {
+        return property;
+      }
       if (typeof property !== "function" || key === "constructor") {
         return wrap(property, String(key));
       }
@@ -388,8 +414,9 @@ function createPluginBindings(
                     result,
                     wrapArguments(args).args,
                   );
-                  if (isFactory(result)) {
-                    factories.add(source);
+                  const binding = factoryBinding(result);
+                  if (binding) {
+                    factories.set(source, binding);
                   }
                   return wrap(source);
                 })
@@ -516,7 +543,7 @@ function createPluginBindings(
               return wrapResult(
                 Reflect.apply(value, receiver, call.args),
                 call.callerData,
-                isFactory(result),
+                factoryBinding(result),
               );
             }),
           construct: (_target, args, newTarget): object =>

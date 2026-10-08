@@ -31,6 +31,7 @@ import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeysResolution,
 } from "./file-mutation-queue.js";
+import { assertFileToolNotAborted } from "./file-tool-abort.js";
 import { normalizePositiveLimit } from "./limits.js";
 import {
   getReadPathVariants,
@@ -408,9 +409,7 @@ export function createReadToolDefinition(
                 async () => {
                   const absoluteInputPath = await inputPathResolution;
                   const resolved = await resolveReadToolPathFromAbsolute(ops, absoluteInputPath);
-                  if (signal?.aborted) {
-                    throw new Error("Operation aborted");
-                  }
+                  assertFileToolNotAborted(signal);
                   return {
                     ...resolved,
                     buffer: await ops.readFile(resolved.absolutePath),
@@ -577,9 +576,7 @@ export function createReadToolDefinition(
               ];
             }
 
-            if (signal?.aborted) {
-              throw new Error("Operation aborted");
-            }
+            assertFileToolNotAborted(signal);
             return { content, details: createReadToolDetails(content, textDetails) };
           } catch (error: unknown) {
             throw normalizeReadError(error, path);

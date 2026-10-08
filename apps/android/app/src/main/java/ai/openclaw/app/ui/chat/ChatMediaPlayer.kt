@@ -330,10 +330,6 @@ internal fun ChatMediaPlayerCard(
       onReleased = { clearPlayerState(requested, requestedFile) },
     )
 
-  fun pause() {
-    player?.let(ChatMediaPlaybackArbiter::pause)
-  }
-
   fun play() {
     if (playbackBlocked) return
     val existing = player
@@ -479,11 +475,10 @@ internal fun ChatMediaPlayerCard(
     MediaPlaybackPresentation(
       content = content,
       loading = loading,
-      preparingPlayback = loading && content.playback == "transcode",
       isPlaying = isPlaying,
       playbackBlocked = playbackBlocked,
       error = error,
-      onToggle = { if (isPlaying) pause() else play() },
+      onToggle = { if (isPlaying) player?.let(ChatMediaPlaybackArbiter::pause) else play() },
     )
   if (kind == GatewayMediaKind.Video) {
     presentation.VideoPlayerSurface(player)
@@ -504,7 +499,6 @@ internal fun ChatMediaPlayerCard(
 private data class MediaPlaybackPresentation(
   val content: ChatMessageContent,
   val loading: Boolean,
-  val preparingPlayback: Boolean,
   val isPlaying: Boolean,
   val playbackBlocked: Boolean,
   val error: String?,
@@ -634,7 +628,7 @@ private fun MediaPlaybackPresentation.MediaPlaybackStatus() {
   val status =
     when {
       error != null -> error
-      preparingPlayback -> nativeString("Preparing playback…")
+      loading && content.playback == "transcode" -> nativeString("Preparing playback…")
       playbackBlocked -> nativeString("Paused for voice playback")
       else -> null
     }
