@@ -2612,16 +2612,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_inference_turns_pending_run
   ON worker_inference_turns(session_id, run_epoch, run_id)
   WHERE state = 'pending';
 
-CREATE TABLE IF NOT EXISTS fleet_cells (
-  tenant_id TEXT NOT NULL PRIMARY KEY,
-  created_at_ms INTEGER NOT NULL,
-  image TEXT NOT NULL,
-  runtime TEXT NOT NULL,
-  host_port INTEGER NOT NULL,
-  container_name TEXT NOT NULL,
-  data_dir TEXT NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS claw_installs (
   agent_id TEXT NOT NULL PRIMARY KEY,
   schema_version TEXT NOT NULL,

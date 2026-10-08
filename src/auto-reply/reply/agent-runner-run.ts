@@ -7,7 +7,9 @@ import { settleProgressVisibilityCallbackResult } from "../../channels/progress-
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -176,18 +178,26 @@ export async function runReplyAgent(
       attributes: traceAttributes,
     });
   const readGeneration = getAgentEventLifecycleGeneration();
-  const assertReadCurrent = () => {
-    assertAgentRunLifecycleGenerationCurrent(readGeneration);
-    followupRun.operatorAuthority?.assertCurrent();
-  };
+  const assertReadCurrent = composeSessionSourceAssertion(
+    [followupRun.operatorAuthority?.assertCurrent],
+    (assertSource) => {
+      assertAgentRunLifecycleGenerationCurrent(readGeneration);
+      assertSource();
+    },
+  );
   const restartRecoverySourceTurnId = readChannelSourceTurnId(sessionCtx);
   let restartRecoveryEntry: typeof activeSessionEntry;
+  let restartRecoveryTarget: SessionEntryTargetPatchScope | undefined;
   try {
     restartRecoveryEntry =
       sessionKey && storePath
         ? ((await readSessionEntryInWorker(
             { agentId: followupRun.run.agentId, storePath, sessionKey },
             assertReadCurrent,
+            undefined,
+            (target) => {
+              restartRecoveryTarget = target;
+            },
           )) ?? activeSessionEntry)
         : activeSessionEntry;
     assertReadCurrent();
@@ -206,12 +216,16 @@ export async function runReplyAgent(
       storePath &&
       hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId)
     ) {
+      if (!restartRecoveryTarget) {
+        releaseAdmissionTicket();
+        typing.cleanup();
+        throw new Error("Restart recovery retirement has no admitted session target");
+      }
       const retired = await retireTerminalRestartRecoverySourceClaim({
-        agentId: followupRun.run.agentId,
+        target: restartRecoveryTarget,
+        assertCurrent: assertReadCurrent,
         sessionId: restartRecoveryEntry.sessionId,
-        sessionKey,
         sourceTurnId: restartRecoverySourceTurnId,
-        storePath,
       });
       if (retired) {
         activeSessionEntry = retired;

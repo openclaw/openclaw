@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
+import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import type {
   AcpSessionReadCommand,
   AcpSessionReadInput,
@@ -45,7 +46,6 @@ import type {
   CronRunRecoveryObservation,
 } from "../cron/store/run-recovery-read.types.js";
 import type { CronQuarantinedJob } from "../cron/types-shared.js";
-import type { FleetCellRecord } from "../fleet/registry.types.js";
 import type {
   PlacementGrantReadInput,
   PlacementGrantRows,
@@ -234,7 +234,8 @@ export type OpenClawStateReadCommand =
   | UserProfileAvatarReadCommand
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
-  | { type: "userProfiles.authority.resolve"; profileId: string }
+  | { type: "userProfiles.authority.resolve"; profileId: string; includeProfile?: boolean }
+  | { type: "userProfiles.aliases.resolve"; profileId: string }
   | ({ type: "userProfiles.githubIdentity.cached" } & CachedGitHubIdentityBinding)
   | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
@@ -264,9 +265,7 @@ export type OpenClawStateReadCommand =
   | { type: "updateRuns.historyStatus" }
   | { type: "worktrees.cleanupState" }
   | { type: "worktrees.list" }
-  | { type: "fleet.list" }
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
-  | { type: "fleet.get"; tenantId: string }
   | { type: "nodeHost.config" }
   | { type: "tts.prefsPath" }
   | { type: "operator.channelPolicy" }
@@ -495,8 +494,9 @@ export type OpenClawStateReadResult =
     }
   | {
       type: "userProfiles.authority.resolve";
-      profile: UserProfileAuthority | undefined;
+      profile: (UserProfileAuthority & { listItem?: UserProfileListItem }) | undefined;
     }
+  | { type: "userProfiles.aliases.resolve"; profileId: string; aliases: string[] }
   | {
       type: "userProfiles.githubIdentity.cached";
       identity: CachedGitHubIdentity | undefined;
@@ -538,12 +538,10 @@ export type OpenClawStateReadResult =
       leases: ReturnType<typeof readWorktreeRunLeaseStateInDatabase>;
     }
   | { type: "worktrees.list"; records: ManagedWorktreeRecord[] }
-  | { type: "fleet.list"; cells: FleetCellRecord[] }
   | {
       type: "workerPlacements.changeSnapshot";
       placements: WorkerSessionPlacementChangeSnapshot[];
     }
-  | { type: "fleet.get"; cell: FleetCellRecord | undefined }
   | {
       type: "nodeHost.config" | "operator.channelPolicy" | "tts.prefsPath";
       row: ConfigMachineStateRow | undefined;

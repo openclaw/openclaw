@@ -226,6 +226,7 @@ describe("listGatewayMethods", () => {
       "sessions.storage.run",
       "plugins.reload",
       "claws.packages.remove",
+      "claws.removalJournal",
       "canvas.document.preview",
       "computer.status",
       "computer.invoke",
@@ -311,6 +312,7 @@ describe("listGatewayMethods", () => {
       "sessions.storage.run",
       "plugins.reload",
       "claws.packages.remove",
+      "claws.removalJournal",
       "canvas.document.preview",
       "computer.status",
       "computer.invoke",
@@ -427,7 +429,14 @@ describe("listGatewayMethods", () => {
   it("classifies cron mutations as control-plane writes", () => {
     const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
 
-    for (const method of ["cron.add", "cron.update", "cron.remove", "cron.run", "claws.monitors"]) {
+    for (const method of [
+      "cron.add",
+      "cron.update",
+      "cron.remove",
+      "cron.run",
+      "claws.monitors",
+      "claws.removalJournal",
+    ]) {
       expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
         name: method,
         scope: "operator.admin",
@@ -524,6 +533,7 @@ describe("listGatewayMethods", () => {
       "sessions.storage.run",
       "plugins.reload",
       "claws.packages.remove",
+      "claws.removalJournal",
       "canvas.document.preview",
       "computer.status",
       "computer.invoke",

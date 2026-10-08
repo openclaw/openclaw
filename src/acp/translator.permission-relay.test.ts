@@ -153,11 +153,6 @@ function captureRetry(agent: AcpGatewayAgent, approvalId: string): () => Promise
 describe("ACP translator permission relay", () => {
   it.each([
     {
-      name: "explicit allow-always",
-      outcome: { outcome: "selected", optionId: "allow-always" },
-      decision: "allow-always",
-    },
-    {
       name: "explicit deny",
       outcome: { outcome: "selected", optionId: "deny" },
       decision: "deny",

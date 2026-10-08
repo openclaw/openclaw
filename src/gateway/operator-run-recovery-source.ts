@@ -11,10 +11,6 @@ import type { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
-import type {
-  OperatorRunRecoverySnapshot,
-  RestartRecoveryOperatorSource,
-} from "./operator-run-recovery.types.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 
 const MAX_RECOVERY_SOURCE_BYTES = 65_536;
@@ -71,6 +67,12 @@ const sourceSchema = z.strictObject({
   snapshot: snapshotSchema,
 });
 
+/** Original authenticated basis, not an executable grant or a transport credential. */
+export type OperatorRunRecoverySnapshot = z.infer<typeof snapshotSchema>;
+
+/** Private input custody; copied attribution or another session cannot authorize recovery. */
+export type RestartRecoveryOperatorSource = z.infer<typeof sourceSchema>;
+
 export function decodeGatewayOperatorRecoverySource(value: unknown): RestartRecoveryOperatorSource {
   const json = JSON.stringify(value);
   if (!json || Buffer.byteLength(json, "utf8") > MAX_RECOVERY_SOURCE_BYTES) {
@@ -86,7 +88,10 @@ export function decodeGatewayOperatorRecoverySource(value: unknown): RestartReco
 /** Capture only handshake-attested input; internal callers cannot manufacture a durable source. */
 export function captureGatewayOperatorRecoverySnapshot(params: {
   client: GatewayClient;
-  authority: AdmittedRunOperatorAuthority;
+  authority: Pick<
+    AdmittedRunOperatorAuthority,
+    "profileId" | "scopes" | "gatewayAccessGrant" | "assertCurrent"
+  >;
   modelPolicy: PreparedOperatorModelPolicy | undefined;
   identity: Awaited<ReturnType<typeof prepareUserProfileIdentity>>;
   config: OpenClawConfig;

@@ -34,6 +34,10 @@ lock-wait budgets, schemas, stored data, and update behavior are unchanged.
 
 The admitted catalog includes index names and trigger definitions alongside tables.
 Canonical session validation consumes these definitions without another catalog scan.
+Canonical index admission shares the schema contract reader's batched metadata snapshot
+instead of querying each table and index separately. Shadowed PRAGMA names retain
+native inspection, and authorization, drift detection, transactional repair, and
+integrity checks remain unchanged.
 First-use schema owners skip additive DDL only when all their tables and indexes
 are present in the current facts. Foreign schema changes, local DDL, rollback, and
 connection replacement invalidate those facts through the same connection owner;
@@ -49,6 +53,14 @@ discard their facts when that snapshot ends.
 Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent, so warm writes preserve schema facts for that handle and its local siblings. First use after rollback or a foreign schema change still creates missing storage through normal write admission. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
 
 The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths stop warm retention and drain affected executors after their last borrower settles. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
+
+Creating an agent database at an admitted absent path revokes the previous file's
+retained validation before worker preparation. A recreated file cannot borrow that
+proof even if Linux reuses its inode. Ordinary reopen still reuses live proof,
+and fresh stores keep their canonical certification. Receipt identifiers survive
+worker transfers so alias publication revokes superseded proof while preserving
+acknowledged copies. Later revocation still refuses publication. Schemas, stored
+bytes, and update behavior are unchanged.
 
 Retaining an already-open agent handle holds its lifetime without querying SQLite. Its read or transaction owner refreshes schema facts when consuming data; canonical readiness owns the freshness check before reusing its clean-store decision.
 

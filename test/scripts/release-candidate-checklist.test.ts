@@ -1324,7 +1324,7 @@ describe("release candidate checklist", () => {
       changelog: [
         "# Changelog",
         "",
-        "## 2026.7.1",
+        "## 2026.7.1-beta.3",
         "",
         "### Highlights",
         "",
@@ -1337,6 +1337,13 @@ describe("release candidate checklist", () => {
       repository: "openclaw/openclaw",
       tag: "v2026.7.1-beta.3",
     });
+    expect(() =>
+      validateCandidateReleaseNotes({
+        changelog: "## 2026.7.1\n\n- Cumulative stale notes.",
+        repository: "openclaw/openclaw",
+        tag: "v2026.7.1-beta.3",
+      }),
+    ).toThrow("does not contain ## 2026.7.1-beta.3");
     const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     const validationIndex = source.indexOf(
       "const releaseNotesCheck = validateCandidateReleaseNotes",

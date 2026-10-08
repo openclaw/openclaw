@@ -72,8 +72,8 @@ without `release_gate`. Every selected failure remains blocking, including
 Windows Node failures.
 Complete campaigns (`rerun_group=all`) retain QA Smoke's
 full scenario profile and Control UI performance independently of changed paths.
-Docker seed runs all six lanes in every ordinary manual/release scope:
-`cron-mcp-cleanup`, `fleet-cache`, `mcp-channels`, `mcp-code-mode-gateway`,
+Docker seed runs all five lanes in every ordinary manual/release scope:
+`cron-mcp-cleanup`, `mcp-channels`, `mcp-code-mode-gateway`,
 `published-upgrade-survivor`, and `update-channel-switch`. This includes
 `npm-beta` and `npm-stable` qualification. The survivor uses `legacy-operator-state`
 with `auto-auth`, so the published driver must update
@@ -83,7 +83,11 @@ supports `legacy-operator-state`; historical targets retain `base` with `auto-au
 Missing historical catalogs keep that fallback; malformed or invalid catalogs fail.
 PRs defer the complete survivor to hourly main and Full Release Validation, while
 the other Docker seed lanes and QA Smoke retain their owner maps.
-Ordinary manual/release CI builds the full declaration-complete package. Main and
+Ordinary manual CI builds the full declaration-complete package. Full Release
+Validation's Docker seed child uses the 16-class Blacksmith runner when no release
+runner group is configured and the existing smoke package without removing
+coverage. Hosted outage overrides and retries keep their recovery route, and
+weighted lane admission remains serial. Main and
 selected PRs, including exact-head `release_gate` fallbacks, use the
 existing `ciArtifacts` profile and canonical packer with `--skip-build`, retaining
 the runtime, public SDK declarations, and unchanged tarball integrity check.

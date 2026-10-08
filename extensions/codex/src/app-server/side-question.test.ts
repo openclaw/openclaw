@@ -1101,21 +1101,15 @@ describe("runCodexAppServerSideQuestion", () => {
   );
 
   it("disables hosted search when side-question sender policy removes managed web_search", async () => {
-    createOpenClawCodingToolsMock.mockImplementation((options: { senderId?: string }) =>
-      options.senderId === "restricted-sender"
-        ? []
-        : [
-            {
-              name: "web_search",
-              description: "Search the web",
-              parameters: { type: "object", properties: {}, additionalProperties: true },
-              execute: toolExecuteMock,
-            },
-          ],
-    );
+    createOpenClawCodingToolsMock.mockReturnValue([]);
 
     const { forkConfig } = await runSideQuestionWithManagedWebSearchCall(
-      sideParams({ senderId: "restricted-sender" }),
+      sideParams({
+        senderId: "restricted-sender",
+        cfg: {
+          tools: { toolsBySender: { "id:restricted-sender": { deny: ["web_search"] } } },
+        },
+      }),
       { preserveToolFactory: true },
     );
 

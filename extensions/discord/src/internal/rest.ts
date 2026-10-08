@@ -68,7 +68,22 @@ async function readResponseBodyText(response: Response, idleTimeoutMs: number): 
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Discord REST response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
-  return decodeResponseBody(buffer);
+  if (!buffer.byteLength) {
+    return "";
+  }
+  if (buffer[0] === GZIP_MAGIC[0] && buffer[1] === GZIP_MAGIC[1]) {
+    try {
+      return gunzipSync(buffer, {
+        maxOutputLength: DISCORD_REST_RESPONSE_BODY_MAX_BYTES,
+      }).toString("utf8");
+    } catch (err: unknown) {
+      if (err instanceof RangeError && "code" in err && err.code === "ERR_BUFFER_TOO_LARGE") {
+        throw createResponseBodyOverflowError("decompressed output");
+      }
+      throw err;
+    }
+  }
+  return buffer.toString("utf8");
 }
 
 function coerceResponseBody(raw: string): unknown {
@@ -80,33 +95,6 @@ function coerceResponseBody(raw: string): unknown {
   } catch {
     return raw;
   }
-}
-
-function decodeResponseBody(buffer: Buffer): string {
-  if (!buffer.byteLength) {
-    return "";
-  }
-  if (buffer[0] === GZIP_MAGIC[0] && buffer[1] === GZIP_MAGIC[1]) {
-    try {
-      return gunzipSync(buffer, {
-        maxOutputLength: DISCORD_REST_RESPONSE_BODY_MAX_BYTES,
-      }).toString("utf8");
-    } catch (err: unknown) {
-      if (isZlibMaxOutputLengthError(err)) {
-        throw createResponseBodyOverflowError("decompressed output");
-      }
-      throw err;
-    }
-  }
-  return buffer.toString("utf8");
-}
-
-function isZlibMaxOutputLengthError(err: unknown): boolean {
-  return (
-    err instanceof RangeError &&
-    "code" in err &&
-    (err as { code?: unknown }).code === "ERR_BUFFER_TOO_LARGE"
-  );
 }
 
 export class RequestClient {

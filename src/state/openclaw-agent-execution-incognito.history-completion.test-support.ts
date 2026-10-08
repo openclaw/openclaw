@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { bindCommandHarnessCompletionAssertion } from "../agents/agent-command-restart-recovery.js";
 import { reconcileHarnessCompletionDelivery } from "../agents/agent-harness-completion-delivery.js";
 import { createHarnessCompletionSourceAssertion } from "../agents/agent-harness-completion-recovery.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
@@ -102,6 +103,63 @@ export async function createIncognitoCompletionSource(
 
 export function registerIncognitoCompletionTests(fixture: CompletionFixture) {
   const { authority } = fixture;
+  it.each([true, false])(
+    "binds resumed command completion only with valid source input=%s",
+    async (validInput) => {
+      const { actor } = fixture;
+      const { claim, session, target } = await createIncognitoCompletionSource(
+        fixture,
+        `command-binding-${validInput}`,
+      );
+      expect(session.entry.restartRecoveryDeliveryRunId).not.toBe(claim.sourceRunId);
+      if (!validInput) {
+        const appended = await actor.sessions.transcript(authority, {
+          type: "session.message.append",
+          input: {
+            ...target,
+            fence: { expectedLifecycleRevision: target.lifecycleRevision },
+            message: { role: "user", content: "New human input supersedes the completion" },
+          },
+        });
+        assert(appended.ok);
+      }
+      await withIncognitoSessionActor(actor, async () => {
+        let callerCurrent = true;
+        const binding = Promise.resolve().then(() =>
+          bindCommandHarnessCompletionAssertion({
+            claim,
+            persisted: session.entry,
+            sessionKey: target.sessionKey,
+            storePath: actor.path,
+            opts: {
+              message: "Resume the saved completion",
+              assertSourceCurrent() {
+                if (!callerCurrent) {
+                  throw new Error("command source caller revoked");
+                }
+              },
+            },
+          }),
+        );
+        if (!validInput) {
+          await expect(binding).rejects.toThrow(
+            "Incognito harness completion source is no longer current",
+          );
+          return;
+        }
+        const bound = await binding;
+        assert(bound.source);
+        try {
+          bound.opts.assertSourceCurrent?.();
+          callerCurrent = false;
+          expect(bound.opts.assertSourceCurrent).toThrow("command source caller revoked");
+        } finally {
+          await bound.source.release();
+        }
+      });
+    },
+  );
+
   it("releases an exact completion source only after accepted native work settles", async () => {
     const { actor } = fixture;
     const { claim, anchor } = await createIncognitoCompletionSource(fixture, "source-release");

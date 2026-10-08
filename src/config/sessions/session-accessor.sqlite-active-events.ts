@@ -338,7 +338,6 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
         : executeSqliteQuerySync(
             projection.database.db,
             selectMessagePayload(
-              projection.database,
               selectMessageRows(projection.database, projection.resolved.sessionId, {
                 start: startPosition,
                 endExclusive: lastMessagePosition + 1,

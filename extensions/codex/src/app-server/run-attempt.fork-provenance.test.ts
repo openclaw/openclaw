@@ -1,3 +1,4 @@
+import { symlink } from "node:fs/promises";
 import path from "node:path";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -48,6 +49,10 @@ describe("Codex submitted prompt provenance", () => {
     });
     await recorder.persistApproved();
     params.userTurnTranscriptRecorder = recorder;
+    // The admission owner canonicalizes its locator; the harness may retain an alias.
+    const alias = path.join(tempDir, "database-alias");
+    await symlink(tempDir, alias, process.platform === "win32" ? "junction" : "dir");
+    params.sessionTarget = { ...target, storePath: path.join(alias, "agent.sqlite") };
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
     const run = runCodexAppServerAttempt(params);
     try {

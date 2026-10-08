@@ -263,8 +263,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             params.multi_agent?.enabled !== true &&
             params.tools
           ) {
+            const synchronousTools = new Set(
+              context.tools?.flatMap((tool) => (tool.async === false ? [tool.name] : [])),
+            );
             params.tools = params.tools.map((tool) =>
-              tool.type === "function" ? { ...tool, async: true } : tool,
+              tool.type === "function" && !synchronousTools.has(tool.name)
+                ? { ...tool, async: true }
+                : tool,
             );
           }
           return params;

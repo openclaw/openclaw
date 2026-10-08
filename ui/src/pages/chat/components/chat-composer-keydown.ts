@@ -22,7 +22,11 @@ type ComposerKeyDownDeps = {
   requestUpdate: () => void;
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
-  syncDraftAfterSend: (target: HTMLTextAreaElement | null) => void;
+  submitDraft: (
+    draft: string,
+    event: KeyboardEvent,
+    followUpModeOverride?: ChatFollowUpMode,
+  ) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
   goalComposer: GoalComposerController;
@@ -37,7 +41,7 @@ export function createComposerKeyDownHandler({
   requestUpdate,
   sendShortcut,
   canSubmitDraft,
-  syncDraftAfterSend,
+  submitDraft,
   showAbortableUi,
   alternateFollowUpMode,
   goalComposer,
@@ -72,8 +76,7 @@ export function createComposerKeyDownHandler({
         canSubmitDraft(target.value)
       ) {
         event.preventDefault();
-        commitComposerDraft(props, target.value);
-        void goalComposer.submit(event);
+        submitDraft(target.value, event);
       }
       return;
     }
@@ -165,14 +168,9 @@ export function createComposerKeyDownHandler({
         return;
       }
       event.preventDefault();
-      commitComposerDraft(props, target.value);
-      if (goalComposer.activateDraft(target.value, true)) {
-        return;
-      }
       const followUpModeOverride =
         (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
-      void props.onSend(followUpModeOverride, event);
-      syncDraftAfterSend(target);
+      submitDraft(target.value, event, followUpModeOverride);
     }
   };
 }

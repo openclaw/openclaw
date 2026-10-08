@@ -682,7 +682,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const bunVitestFiles = [
         "packages/markdown-core/src/render-aware-chunking.test.ts",
         workerMemoryTest,
-        "src/agents/code-mode-node.test.ts",
         vitestBunTarget,
         nativeCompilerTest,
         compilerGraphTest,

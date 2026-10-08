@@ -70,7 +70,10 @@ import type { IMessageApprovalGatewayRuntime } from "../approval-gateway-types.j
 import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
-import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
+import {
+  buildIMessageApprovalConversationKeyForInbound,
+  resolveIMessageApprovalControlActor,
+} from "../approval-target-keys.js";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { resolveIMessageStartupRowidWatermark } from "../chat-db.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
@@ -1131,21 +1134,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
   };
 
   const resolveApprovalControlConversation = (message: IMessagePayload) => {
-    const sender = normalizeIMessageHandle((message.sender ?? "").trim());
-    const destination = normalizeIMessageHandle((message.destination_caller_id ?? "").trim());
-    const receivedSenderIsLocalFallback =
-      message.is_from_me !== true && Boolean(sender) && sender === destination;
-    const actorHandle =
-      (receivedSenderIsLocalFallback ? "" : sender) ||
-      (message.is_from_me === true ? destination : "");
+    const actorHandle = resolveIMessageApprovalControlActor(message);
     return actorHandle
-      ? buildIMessageApprovalConversationKeyForInbound({
-          chatGuid: message.chat_guid,
-          chatIdentifier: message.chat_identifier,
-          chatId: message.chat_id,
-          isGroup: message.is_group,
-          actorHandle,
-        })
+      ? buildIMessageApprovalConversationKeyForInbound(message, actorHandle)
       : null;
   };
 

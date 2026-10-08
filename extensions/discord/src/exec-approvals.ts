@@ -14,8 +14,8 @@ import { resolveDiscordAccount } from "./accounts.js";
 import { resolveDiscordCommandOwnerEntries } from "./command-owners.js";
 import { parseDiscordTarget } from "./target-parsing.js";
 
-function normalizeDiscordApproverId(value: string): string | undefined {
-  const trimmed = value.trim();
+function normalizeDiscordApproverId(value: unknown): string | undefined {
+  const trimmed = String(value).trim();
   if (!trimmed) {
     return undefined;
   }
@@ -30,15 +30,6 @@ function normalizeDiscordApproverId(value: string): string | undefined {
   }
 }
 
-function resolveDiscordOwnerApprovers(cfg: OpenClawConfig): string[] {
-  // Global owner targets have a nested normalization pass; explicit approvers do not.
-  // Preserve that shipped distinction for targets such as discord:<@123>.
-  return resolveApprovalApprovers({
-    explicit: resolveDiscordCommandOwnerEntries(cfg),
-    normalizeApprover: (value) => normalizeDiscordApproverId(String(value)),
-  });
-}
-
 export function getDiscordExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -48,8 +39,12 @@ export function getDiscordExecApprovalApprovers(params: {
     explicit:
       params.configOverride?.approvers ??
       resolveDiscordAccount(params).config.execApprovals?.approvers ??
-      resolveDiscordOwnerApprovers(params.cfg),
-    normalizeApprover: (value) => normalizeDiscordApproverId(String(value)),
+      // Global owners need the shipped nested pass for targets such as discord:<@123>.
+      resolveApprovalApprovers({
+        explicit: resolveDiscordCommandOwnerEntries(params.cfg),
+        normalizeApprover: normalizeDiscordApproverId,
+      }),
+    normalizeApprover: normalizeDiscordApproverId,
   });
 }
 

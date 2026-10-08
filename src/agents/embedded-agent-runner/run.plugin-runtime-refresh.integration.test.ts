@@ -40,6 +40,80 @@ afterEach(async () => {
 });
 
 describe("plugin runtime refresh admission", () => {
+  it("retains settled work from an overloaded attempt through a later plugin refresh", async () => {
+    const originalPrompt = "write the receipt, reload the plugin, then report the receipt ID";
+    const originalMessage = { role: "user" as const, content: originalPrompt, timestamp: 1 };
+    const settledMessages: EmbeddedRunAttemptResult["messagesSnapshot"] = [
+      buildEmbeddedRunnerAssistant({
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "receipt-write",
+            name: "write",
+            arguments: { path: "receipt.txt", content: "AMBER-731" },
+          },
+        ],
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "receipt-write",
+        toolName: "write",
+        content: [{ type: "text", text: "Created receipt AMBER-731." }],
+        isError: false,
+        timestamp: 2,
+      },
+    ];
+    const refreshedMessage = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "Plugin refreshed; receipt verification remains." }],
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        messagesSnapshot: settledMessages,
+        toolMetas: [{ toolName: "write", toolCallId: "receipt-write", isError: false }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: Object.assign(new Error("server_overloaded: server is overloaded"), {
+            status: 503,
+            code: "server_overloaded",
+          }),
+        },
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      expect(params.continuation).toEqual({ prompt: originalPrompt, messages: settledMessages });
+      params.registerPluginRuntimeRefreshConsumer?.(() => true);
+      expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+      return makeAttemptResult({
+        assistantTexts: [],
+        pluginRuntimeRefreshMessages: [originalMessage, refreshedMessage],
+        toolMetas: [{ toolName: "plugins", isError: false }],
+      });
+    });
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      expect(params.pluginRuntimeRefreshMessages).toEqual([
+        ...settledMessages,
+        originalMessage,
+        refreshedMessage,
+      ]);
+      expect(params.continuation).toBeUndefined();
+      return makeAttemptResult({ assistantTexts: ["Receipt AMBER-731 verified."] });
+    });
+    const result = await runEmbeddedAgent({
+      ...createOverflowRunParams(state),
+      prompt: originalPrompt,
+      agentHarnessId: "openclaw",
+      provider: "fixture-provider",
+      model: "fixture-model",
+      sessionKey: undefined,
+    });
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+  });
+
   it("preserves same-route text delivery dedupe across refresh", async () => {
     const text = "The requested result was delivered by the original plugin generation.";
     const sentTarget = {

@@ -126,6 +126,10 @@ export function createAgentHarnessHostCapabilities(params: {
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
   const capabilityAbortController = new AbortController();
+  const bindAbortSignal = (signal: AbortSignal | undefined) =>
+    signal
+      ? AbortSignal.any([signal, capabilityAbortController.signal])
+      : capabilityAbortController.signal;
   const inheritedCaller = getGatewayToolCallerIdentity();
   const sourceCaller =
     inheritedCaller?.operationalRunInstance === operationalRunInstance
@@ -212,9 +216,7 @@ export function createAgentHarnessHostCapabilities(params: {
           },
           runId: attempt.runId,
           config,
-          abortSignal: attempt.abortSignal
-            ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
-            : capabilityAbortController.signal,
+          abortSignal: bindAbortSignal(attempt.abortSignal),
           assertCurrent: () => {
             assertActive();
             if (
@@ -372,9 +374,7 @@ export function createAgentHarnessHostCapabilities(params: {
     observeResult: (result: unknown) => void,
   ) => {
     assertActive();
-    const boundAbortSignal = attempt.abortSignal
-      ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
-      : capabilityAbortController.signal;
+    const boundAbortSignal = bindAbortSignal(attempt.abortSignal);
     const bindingHookContext = hookContextForOperation(options);
     return tools
       .map((tool) => bindAgentToolSourceExecutionGuard(tool, assertActive))
@@ -503,9 +503,7 @@ export function createAgentHarnessHostCapabilities(params: {
           undefined,
           {
             assertCurrent: assertActive,
-            signal: attemptSignal
-              ? AbortSignal.any([attemptSignal, capabilityAbortController.signal])
-              : capabilityAbortController.signal,
+            signal: bindAbortSignal(attemptSignal),
           },
         ),
       );
@@ -663,9 +661,7 @@ export function createAgentHarnessHostCapabilities(params: {
         params.pluginId,
         requiredNodeCommands,
         assertActive,
-        attempt.abortSignal
-          ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
-          : capabilityAbortController.signal,
+        bindAbortSignal(attempt.abortSignal),
       );
       return withPluginRuntimeGatewayRequestScope(
         {

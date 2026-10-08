@@ -6,12 +6,13 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { getUserPreferences, setUserPreferences } from "../state/user-preferences.test-support.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { resolveUserProfileGitHubAttribution } from "../state/user-profile-github-identity.js";
+import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
 import {
   linkEmail,
   setUserProfileRole,
   syncGitHubIdentity,
 } from "../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail, getUserProfileListItem } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
 import {

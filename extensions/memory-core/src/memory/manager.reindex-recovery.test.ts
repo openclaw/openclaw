@@ -504,7 +504,14 @@ describe("memory manager reindex recovery", () => {
         await Promise.race([queued.promise, sync]);
         expect(publishedDb.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
         reservation?.release();
-        await reservation?.done;
+        if (scenario === "revoke") {
+          // Revocation also fences the transcript lock holding the published writer.
+          await expect(reservation?.done).rejects.toThrow(
+            /^Agent database execution admission is closed$/,
+          );
+        } else {
+          await reservation?.done;
+        }
         await expect(sync).rejects.toThrow(
           scenario === "revoke"
             ? /^Agent database execution admission is closed$/
@@ -520,8 +527,7 @@ describe("memory manager reindex recovery", () => {
         ).toEqual([]);
       } finally {
         reservation?.release();
-        await reservation?.done;
-        await sync.catch(() => undefined);
+        await Promise.allSettled([reservation?.done, sync]);
       }
     },
   );

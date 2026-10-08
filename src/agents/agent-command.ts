@@ -30,7 +30,6 @@ import { runLocalAgentCommand } from "./agent-command-local.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   bindCommandHarnessCompletionAssertion,
-  prepareCommandHarnessCompletionSource,
   resolveCommandRecoveryOptions,
   shouldPersistRestartRecoveryContextClaim,
 } from "./agent-command-restart-recovery.js";
@@ -156,7 +155,7 @@ async function agentCommandInternal(
   let releaseForeground: (() => void) | undefined;
   let maintenanceRequest: SessionMaintenanceRequest | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
-  let completionSource: Awaited<ReturnType<typeof prepareCommandHarnessCompletionSource>>;
+  let completionSource: Awaited<ReturnType<typeof bindCommandHarnessCompletionAssertion>>["source"];
   let commandError: unknown;
   try {
     const operatorSession =
@@ -357,17 +356,15 @@ async function agentCommandInternal(
         // cancellation invalidates the task during the awaited session write.
         sessionEntry = persisted;
         trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
-        opts = bindCommandHarnessCompletionAssertion({
+        const completion = await bindCommandHarnessCompletionAssertion({
           claim: guardedHarnessCompletion,
           persisted,
           sessionKey,
           storePath,
           opts,
         });
-        if (guardedHarnessCompletion) {
-          completionSource = await prepareCommandHarnessCompletionSource(opts);
-          opts = completionSource?.opts ?? opts;
-        }
+        opts = completion.opts;
+        completionSource = completion.source;
         if (operatorSession && (!persisted || persisted.sessionId !== sessionId)) {
           throw createSessionWorkStartChangedError(sessionKey);
         }

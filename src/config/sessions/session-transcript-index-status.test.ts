@@ -1,12 +1,15 @@
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import {
+  admitSqliteSchema,
+  registerSqliteSchemaMutationListener,
+} from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { drainTranscriptIndexStatus } from "./session-transcript-index-maintenance.js";
@@ -14,6 +17,7 @@ import {
   isSessionTranscriptIndexStatusClean,
   maintainSessionTranscriptIndexStatus,
 } from "./session-transcript-index-status.worker.js";
+import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
@@ -76,6 +80,18 @@ function settle(db: DatabaseSync) {
   throw new Error("Bounded projection maintenance did not finish");
 }
 
+it("does not reconcile an empty transcript because of orphaned or another session's projection", () => {
+  const db = createDatabase();
+  seedCleanSession(db, "empty");
+  seedCleanSession(db, "other");
+  db.exec(`DELETE FROM transcript_events WHERE session_id = 'empty';
+    UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = 'empty';
+    UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = 'other';`);
+  expect(sessionTranscriptIndexNeedsReconcile(db, "empty")).toBe(false);
+  expect(sessionTranscriptIndexNeedsReconcile(db, "missing")).toBe(false);
+  expect(sessionTranscriptIndexNeedsReconcile(db, "other")).toBe(true);
+});
+
 it("bounds admission, detects writes behind its cursor, and stops reading clean source tables", () => {
   const db = createDatabase();
   transaction(db, () => {
@@ -83,7 +99,10 @@ it("bounds admission, detects writes behind its cursor, and stops reading clean 
       seedCleanSession(db, `z-${String(index).padStart(3, "0")}`);
     }
   });
+  const mainSchemaMutation = vi.fn();
+  registerSqliteSchemaMutationListener(db, mainSchemaMutation);
   expect(maintain(db)).toEqual({ sessionIds: [], hasMore: true, traversalComplete: false });
+  expect(mainSchemaMutation).not.toHaveBeenCalled();
   transaction(db, () => {
     seedCleanSession(db, "a-behind-cursor");
     db.prepare(
@@ -128,6 +147,18 @@ it("bounds admission, detects writes behind its cursor, and stops reading clean 
   const pending = settle(db);
   expect(pending).toMatchObject({ hasMore: false, traversalComplete: true });
   expect(pending.sessionIds).toHaveLength(300);
+});
+
+it("revokes main admission when an existing transcript tracking trigger differs", () => {
+  const db = createDatabase();
+  db.exec(`CREATE TEMP TRIGGER openclaw_session_windows_projection_insert
+    AFTER INSERT ON main.session_windows BEGIN SELECT 1; END`);
+  const mainSchemaMutation = vi.fn();
+  registerSqliteSchemaMutationListener(db, mainSchemaMutation);
+  expect(settle(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
+  expect(mainSchemaMutation).toHaveBeenCalled();
+  seedCleanSession(db, "after-repair");
+  expect(settle(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
 });
 
 it("rolls back admission and pending facts with raw writes, including nested savepoints", () => {

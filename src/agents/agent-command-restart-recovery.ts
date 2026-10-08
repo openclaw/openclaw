@@ -32,32 +32,6 @@ import {
 } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeAttemptToolMediaPayloads } from "./embedded-agent-runner/run/tool-media-payloads.js";
 
-/** Retain command custody while nested consumers prepare their own exact read fences. */
-export async function prepareCommandHarnessCompletionSource(opts: AgentCommandOpts) {
-  const source = opts.assertSourceCurrent;
-  const prepared = await prepareSessionSourceScope(source);
-  if (!source || !prepared) {
-    return undefined;
-  }
-  const assertion = bindPreparedSessionSourceAssertion(source, prepared);
-  const release = () => assertion.release();
-  try {
-    assertion();
-    return {
-      opts: {
-        ...opts,
-        assertSourceCurrent: Object.assign(assertion, {
-          recoveryReference: source.recoveryReference,
-        }),
-      },
-      release,
-    };
-  } catch (error) {
-    await releaseSessionSourceAuthorities([{ release }], [error]);
-    throw error;
-  }
-}
-
 /** Restore the exact host-owned delivery constraints before starting a recovery turn. */
 export function resolveCommandRecoveryOptions(params: {
   opts: AgentCommandOpts;
@@ -321,9 +295,24 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
 export function shouldPersistCurrentRunSessionCleanup(
   current: SessionEntry | undefined,
   sessionId: string,
+  runId: string,
 ): boolean {
+  if (!current || current.sessionId !== sessionId) {
+    return false;
+  }
+  if (current.abortedLastRun !== true) {
+    return true;
+  }
+  // Stop is terminal, while a restart keeps custody. Only the settled command
+  // may retire its own source claim after all execution and delivery owners leave.
   return (
-    current !== undefined && current.sessionId === sessionId && current.abortedLastRun !== true
+    current.status === "killed" &&
+    current.lastRunId === runId &&
+    current.restartRecoveryDeliveryRunId === runId &&
+    current.lifecycleRunId === undefined &&
+    !current.mainRestartRecovery &&
+    !current.restartRecoveryRuns?.length &&
+    !current.pendingFinalDelivery
   );
 }
 
@@ -482,13 +471,13 @@ export function prepareCommandHarnessCompletionRecovery(params: {
 }
 
 /** Called after the caller has recorded the committed entry for failure cleanup. */
-export function bindCommandHarnessCompletionAssertion(params: {
+export async function bindCommandHarnessCompletionAssertion(params: {
   claim?: HarnessCompletionRecovery;
   persisted?: SessionEntry;
   sessionKey: string;
   storePath?: string;
   opts: AgentCommandOpts;
-}): AgentCommandOpts {
+}): Promise<{ opts: AgentCommandOpts; source?: { release(): Promise<void> } }> {
   const { claim, persisted, sessionKey, storePath, opts } = params;
   if (
     claim &&
@@ -499,7 +488,7 @@ export function bindCommandHarnessCompletionAssertion(params: {
     throw createSessionWorkStartChangedError(sessionKey);
   }
   if (!claim || !storePath) {
-    return opts;
+    return { opts };
   }
   const guarded = {
     ...opts,
@@ -512,6 +501,26 @@ export function bindCommandHarnessCompletionAssertion(params: {
       { recoveryReference: opts.assertSourceCurrent?.recoveryReference },
     ),
   };
-  guarded.assertSourceCurrent();
-  return guarded;
+  // A resumed run needs its exact source prepared before the first assertion.
+  const prepared = await prepareSessionSourceScope(guarded.assertSourceCurrent);
+  if (!prepared) {
+    guarded.assertSourceCurrent();
+    return { opts: guarded };
+  }
+  const source = bindPreparedSessionSourceAssertion(guarded.assertSourceCurrent, prepared);
+  try {
+    source();
+    return {
+      opts: {
+        ...guarded,
+        assertSourceCurrent: Object.assign(source, {
+          recoveryReference: guarded.assertSourceCurrent.recoveryReference,
+        }),
+      },
+      source,
+    };
+  } catch (error) {
+    await releaseSessionSourceAuthorities([source], [error]);
+    throw error;
+  }
 }

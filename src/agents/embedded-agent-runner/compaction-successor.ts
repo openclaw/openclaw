@@ -12,7 +12,6 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import {
-  readSessionEntryInWorker,
   readSessionEntryReadOnlyInWorker,
   readSessionEntrySummariesInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
@@ -207,7 +206,7 @@ export async function acceptCompactionSuccessor(params: {
   });
   params.assertActive();
   const previousEntry = requireCompactionWriterEntry(
-    await readSessionEntryInWorker(
+    await readSessionEntryReadOnlyInWorker(
       { ...currentTarget, readConsistency: "latest" },
       params.assertActive,
     ),

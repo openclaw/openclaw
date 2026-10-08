@@ -80,6 +80,7 @@ type ManagedWorktreeFixtureParams = {
   ownerKind?: ManagedWorktreeOwnerKind;
   ownerId?: string;
   provisionedPaths?: readonly string[];
+  repoFingerprint?: string;
   repoRoot: string;
   stateDir: string;
 };
@@ -87,12 +88,13 @@ type ManagedWorktreeFixtureParams = {
 export async function materializeManagedWorktreeFixtures(
   params: Omit<ManagedWorktreeFixtureParams, "name"> & { names: string[] },
 ): Promise<ManagedWorktreeRecord[]> {
+  const repoFingerprint = params.repoFingerprint ?? "downstream-fixture";
   const records = params.names.map((name): ManagedWorktreeRecord => ({
     id: `fixture-${name}`,
     name,
-    repoFingerprint: "downstream-fixture",
+    repoFingerprint,
     repoRoot: params.repoRoot,
-    path: path.join(params.stateDir, "worktrees", "downstream-fixture", name),
+    path: path.join(params.stateDir, "worktrees", repoFingerprint, name),
     branch: `openclaw/${name}`,
     baseRef: "HEAD",
     ownerKind: params.ownerKind ?? "manual",

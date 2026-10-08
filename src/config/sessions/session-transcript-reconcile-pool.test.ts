@@ -12,6 +12,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -85,6 +86,8 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
       },
     );
     await waitForSessionTranscriptIndexReconcile(options);
+    // Seeding may retain a worker writer; this fixture starts with only its native handle.
+    await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
     const database = openOpenClawAgentDatabase(options);
     const nativeLeases = readAgentDatabaseLeaseIds(database.path, env);
     expect(nativeLeases).toHaveLength(1);
@@ -161,6 +164,7 @@ it.each(["complete", "native-exit"] as const)(
           },
         );
         await waitForSessionTranscriptIndexReconcile(options);
+        await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
         const database = openOpenClawAgentDatabase(options);
         const baseline = readAgentDatabaseLeaseIds(database.path, env);
         expect(baseline).toHaveLength(1);
@@ -252,25 +256,24 @@ it.each(["complete", "native-exit"] as const)(
         activeTasks: 0,
         pendingTasks: 0,
       });
-      const retainedCanonicalLeases: string[] = [];
       for (const options of targets.slice(0, 2)) {
         const database = openOpenClawAgentDatabase(options);
         const actual = readAgentDatabaseLeaseIds(database.path, env);
-        const canonicalId = canonical.leases.get(database.path);
+        const canonicalId = expectDefined(canonical.leases.get(database.path), "canonical lease");
         const plannerId = plannerLeases.get(database.path);
         expect(canonicalId).toEqual(expect.any(String));
         expect(plannerId).toEqual(expect.any(String));
         expect(canonicalId).not.toBe(plannerId);
         expect(actual).not.toContain(plannerId);
-        const retained = actual.filter((id) => id === canonicalId);
-        retainedCanonicalLeases.push(...retained);
-        expect(actual).toEqual([...nativeLeases.get(database.path)!, ...retained].toSorted());
+        expect(actual).toEqual(
+          [...nativeLeases.get(database.path)!, canonicalId].toSorted((left, right) =>
+            left.localeCompare(right),
+          ),
+        );
         expect(
           database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
         ).toEqual([{ message_id: options.agentId, text: options.agentId }]);
       }
-      // Closing reconciliation releases planner leases while both canonical executors stay idle.
-      expect(retainedCanonicalLeases).toHaveLength(2);
       const late = vi.fn(async () => undefined);
       for (const captured of [generation, duringClose]) {
         await expect(
@@ -341,6 +344,7 @@ it.each(["complete", "native-exit"] as const)(
         await waitForSessionTranscriptIndexReconcile(options);
       }
       await closeSessionTranscriptReconcileWorkerPool();
+      await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
       const database = openOpenClawAgentDatabase(options);
       const nativeLeases = readAgentDatabaseLeaseIds(database.path, env);
       expect(nativeLeases).toHaveLength(1);

@@ -102,7 +102,10 @@ export async function executeFollowupTurn(params: {
   // Queued turns are never heartbeats; heartbeat runs never supply the drain callback.
   const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
-  const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
+  const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
+  const progressAllowed = () =>
+    deliveryAllowed() &&
+    (sourceOpts?.progressRequiresReply !== true || terminalReplyExpectation === "required");
   const verboseRead =
     turn.session.kind === "session" && turn.session.storePath
       ? captureSessionEntryReadScope({
@@ -338,10 +341,10 @@ export async function executeFollowupTurn(params: {
     onReasoningEnd: wrapVisibility(sourceOpts?.onReasoningEnd),
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
-        if (!progressAllowed()) {
+        const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
+        if (!deliveryAllowed() || (!requiresDurableToolResult && !progressAllowed())) {
           return false;
         }
-        const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
         if (sourceOpts?.suppressToolProgressMessages && !requiresDurableToolResult) {
           return false;
         }

@@ -33,7 +33,6 @@ import type {
 } from "./session-accessor.sqlite-replacement-types.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
 import type { SessionEntry } from "./types.js";
 
@@ -57,12 +56,19 @@ export function prepareSessionEntryReplacementPublication(
       [...result.current.keys()],
       "list",
       undefined,
-      { includeBoardPresence: true },
+      { includeBoardPresence: true, includeMembership: true },
     );
     // Read the final persisted bytes and side tables after assignment, alias moves and maintenance.
     const committed = readCommitted(key);
     if (!committed) {
       throw new Error(`Session publication lost its committed metadata: ${key}`);
+    }
+    const memberIds: unknown = JSON.parse(committed.row.member_ids_json ?? "null");
+    if (
+      !Array.isArray(memberIds) ||
+      !memberIds.every((id): id is string => typeof id === "string")
+    ) {
+      throw new Error(`Session publication lost its committed membership: ${key}`);
     }
     current.set(key, freezeJsonSnapshot(committed.entry));
     const { entry } = committed;
@@ -74,7 +80,7 @@ export function prepareSessionEntryReplacementPublication(
           isInternalSessionEffectsKey(key)
             ? null
             : (normalizeOptionalString(entry.category) ?? null),
-          listSessionMembersInDatabase(database, key).map(({ identityId }) => identityId),
+          memberIds,
           {
             ...(entry.participants ? { participants: entry.participants } : {}),
             ...(entry.participantCount === undefined
@@ -99,6 +105,16 @@ export function prepareSessionEntryReplacementPublication(
         ? [key]
         : [],
     ),
+    // Committed rows that keep their incarnation; generation readers need not wait for them.
+    generationUnchangedKeys: [...current].flatMap(([key, entry]) => {
+      const previous = result.previous.get(key);
+      return !invalidated.has(key) &&
+        previous !== undefined &&
+        previous.sessionId === entry.sessionId &&
+        previous.lifecycleRevision === entry.lifecycleRevision
+        ? [key]
+        : [];
+    }),
     previous: new Map(
       [...result.previous].map(([key, entry]) => [
         key,

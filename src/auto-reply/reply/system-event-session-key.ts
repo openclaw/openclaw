@@ -1,3 +1,4 @@
+import type { ExecRequestOwner } from "../../infra/exec-request-context.js";
 import type { SystemEvent } from "../../infra/system-events.js";
 
 const REPLY_SYSTEM_EVENT_CONTEXT = Symbol("openclaw.reply.systemEventContext");
@@ -7,6 +8,9 @@ type ReplySystemEventContext = {
   events?: readonly SystemEvent[];
   /** Captured occurrences whose delivery owner, not prompt admission, settles them. */
   deferredEventIds?: readonly string[];
+  execRequestOwners?: readonly ExecRequestOwner[];
+  /** Records the exact prompt-admitted occurrences for the deferred settlement owner. */
+  onEventsAdmitted?: (events: readonly SystemEvent[]) => void;
 };
 
 /** Carry the queue and its optional prepared selection through internal option spreads. */
