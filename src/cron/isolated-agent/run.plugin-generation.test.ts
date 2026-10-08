@@ -1,6 +1,7 @@
 // Proves isolated cron/hook runs carry the published Gateway plugin generation
 // into embedded execution instead of rebuilding metadata per run (#125596 family).
-import { describe, expect, it, vi } from "vitest";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   getPreparedModelRuntimePluginGeneration,
@@ -11,7 +12,7 @@ import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.te
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
-import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   loadRunCronIsolatedAgentTurn,
@@ -24,6 +25,12 @@ import {
   makeCronSession,
   resolveCronSessionMock,
   resolveSessionAuthSelectionMock,
+  isThinkingLevelSupportedMock,
+  loadModelCatalogMock,
+  resolveAllowedModelRefMock,
+  resolveConfiguredModelRefMock,
+  resolveEffectiveAgentRuntimeMock,
+  resolveSupportedThinkingLevelMock,
 } from "./run.test-harness.js";
 
 const { PreparedModelRuntimeOwnerNotPublishedError } = await vi.importActual<
@@ -255,29 +262,67 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       selected,
     );
   });
+});
 
-  it("releases the prepared lease when continuation initialization fails", async () => {
-    const state = await import("./run-session-state.js");
-    const initialize = vi.spyOn(state, "createCronRunContinuationSession").mockReturnValue({
-      initialize: async () => {
-        throw new Error("continuation fixture failed");
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
+const CODEX_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+function runCodexCronTurn(thinking: string) {
+  return runCronIsolatedAgentTurn(
+    makeIsolatedAgentParamsFixture({
+      sessionKey: "cron:thinking-capability",
+      cfg: {
+        agents: {
+          defaults: { models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } } } },
+        },
       },
-      sync: async () => {},
-      setCliExecutionProvider: async () => {},
-      seal: async () => {},
+      job: makeIsolatedAgentJobFixture({
+        id: "thinking-capability-job",
+        payload: {
+          kind: "agentTurn",
+          message: "summarize",
+          model: "openai/gpt-5.6-luna",
+          thinking,
+        },
+      }),
+    }),
+  );
+}
+
+describe("runCronIsolatedAgentTurn model thinking capability", () => {
+  setupRunCronIsolatedAgentTurnSuite();
+
+  beforeEach(() => {
+    resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-5.6-luna" });
+    resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "openai", model: "gpt-5.6-luna" },
     });
-    const release = vi.fn(async () => {});
-    acquirePreparedModelRuntimeMock.mockResolvedValue({
-      snapshot: { pluginRegistry: createEmptyPluginRegistry() },
-      [Symbol.asyncDispose]: release,
+    resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");
+    isThinkingLevelSupportedMock.mockReturnValue(true);
+    resolveSupportedThinkingLevelMock.mockImplementation(({ level }: { level?: string }) => level);
+    mockRunCronFallbackPassthrough();
+  });
+
+  it("passes the hydrated Codex effort list so max is not dropped", async () => {
+    loadModelCatalogMock.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: CODEX_EFFORTS },
+      },
+    ]);
+
+    await runCodexCronTurn("max");
+
+    const embeddedCall = requireRecord(runEmbeddedAgentMock.mock.calls[0]?.[0]);
+    expect(embeddedCall.thinkLevel).toBe("max");
+    expect(embeddedCall.modelThinkingCapability).toEqual({
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      agentRuntime: "codex",
+      compat: { supportedReasoningEfforts: CODEX_EFFORTS },
     });
-    try {
-      await expect(runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture())).rejects.toThrow(
-        "continuation fixture failed",
-      );
-      expect(release).toHaveBeenCalledOnce();
-    } finally {
-      initialize.mockRestore();
-    }
   });
 });

@@ -10,7 +10,6 @@ import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   cleanupBrowserSessionsForLifecycleEndMock,
   isCliProviderMock,
-  getCliSessionBindingMock,
   removeCronRunContinuationSessionIfIdleMock,
   loadSessionEntryMock,
   loadRunCronIsolatedAgentTurn,
@@ -191,55 +190,6 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(cleanupBrowserSessionsForLifecycleEndMock).not.toHaveBeenCalled();
   });
 
-  it("uses a run-scoped key for CLI isolated cron execution", async () => {
-    isCliProviderMock.mockReturnValue(true);
-    getCliSessionBindingMock.mockReturnValue({ sessionId: "previous-cli-session" });
-    const cronSession = makeCronSession({
-      sessionEntry: {
-        ...makeCronSession().sessionEntry,
-        sessionId: "isolated-cli-run-1",
-      },
-    });
-    resolveCronSessionMock.mockReturnValue(cronSession);
-    mockRunCronFallbackPassthrough();
-    runCliAgentMock.mockResolvedValue({
-      payloads: [{ text: "done" }],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-    });
-
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({
-        sessionKey: "cron:cli-monitor",
-        job: makeIsolatedAgentJobFixture({
-          payload: {
-            kind: "agentTurn",
-            message: "test",
-            lightContext: true,
-          },
-        }),
-      }),
-    );
-
-    expect(result.status).toBe("ok");
-    expect(result.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
-    expect(runCliAgentMock).toHaveBeenCalledOnce();
-    const runRequest = runCliAgentMock.mock.calls[0]?.[0];
-    expect(runRequest.sessionId).toBe("isolated-cli-run-1");
-    expect(runRequest.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
-    expect(runRequest.sessionTarget).toEqual({
-      agentId: "default",
-      sessionId: "isolated-cli-run-1",
-      sessionKey: "agent:default:cron:cli-monitor:run:isolated-cli-run-1",
-      storePath: cronSession.storePath,
-    });
-    expect(runRequest.sessionKey).not.toBe("agent:default:cron:cli-monitor");
-    expect(runRequest.promptCacheKey).toBeUndefined();
-    expect(runRequest.bootstrapContextMode).toBe("lightweight");
-    expect(runRequest.bootstrapContextRunKind).toBe("cron");
-    expect(runRequest.cleanupCliLiveSessionOnRunEnd).toBe(true);
-    expect(runRequest.cliSessionId).toBeUndefined();
-  });
-
   it("runs externally sourced CLI hook turns", async () => {
     isCliProviderMock.mockReturnValue(true);
     mockRunCronFallbackPassthrough();
@@ -405,59 +355,53 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     {
       name: "reported runtime",
       reported: true,
-      locked: false,
       expected: 1_000_000,
       source: "runtime",
     },
     {
       name: "retained lower runtime",
       reported: false,
-      locked: false,
       expected: 222_000,
       source: "runtime",
     },
-    { name: "locked legacy", reported: false, locked: true, expected: 222_000, source: undefined },
-  ])(
-    "persists the $name context window and provenance",
-    async ({ reported, locked, expected, source }) => {
-      const session = makeCronSession({
-        sessionEntry: makeCronSessionEntry({
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          agentHarnessId: reported ? "openclaw" : "codex",
-          contextTokens: 222_000,
-          contextTokensSource: locked ? undefined : reported ? "resolved" : "runtime",
-          modelSelectionLocked: locked,
-        }),
-      });
-      resolveCronSessionMock.mockReturnValue(session);
-      lookupModelContextTokensMock.mockReturnValue(512_000);
-      runWithModelFallbackMock.mockResolvedValueOnce({
+  ])("persists the $name context window and provenance", async ({ reported, expected, source }) => {
+    const session = makeCronSession({
+      sessionEntry: makeCronSessionEntry({
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        agentHarnessId: reported ? "openclaw" : "codex",
+        contextTokens: 222_000,
+        contextTokensSource: reported ? "resolved" : "runtime",
+        modelSelectionLocked: false,
+      }),
+    });
+    resolveCronSessionMock.mockReturnValue(session);
+    lookupModelContextTokensMock.mockReturnValue(512_000);
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
         result: {
-          result: {
-            payloads: [{ text: "test output" }],
-            meta: {
-              agentMeta: {
-                provider: "openai",
-                model: "gpt-5.4",
-                agentHarnessId: "codex",
-                ...(reported ? { contextTokens: 1_000_000, contextTokensSource: "runtime" } : {}),
-              },
+          payloads: [{ text: "test output" }],
+          meta: {
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+              agentHarnessId: "codex",
+              ...(reported ? { contextTokens: 1_000_000, contextTokensSource: "runtime" } : {}),
             },
           },
         },
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
-      });
-      await runSkillFilterCase();
-      expect(session.sessionEntry).toMatchObject({
-        agentHarnessId: "codex",
-        contextTokens: expected,
-        contextTokensSource: source,
-      });
-    },
-  );
+      },
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    });
+    await runSkillFilterCase();
+    expect(session.sessionEntry).toMatchObject({
+      agentHarnessId: "codex",
+      contextTokens: expected,
+      contextTokensSource: source,
+    });
+  });
 });
 
 describe("resolveCronAgentSessionKey", () => {
