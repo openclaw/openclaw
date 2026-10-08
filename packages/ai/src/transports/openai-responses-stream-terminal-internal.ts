@@ -158,7 +158,8 @@ export function createResponsesTerminalController(params: {
       }
     }
   };
-  const appendText = (item: ResponseOutputMessage, contentIndex?: number): number | undefined => {
+  const appendText = (item: ResponseOutputMessage, initialIndex?: number): number | undefined => {
+    let contentIndex = initialIndex;
     const text = (Array.isArray(item.content) ? item.content : [])
       .map((part) => {
         const content = part as { type: string; text?: string; refusal?: string };
