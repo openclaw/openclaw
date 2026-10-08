@@ -130,26 +130,6 @@ export function prepareSessionCreateModelSelection(params: {
   };
 }
 
-/** Title preparation and the row commit retain the same caller, model, and account fences. */
-export function createSessionCreateCommitGuard(params: {
-  assertCallerCurrent?: () => void;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  selections: readonly ({ assertCurrent: () => void } | undefined)[];
-  validateSelection: () => ErrorShape | undefined;
-}): () => void {
-  return () => {
-    params.assertCallerCurrent?.();
-    params.operatorAuthority?.assertCurrent();
-    const error = params.validateSelection();
-    if (error) {
-      throw new Error(error.message);
-    }
-    for (const selection of params.selections) {
-      selection?.assertCurrent();
-    }
-  };
-}
-
 /** Assemble the creation lifetime once, including host-only publication intent. */
 export function resolveSessionCreationCommitGuard(
   params: CreateGatewaySessionParams,
@@ -179,23 +159,25 @@ export function resolveSessionCreationCommitGuard(
   ) {
     return assertCallerCurrent;
   }
-  return createSessionCreateCommitGuard({
-    assertCallerCurrent: () => {
-      assertCallerCurrent?.();
-      prepared.assertPreparedTargetCurrent();
-    },
-    get operatorAuthority() {
-      return prepared.readOperatorAuthority();
-    },
-    selections: [
-      params.activeParentFork,
-      params.preparedModelSelection,
-      params.preparedPermissionSelection,
-      params.personalModelSelection,
-      params.personalAccountDefaults,
-    ],
-    validateSelection: prepared.validateSelection,
-  });
+  const selections = [
+    params.activeParentFork,
+    params.preparedModelSelection,
+    params.preparedPermissionSelection,
+    params.personalModelSelection,
+    params.personalAccountDefaults,
+  ];
+  return () => {
+    assertCallerCurrent?.();
+    prepared.assertPreparedTargetCurrent();
+    prepared.readOperatorAuthority()?.assertCurrent();
+    const error = prepared.validateSelection();
+    if (error) {
+      throw new Error(error.message);
+    }
+    for (const selection of selections) {
+      selection?.assertCurrent();
+    }
+  };
 }
 
 /** New unpinned sessions bind an account for the caller's permitted default without storing a model pin. */

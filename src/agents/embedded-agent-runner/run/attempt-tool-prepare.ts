@@ -171,9 +171,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     const cleanups = generationCleanups.splice(0);
     const settled = Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(reason))).then(
       (results) => {
-        if (results.some((result) => result.status === "rejected")) {
-          retiredCleanupFailed = true;
-        }
+        retiredCleanupFailed ||= results.some((result) => result.status === "rejected");
       },
     );
     retiringGenerations.add(settled);

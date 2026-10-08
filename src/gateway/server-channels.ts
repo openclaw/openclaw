@@ -252,6 +252,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   // this: the timed-out-stop recovery sets it too, and that one needs the health
   // monitor to keep driving it.
   const pendingAutoRestarts = new Set<string>();
+  const clearRecoveryState = (key: string) => {
+    recoveryStopTimedOut.delete(key);
+    recoveryStartRequested.delete(key);
+  };
   let autostartSuppression: ChannelAutostartSuppression | null = null;
   let ambientAutostartSuppressedChannelIds = new Set(
     opts.ambientAutostartSuppressedChannelIds ?? [],
@@ -599,8 +603,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               return;
             }
             // A repeated recovery request retires the stuck predecessor before replacement.
-            recoveryStopTimedOut.delete(rKey);
-            recoveryStartRequested.delete(rKey);
+            clearRecoveryState(rKey);
             restarts.delete(rKey);
             store.lifetimes.get(id)?.capabilityLease.revoke();
             store.lifetimes.delete(id);
@@ -959,15 +962,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 return;
               }
               if (manuallyStopped.has(rKey)) {
-                recoveryStopTimedOut.delete(rKey);
-                recoveryStartRequested.delete(rKey);
+                clearRecoveryState(rKey);
                 return;
               }
               if (getRuntime(channelId, id).terminalDisconnect) {
                 // Terminal startup/session failures win over pending recovery.
                 // Leaving recovery state behind would restart a channel that needs user action.
-                recoveryStopTimedOut.delete(rKey);
-                recoveryStartRequested.delete(rKey);
+                clearRecoveryState(rKey);
                 restarts.delete(rKey);
                 setRuntime(channelId, id, {
                   restartPending: false,
@@ -1296,8 +1297,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             };
           }
           if (outcome.status === "rejected" && retainCleanupOwner) {
-            recoveryStopTimedOut.delete(rKey);
-            recoveryStartRequested.delete(rKey);
+            clearRecoveryState(rKey);
             if (stoppedCleanly && store.tasks.get(id) === task) {
               store.tasks.delete(id);
             }
@@ -1324,8 +1324,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             return outcome;
           }
-          recoveryStopTimedOut.delete(rKey);
-          recoveryStartRequested.delete(rKey);
+          clearRecoveryState(rKey);
           if (store.tasks.get(id) === task) {
             store.tasks.delete(id);
           }

@@ -45,7 +45,11 @@ import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
 import { log } from "./logger.js";
-import { parseCacheRetention, resolveCacheRetention } from "./prompt-cache-retention.js";
+import {
+  parseCacheRetention,
+  resolveCacheRetention,
+  resolveExplicitCachedContent,
+} from "./prompt-cache-retention.js";
 import type { ProviderThinkLevel } from "./utils.js";
 
 function requireBaseStreamFn(streamFn: StreamFn | undefined): StreamFn {
@@ -132,14 +136,7 @@ export function resolvePreparedExtraParams(params: {
   providerRuntimeHandle?: ProviderRuntimePluginHandle;
   auth?: ProviderPrepareExtraParamsContext["auth"];
 }): Record<string, unknown> {
-  const resolvedExtraParams =
-    params.resolvedExtraParams ??
-    resolveExtraParams({
-      cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-      agentId: params.agentId,
-    });
+  const resolvedExtraParams = params.resolvedExtraParams ?? resolveExtraParams(params);
   const override = stripRequestScopedExtraParams(
     sanitizeExtraParamsOverride(params.extraParamsOverride),
   );
@@ -214,10 +211,6 @@ function stripRequestScopedExtraParams(
   return Object.keys(filtered).length > 0 ? filtered : undefined;
 }
 
-function hasRequestScopedExtraParams(value: Record<string, unknown>): boolean {
-  return [...REQUEST_SCOPED_EXTRA_PARAM_KEYS].some((key) => Object.hasOwn(value, key));
-}
-
 function applyDefaultOpenAIGptRuntimeParams(
   params: { provider: string; modelId: string },
   merged: Record<string, unknown>,
@@ -290,11 +283,10 @@ function createStreamFnWithExtraParams(
   }
 
   const streamParams: CacheRetentionStreamOptions = {};
-  if (typeof extraParams.temperature === "number") {
-    streamParams.temperature = extraParams.temperature;
-  }
-  if (typeof extraParams.topP === "number") {
-    streamParams.topP = extraParams.topP;
+  for (const key of ["temperature", "topP"] as const) {
+    if (typeof extraParams[key] === "number") {
+      streamParams[key] = extraParams[key];
+    }
   }
   const maxTokens = resolveMaxTokensParam(extraParams);
   if (maxTokens !== undefined) {
@@ -321,14 +313,9 @@ function createStreamFnWithExtraParams(
         : typeof extraParams.transport;
     log.warn(`ignoring invalid transport param: ${transportSummary}`);
   }
-  const cachedContent =
-    typeof extraParams.cachedContent === "string"
-      ? extraParams.cachedContent
-      : typeof extraParams.cached_content === "string"
-        ? extraParams.cached_content
-        : undefined;
-  if (typeof cachedContent === "string" && cachedContent.trim()) {
-    streamParams.cachedContent = cachedContent.trim();
+  const cachedContent = resolveExplicitCachedContent(extraParams);
+  if (cachedContent) {
+    streamParams.cachedContent = cachedContent;
   }
 
   // Camel-case request overrides win over configured snake-case penalties.
@@ -600,7 +587,7 @@ export function applyExtraParamsToAgent(
   // Apply caller/config extra params outside provider defaults so explicit runtime
   // transport values can override provider-added defaults.
   const baseExtraParams =
-    override && hasRequestScopedExtraParams(override)
+    override && [...REQUEST_SCOPED_EXTRA_PARAM_KEYS].some((key) => Object.hasOwn(override, key))
       ? stripRequestScopedExtraParams(effectiveExtraParams)
       : effectiveExtraParams;
   const streamParams = override ? { ...baseExtraParams, ...override } : baseExtraParams;

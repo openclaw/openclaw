@@ -12,6 +12,7 @@ import { buildSessionContext, projectSessionEntryMessage } from "../session/sess
 import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import { CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.js";
 import { runSummarizationCompletion } from "./summarization-completion.js";
+import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
   computeFileLists,
   createFileOps,
@@ -55,27 +56,6 @@ function parseCompactionDetails(value: unknown): CompactionDetails | undefined {
   };
 }
 
-function extractFileOperations(
-  messages: AgentMessage[],
-  entries: SessionTreeEntry[],
-  prevBoundaryIndex: number,
-): FileOperations {
-  const fileOps = createFileOps();
-  if (prevBoundaryIndex >= 0) {
-    const prevCompaction = entries[prevBoundaryIndex];
-    if (prevCompaction?.type === "compaction" && !prevCompaction.fromHook) {
-      const details = parseCompactionDetails(prevCompaction.details);
-      if (details) {
-        mergeSummaryFileOperations(fileOps, details);
-      }
-    }
-  }
-  for (const msg of messages) {
-    extractFileOpsFromMessage(msg, fileOps);
-  }
-
-  return fileOps;
-}
 function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage | undefined {
   if (entry.type === "compaction") {
     return undefined;
@@ -162,12 +142,11 @@ export function fitCompactionSummary<T extends { summary: string }>(
   tokenBudget: number | undefined,
   render: (maxChars: number) => T | undefined,
 ): Result<T, CompactionError> {
+  const fits = (candidate: T) =>
+    tokenBudget === undefined ||
+    estimateStringChars(candidate.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget;
   const full = render(MAX_COMPACTION_SUMMARY_CHARS);
-  if (
-    full &&
-    (tokenBudget === undefined ||
-      estimateStringChars(full.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget)
-  ) {
+  if (full && fits(full)) {
     return ok(full);
   }
   let low = 1;
@@ -178,10 +157,7 @@ export function fitCompactionSummary<T extends { summary: string }>(
     const candidate = render(mid);
     if (!candidate) {
       low = mid + 1;
-    } else if (
-      tokenBudget === undefined ||
-      estimateStringChars(candidate.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget
-    ) {
+    } else if (fits(candidate)) {
       fitted = candidate;
       low = mid + 1;
     } else {
@@ -533,40 +509,22 @@ export function findCutPoint(
   };
 }
 
-const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+const SUMMARIZATION_PROMPT = buildSummaryCheckpointPrompt({
+  introduction:
+    "The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.",
+  goal: "[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]",
+  constraints:
+    '- [Any constraints, preferences, or requirements mentioned by user]\n- [Or "(none)" if none were mentioned]',
+  inProgress: "- [ ] [Current work]",
+  blocked: "- [Issues preventing progress, if any]",
+  decisions: "- **[Decision]**: [Brief rationale]",
+  nextSteps: "1. [Ordered list of what should happen next]",
+  criticalContext:
+    '- [Any data, examples, or references needed to continue]\n- [Or "(none)" if not applicable]',
+});
 
-Use this EXACT format:
-
-## Goal
-[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
-
-## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned by user]
-- [Or "(none)" if none were mentioned]
-
-## Progress
-### Done
-- [x] [Completed tasks/changes]
-
-### In Progress
-- [ ] [Current work]
-
-### Blocked
-- [Issues preventing progress, if any]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale]
-
-## Next Steps
-1. [Ordered list of what should happen next]
-
-## Critical Context
-- [Any data, examples, or references needed to continue]
-- [Or "(none)" if not applicable]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
-
-const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+const UPDATE_SUMMARIZATION_PROMPT = buildSummaryCheckpointPrompt({
+  introduction: `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
 
 Update the existing structured summary with new information. RULES:
 - PRESERVE all existing information from the previous summary
@@ -574,36 +532,16 @@ Update the existing structured summary with new information. RULES:
 - UPDATE the Progress section: move items from "In Progress" to "Done" when completed. Record checks that ran and their results as completed, even when they failed; keep unresolved blockers separate.
 - UPDATE "Next Steps" based on what was accomplished
 - PRESERVE exact file paths, function names, and error messages
-- If something is no longer relevant, you may remove it
-
-Use this EXACT format:
-
-## Goal
-[Preserve existing goals, add new ones if the task expanded]
-
-## Constraints & Preferences
-- [Preserve existing, add new ones discovered]
-
-## Progress
-### Done
-- [x] [Include previously done items AND newly completed items]
-
-### In Progress
-- [ ] [Current work - update based on progress]
-
-### Blocked
-- [Current blockers - remove if resolved]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale] (preserve all previous, add new)
-
-## Next Steps
-1. [Update based on current state]
-
-## Critical Context
-- [Preserve important context, add new if needed]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+- If something is no longer relevant, you may remove it`,
+  goal: "[Preserve existing goals, add new ones if the task expanded]",
+  constraints: "- [Preserve existing, add new ones discovered]",
+  done: "- [x] [Include previously done items AND newly completed items]",
+  inProgress: "- [ ] [Current work - update based on progress]",
+  blocked: "- [Current blockers - remove if resolved]",
+  decisions: "- **[Decision]**: [Brief rationale] (preserve all previous, add new)",
+  nextSteps: "1. [Update based on current state]",
+  criticalContext: "- [Preserve important context, add new if needed]",
+});
 
 /** Caller-owned formats replace the default headings; focus remains additive. */
 export type CompactionSummaryPrompt =
@@ -815,7 +753,19 @@ export function prepareCompaction(
   if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {
     return ok(undefined);
   }
-  const fileOps = extractFileOperations(messagesToSummarize, effectiveEntries, prevBoundaryIndex);
+  const fileOps = createFileOps();
+  if (prevBoundaryIndex >= 0) {
+    const prevCompaction = effectiveEntries[prevBoundaryIndex];
+    if (prevCompaction?.type === "compaction" && !prevCompaction.fromHook) {
+      const details = parseCompactionDetails(prevCompaction.details);
+      if (details) {
+        mergeSummaryFileOperations(fileOps, details);
+      }
+    }
+  }
+  for (const msg of messagesToSummarize) {
+    extractFileOpsFromMessage(msg, fileOps);
+  }
   if (cutPoint.isSplitTurn) {
     for (const msg of turnPrefixMessages) {
       extractFileOpsFromMessage(msg, fileOps);

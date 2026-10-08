@@ -1,8 +1,6 @@
 {
   "version": 3,
   "sites": [
-    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/AssistantTextParser.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.61dba74761c9d9e6","source":"</\\(tag)"},
-    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/AssistantTextParser.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.4165ce794721016d","source":"<\\(tag)"},
     {"path":"apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.e0a3f5bd01e4e969","source":"Critical"},
     {"path":"apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.bed8cb6b0332b3ac","source":"Debug"},
     {"path":"apps/macos/Sources/OpenClaw/Logging/OpenClawLogging.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.5c38ee0e8d3d2080","source":"Error"},

@@ -219,16 +219,14 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         preserveToolNames: localModelLeanPreserveToolNames,
       });
       const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
-      if (cronCreatorToolAllowlistCaptureRef) {
-        // Cron is constructed before bundled tools; capture only the executable
-        // surface that survived provider normalization and schema quarantine.
-        captureFinalEffectiveCronCreatorToolAllowlist(
-          cronCreatorToolAllowlist,
-          cronCreatorToolAllowlistCaptureRef,
-          schemaProjection.tools,
-          (tool) => getPluginToolMeta(tool),
-        );
-      }
+      // Cron is constructed before bundled tools; capture only the executable
+      // surface that survived provider normalization and schema quarantine.
+      captureFinalEffectiveCronCreatorToolAllowlist(
+        cronCreatorToolAllowlist,
+        cronCreatorToolAllowlistCaptureRef,
+        schemaProjection.tools,
+        (tool) => getPluginToolMeta(tool),
+      );
       if (inheritedToolAllowlist?.length) {
         // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
         // only after final policy and schema projection so children inherit the

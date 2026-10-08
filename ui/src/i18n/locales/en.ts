@@ -1651,6 +1651,7 @@ export const en: TranslationMap & {
   },
   terminal: {
     title: "Terminal",
+    copiedToClipboard: "Copied to clipboard",
     toggle: "Toggle terminal",
     open: "Open terminal",
     openWindow: "Open terminal in new window",
