@@ -81,6 +81,7 @@ import {
 } from "./src/stream-compat.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./src/stream-contract.js";
 import { createLazyConfiguredOllamaStreamFn } from "./src/stream-registration.js";
+import { createOllamaUsageHooks } from "./src/usage-registration.js";
 import { createLazyOllamaWebSearchProvider } from "./src/web-search-provider-registration.js";
 
 const loadOllamaSetup = createLazyRuntimeModule(() => import("./src/setup.runtime.js"));
@@ -101,8 +102,6 @@ const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter =
 const ollamaMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: OLLAMA_PROVIDER_ID,
   capabilities: ["image"],
-  describeImage: undefined,
-  describeImages: undefined,
 };
 
 async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<void> {
@@ -799,6 +798,7 @@ export default definePluginEntry({
       label: "Ollama",
       docsPath: "/providers/ollama",
       envVars: ["OLLAMA_API_KEY"],
+      ...createOllamaUsageHooks(),
       auth: [
         {
           id: "local",

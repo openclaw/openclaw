@@ -373,6 +373,7 @@
   "contracts": {
     "embeddingProviders": ["ollama"],
     "tools": ["node_inference"],
+    "usageProviders": ["ollama"],
     "webSearchProviders": ["ollama"]
   },
   "configGroups": [
