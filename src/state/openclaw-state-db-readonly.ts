@@ -220,7 +220,7 @@ export async function withDisposableOpenClawStateReads<T>(
   );
 }
 
-export function requiresArtifactPreservingSnapshot(pathname: string): boolean {
+function requiresArtifactPreservingSnapshot(pathname: string): boolean {
   return (
     isArtifactPreservingStateRead("shared", pathname) &&
     !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname)
