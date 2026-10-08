@@ -136,12 +136,7 @@ function readToolEventPayload(evt: AgentEventPayload): CliToolEventPayload | und
   };
 }
 
-/**
- * Tracks CLI tool start/result events and renders the same durable tool
- * summaries the embedded runner emits: a formatToolAggregate line per result
- * (args-derived meta captured at start), plus the output block under full
- * verbose. Keeps CLI runs at tool-summary parity with embedded runs.
- */
+/** CLI result summaries use start-event metadata; full verbosity also carries raw output. */
 export function createCliToolSummaryTracker(params: {
   detailMode?: "explain" | "raw";
   commandDetailsVisible: boolean;
@@ -495,9 +490,6 @@ async function runCliAgentWithLifecycleInternal(
     await params.onErrorBeforeLifecycle?.(err);
     throw err;
   } finally {
-    for (const bridge of bridges) {
-      bridge.unsubscribe();
-    }
     if (
       params.runParams.isFinalFallbackAttempt !== false &&
       params.runParams.fastMode === "auto" &&

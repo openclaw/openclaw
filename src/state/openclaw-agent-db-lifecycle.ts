@@ -591,7 +591,6 @@ export function invalidateOpenClawAgentWritableProjections(
   }
 }
 
-/** Close cached agent handles, optionally restricted to one runtime root. */
 export function closeOpenClawAgentDatabases(rootPath?: string): void {
   void revokeAgentDatabaseResources({ rootPath }, logResourceCloseFailure);
   for (const pathname of cache.pending.keys()) {
@@ -755,7 +754,6 @@ export function readOpenIncognitoAgentDatabaseGeneration(): number {
   return cache.generation;
 }
 
-/** Returns whether this exact process-held database is incognito/in-memory. */
 export function isIncognitoOpenClawAgentDatabase(database: OpenClawAgentDatabase): boolean {
   return cache.incognito.has(database);
 }

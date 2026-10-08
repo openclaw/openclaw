@@ -312,7 +312,7 @@ impl Routing {
         }
         let reconnects = labels
             .into_iter()
-            .map(|label| self.refresh_primary(&label))
+            .map(|label| self.refresh_primary(&label).intent.clone())
             .collect();
         (self.follows_primary(), reconnects)
     }
@@ -409,16 +409,9 @@ impl Routing {
                         .is_none_or(|pending| pending.intent.target == PRIMARY)
             });
         let replacement = replace.then(|| {
-            let mut intent = self.refresh_primary(label);
-            intent.navigation_url = Some(url.clone());
-            self.windows
-                .get_mut(label)
-                .unwrap()
-                .pending
-                .as_mut()
-                .unwrap()
-                .intent = intent.clone();
-            intent
+            let pending = self.refresh_primary(label);
+            pending.intent.navigation_url = Some(url.clone());
+            pending.intent.clone()
         });
         (false, replacement)
     }
@@ -512,13 +505,9 @@ impl Routing {
             .take()
             .unwrap_or_default();
         let present = completion.presents(self.selection_sequence);
-        let intent = self.begin(&event.label, &target, None);
-        self.windows
-            .get_mut(&event.label)?
-            .pending
-            .as_mut()?
-            .completion = completion;
-        Some((intent, present))
+        let pending = self.begin(&event.label, &target, None);
+        pending.completion = completion;
+        Some((pending.intent.clone(), present))
     }
 
     fn complete_document(
@@ -579,7 +568,7 @@ impl Routing {
                 nonce: document.nonce.clone()?,
             })
         };
-        let mut intent = self.begin("main", INITIAL_SELECTION, source);
+        let mut intent = self.begin("main", INITIAL_SELECTION, source).intent.clone();
         intent.source_url = local_url;
         self.initial_selection = InitialSelection::Restoring {
             generation: intent.generation,
@@ -597,7 +586,10 @@ impl Routing {
             return None;
         }
         if let Some(target) = target {
-            let mut next = self.begin("main", target, intent.source.clone());
+            let mut next = self
+                .begin("main", target, intent.source.clone())
+                .intent
+                .clone();
             next.source_url = intent.source_url.clone();
             self.initial_selection = InitialSelection::Restoring {
                 generation: next.generation,
@@ -673,7 +665,12 @@ impl Routing {
         })
     }
 
-    fn begin(&mut self, label: &str, target: &str, source: Option<DocumentAuthority>) -> Intent {
+    fn begin(
+        &mut self,
+        label: &str,
+        target: &str,
+        source: Option<DocumentAuthority>,
+    ) -> &mut PendingSelection {
         let route = self.windows.entry(label.to_string()).or_default();
         route.generation = route.generation.wrapping_add(1);
         let intent = Intent {
@@ -690,30 +687,24 @@ impl Routing {
         } else {
             SelectionCompletion::Automatic
         };
-        route.pending = Some(PendingSelection {
-            intent: intent.clone(),
+        let pending = route.pending.insert(PendingSelection {
+            intent,
             completion,
             action: PendingAction::Switch,
         });
         if let Some(doc) = &mut route.document {
             doc.completion = None;
         }
-        intent
+        pending
     }
 
     fn begin_promotion(&mut self, label: &str, target: &str, source: DocumentAuthority) -> Intent {
-        let intent = self.begin(label, target, Some(source));
-        self.windows
-            .get_mut(label)
-            .expect("reserved window")
-            .pending
-            .as_mut()
-            .expect("reserved promotion")
-            .action = PendingAction::Promote;
-        intent
+        let pending = self.begin(label, target, Some(source));
+        pending.action = PendingAction::Promote;
+        pending.intent.clone()
     }
 
-    fn refresh_primary(&mut self, label: &str) -> Intent {
+    fn refresh_primary(&mut self, label: &str) -> &mut PendingSelection {
         let route = self.windows.get(label);
         let inherited = route.and_then(|route| route.pending.as_ref());
         let document = route.and_then(|route| route.document.as_ref());
@@ -739,21 +730,13 @@ impl Routing {
             .map(|pending| pending.completion)
             .or_else(|| document.and_then(|doc| doc.completion));
         let source = inherited.and_then(|pending| pending.intent.source.clone());
-        let mut next = self.begin(label, PRIMARY, source);
-        next.source_url = source_url;
-        next.navigation_url = navigation_url;
-        let pending = self
-            .windows
-            .get_mut(label)
-            .expect("reserved window")
-            .pending
-            .as_mut()
-            .expect("reserved primary refresh");
-        pending.intent = next.clone();
+        let pending = self.begin(label, PRIMARY, source);
+        pending.intent.source_url = source_url;
+        pending.intent.navigation_url = navigation_url;
         if let Some(completion) = completion {
             pending.completion = completion;
         }
-        next
+        pending
     }
 
     fn primary_refresh_targets(&self) -> Vec<String> {
@@ -905,16 +888,14 @@ impl Routing {
         }
     }
 
-    fn remember_edited_selection(&mut self, intent: &Intent) {
-        if self.current(intent) {
-            if let Some(pending) = self
-                .windows
-                .get_mut(&intent.label)
-                .and_then(|route| route.pending.as_mut())
-            {
-                pending.completion = SelectionCompletion::RestoreEdited(self.selection_sequence);
-            }
+    fn begin_profile_edit(&mut self, label: &str, target: &str, remember: bool) -> Intent {
+        let completion = (remember && !self.closing)
+            .then_some(SelectionCompletion::RestoreEdited(self.selection_sequence));
+        let pending = self.begin(label, target, None);
+        if let Some(completion) = completion {
+            pending.completion = completion;
         }
+        pending.intent.clone()
     }
 
     fn remembers_edited_target(&self, id: &str) -> bool {
@@ -1005,7 +986,7 @@ impl Routing {
         if self.closing || target == PRIMARY {
             return None;
         }
-        let mut intent = self.begin("main", &target, None);
+        let mut intent = self.begin("main", &target, None).intent.clone();
         intent.source_url = Some(source_url);
         Some(intent)
     }
@@ -1710,16 +1691,12 @@ impl GatewayWindows {
                 None => Err(tunnel),
             }
         };
-        match transferred {
-            Ok(retired) => {
-                retire_tunnel(app, retired);
-                Ok(())
-            }
-            Err(unpublished) => {
-                retire_tunnel(app, unpublished);
-                Err(STALE.into())
-            }
-        }
+        let (retired, result) = match transferred {
+            Ok(retired) => (retired, Ok(())),
+            Err(unpublished) => (unpublished, Err(STALE.to_string())),
+        };
+        retire_tunnel(app, retired);
+        result
     }
 
     pub fn shutdown(&self, app: &AppHandle) {
@@ -2572,7 +2549,7 @@ async fn select_window(
             }
             SelectionDisposition::Replace => {
                 let mut state = owner.routing.lock().map_err(|_| STALE)?;
-                let intent = state.begin(&label, &target, source);
+                let intent = state.begin(&label, &target, source).intent.clone();
                 state.upgrade_selection(&intent, remember);
                 Some(intent)
             }
@@ -2904,22 +2881,18 @@ pub(crate) async fn gateway_request(
         "open-window" => {
             select_window(app, target, Some(source), WindowSelection::New).await?;
         }
-        "reconnect-cancel" => {
+        "reconnect-cancel" | "open-settings" => {
+            let settings = action == "open-settings";
             on_main(&app, move |app| {
                 let view = app.get_webview(&label).ok_or(STALE)?;
                 let owner = app.state::<GatewayWindows>();
                 owner.authorize(&view, &source.nonce)?;
-                owner.cancel_pending(app, &label);
-                Ok(())
-            })
-            .await?
-        }
-        "open-settings" => {
-            on_main(&app, move |app| {
-                let view = app.get_webview(&label).ok_or(STALE)?;
-                app.state::<GatewayWindows>()
-                    .authorize(&view, &source.nonce)?;
-                open_settings(app)
+                if settings {
+                    open_settings(app)
+                } else {
+                    owner.cancel_pending(app, &label);
+                    Ok(())
+                }
             })
             .await?
         }
@@ -3011,7 +2984,7 @@ pub(crate) async fn gateway_profile_request(
                 let url = view.url().map_err(|_| STALE)?;
                 let mut state = owner.routing.lock().map_err(|_| STALE)?;
                 state.explicit_selection();
-                let mut intent = state.begin(&label, &id, None);
+                let mut intent = state.begin(&label, &id, None).intent.clone();
                 intent.source_url = Some(url);
                 state.upgrade_selection(&intent, true);
                 Ok(intent)
@@ -3086,14 +3059,11 @@ pub(crate) async fn gateway_profile_request(
                 close_window(app, &label);
             } else {
                 let target = replacement.as_deref().unwrap_or(PRIMARY);
-                let retiring = {
-                    let mut state = owner.routing.lock().map_err(|_| STALE)?;
-                    let intent = state.begin(&label, target, None);
-                    if remember_edited {
-                        state.remember_edited_selection(&intent);
-                    }
-                    intent
-                };
+                let retiring = owner.routing.lock().map_err(|_| STALE)?.begin_profile_edit(
+                    &label,
+                    target,
+                    remember_edited,
+                );
                 if let Err(error) = open_profile_recovery(app, &retiring, "") {
                     show_error(app, view.label(), &error);
                     continue;
@@ -3103,7 +3073,9 @@ pub(crate) async fn gateway_profile_request(
                         .routing
                         .lock()
                         .map_err(|_| STALE)?
-                        .begin(&label, target, None),
+                        .begin(&label, target, None)
+                        .intent
+                        .clone(),
                 );
             }
         }
@@ -3318,26 +3290,17 @@ pub(crate) fn startup(app: &AppHandle) {
             Ok(next)
         })
         .await;
-        match resolved {
-            Ok(Some(intent)) => {
-                let completion = intent.clone();
-                if let Err(error) = select_intent(app.clone(), intent).await {
-                    if error != STALE {
-                        show_error(&app, "main", &error);
-                    }
-                }
-                if let Ok(mut state) = app.state::<GatewayWindows>().routing.lock() {
-                    state.finish_initial_selection(&completion);
-                }
-            }
-            Ok(None) => {}
-            Err(error) => {
-                if let Ok(mut state) = app.state::<GatewayWindows>().routing.lock() {
-                    state.finish_initial_selection(&completion);
-                }
-                if error != STALE {
-                    show_error(&app, "main", &error);
-                }
+        let (completion, result) = match resolved {
+            Ok(Some(intent)) => (intent.clone(), select_intent(app.clone(), intent).await),
+            Ok(None) => return,
+            Err(error) => (completion, Err(error)),
+        };
+        if let Ok(mut state) = app.state::<GatewayWindows>().routing.lock() {
+            state.finish_initial_selection(&completion);
+        }
+        if let Err(error) = result {
+            if error != STALE {
+                show_error(&app, "main", &error);
             }
         }
     });
@@ -3904,7 +3867,7 @@ mod tests {
         state
             .enter_profile_recovery(&recovery, Some("saved-b"))
             .unwrap();
-        let retry = state.begin("main", "saved-b", None);
+        let retry = state.begin("main", "saved-b", None).intent.clone();
         let completion = state.selection_completion(&retry);
         assert!(completion.remembers(state.selection_sequence));
         assert!(
@@ -3976,7 +3939,7 @@ mod tests {
             },
         );
         let failed = state.document_failed("main", "failed").unwrap();
-        let newer = state.begin("main", "saved-c", None);
+        let newer = state.begin("main", "saved-c", None).intent.clone();
         state.upgrade_selection(&newer, true);
         assert!(state.begin_document_recovery(&failed).is_none());
         assert!(state.current(&newer));
@@ -4005,7 +3968,7 @@ mod tests {
                 state.admit_selection("gateway-b", "saved-b", true, true),
                 SelectionDisposition::Pending
             );
-            let other = state.begin("gateway-c", "saved-c", None);
+            let other = state.begin("gateway-c", "saved-c", None).intent.clone();
             state.upgrade_selection(&other, true);
             let newer_sequence = state.selection_sequence;
             assert_eq!(
@@ -4038,10 +4001,9 @@ mod tests {
         state.selection_sequence = 7;
         for target in ["saved-b", "saved-c"] {
             state.selection_target = Some(target.into());
-            let edited = state.begin("main", target, None);
-            state.remember_edited_selection(&edited);
+            let edited = state.begin_profile_edit("main", target, true);
             state.enter_profile_recovery(&edited, Some(target)).unwrap();
-            let retry = state.begin("main", target, None);
+            let retry = state.begin("main", target, None).intent.clone();
             let completion = state.selection_completion(&retry);
             assert!(completion.remembers(7));
             assert!(!completion.presents(7));
@@ -4058,10 +4020,10 @@ mod tests {
                 .unwrap();
             assert!(state.remembers_edited_target(target));
         }
-        let newer = state.begin("gateway-other", "saved-d", None);
+        let newer = state.begin("gateway-other", "saved-d", None).intent.clone();
         state.upgrade_selection(&newer, true);
         assert!(!state.remembers_edited_target("saved-c"));
-        let retry = state.begin("main", "saved-c", None);
+        let retry = state.begin("main", "saved-c", None).intent.clone();
         assert!(!state
             .selection_completion(&retry)
             .remembers(state.selection_sequence));
@@ -4078,25 +4040,31 @@ mod tests {
                 ..Default::default()
             },
         );
-        let first = state.begin(
-            "main",
-            "alpha",
-            Some(DocumentAuthority {
-                label: "main".into(),
-                lifetime: "first".into(),
-                nonce: "ready-nonce".into(),
-            }),
-        );
-        let other = state.begin("gateway-other", "gamma", None);
-        let last = state.begin(
-            "main",
-            "beta",
-            Some(DocumentAuthority {
-                label: "main".into(),
-                lifetime: "first".into(),
-                nonce: "ready-nonce".into(),
-            }),
-        );
+        let first = state
+            .begin(
+                "main",
+                "alpha",
+                Some(DocumentAuthority {
+                    label: "main".into(),
+                    lifetime: "first".into(),
+                    nonce: "ready-nonce".into(),
+                }),
+            )
+            .intent
+            .clone();
+        let other = state.begin("gateway-other", "gamma", None).intent.clone();
+        let last = state
+            .begin(
+                "main",
+                "beta",
+                Some(DocumentAuthority {
+                    label: "main".into(),
+                    lifetime: "first".into(),
+                    nonce: "ready-nonce".into(),
+                }),
+            )
+            .intent
+            .clone();
         assert!(!state.current(&first));
         assert!(state.current(&last));
         assert!(state.current(&other));
@@ -4121,15 +4089,18 @@ mod tests {
                     ..Default::default()
                 },
             );
-            let pending = state.begin(
-                "main",
-                "alpha",
-                Some(DocumentAuthority {
-                    label: "main".into(),
-                    lifetime: "first".into(),
-                    nonce: "ready-nonce".into(),
-                }),
-            );
+            let pending = state
+                .begin(
+                    "main",
+                    "alpha",
+                    Some(DocumentAuthority {
+                        label: "main".into(),
+                        lifetime: "first".into(),
+                        nonce: "ready-nonce".into(),
+                    }),
+                )
+                .intent
+                .clone();
             match change {
                 "navigate" => {
                     state
@@ -4201,8 +4172,11 @@ mod tests {
             lifetime: "first".into(),
             nonce: "ready-nonce".into(),
         };
-        let requested = state.begin("gateway-new", "saved", Some(source));
-        let independent = state.begin("gateway-menu", "saved", None);
+        let requested = state
+            .begin("gateway-new", "saved", Some(source))
+            .intent
+            .clone();
+        let independent = state.begin("gateway-menu", "saved", None).intent.clone();
         assert!(state.current(&requested));
         state.windows.remove("main");
         assert!(
@@ -4232,9 +4206,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        let selection = state.begin("main", "saved", None);
+        let selection = state.begin("main", "saved", None).intent.clone();
         assert!(!state.follows_primary());
-        let unrelated = state.begin("gateway-other", "other", None);
+        let unrelated = state.begin("gateway-other", "other", None).intent.clone();
         assert!(state.invalidate_profile("saved").is_empty());
         assert!(!state.current(&selection));
         assert!(state.current(&unrelated));
@@ -4269,15 +4243,18 @@ mod tests {
                 tls_fingerprint: None,
             },
         };
-        let intent = state.begin(
-            "main",
-            &profile.id,
-            Some(DocumentAuthority {
-                label: "main".into(),
-                lifetime: "confirmed".into(),
-                nonce: "ready-nonce".into(),
-            }),
-        );
+        let intent = state
+            .begin(
+                "main",
+                &profile.id,
+                Some(DocumentAuthority {
+                    label: "main".into(),
+                    lifetime: "confirmed".into(),
+                    nonce: "ready-nonce".into(),
+                }),
+            )
+            .intent
+            .clone();
         let guard = PromotionGuard {
             intent,
             profile_id: profile.id.clone(),
@@ -4378,7 +4355,10 @@ mod tests {
                     .unwrap();
             }
             state.explicit_selection();
-            let chosen = state.begin("gateway-other", "explicit", None);
+            let chosen = state
+                .begin("gateway-other", "explicit", None)
+                .intent
+                .clone();
             assert!(
                 !state.current(&startup),
                 "late startup work cannot overwrite an explicit auxiliary choice"
@@ -4561,7 +4541,7 @@ mod tests {
             nonce: "ready-nonce".into(),
         };
         state.invalidate_profile("saved");
-        let edited = state.begin("main", "saved", None);
+        let edited = state.begin("main", "saved", None).intent.clone();
         assert!(state.current(&edited));
         assert!(!state.source_current(&original));
         state
@@ -4578,7 +4558,7 @@ mod tests {
             !state.follows_primary(),
             "Primary updates must preserve the profile recovery editor"
         );
-        let retry = state.begin("main", "saved", None);
+        let retry = state.begin("main", "saved", None).intent.clone();
         assert!(state.current(&retry));
     }
 
@@ -4588,7 +4568,10 @@ mod tests {
         state.windows.get_mut("main").unwrap().target = "manual-direct-studio".into();
         state.windows.get_mut("main").unwrap().document = Some(document("direct-principal"));
         state.invalidate_profile("manual-direct-studio");
-        let ssh_edit = state.begin("main", "manual-ssh-studio", None);
+        let ssh_edit = state
+            .begin("main", "manual-ssh-studio", None)
+            .intent
+            .clone();
         state
             .enter_profile_recovery(&ssh_edit, Some("manual-ssh-studio"))
             .unwrap();
@@ -4607,7 +4590,7 @@ mod tests {
         state.windows.get_mut("main").unwrap().target = "removed-profile".into();
         state.windows.get_mut("main").unwrap().document = Some(document("old-principal"));
         state.invalidate_profile("removed-profile");
-        let pending = state.begin("main", "removed-profile", None);
+        let pending = state.begin("main", "removed-profile", None).intent.clone();
         state.invalidate_profile("removed-profile");
         assert!(
             state
@@ -4615,7 +4598,7 @@ mod tests {
                 .is_err(),
             "deletion retires pending recovery too"
         );
-        let fallback = state.begin("main", PRIMARY, None);
+        let fallback = state.begin("main", PRIMARY, None).intent.clone();
         state.enter_profile_recovery(&fallback, None).unwrap();
         assert_eq!(state.windows["main"].target, PRIMARY);
         assert!(state.windows["main"].document.is_none());
@@ -4650,7 +4633,7 @@ mod tests {
         state.windows.get_mut("main").unwrap().target = "direct-profile".into();
         state.windows.get_mut("main").unwrap().document = Some(document("old-authentication"));
         state.invalidate_profile("direct-profile");
-        let edit = state.begin("main", "ssh-profile", None);
+        let edit = state.begin("main", "ssh-profile", None).intent.clone();
         state
             .enter_profile_recovery(&edit, Some("ssh-profile"))
             .unwrap();
@@ -4658,7 +4641,7 @@ mod tests {
             state.windows["main"].document.is_none(),
             "save retires the old principal before SSH preparation"
         );
-        let slow = state.begin("main", "ssh-profile", None);
+        let slow = state.begin("main", "ssh-profile", None).intent.clone();
         state.cancel("main");
         assert!(!state.current(&slow));
         assert!(state.windows["main"].recovery.is_some());
@@ -4688,7 +4671,7 @@ mod tests {
     #[test]
     fn explicit_primary_selection_rebuilds_its_recovery_editor() {
         let mut state = starting_primary();
-        let removed = state.begin("main", PRIMARY, None);
+        let removed = state.begin("main", PRIMARY, None).intent.clone();
         state.enter_profile_recovery(&removed, None).unwrap();
         assert!(
             !state.needs_primary_refresh("main"),
@@ -4705,7 +4688,7 @@ mod tests {
         let mut state = starting_primary();
         state.windows.get_mut("main").unwrap().document = Some(document("ready-primary"));
         state.windows.get_mut("main").unwrap().primary_generation = Some(state.primary_generation);
-        let pending = state.begin("main", "saved-b", None);
+        let pending = state.begin("main", "saved-b", None).intent.clone();
         assert_eq!(
             state.admit_selection("main", PRIMARY, false, true),
             SelectionDisposition::Reuse
@@ -4714,7 +4697,7 @@ mod tests {
             !state.current(&pending),
             "focusing visible A must retire pending B"
         );
-        let same = state.begin("main", "saved-b", None);
+        let same = state.begin("main", "saved-b", None).intent.clone();
         assert_eq!(
             state.admit_selection("main", "saved-b", false, true),
             SelectionDisposition::Pending
@@ -4805,7 +4788,7 @@ mod tests {
         let mut state = starting_primary();
         state.windows.get_mut("main").unwrap().target = "saved-b".into();
         state.windows.get_mut("main").unwrap().document = Some(document("saved-b-document"));
-        let old = state.begin("main", "saved-c", None);
+        let old = state.begin("main", "saved-c", None).intent.clone();
         state.suspend_document("main");
         assert_eq!(state.windows["main"].target, "saved-b");
         assert!(state.windows["main"].document.is_none());
@@ -4843,14 +4826,17 @@ mod tests {
     fn primary_reuse_excludes_an_uncommitted_auxiliary_opening_a_different_gateway() {
         let mut state = starting_primary();
         state.windows.get_mut("main").unwrap().target = "saved-main".into();
-        let independent = state.begin("gateway-pending-ssh", "saved-ssh", None);
+        let independent = state
+            .begin("gateway-pending-ssh", "saved-ssh", None)
+            .intent
+            .clone();
         assert!(state.primary_window().is_none());
         assert!(state.window_for_target(PRIMARY).is_none());
         assert!(state.current(&independent));
         state.windows.get_mut("main").unwrap().target = PRIMARY.into();
         state.windows.get_mut("main").unwrap().primary_generation = Some(state.primary_generation);
         state.windows.get_mut("main").unwrap().document = Some(document("committed-primary"));
-        let main_switch = state.begin("main", "another-saved", None);
+        let main_switch = state.begin("main", "another-saved", None).intent.clone();
         assert_eq!(state.primary_window(), Some(("main".into(), false)));
         assert_eq!(
             state.admit_selection("main", PRIMARY, false, true),
@@ -4867,7 +4853,7 @@ mod tests {
     fn joining_automatic_reconnect_upgrades_only_its_successful_completion() {
         let mut state = starting_primary();
         state.windows.get_mut("main").unwrap().target = "saved-b".into();
-        let automatic = state.begin("main", "saved-b", None);
+        let automatic = state.begin("main", "saved-b", None).intent.clone();
         assert!(!matches!(
             state.selection_completion(&automatic),
             SelectionCompletion::Explicit(_)
@@ -4911,10 +4897,13 @@ mod tests {
             lifetime: "source".into(),
             nonce: "ready-nonce".into(),
         };
-        let old = state.begin("gateway-primary", PRIMARY, Some(source));
+        let old = state
+            .begin("gateway-primary", PRIMARY, Some(source))
+            .intent
+            .clone();
         state.upgrade_selection(&old, true);
         let sequence = state.selection_sequence;
-        let refreshed = state.refresh_primary("gateway-primary");
+        let refreshed = state.refresh_primary("gateway-primary").intent.clone();
         assert_eq!(
             state.selection_sequence, sequence,
             "automatic reprepare must preserve the admitted selection order"
@@ -4966,7 +4955,10 @@ mod tests {
             lifetime: "source".into(),
             nonce: "ready-nonce".into(),
         };
-        let expired = state.begin("gateway-pending", "saved-b", Some(source.clone()));
+        let expired = state
+            .begin("gateway-pending", "saved-b", Some(source.clone()))
+            .intent
+            .clone();
         state.windows.get_mut("main").unwrap().document = None;
         assert!(!state.current(&expired));
         state.cancel_intent(&expired);
@@ -4974,12 +4966,18 @@ mod tests {
             state.windows["gateway-pending"].pending.is_none(),
             "lost source authority must not leave a dead pending slot"
         );
-        let stale = state.begin("gateway-pending", "saved-b", Some(source));
+        let stale = state
+            .begin("gateway-pending", "saved-b", Some(source))
+            .intent
+            .clone();
         assert_eq!(
             state.admit_selection("gateway-pending", "saved-b", true, true),
             SelectionDisposition::Replace
         );
-        let fresh = state.begin("gateway-pending", "saved-b", None);
+        let fresh = state
+            .begin("gateway-pending", "saved-b", None)
+            .intent
+            .clone();
         state.cancel_intent(&stale);
         assert!(
             state.current(&fresh),
@@ -5002,7 +5000,7 @@ mod tests {
             state.needs_primary_refresh("main"),
             "opening the manager cancels restoration without discarding ready Primary navigation"
         );
-        let newer = state.begin("main", "saved-choice", None);
+        let newer = state.begin("main", "saved-choice", None).intent.clone();
         state.finish_initial_selection(&lookup);
         assert!(!state.needs_primary_refresh("main"));
         assert!(
@@ -5028,14 +5026,14 @@ mod tests {
                 lifetime: "saved-b".into(),
                 nonce: "ready-nonce".into(),
             };
-            let old = state.begin(label, PRIMARY, Some(source));
+            let old = state.begin(label, PRIMARY, Some(source)).intent.clone();
             state.upgrade_selection(&old, true);
             state.primary_generation += 1;
             assert!(
                 state.primary_refresh_targets().contains(&label.to_string()),
                 "{label} must follow its pending Primary choice even though B is still displayed"
             );
-            let new = state.refresh_primary(label);
+            let new = state.refresh_primary(label).intent.clone();
             assert!(!state.current(&old));
             assert!(state.current(&new));
             assert!(matches!(
@@ -5056,7 +5054,7 @@ mod tests {
         let mut state = starting_primary();
         state.windows.get_mut("main").unwrap().document = Some(document("main-source"));
         state.windows.get_mut("main").unwrap().primary_generation = Some(0);
-        let main = state.begin("main", PRIMARY, None);
+        let main = state.begin("main", PRIMARY, None).intent.clone();
         assert!(
             !state.follows_primary(),
             "pending owner must complete instead of a second root-main replacement"

@@ -3,6 +3,7 @@ import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
 } from "../../agents/agent-scope.js";
+import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   findModelInCatalog,
@@ -48,6 +49,21 @@ export function resolveModelFallbackOptions(
     sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     modelFallbackAvailability,
     fallbacksOverride: modelFallbackOverrideFromAvailability(modelFallbackAvailability),
+  };
+}
+
+export function buildRunEntrySelection(
+  selection: Parameters<typeof runEmbeddedAgentEntry>[0]["selection"],
+  run: FollowupRun["run"],
+) {
+  return {
+    cfg: selection.cfg,
+    provider: selection.provider,
+    model: selection.model,
+    requestedRouteResolution: selection.requestedRouteResolution,
+    agentDir: selection.agentDir,
+    fallbacksOverride: selection.fallbacksOverride,
+    userLockedAuthProfileId: run.authProfileIdSource === "user" ? run.authProfileId : undefined,
   };
 }
 
@@ -237,5 +253,28 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     bootstrapUserProfileId: run.bootstrapUserProfileId,
     gatewayUiCommandTarget: run.gatewayUiCommandTarget,
     taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
+  };
+}
+
+export function buildReplyMediaContextParams(
+  { run, originatingAccountId }: FollowupRun,
+  sessionKey: string | undefined,
+  cfg: FollowupRun["run"]["config"],
+) {
+  return {
+    cfg,
+    agentId: run.agentId,
+    sessionKey,
+    workspaceDir: run.workspaceDir,
+    mediaNormalizationOwner: run.mediaNormalizationOwner,
+    messageProvider: run.messageProvider,
+    accountId: originatingAccountId ?? run.agentAccountId,
+    groupId: run.groupId,
+    groupChannel: run.groupChannel,
+    groupSpace: run.groupSpace,
+    requesterSenderId: run.senderId,
+    requesterSenderName: run.senderName,
+    requesterSenderUsername: run.senderUsername,
+    requesterSenderE164: run.senderE164,
   };
 }

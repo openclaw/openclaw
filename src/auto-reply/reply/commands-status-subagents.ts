@@ -6,6 +6,13 @@ import { hasSubagentRunEnded } from "../../agents/subagents/registry/subagent-ru
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatRunLabel } from "./subagents-utils.js";
 
+const WAIT_LABELS = new Map([
+  ["approval", "approval"],
+  ["user_input", "input"],
+  ["agent_messages", "agent messages"],
+  ["children", "child tasks"],
+]);
+
 function formatExecutionObservation(observation: SubagentExecutionObservation): string {
   switch (observation.state) {
     case "running": {
@@ -15,18 +22,7 @@ function formatExecutionObservation(observation: SubagentExecutionObservation): 
     case "queued":
       return "queued";
     case "waiting":
-      switch (observation.wait?.kind) {
-        case "approval":
-          return "waiting for approval";
-        case "user_input":
-          return "waiting for input";
-        case "agent_messages":
-          return "waiting for agent messages";
-        case "children":
-          return "waiting for child tasks";
-        default:
-          return "waiting for external work";
-      }
+      return `waiting for ${WAIT_LABELS.get(observation.wait?.kind ?? "") ?? "external work"}`;
     case "finished":
       return "finished · settlement pending";
     default:

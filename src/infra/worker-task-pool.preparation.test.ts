@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { EventEmitter } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import type { WorkerOptions } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -8,22 +9,31 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "./diagnostic-events.js";
+import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 import { createOwnedWorkerTaskPool, WorkerTaskPool } from "./worker-task-pool.js";
 
 type PostedTask = { input: string; taskId: number };
 type FakeWorker = EventEmitter & {
+  options?: WorkerOptions;
   postMessage: ReturnType<typeof vi.fn<(message: PostedTask) => void>>;
   terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
 };
 const workers = vi.hoisted(() => [] as FakeWorker[]);
-vi.mock("node:os", () => ({ availableParallelism: () => 2 }));
+const cpu = vi.hoisted(() => ({ count: 2 }));
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => cpu.count,
+}));
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
   const { EventEmitter } = await import("node:events");
   return {
     ...actual,
     Worker: class extends EventEmitter {
-      constructor() {
+      constructor(
+        _url: URL,
+        readonly options: WorkerOptions,
+      ) {
         super();
         workers.push(this);
       }
@@ -64,9 +74,106 @@ function createPool(
 beforeEach(() => workers.splice(0));
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
+  cpu.count = 2;
+});
+
+it.each<{
+  cpus: number;
+  workerClass: WorkerPoolClass;
+  admitted: number;
+  owned?: boolean;
+  maxWorkers?: number;
+}>([
+  { cpus: 1, workerClass: "reader", admitted: 1 },
+  { cpus: 2, workerClass: "reader", admitted: 1 },
+  { cpus: 8, workerClass: "reader", admitted: 7 },
+  { cpus: 128, workerClass: "reader", admitted: 8 },
+  { cpus: 128, workerClass: "file-reader", admitted: 2 },
+  { cpus: 128, workerClass: "compute", admitted: 4 },
+  { cpus: 128, workerClass: "writer", admitted: 1 },
+  { cpus: 128, workerClass: "singleton", admitted: 1 },
+  { cpus: 128, workerClass: "reader", admitted: 8, owned: true },
+  { cpus: 128, workerClass: "reader", admitted: 8, maxWorkers: 1 },
+])("bounds $workerClass admission on $cpus CPUs (owned=$owned)", async (testCase) => {
+  cpu.count = testCase.cpus;
+  const options = {
+    workerUrl: new URL("file:///fixture/preparation-worker.js"),
+    workerClass: testCase.workerClass,
+    maxWorkers: testCase.maxWorkers,
+  };
+  const pool = testCase.owned
+    ? createOwnedWorkerTaskPool<string, string>(options)
+    : new WorkerTaskPool<string, string>(options);
+  const gate = createDeferredCore();
+  const admitted: number[] = [];
+  const results = Array.from({ length: 12 }, (_, index) =>
+    pool.run(() => {
+      admitted.push(index);
+      return gate.promise.then(() => String(index));
+    }, {}),
+  );
+  try {
+    expect(admitted).toEqual(Array.from({ length: testCase.admitted }, (_, index) => index));
+    expect(pool.getSnapshot().maxWorkers).toBe(testCase.admitted);
+    gate.resolve();
+    await expect(Promise.all(results)).resolves.toEqual(
+      Array.from({ length: 12 }, (_, index) => String(index)),
+    );
+    expect(admitted).toEqual(Array.from({ length: 12 }, (_, index) => index));
+    if (
+      testCase.workerClass === "reader" ||
+      testCase.workerClass === "file-reader" ||
+      testCase.workerClass === "compute"
+    ) {
+      expect(
+        workers.map((worker) => worker.options?.resourceLimits?.maxOldGenerationSizeMb),
+      ).toEqual(Array(testCase.admitted).fill(512));
+    }
+  } finally {
+    gate.resolve();
+    await Promise.all([Promise.allSettled(results), pool.close()]);
+  }
 });
 
 describe("public worker task preparation custody", () => {
+  it.each([undefined, "reader"] as const)(
+    "retains lazy inherited options (class=%s)",
+    async (selectedClass) => {
+      const releaseResources = vi.fn(async () => {});
+      const readOptions = vi.fn();
+      class Limits {
+        get stackSizeMb() {
+          return 8;
+        }
+      }
+      class PoolOptions {
+        #release = releaseResources;
+        workerUrl = new URL("file:///fixture/preparation-worker.js");
+        maxWorkers = 1;
+        constructor(readonly workerClass: WorkerPoolClass | undefined) {}
+        get workerOptions() {
+          readOptions();
+          return { resourceLimits: new Limits() };
+        }
+        prepareWorker() {
+          return { options: {}, releaseResources: this.#release };
+        }
+      }
+      const pool = new WorkerTaskPool<string, string>(new PoolOptions(selectedClass));
+      pools.push(pool);
+      expect(readOptions).not.toHaveBeenCalled();
+      await expect(pool.run("prepared", {})).resolves.toBe("prepared");
+      expect(readOptions).toHaveBeenCalledOnce();
+      expect(workers[0]?.options?.resourceLimits?.stackSizeMb).toBe(8);
+      expect(workers[0]?.options?.resourceLimits?.maxOldGenerationSizeMb).toBe(
+        selectedClass ? 512 : undefined,
+      );
+      expect(releaseResources).not.toHaveBeenCalled();
+      await pool.close();
+      expect(releaseResources).toHaveBeenCalledOnce();
+    },
+  );
+
   it("attributes owned tasks before input preparation without exporting private operation suffixes", async () => {
     const events: Extract<DiagnosticEventPayload, { type: "worker.request" }>[] = [];
     const unsubscribe = onTrustedInternalDiagnosticEvent(

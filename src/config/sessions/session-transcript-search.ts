@@ -51,7 +51,6 @@ import type {
   SessionTranscriptSearchReadResult,
   SessionTranscriptSearchResult,
 } from "./session-transcript-search.types.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 const SEARCH_SNIPPET_MAX_CHARS = 500;
@@ -236,39 +235,35 @@ export async function searchSessionTranscripts(
     sessionKeys: params.sessionKeys?.slice(),
   };
   let statusOwnerFailure: { error: unknown } | undefined;
-  const finish = async (
-    { found, revision, ...result }: SessionTranscriptSearchReadResult,
-    isCurrent: (revision: string) => boolean | Promise<boolean>,
-    assertCurrent?: () => void,
-  ): Promise<SessionTranscriptSearchResult> => {
+  const readIndexStatus = async (assertCurrent?: () => void): Promise<boolean> => {
     assertCurrent?.();
     let indexing: boolean;
     try {
-      if (found && statusOwnerFailure) {
+      if (statusOwnerFailure) {
         throw statusOwnerFailure.error;
       }
-      indexing = found && (await readSessionTranscriptIndexStatus(options, assertCurrent));
+      indexing = await readSessionTranscriptIndexStatus(options, assertCurrent);
     } catch {
       // Writable maintenance failure must not discard an authorized read-only result.
       assertCurrent?.();
-      return { ...result, indexing: true };
+      return true;
     }
     assertCurrent?.();
     if (indexing) {
       startSessionTranscriptIndexReconcile(options);
     }
-    const current = !found || (!indexing && revision !== undefined && (await isCurrent(revision)));
-    assertCurrent?.();
-    return {
-      ...result,
-      indexing: !current || isSessionTranscriptIndexReconcileRunning(options),
-    };
+    return indexing;
   };
   if (isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options)) {
     // Process-local SQLite cannot cross the worker boundary without changing its lifetime.
-    return finish(searchSessionTranscriptsReadOnlySync(request, options), (revision) =>
-      isSessionTranscriptSearchCurrentSync(revision, options),
-    );
+    const { found, revision, ...result } = searchSessionTranscriptsReadOnlySync(request, options);
+    const indexing = found && (await readIndexStatus());
+    const current =
+      !found ||
+      (!indexing &&
+        revision !== undefined &&
+        isSessionTranscriptSearchCurrentSync(revision, options));
+    return { ...result, indexing: !current || isSessionTranscriptIndexReconcileRunning(options) };
   }
   let execution: OpenClawAgentDatabaseExecution | undefined;
   try {
@@ -281,17 +276,16 @@ export async function searchSessionTranscripts(
     } catch (error) {
       statusOwnerFailure = { error };
     }
-    // Search revisions are connection-local; keep both reads on one serialized worker.
-    return await withSessionHistoryWorkerDatabase(
-      options,
-      async (owner) =>
-        await finish(
-          await owner.searchTranscripts(request),
-          (revision) => owner.isTranscriptSearchCurrent({ revision, env: scope.env }),
-          owner.assertCurrent,
-        ),
-      projectionLane,
-    );
+    return await withSessionHistoryWorkerDatabase(options, async (owner) => {
+      const result = await owner.searchTranscripts(request, () =>
+        readIndexStatus(owner.assertCurrent),
+      );
+      owner.assertCurrent();
+      return {
+        ...result,
+        indexing: result.indexing || isSessionTranscriptIndexReconcileRunning(options),
+      };
+    });
   } finally {
     await execution?.release();
   }

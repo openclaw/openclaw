@@ -67,7 +67,6 @@ export async function persistSessionUsageUpdate(params: {
     : undefined;
 
   const cfg = params.cfg ?? getRuntimeConfig();
-  const agentHarnessId = normalizeOptionalString(params.agentHarnessId);
   const modelSelection = params.runtimeModelSelection ?? {
     provider: params.providerUsed,
     model: params.modelUsed,
@@ -82,7 +81,6 @@ export async function persistSessionUsageUpdate(params: {
     Boolean(params.lastCallUsage) && params.lastCallUsage?.contextUsage?.state !== "unavailable";
   const hasFreshContextSnapshot = hasUsableLastCallUsage || hasPromptTokens;
   const hasCurrentContextSnapshot = params.currentContextSnapshot !== undefined;
-  const currentContextTokens = resolveNonNegativeTokenCount(params.currentContextSnapshot?.tokens);
 
   // A monetary-only update must not invalidate the existing context observation.
   const hasContextUpdate =
@@ -98,13 +96,13 @@ export async function persistSessionUsageUpdate(params: {
     usage: params.usage,
     lastCallUsage: params.lastCallUsage,
     modelSelection,
-    agentHarnessId,
+    agentHarnessId: normalizeOptionalString(params.agentHarnessId),
     contextTokensUsed: params.contextTokensUsed,
     contextTokensSource: params.contextTokensSource,
     contextBudgetStatus: params.contextBudgetStatus,
     systemPromptReport: params.systemPromptReport,
     promptTokens: params.promptTokens,
-    currentContextTokens,
+    currentContextTokens: resolveNonNegativeTokenCount(params.currentContextSnapshot?.tokens),
     hasUsage,
     hasBilling,
     hasContextUpdate,
@@ -131,14 +129,12 @@ export async function persistSessionUsageUpdate(params: {
         );
   const options = {
     skipMaintenance: true,
-    ...(sessionStore
-      ? {
-          onCommitted: (entry: InternalSessionEntry) => {
-            // Publish this commit before a newer writer can replace the caller's cache.
-            sessionStore[sessionKey] = entry;
-          },
+    onCommitted: sessionStore
+      ? (entry: InternalSessionEntry) => {
+          // Publish this commit before a newer writer can replace the caller's cache.
+          sessionStore[sessionKey] = entry;
         }
-      : {}),
+      : undefined,
     workerGuard: {
       assertCurrent: authorize
         ? () => {

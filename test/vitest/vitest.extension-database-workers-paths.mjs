@@ -260,6 +260,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt.steering-media.test.ts",
   "extensions/codex/src/app-server/run-attempt.steering-settlement.test.ts",
   "extensions/codex/src/app-server/run-attempt.turn-watches.test.ts",
+  "extensions/codex/src/app-server/run-attempt.warnings.test.ts",
+  "extensions/codex/src/app-server/session-warnings.test.ts",
   "extensions/codex/src/app-server/run-attempt.workspace-snapshot.test.ts",
   "extensions/copilot/src/tool-bridge.test.ts",
   "extensions/crabbox/doctor-contract-api.test.ts",
