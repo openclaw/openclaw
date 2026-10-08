@@ -767,6 +767,9 @@ export class RealtimeCallHandler {
       ? initialGreetingInstructions
       : instructions;
     const harness = createRealtimeVoiceSessionHarness({
+      forcedConsults: {
+        questionsMatch: (left, right) => Boolean(left && right && left.trim() === right.trim()),
+      },
       talk: {
         sessionId: `voice-call:${callId}:realtime`,
         mode: "realtime",
