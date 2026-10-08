@@ -29,6 +29,7 @@ import {
   type GatewayRunSignalContext,
   type GatewayRunSignalRequest,
 } from "./run-loop-request.js";
+import { createGatewayRestartRuntimePreparation } from "./run-loop-runtime-preparation.js";
 import {
   resolveGatewayShutdownDrainBudget,
   resolveGatewayShutdownBudget,
@@ -122,8 +123,11 @@ export async function runGatewayLoop(params: {
   const processInstanceId = randomUUID();
   const getManagedUpdateOwner = () =>
     (pendingStartupRequest ?? activeRestartRequest)?.restartIntent?.successorOwner;
+  const restartRuntime = createGatewayRestartRuntimePreparation(eagerLifecycleRuntime, gatewayLog);
 
   const cleanupSignals = () => {
+    // A forced process exit can discard code-only preparation, never an accepted write.
+    void restartRuntime.release();
     signals.retire();
     releaseHostLifeline?.();
     releaseHostLifeline = undefined;
@@ -142,6 +146,9 @@ export async function runGatewayLoop(params: {
     params.runtime.exit(hostExitRequested && code === 0 ? Number(process.exitCode ?? 0) : code);
   };
   const exitProcessAfterSignals = async (code: number) => {
+    if (restartRuntime.pending) {
+      await restartRuntime.release();
+    }
     for (;;) {
       if (forcedExitStarted || !signals.pending) {
         break;
@@ -161,6 +168,9 @@ export async function runGatewayLoop(params: {
     }
     if (!forcedExitStarted) {
       await signals.drain();
+    }
+    if (restartRuntime.pending) {
+      await restartRuntime.release();
     }
     let ownerToCommit = initialOwner;
     let commitOutcome = initialOutcome;
@@ -311,6 +321,9 @@ export async function runGatewayLoop(params: {
     alreadyCancelledOwner?: GatewayRestartIntent["successorOwner"],
   ): Promise<void> => {
     await signals.drain();
+    if (restartRuntime.pending) {
+      await restartRuntime.release();
+    }
     if (foregroundUpdateClosed) {
       return exitProcessAfterLogFlush(1);
     }
@@ -535,6 +548,7 @@ export async function runGatewayLoop(params: {
         signals.active && !forcedExitStarted && activeRestartRequest === handoffRequest;
       let handoff: Awaited<ReturnType<typeof eagerLifecycleRuntime.writeGatewayRestartHandoff>> =
         null;
+      const runtimePreparation = restartRuntime.current;
       try {
         handoff = await eagerLifecycleRuntime.writeGatewayRestartHandoff(
           {
@@ -543,6 +557,7 @@ export async function runGatewayLoop(params: {
             processInstanceId,
             supervisorMode: supervisorMode ?? "external",
             restartTrace: restartTrace.captureGatewayRestartTraceHandoff(),
+            ...(runtimePreparation ? { runtimePreparation } : {}),
           },
           () => {
             if (!handoffIsCurrent()) {
@@ -553,6 +568,10 @@ export async function runGatewayLoop(params: {
       } catch (error) {
         if (handoffIsCurrent()) {
           throw error;
+        }
+      } finally {
+        if (runtimePreparation) {
+          await restartRuntime.release(runtimePreparation);
         }
       }
       if (forcedExitStarted || !signals.active) {
@@ -725,6 +744,7 @@ export async function runGatewayLoop(params: {
         ["signal", acceptedRequest.signal],
       ]);
     }
+    const preparedRuntime = restartRuntime.prepare(acceptedRequest, restartDecision);
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
     let shutdownDeadline: number | undefined;
     let hardExitWatchdog: ShutdownHardExitWatchdog | null = null;
@@ -958,6 +978,7 @@ export async function runGatewayLoop(params: {
       if (action === "restart") {
         forceActiveRestartExit = null;
       }
+      return preparedRuntime ? restartRuntime.release(preparedRuntime) : undefined;
     });
     if (acceptedRequest.action === "stop") {
       acceptedStartupOperations.stopCompletion = completion;
@@ -1276,6 +1297,9 @@ export async function runGatewayLoop(params: {
   } finally {
     signals.retire();
     await signals.drain();
+    if (restartRuntime.pending) {
+      await restartRuntime.release();
+    }
     await hostLifecycle?.retire();
     await releaseLockIfHeld();
     cleanupSignals();

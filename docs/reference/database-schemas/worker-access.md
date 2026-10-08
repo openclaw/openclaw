@@ -56,6 +56,15 @@ handoff consumption and native service-control lock operations retain their
 existing synchronous contracts. Schemas, stored formats, retention, permissions,
 and published-driver update behavior are unchanged.
 
+Supervised restarts can preload the shared-state worker's code while accepted
+work drains. This optional preparation opens no database and grants no authority;
+normal work can reclaim its capacity. The broker binds it to the captured runtime
+source and the next successful close, then consumes it once through ordinary
+admission after native writers retire. Failed or stale preparations are retired,
+and unused preparation is joined before an in-process fallback or normal exit.
+The handoff still captures and checks the physical database and live request at
+use time, so warming does not move persistence ahead of shutdown settlement.
+
 Conversation directory registration and outbound binding predicates use the existing
 agent writer. Registration retains the selected physical store across directory
 discovery; transaction and commit grants recheck live routing authority. Delivery

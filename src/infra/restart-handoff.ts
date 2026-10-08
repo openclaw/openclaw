@@ -25,8 +25,10 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
+import type { SqliteWorkerRuntimePreparation } from "./sqlite-worker-runtime-preparation.types.js";
 
 export type { GatewayRestartHandoff } from "./restart-lifecycle.types.js";
+export { prepareOpenClawStateWorkerRuntime as prepareGatewayRestartHandoffRuntime } from "../state/openclaw-state-worker-store.js";
 
 // Restart handoff rows let a supervisor explain a recent gateway restart after
 // the old process exits. The row is short-lived, bounded, and replaced on write.
@@ -276,6 +278,7 @@ export async function writeGatewayRestartHandoff(
     restartTrace?: GatewayRestartHandoff["restartTrace"];
     ttlMs?: number;
     createdAt?: number;
+    runtimePreparation?: SqliteWorkerRuntimePreparation;
   },
   assertCurrent?: () => void,
 ): Promise<GatewayRestartHandoff | null> {
@@ -317,6 +320,7 @@ export async function writeGatewayRestartHandoff(
       context,
       (scope) => scope.execute({ type: "restartLifecycle.writeHandoff", input: payload }),
       {
+        runtimePreparation: opts.runtimePreparation,
         assertCurrent: check,
         createAdmission: () => {
           admission = createSqliteWorkerOperationAdmission((_request, grant) => {

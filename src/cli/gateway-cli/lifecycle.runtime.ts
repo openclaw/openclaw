@@ -23,7 +23,10 @@ export {
   scheduleGatewayRestart,
 } from "../../infra/restart.js";
 export { prepareGatewayRestartIntentConsumption } from "../../infra/restart-intent.js";
-export { writeGatewayRestartHandoff } from "../../infra/restart-handoff.js";
+export {
+  prepareGatewayRestartHandoffRuntime,
+  writeGatewayRestartHandoff,
+} from "../../infra/restart-handoff.js";
 export {
   cancelManagedServiceUpdateHandoff,
   claimManagedServiceUpdateHandoff,

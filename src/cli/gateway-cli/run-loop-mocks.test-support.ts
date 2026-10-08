@@ -128,6 +128,8 @@ const writeGatewayRestartHandoff = vi.fn<
   restartKind: "full-process",
   supervisorMode: "external",
 }));
+const prepareGatewayRestartHandoffRuntime =
+  vi.fn<typeof import("../../infra/restart-handoff.js").prepareGatewayRestartHandoffRuntime>();
 const scheduleGatewayRestart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
   ok: true,
   pid: process.pid,
@@ -299,6 +301,7 @@ vi.mock("../../infra/restart-handoff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/restart-handoff.js")>()),
   writeGatewayRestartHandoff: (...args: Parameters<typeof writeGatewayRestartHandoff>) =>
     writeGatewayRestartHandoff(...args),
+  prepareGatewayRestartHandoffRuntime: () => prepareGatewayRestartHandoffRuntime(),
 }));
 
 vi.mock("../../infra/gateway-active-work.js", () => ({
@@ -459,6 +462,8 @@ beforeEach(async () => {
   consumeGatewayRestartIntent.mockReturnValue(null);
   peekGatewayRestartReason.mockReset();
   peekGatewayRestartReason.mockReturnValue(undefined);
+  prepareGatewayRestartHandoffRuntime.mockReset();
+  prepareGatewayRestartHandoffRuntime.mockReturnValue(undefined);
   restartGatewayProcessWithFreshPid.mockReset();
   restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
   respawnGatewayProcessForUpdate.mockReset();
@@ -543,6 +548,7 @@ export const runLoopFixture = {
   markGatewayRestartHandled,
   markUpdateRestartSentinelFailure,
   peekGatewayRestartReason,
+  prepareGatewayRestartHandoffRuntime,
   readCgroup,
   readLaunchdStopTimeout,
   readRestartSentinelReadOnly,

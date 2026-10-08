@@ -19,6 +19,7 @@ export function registerExternalHandoffShutdownTests(
     restartGatewayProcessWithFreshPid,
     respawnGatewayProcessForUpdate,
     writeGatewayRestartHandoff,
+    prepareGatewayRestartHandoffRuntime,
     cancelShutdownHardExitWatchdog,
     gatewayLog,
     isGatewayWorkAdmissionClosed,
@@ -162,6 +163,86 @@ export function registerExternalHandoffShutdownTests(
       });
     } finally {
       delete process.env.OPENCLAW_SUPERVISOR_MODE;
+    }
+  });
+
+  it("prepares restart code before close and publishes the handoff only after close", async () => {
+    const env = captureEnv(["OPENCLAW_SUPERVISOR_MODE"]);
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    const closed = createDeferredCore();
+    const closeEntered = createDeferredCore();
+    const cleanup = createDeferredCore();
+    const preparation = { release: vi.fn(() => cleanup.promise) };
+    prepareGatewayRestartHandoffRuntime.mockReturnValueOnce(preparation);
+    restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, runtime, exited } = await createSignaledLoopHarness();
+        close.mockImplementationOnce(async () => {
+          closeEntered.resolve();
+          await closed.promise;
+        });
+        captureSignal("SIGUSR2")();
+        await closeEntered.promise;
+        try {
+          expect(prepareGatewayRestartHandoffRuntime).toHaveBeenCalledOnce();
+          expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
+        } finally {
+          closed.resolve();
+        }
+        await waitForLoopCondition(
+          () => preparation.release.mock.calls.length > 0,
+          "restart preparation cleanup did not begin",
+        );
+        try {
+          expect(writeGatewayRestartHandoff).toHaveBeenCalledWith(
+            expect.objectContaining({ runtimePreparation: preparation }),
+            expect.any(Function),
+          );
+          expect(runtime.exit).not.toHaveBeenCalled();
+        } finally {
+          cleanup.resolve();
+        }
+        await expect(exited).resolves.toBe(0);
+      });
+    } finally {
+      closed.resolve();
+      cleanup.resolve();
+      env.restore();
+    }
+  });
+
+  it("joins unused runtime preparation before resuming an in-process restart", async () => {
+    const env = captureEnv(["OPENCLAW_SUPERVISOR_MODE"]);
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    const cleanup = createDeferredCore();
+    const preparation = { release: vi.fn(() => cleanup.promise) };
+    prepareGatewayRestartHandoffRuntime.mockReturnValueOnce(preparation);
+    restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "failed", detail: "fixture" });
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { start, exited } = await createSignaledLoopHarness();
+        captureSignal("SIGUSR2")();
+        await waitForLoopCondition(
+          () => preparation.release.mock.calls.length > 0,
+          "unused preparation cleanup did not begin",
+        );
+        try {
+          expect(start).toHaveBeenCalledOnce();
+          expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
+        } finally {
+          cleanup.resolve();
+        }
+        await waitForLoopCondition(
+          () => start.mock.calls.length === 2,
+          "restart did not resume after code preparation closed",
+        );
+        captureSignal("SIGINT")();
+        await expect(exited).resolves.toBe(0);
+      });
+    } finally {
+      cleanup.resolve();
+      env.restore();
     }
   });
 
