@@ -45,6 +45,13 @@ export function renderGitHubPublicationAction(publication: GitHubPublicationView
           : nothing
       }`;
   }
+  // Nothing can be published without discovered accounts; offer a retry, not a dead button.
+  if (publication.optionsUnavailable) {
+    return renderPublicationRefresh(
+      publication,
+      `${t("githubPublication.statusUnavailable")}: ${publication.error}`,
+    );
+  }
   const personal = personalGitHubPublicationSelection(publication.options);
   const shared = publication.options?.shared;
   if (publication.result || publication.locked || !publication.onSelect || !shared || !personal) {
@@ -173,9 +180,9 @@ function renderPublicationAccount(publication: GitHubPublicationView) {
     : nothing;
 }
 
-function renderPublicationRefresh(publication: GitHubPublicationView) {
+function renderPublicationRefresh(publication: GitHubPublicationView, tooltip?: string) {
   const label = t("githubPublication.refresh");
-  return html`<openclaw-tooltip content=${label}>
+  return html`<openclaw-tooltip content=${tooltip ?? label}>
     <button
       class="btn btn--ghost btn--icon chat-icon-btn chat-pr__publication-refresh"
       type="button"
@@ -247,7 +254,8 @@ export function renderGitHubPublicationDetails(
 ) {
   const { result, confirmation, activity, locked, error, options } = publication;
   const selection = publicationButtonSelection(publication);
-  if (result?.status === "published" && !error) {
+  // The row action already carries the retry and the reason.
+  if ((result?.status === "published" && !error) || publication.optionsUnavailable) {
     return nothing;
   }
   const busy = activity !== null;
