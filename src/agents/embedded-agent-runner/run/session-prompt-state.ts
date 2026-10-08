@@ -6,6 +6,7 @@ import {
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { adoptExecRequestSession } from "../../../infra/exec-request-context.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { CustomMessage } from "../../sessions/messages.js";
 import { appendSessionTranscriptNote } from "../../sessions/session-manager-write-admission.js";
@@ -79,9 +80,10 @@ export async function createEmbeddedRunSessionPromptState(input: {
     internal: false,
   };
 
-  const notifySessionIdChanged = () => {
+  const notifySessionIdChanged = (previousSessionId: string) => {
     // Update host provenance before callbacks can close the exact run owner.
     registerAgentRunContext(params.runId, { sessionId: activeSessionId, lifecycleGeneration });
+    adoptExecRequestSession({ runId: params.runId, previousSessionId, sessionId: activeSessionId });
     params.replyOperation?.updateSessionId(activeSessionId);
     params.onSessionIdChanged?.(activeSessionId);
   };
@@ -89,8 +91,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
     if (!nextSessionId || nextSessionId === activeSessionId) {
       return;
     }
+    const previousSessionId = activeSessionId;
     activeSessionId = nextSessionId;
-    notifySessionIdChanged();
+    notifySessionIdChanged(previousSessionId);
   };
   const capturePreparedCompactionTarget = (
     target: Pick<AcceptedCompactionSuccessor, "sessionId" | "sessionFile" | "sessionTarget">,
@@ -108,7 +111,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
   };
   const notifyCompactionSessionAdopted = (previousSessionId: string | undefined) => {
     if (previousSessionId && previousSessionId !== activeSessionId) {
-      notifySessionIdChanged();
+      notifySessionIdChanged(previousSessionId);
     }
   };
   // Internal control prompts are model-only context, never operator-authored transcript turns.

@@ -355,8 +355,18 @@ keeps its native owner. Schemas, retained bytes, and update behavior are unchang
 After session discovery selects an absent store, its first registration by that
 same database owner preserves the captured registry witness. The existing mutation
 filter retains that first physical generation; different owners, replacement, and
-retirement still invalidate the read. Discovery, transcript callbacks, and writes
-are not replayed. Registration before target selection retains its existing refusal.
+retirement still invalidate the read. Admitted reads, consumer callbacks, and writes
+are not replayed. Fresh target discovery that meets a pending registration waits for
+the first refusal's captured native settlements, rechecks the original shared-state
+admission and caller custody, and reads the settled registry before selecting a
+target. A later pending registration refuses discovery instead of extending its
+wait indefinitely. Retained reads
+still refuse relevant registry changes. The captured discovery witness follows its
+own registration even when routing did not need native registry rows, then verifies
+the selected target again before releasing the read. Heartbeat admission reads use
+that same worker owner, so an immediate wake cannot synchronously create a store
+while another request holds its absent-file creation witness. Schemas, stored bytes,
+and update behavior are unchanged.
 
 Concurrent creators that observed the same absent agent database share its captured
 execution owner and native opening. The owner retains the creation reservation until

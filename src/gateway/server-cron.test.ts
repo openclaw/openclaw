@@ -25,7 +25,7 @@ import { CronService } from "../cron/service.js";
 import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
 import { loadCronStore } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
-import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
+import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
   OutboundDeliveryError,
@@ -3159,7 +3159,7 @@ describe("buildGatewayCronService", () => {
         sessionKey: undefined,
       });
       expect(
-        resolveHeartbeatSession(
+        resolveHeartbeatSessionKey(
           cfg,
           "primary",
           cfg.agents?.defaults?.heartbeat,
@@ -3199,7 +3199,7 @@ describe("buildGatewayCronService", () => {
         sessionKey: "agent:primary:user-session",
       });
       expect(
-        resolveHeartbeatSession(
+        resolveHeartbeatSessionKey(
           cfg,
           "primary",
           cfg.agents?.defaults?.heartbeat,

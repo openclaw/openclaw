@@ -29,6 +29,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
@@ -613,6 +614,11 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 }),
                 onSessionIdChanged: (sessionId) => {
                   if (prepared.activeRunAbort.entry) {
+                    adoptExecRequestSession({
+                      runId: params.runId,
+                      previousSessionId: prepared.activeRunAbort.entry.sessionId,
+                      sessionId,
+                    });
                     prepared.activeRunAbort.entry.sessionId = sessionId;
                   }
                 },

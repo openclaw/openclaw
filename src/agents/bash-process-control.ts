@@ -1,5 +1,18 @@
+import {
+  activeExecRequestOwners,
+  cancelExecRequestOwners,
+  execRequestMatches,
+  readExecRequestOwners,
+  type ExecRequestIdentity,
+} from "../infra/exec-request-context.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { getSession, type ProcessSession } from "./bash-process-registry.js";
+import {
+  removeNotifyOnExit,
+  getSession,
+  listExecSessionsForCancellation,
+  waitForExecSession,
+  type ProcessSession,
+} from "./bash-process-registry.js";
 
 export function isBackgroundExecCancellable(
   session: ProcessSession | undefined,
@@ -31,4 +44,64 @@ export function isConfirmedRequestedStop(session: ProcessSession): boolean {
     session.exitReason === "manual-cancel" &&
     session.finalizationFailed !== true
   );
+}
+
+/** Select before awaited cancellation work; a later human turn cannot enter this plan. */
+export function captureExecRequestCancellation(
+  target: ExecRequestIdentity,
+  accept: (identity: ExecRequestIdentity) => boolean = () => true,
+) {
+  const initialSessions = listExecSessionsForCancellation();
+  const residualOwners = initialSessions
+    .flatMap((session) =>
+      !session.exited || session.finalizing ? (readExecRequestOwners(session) ?? []) : [],
+    )
+    .filter((owner) => execRequestMatches(owner, target) && accept(owner.identity));
+  const owners = new Set([...activeExecRequestOwners(target, accept), ...residualOwners]);
+  const matching = (session: ProcessSession) =>
+    readExecRequestOwners(session)?.some((owner) => owners.has(owner)) === true;
+  const capturedSessions = initialSessions.filter(matching);
+  let cancelled = false;
+  return {
+    owners: [...owners],
+    cancel() {
+      if (cancelled || owners.size === 0) {
+        return false;
+      }
+      cancelled = true;
+      cancelExecRequestOwners([...owners]);
+      for (const session of listExecSessionsForCancellation().filter(matching)) {
+        removeNotifyOnExit(session);
+      }
+      return true;
+    },
+    async settle() {
+      const stoppedOwners = new Set([...owners].filter((owner) => owner.signal.aborted));
+      if (stoppedOwners.size === 0) {
+        return;
+      }
+      // Accepted Stop may reach the owner through another cancellation path. Keep
+      // captured records even if output eviction precedes this cleanup verdict.
+      const sessions = [
+        ...new Set([...capturedSessions, ...listExecSessionsForCancellation()]),
+      ].filter((session) =>
+        readExecRequestOwners(session)?.some((owner) => stoppedOwners.has(owner)),
+      );
+      const pending = sessions.map(waitForExecSession);
+      for (const owner of stoppedOwners) {
+        for (const settlement of owner.pendingProcesses) {
+          pending.push(settlement);
+        }
+      }
+      await Promise.all(pending);
+      if (
+        [...stoppedOwners].some((owner) => owner.cleanupUncertain) ||
+        sessions.some((session) => session.finalizationFailed || session.cleanupUncertain)
+      ) {
+        throw new Error(
+          "Request stopped, but command cleanup could not be confirmed. Inspect its retained process output before retrying.",
+        );
+      }
+    },
+  };
 }

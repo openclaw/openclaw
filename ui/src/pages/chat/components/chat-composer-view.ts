@@ -422,15 +422,21 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   : nothing
               }
               <div class="agent-chat__composer-lede">
-                <openclaw-mcp-app-catalog
-                  surface="thread"
-                  .sessionKey=${props.sessionKey}
-                  .agentId=${props.currentAgentId}
-                ></openclaw-mcp-app-catalog>
-                <openclaw-mcp-app-resources
-                  .sessionKey=${props.sessionKey}
-                  .agentId=${props.currentAgentId}
-                ></openclaw-mcp-app-resources>
+                ${
+                  props.sessionAdmitted === false
+                    ? nothing
+                    : html`
+                        <openclaw-mcp-app-catalog
+                          surface="thread"
+                          .sessionKey=${props.sessionKey}
+                          .agentId=${props.currentAgentId}
+                        ></openclaw-mcp-app-catalog>
+                        <openclaw-mcp-app-resources
+                          .sessionKey=${props.sessionKey}
+                          .agentId=${props.currentAgentId}
+                        ></openclaw-mcp-app-resources>
+                      `
+                }
                 ${goalComposer.render()}
                 ${renderSelectedHumanMentions(
                   visibleDraft,
@@ -473,10 +479,16 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       `
                     : nothing
                 }
-                <openclaw-mcp-app-context-strip
-                  .sessionKey=${props.sessionKey}
-                  .agentId=${props.currentAgentId}
-                ></openclaw-mcp-app-context-strip>
+                ${
+                  props.sessionAdmitted === false
+                    ? nothing
+                    : html`
+                        <openclaw-mcp-app-context-strip
+                          .sessionKey=${props.sessionKey}
+                          .agentId=${props.currentAgentId}
+                        ></openclaw-mcp-app-context-strip>
+                      `
+                }
                 ${renderAttachmentPreview(props)}
                 ${renderAttachmentReadStatus(props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0)}
                 ${renderComposerDictationStatus(dictation)}
