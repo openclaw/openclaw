@@ -6,16 +6,16 @@ import { addGatewayClientOptions } from "../gateway-rpc.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import { collectOption, parseStrictPositiveIntOption } from "./helpers.js";
 
-function backupCommand(
+function backupCommand<Options>(
   parent: Command,
   name: string,
   description: string,
-  load: () => Promise<(runtime: RuntimeEnv, options: Record<string, unknown>) => Promise<unknown>>,
+  load: () => Promise<(runtime: RuntimeEnv, options: Options) => Promise<unknown>>,
 ): Command {
   return parent
     .command(name)
     .description(description)
-    .action((opts) =>
+    .action((opts: Options) =>
       runCommandWithRuntime(defaultRuntime, async () => {
         const run = await load();
         await run(defaultRuntime, opts);

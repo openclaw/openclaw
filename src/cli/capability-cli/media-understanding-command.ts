@@ -5,6 +5,15 @@ import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
 import { runCapabilityCommand } from "./providers-command.js";
 
+type MediaUnderstandingOptions = {
+  file: string;
+  agent?: string;
+  model?: string;
+  language?: string;
+  prompt?: string;
+  json: boolean;
+};
+
 export function registerMediaUnderstandingCommand(parent: Command, kind: "audio" | "video") {
   const audio = kind === "audio";
   const command = parent
@@ -18,7 +27,7 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
   command
     .option("--model <provider/model>", "Model override")
     .option("--json", "Output JSON", false)
-    .action((opts, actionCommand) =>
+    .action((opts: MediaUnderstandingOptions, actionCommand: Command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const {
           requireProviderModelOverride,
@@ -36,13 +45,13 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
           agent,
           ...(audio ? {} : { surface: "infer video describe" }),
         });
-        const activeModel = requireProviderModelOverride(opts.model as string | undefined);
+        const activeModel = requireProviderModelOverride(opts.model);
         const input = { filePath: path.resolve(file), cfg, agentId, agentDir, activeModel };
         const result = audio
           ? await transcribeAudioFile({
               ...input,
-              language: opts.language as string | undefined,
-              prompt: opts.prompt as string | undefined,
+              language: opts.language,
+              prompt: opts.prompt,
             })
           : await describeVideoFile(input);
         if (!result.text) {
