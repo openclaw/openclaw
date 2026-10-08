@@ -4,6 +4,7 @@ import { initialState, Task, TaskStatus } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import { html as staticHtml, literal } from "lit/static-html.js";
 import type {
   PluginsListResult,
   SessionsCatalogListResult,
@@ -885,6 +886,18 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.isUpdateBusy() ||
       this.context.overlays.snapshot.updateStatusRefreshing ||
       !hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
+    const sectionTag =
+      this.pageId === "communications" && activeSection === "transcripts"
+        ? literal`openclaw-meeting-capture-settings`
+        : this.pageId === "ai-agents" && activeSection === "session"
+          ? literal`openclaw-session-storage-settings`
+          : undefined;
+    const withConfigMutation =
+      <Args extends unknown[]>(mutate: (...args: Args) => void) =>
+      (...args: Args) => {
+        this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
+        mutate(...args);
+      };
     const props: ConfigProps = {
       onAppearanceChange: (patch) => this.applySettings(patch),
       raw: configState.configRaw,
@@ -911,22 +924,13 @@ export class ConfigPage extends OpenClawLightDomElement {
       formValue: configState.configForm,
       activeSection,
       activeSubsection,
-      onRawChange: (next) => {
-        this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
-        runtimeConfig.setRaw(next);
-      },
+      onRawChange: withConfigMutation((next) => runtimeConfig.setRaw(next)),
       onFormModeChange: (mode) => {
         this.formModes = { ...this.formModes, [this.pageId]: mode };
       },
       onViewStateChange: () => this.requestUpdate(),
-      onFormPatch: (path, value) => {
-        this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
-        runtimeConfig.patchForm(path, value);
-      },
-      onFormRemove: (path) => {
-        this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
-        runtimeConfig.removeFormValue(path);
-      },
+      onFormPatch: withConfigMutation((path, value) => runtimeConfig.patchForm(path, value)),
+      onFormRemove: withConfigMutation((path) => runtimeConfig.removeFormValue(path)),
       onSectionChange: (section) => this.setActiveSection(section),
       onSubsectionChange: (section) => this.setActiveSubsection(section),
       onSave: () => void runtimeConfig.save(),
@@ -1064,26 +1068,16 @@ export class ConfigPage extends OpenClawLightDomElement {
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: this.pageId === "advanced" ? undefined : titleForRoute(this.pageId),
       showSectionDocs: this.pageId !== "communications",
-      renderSection:
-        this.pageId === "communications" && activeSection === "transcripts"
-          ? (editor) => html`<openclaw-meeting-capture-settings
+      renderSection: sectionTag
+        ? (editor) => staticHtml`<${sectionTag}
               .mutationDisabled=${this.isCuratedConfigMutationDisabled()}
               .advancedExpanded=${
                 this.routeData?.advanced === true ||
-                this.routeData?.targetBlockId === "config-section-transcripts"
+                this.routeData?.targetBlockId === `config-section-${activeSection}`
               }
               .editor=${editor}
-            ></openclaw-meeting-capture-settings>`
-          : this.pageId === "ai-agents" && activeSection === "session"
-            ? (editor) => html`<openclaw-session-storage-settings
-                .mutationDisabled=${this.isCuratedConfigMutationDisabled()}
-                .advancedExpanded=${
-                  this.routeData?.advanced === true ||
-                  this.routeData?.targetBlockId === "config-section-session"
-                }
-                .editor=${editor}
-              ></openclaw-session-storage-settings>`
-            : undefined,
+            ></${sectionTag}>`
+        : undefined,
       sectionPrelude:
         activeSection === "browser" && browserPanelAvailable && !hasNativeBrowserBridge()
           ? renderBrowserLinkPreferencesRow({

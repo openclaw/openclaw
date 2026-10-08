@@ -19,11 +19,10 @@ import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../se
 import type { FollowupRun } from "./queue.js";
 
 function sessionEntryOnlyUpdatedAtChanged(entry: SessionEntry, snapshot: SessionEntry): boolean {
-  if (entry.updatedAt === snapshot.updatedAt) {
-    return false;
-  }
-  const entryWithoutUpdatedAt = { ...entry, updatedAt: snapshot.updatedAt };
-  return isDeepStrictEqual(entryWithoutUpdatedAt, snapshot);
+  return (
+    entry.updatedAt !== snapshot.updatedAt &&
+    isDeepStrictEqual({ ...entry, updatedAt: snapshot.updatedAt }, snapshot)
+  );
 }
 
 /** Decides whether to retry after rechecking auto-fallback primary probe state. */
@@ -169,10 +168,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
   if (currentCachedEntry !== cachedSessionEntry) {
     return;
   }
-  const currentEntry = currentCachedEntry ?? (cachedSessionEntry ? undefined : activeSessionEntry);
-  if (!currentEntry) {
-    return;
-  }
+  const currentEntry = currentCachedEntry ?? activeSessionEntry;
   if (authoritativeEntry) {
     if (isDeepStrictEqual(currentEntry, activeSessionEntryBeforeUpdate)) {
       params.activeSessionStore[params.sessionKey] = authoritativeEntry;

@@ -80,6 +80,26 @@ function formatUsedPercent(fraction: number) {
   return `${Math.round(Math.min(Math.max(fraction, 0), 1) * 100)}%`;
 }
 
+function resourceStat(
+  kind: "memory" | "disk",
+  totalBytes: number | undefined,
+  freeBytes: number | undefined,
+  path?: string,
+): SystemStat {
+  const used = usedFraction(totalBytes, freeBytes);
+  return {
+    label: t(`quickSettings.system.${kind}`),
+    value: used == null ? "—" : formatUsedPercent(used),
+    unit: used == null ? undefined : t("quickSettings.system.used"),
+    detail: t("quickSettings.system.freeOf", {
+      free: formatBytes(freeBytes),
+      total: formatBytes(totalBytes),
+    }),
+    usedFraction: used,
+    path,
+  };
+}
+
 function buildSystemStats(info: SystemInfoResult): SystemStat[] {
   const load = info.loadAverage?.[0];
   const loadTitle = info.loadAverage
@@ -108,44 +128,14 @@ function buildSystemStats(info: SystemInfoResult): SystemStat[] {
           usedFraction: info.cpuCount > 0 ? load / info.cpuCount : undefined,
           title: cpuTitle,
         };
-  const memoryUsed = usedFraction(info.memoryTotalBytes, info.memoryFreeBytes);
-  const memory: SystemStat = {
-    label: t("quickSettings.system.memory"),
-    value: memoryUsed == null ? "—" : formatUsedPercent(memoryUsed),
-    unit: memoryUsed == null ? undefined : t("quickSettings.system.used"),
-    detail: t("quickSettings.system.freeOf", {
-      free: formatBytes(info.memoryFreeBytes),
-      total: formatBytes(info.memoryTotalBytes),
-    }),
-    usedFraction: memoryUsed,
-  };
-  const stats = [cpu, memory];
+  const stats = [cpu, resourceStat("memory", info.memoryTotalBytes, info.memoryFreeBytes)];
   for (const disk of info.disks ?? []) {
-    const diskUsed = usedFraction(disk.totalBytes, disk.availableBytes);
-    if (diskUsed == null) {
-      continue;
+    const stat = resourceStat("disk", disk.totalBytes, disk.availableBytes, disk.path);
+    if (stat.usedFraction != null) {
+      stats.push(stat);
     }
-    stats.push({
-      label: t("quickSettings.system.disk"),
-      value: formatUsedPercent(diskUsed),
-      unit: t("quickSettings.system.used"),
-      detail: t("quickSettings.system.freeOf", {
-        free: formatBytes(disk.availableBytes),
-        total: formatBytes(disk.totalBytes),
-      }),
-      usedFraction: diskUsed,
-      path: disk.path,
-    });
   }
   return stats;
-}
-
-function buildSystemStatsPlaceholder(value: SystemStat["value"]): SystemStat[] {
-  return [
-    { label: t("quickSettings.system.cpu"), value },
-    { label: t("quickSettings.system.memory"), value },
-    { label: t("quickSettings.system.disk"), value },
-  ];
 }
 
 /** Gateway host section with the stable settings-search scroll target id. */
@@ -161,7 +151,12 @@ export function renderSystemSection(props: SystemSectionProps) {
   const address = info?.lanAddress
     ? `${info.lanAddress}${info.port == null ? "" : `:${info.port}`}`
     : undefined;
-  const stats = info ? buildSystemStats(info) : buildSystemStatsPlaceholder(placeholder);
+  const stats = info
+    ? buildSystemStats(info)
+    : ["cpu", "memory", "disk"].map((kind) => ({
+        label: t(`quickSettings.system.${kind}`),
+        value: placeholder,
+      }));
 
   // Host identity and metered stats use a custom two-column grid with aligned row padding.
   const sectionProps: SettingsSectionProps = {

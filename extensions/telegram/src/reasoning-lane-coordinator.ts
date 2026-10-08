@@ -34,14 +34,10 @@ const THINKING_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 
 function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
-  if (!text) {
-    return "";
-  }
   const codeRegions = findCodeRegions(text);
   let result = "";
   let lastIndex = 0;
   let inThinking = false;
-  THINKING_TAG_RE.lastIndex = 0;
   for (const match of text.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
     if (isInsideCode(idx, codeRegions)) {
@@ -50,8 +46,7 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
     if (inThinking) {
       result += text.slice(lastIndex, idx);
     }
-    const isClose = match[1] === "/";
-    inThinking = !isClose;
+    inThinking = match[1] !== "/";
     lastIndex = idx + match[0].length;
   }
   if (inThinking) {
@@ -65,10 +60,9 @@ function isPartialReasoningTagPrefix(text: string): boolean {
     .trim()
     .replace(/^<\s*(\/?)\s+/u, "<$1")
     .toLowerCase();
-  if (!trimmed.startsWith("<") || trimmed.includes(">")) {
-    return false;
-  }
-  return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed));
+  return (
+    trimmed.startsWith("<") && REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed))
+  );
 }
 
 type TelegramReasoningSplit = {

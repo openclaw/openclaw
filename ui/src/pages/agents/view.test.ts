@@ -12,6 +12,7 @@ import { formatNextRun } from "../../lib/presenter.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSkill } from "../skills/view.test-support.ts";
+import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import {
   createAgentViewTestProps as createProps,
   inertAgentFileControls,
@@ -61,8 +62,11 @@ function renderFiles(
       agentFilesLoading: false,
       agentFilesError: null,
       agentFileActive: "USER.md",
-      agentFileContents: { "USER.md": content },
-      agentFileDrafts: { "USER.md": content },
+      agentFileEditors: createAgentFileEditors({
+        content: { "USER.md": content },
+        draft: { "USER.md": content },
+      }),
+
       agentFileSaving: false,
       ...inertAgentFileControls,
       ...overrides,
@@ -165,15 +169,16 @@ describe("renderAgents", () => {
         activePanel: "cron",
         selectedAgentId: "alpha",
         cron: {
-          cronStatus: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
-          cronJobs: [job],
-          cronJobsTotal: 1,
-          cronJobsHasMore: false,
-          cronJobsLoadingMore: false,
-          cronScopedTotal: 1,
-          cronScopedNextWakeAtMs: scopedNextWakeAtMs,
-          cronLoading: false,
-          cronError: null,
+          ...createProps().cron,
+          status: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
+          jobs: [job],
+          jobsTotal: 1,
+          jobsHasMore: false,
+          jobsLoadingMore: false,
+          scopedTotal: 1,
+          scopedNextWakeAtMs,
+          loading: false,
+          error: null,
         },
       },
       container,
@@ -236,20 +241,21 @@ describe("renderAgents", () => {
           activePanel: "cron",
           selectedAgentId: "alpha",
           cron: {
-            cronStatus: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
-            cronJobs: cronState.cronJobs,
-            cronJobsTotal: cronState.cronJobsTotal,
-            cronJobsHasMore: cronState.cronJobsHasMore,
-            cronJobsLoadingMore: cronState.cronJobsLoadingMore,
-            cronScopedTotal: 51,
-            cronScopedNextWakeAtMs: null,
-            cronLoading: cronState.cronLoading,
-            cronError: cronState.cronError,
-          },
-          onCronLoadMore: () => {
-            const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
-            renderCurrentPage();
-            void nextPage.then(renderCurrentPage);
+            ...createProps().cron,
+            status: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
+            jobs: cronState.cronJobs,
+            jobsTotal: cronState.cronJobsTotal,
+            jobsHasMore: cronState.cronJobsHasMore,
+            jobsLoadingMore: cronState.cronJobsLoadingMore,
+            scopedTotal: 51,
+            scopedNextWakeAtMs: null,
+            loading: cronState.cronLoading,
+            error: cronState.cronError,
+            onLoadMore: () => {
+              const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
+              renderCurrentPage();
+              void nextPage.then(renderCurrentPage);
+            },
           },
         },
         container,
@@ -364,10 +370,9 @@ describe("renderAgents", () => {
       {
         selectedAgentId: "alpha",
         config: config(configForm),
-        modelCatalog: {
-          hasSnapshot: true,
-          retired: false,
-          models: [
+        overview: {
+          ...createProps().overview,
+          modelCatalog: [
             {
               id: "claude-opus-4-8",
               alias: "opus",
@@ -516,15 +521,16 @@ describe("renderAgents", () => {
     renderView(
       {
         agentSkills: {
-          agentSkillsReport: {
+          ...createProps().agentSkills,
+          report: {
             workspaceDir: "/tmp/workspace",
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          agentSkillsLoading: false,
-          agentSkillsError: null,
-          agentSkillsAgentId: "alpha",
-          skillsFilter: "",
+          loading: false,
+          error: null,
+          activeAgentId: "alpha",
+          filter: "",
         },
       },
       container,
@@ -538,15 +544,16 @@ describe("renderAgents", () => {
     renderView(
       {
         agentSkills: {
-          agentSkillsReport: {
+          ...createProps().agentSkills,
+          report: {
             workspaceDir: "/tmp/workspace",
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          agentSkillsLoading: false,
-          agentSkillsError: null,
-          agentSkillsAgentId: "beta",
-          skillsFilter: "",
+          loading: false,
+          error: null,
+          activeAgentId: "beta",
+          filter: "",
         },
       },
       container,
@@ -569,10 +576,11 @@ describe("renderAgents", () => {
         {
           activePanel: "channels",
           channels: {
-            channelsSnapshot: null,
-            channelsLoading: false,
-            channelsError: null,
-            channelsLastSuccess: null,
+            ...createProps().channels,
+            snapshot: null,
+            loading: false,
+            error: null,
+            lastSuccess: null,
           },
         },
         container,
@@ -697,8 +705,11 @@ describe("renderAgentFiles", () => {
         },
         agentFilesLoading: true,
         agentFileActive: "AGENTS.md",
-        agentFileContents: { "AGENTS.md": "# Instructions" },
-        agentFileDrafts: { "AGENTS.md": "# Instructions" },
+        agentFileEditors: createAgentFileEditors({
+          content: { "AGENTS.md": "# Instructions" },
+          draft: { "AGENTS.md": "# Instructions" },
+        }),
+
         onSelectFile,
       },
       container,
@@ -738,8 +749,11 @@ describe("renderAgentFiles", () => {
           ],
         },
         agentFileActive: "AGENTS.md",
-        agentFileContents: { "AGENTS.md": "" },
-        agentFileDrafts: { "AGENTS.md": "" },
+        agentFileEditors: createAgentFileEditors({
+          content: { "AGENTS.md": "" },
+          draft: { "AGENTS.md": "" },
+        }),
+
         onSelectFile,
       },
       container,
@@ -805,8 +819,11 @@ describe("renderAgentFiles", () => {
           agentFilesLoading: false,
           agentFilesError: null,
           agentFileActive: "SOUL.md",
-          agentFileContents: { "SOUL.md": "" },
-          agentFileDrafts: { "SOUL.md": "Unsaved instructions" },
+          agentFileEditors: createAgentFileEditors({
+            content: { "SOUL.md": "" },
+            draft: { "SOUL.md": "Unsaved instructions" },
+          }),
+
           agentFileSaving: false,
           ...inertAgentFileControls,
           onSelectFile,
