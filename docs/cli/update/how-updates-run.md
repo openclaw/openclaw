@@ -199,6 +199,12 @@ deleting obsolete backups; rollback still hashes a backup before restoring it
 and verifies the restored bytes. These improvements belong to the installed
 updater and do not change an older updater already running.
 
+Retaining the updater's runtime skips package recovery anchors, control journals,
+and settled evidence beside installed packages. Even hard-linking unchanged
+recovery files would change their metadata and could invalidate an older sealed
+helper's fingerprint. Explicit runtime links into those recovery artifacts are
+rejected; the evidence remains untouched for its recovery owner.
+
 Candidate verification uses the same best-effort contract when its scan reaches
 the resource limits: activation and publication continue with directory identity,
 package version, and launcher verification, recording that full package contents
