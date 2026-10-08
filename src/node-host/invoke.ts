@@ -13,11 +13,10 @@ import {
   analyzeArgvCommand,
   createExecApprovalPolicySnapshot,
   ensureExecApprovalsSnapshot,
-  mergeExecApprovalsSocketDefaults,
   minSecurity,
   maxAsk,
   normalizeExecApprovals,
-  readExecApprovalsSnapshot,
+  readExecApprovalsSnapshotAsync,
   redactExecApprovals,
   resolveAllowAlwaysPatternCoverage,
   resolveExecApprovalsFromFile,
@@ -42,6 +41,7 @@ import {
 import { stageTerminalUpload } from "../infra/terminal-file-upload.js";
 import { logWarn } from "../logger.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   createNodeInvokeResponder,
   type NodeHostClient,
@@ -400,7 +400,7 @@ async function dispatchInvoke(
       return;
     }
     try {
-      const snapshot = await ensureExecApprovalsSnapshot();
+      const snapshot = await ensureExecApprovalsSnapshot(() => runtime.signal?.throwIfAborted());
       const payload = {
         ...redactExecApprovals(snapshot),
         ...(includeResolvedDefaults
@@ -415,6 +415,7 @@ async function dispatchInvoke(
   }
 
   if (command === "system.execApprovals.set") {
+    const assertCurrent = () => runtime.signal?.throwIfAborted();
     let params: SystemExecApprovalsSetParams;
     let normalized: ExecApprovalsFile;
     try {
@@ -429,9 +430,12 @@ async function dispatchInvoke(
     }
 
     let snapshot: ExecApprovalsSnapshot;
+    let context: ReturnType<typeof captureOpenClawStateWorkerContext>;
     try {
       // A stale save must not initialize state before its base hash is checked.
-      snapshot = readExecApprovalsSnapshot();
+      context = captureOpenClawStateWorkerContext();
+      snapshot = await readExecApprovalsSnapshotAsync(context);
+      assertCurrent();
     } catch (err) {
       await response.error(classifyExecApprovalsStorageError(err), String(err));
       return;
@@ -446,10 +450,14 @@ async function dispatchInvoke(
 
     let nextSnapshot: ExecApprovalsSnapshot | null;
     try {
-      nextSnapshot = await updateExecApprovals({
-        baseHash: snapshot.hash,
-        update: (current) => mergeExecApprovalsSocketDefaults({ normalized, current }),
-      });
+      nextSnapshot = await updateExecApprovals(
+        {
+          baseHash: snapshot.hash,
+          assertCurrent,
+          update: { kind: "replace", file: normalized, preserveSocket: true },
+        },
+        context,
+      );
     } catch (err) {
       await response.error(classifyExecApprovalsStorageError(err), String(err));
       return;
@@ -463,6 +471,8 @@ async function dispatchInvoke(
       return;
     }
 
+    context.admission.assertCurrent();
+    assertCurrent();
     await response.json(redactExecApprovals(nextSnapshot));
     return;
   }

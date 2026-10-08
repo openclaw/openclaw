@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
 import {
   detectSharedAuthStoreMigration,
   migrateSharedAuthStore,
@@ -19,6 +20,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { resolveAgentDir } from "./agent-scope.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
@@ -214,16 +216,26 @@ describe("auth profile sqlite store", () => {
 
   it("memoizes legacy inspection and follows Doctor's ownership flip", async () => {
     await withAgentDirEnv("openclaw-auth-shared-memo-", async (agentDir, stateDir) => {
-      const sourcePath = resolveAuthProfileDatabasePath(agentDir);
       writePersistedAuthProfileStoreRaw(apiKeyStore("sk-legacy"), agentDir);
-      const realLstat = fs.lstatSync;
+      const runOperation = stateWorker.runOpenClawStateWorkerOperation;
       let sourceInspections = 0;
-      const lstatSpy = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
-        if (path.resolve(String(pathname)) === path.resolve(sourcePath)) {
-          sourceInspections += 1;
-        }
-        return realLstat(pathname, options as never);
-      });
+      const inspection = vi
+        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+        .mockImplementation((context, operation, options) =>
+          runOperation(
+            context,
+            (scope) =>
+              operation({
+                execute(command, executeOptions) {
+                  if (command.type === "authProfiles.bootstrap") {
+                    sourceInspections += 1;
+                  }
+                  return scope.execute(command, executeOptions);
+                },
+              }),
+            options,
+          ),
+        );
 
       try {
         for (const key of ["sk-first", "sk-second"]) {
@@ -254,7 +266,7 @@ describe("auth profile sqlite store", () => {
         });
         expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("missing");
       } finally {
-        lstatSpy.mockRestore();
+        inspection.mockRestore();
       }
     });
   });
@@ -297,16 +309,20 @@ describe("auth profile sqlite store", () => {
     });
   });
 
-  it("keeps legacy ownership when the main-agent source is unreadable", async () => {
+  it("keeps legacy ownership when bootstrap source inspection fails", async () => {
     await withAgentDirEnv("openclaw-auth-shared-unreadable-", async (agentDir) => {
       const sourcePath = resolveAuthProfileDatabasePath(agentDir);
-      const realLstat = fs.lstatSync;
-      const lstatSpy = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
-        if (path.resolve(String(pathname)) === path.resolve(sourcePath)) {
-          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-        }
-        return realLstat(pathname, options as never);
-      });
+      const inspectIdentity = databaseIdentity.inspectDatabasePathIdentitySync;
+      let sourceInspectionFailed = false;
+      const inspection = vi
+        .spyOn(databaseIdentity, "inspectDatabasePathIdentitySync")
+        .mockImplementation((pathname) => {
+          if (path.resolve(pathname) === path.resolve(sourcePath)) {
+            sourceInspectionFailed = true;
+            throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+          }
+          return inspectIdentity(pathname);
+        });
 
       try {
         await upsertAuthProfileWithLockOrThrow({
@@ -315,9 +331,10 @@ describe("auth profile sqlite store", () => {
           credential: apiKeyCredential("sk-unreadable"),
         });
       } finally {
-        lstatSpy.mockRestore();
+        inspection.mockRestore();
       }
 
+      expect(sourceInspectionFailed).toBe(true);
       const sharedDatabase = new DatabaseSync(resolveOpenClawStateSqlitePath());
       expect(sharedValue(sharedDatabase, "auth.sharedStore")).toBeUndefined();
       sharedDatabase.close();

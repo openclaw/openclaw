@@ -1,5 +1,9 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/cli/admin-state-owner.process.test.ts",
+  "src/pairing/pairing-store.test.ts",
+  "src/pairing/pairing-store.worker.test.ts",
+  "src/plugin-sdk/channel-pairing.store.test.ts",
   "src/hooks/bundled/session-memory/capture.test.ts",
   "src/hooks/bundled/session-memory/handler.test.ts",
   "src/hooks/bundled/session-memory/handler-auto-reset.test.ts",
@@ -195,6 +199,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/acp/runtime/session-meta-list.test.ts",
   "src/acp/runtime/session-meta-read.test.ts",
   "src/acp/runtime/session-meta-write.worker.test.ts",
+  "src/acp/runtime/session-meta-reset.worker.test.ts",
   "src/auto-reply/reply/commands-acp.test.ts",
   "src/commands/sessions.acp-model-display.test.ts",
   "src/gateway/agent-turn/agent-request-preflight.source-lineage.test.ts",
@@ -329,6 +334,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/spawn/acp-spawn.authority.test.ts",
   "src/agents/subagents/spawn/acp-spawn.test.ts",
   "src/node-host/invoke-agent-cli-claude.test.ts",
+  "src/node-host/invoke-system-run.socket.test.ts",
   "src/node-host/invoke-system-run.test.ts",
   "src/node-host/invoke.test.ts",
   "src/node-host/worker-runtime.test.ts",

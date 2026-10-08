@@ -155,13 +155,15 @@ export async function openTerminalSession(
   const { respond, context } = opts;
   const invalidPlan = (message: string) =>
     invalid(respond, terminalFailureMessage(message, request.failureHint));
+  const unavailable = (message: string) =>
+    respondTerminalUnavailable(respond, message, request.failureHint);
   const connId = requireConnId(opts);
   if (!connId) {
     return;
   }
   const manager = context.terminalSessions;
   if (!manager) {
-    respondTerminalUnavailable(respond, "terminal is not available", request.failureHint);
+    unavailable("terminal is not available");
     return;
   }
   const launch = context.resolveTerminalLaunchPolicy(request.agentId);
@@ -192,7 +194,7 @@ export async function openTerminalSession(
       );
     } catch (error) {
       if (error instanceof TerminalOpenDeadlineError) {
-        respondTerminalUnavailable(respond, "terminal open timed out", request.failureHint);
+        unavailable("terminal open timed out");
         return;
       }
       invalidPlan(
@@ -225,7 +227,7 @@ export async function openTerminalSession(
         nodeCatalogPlan.command,
       );
       if (!access.ok) {
-        respondTerminalUnavailable(respond, access.message, request.failureHint);
+        unavailable(access.message);
         return;
       }
       let nodeParams: Record<string, unknown>;
@@ -265,13 +267,13 @@ export async function openTerminalSession(
         );
       } catch (error) {
         if (error instanceof TerminalOpenDeadlineError) {
-          respondTerminalUnavailable(respond, "terminal open timed out", request.failureHint);
+          unavailable("terminal open timed out");
           return;
         }
         throw error;
       }
       if (policyResult && !policyResult.ok) {
-        respondTerminalUnavailable(respond, policyResult.message, request.failureHint);
+        unavailable(policyResult.message);
         return;
       }
       stageUpload = async (file) => ({
@@ -282,7 +284,7 @@ export async function openTerminalSession(
   }
 
   if (context.isConnectionActive?.(connId) === false) {
-    respondTerminalUnavailable(respond, "terminal connection closed", request.failureHint);
+    unavailable("terminal connection closed");
     return;
   }
   if (
@@ -296,7 +298,7 @@ export async function openTerminalSession(
     return;
   }
   if (!context.isTerminalEnabled()) {
-    respondTerminalUnavailable(respond, "terminal is disabled", request.failureHint);
+    unavailable("terminal is disabled");
     return;
   }
   const refreshedLaunch = context.resolveTerminalLaunchPolicy(request.agentId);
@@ -327,11 +329,7 @@ export async function openTerminalSession(
     });
     const agentSessionId = entry?.sessionId?.trim();
     if (!agentSessionId) {
-      respondTerminalUnavailable(
-        respond,
-        "session is no longer available; refresh and retry",
-        request.failureHint,
-      );
+      unavailable("session is no longer available; refresh and retry");
       return;
     }
     const readinessError = resolveSessionWorkStartError(agentSessionKey, entry);
@@ -350,7 +348,7 @@ export async function openTerminalSession(
     const relay = nodeRelay;
     const access = authorizeTerminalNodeCommand(context, relay.plan.nodeId, relay.plan.command);
     if (!access.ok) {
-      respondTerminalUnavailable(respond, access.message, request.failureHint);
+      unavailable(access.message);
       return;
     }
     // Policy awaits cannot authorize a replacement connection or pairing.
@@ -434,7 +432,7 @@ export async function openTerminalSession(
           () => undefined,
         );
       }
-      respondTerminalUnavailable(respond, "terminal open timed out", request.failureHint);
+      unavailable("terminal open timed out");
       return;
     }
     throw error;
@@ -452,7 +450,7 @@ export async function openTerminalSession(
     // A browser deadline can close the socket while PTY creation is still
     // finishing. Release the raced session instead of leaving an orphan.
     closeOpenedSession(outcome.sessionId);
-    respondTerminalUnavailable(respond, "terminal connection closed", request.failureHint);
+    unavailable("terminal connection closed");
     return;
   }
   context.logGateway.info(

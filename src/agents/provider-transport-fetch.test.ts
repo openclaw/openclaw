@@ -411,7 +411,10 @@ describe("buildGuardedModelFetch", () => {
           headers: { "content-type": contentType },
         }),
       );
-      const response = await request(streaming);
+      const response = await buildGuardedModelFetch(model, undefined, { onSseComment: vi.fn() })(
+        `${model.baseUrl}/responses`,
+        streaming,
+      );
       await expect(response.body!.cancel("consumer stopped")).resolves.toBeUndefined();
       expect(cancel).toHaveBeenCalledOnce();
       expect(release).toHaveBeenCalledOnce();
@@ -550,6 +553,37 @@ describe("buildGuardedModelFetch SSE readability", () => {
         message: expect.stringMatching(/baseUrl.*\/v1 path prefix/),
       });
       expect(release).toHaveBeenCalled();
+    },
+  );
+
+  it.each(["sanitized", "official", "opt-out"])(
+    "observes comment lines without event separators on %s streams",
+    async (mode) => {
+      const chunks = [
+        "\uFEFF: keep",
+        "alive\r",
+        "\n: second\n: third\r",
+        'event: ping\n\ndata: {"ok": true}\n\n',
+      ];
+      respond(chunks, "text/event-stream");
+      const target =
+        mode === "official"
+          ? { ...completionModel, provider: "openai", baseUrl: "https://api.openai.com/v1" }
+          : completionModel;
+      const onSseComment = vi.fn();
+      const response = await buildGuardedModelFetch(target, undefined, {
+        onSseComment,
+        sanitizeSse: mode !== "opt-out",
+      })(`${target.baseUrl}/responses`, { method: "POST" });
+
+      if (mode === "sanitized") {
+        await expect(response.text()).resolves.toBe('data: {"ok": true}\n\n');
+      } else {
+        expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+          new TextEncoder().encode(chunks.join("")),
+        );
+      }
+      expect(onSseComment).toHaveBeenCalledTimes(3);
     },
   );
 

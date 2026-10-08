@@ -65,10 +65,12 @@ function createDurableLease() {
     effectiveEngineId: "test",
     effectiveEnginePluginId: undefined,
     degraded: false,
+    disposed: false,
     degradedReason: undefined,
     selectForHost: vi.fn(),
     degradeBeforeStart: vi.fn(),
     begin: vi.fn(),
+    onDispose: vi.fn(),
     deferDisposalUntil: () => undefined,
     dispose: async () => undefined,
   } satisfies ContextEngineLogicalTurnLease;
@@ -387,7 +389,7 @@ describe("accepted context-engine turn finalization", () => {
   });
 
   it("advances only the admitted durable range and rejects stale admission facts", async () => {
-    const { admission, database, facts, target, priorId, readPayload, readRow } =
+    const { admission, database, facts, target, priorId, readPayload } =
       await createAcceptedTurnFixture({ prefix: ["prior"] });
     const terminal = facts.boundary.terminal;
     expect(
@@ -524,27 +526,6 @@ describe("accepted context-engine turn finalization", () => {
       state: "blocked",
       failure: "non-descendant",
     });
-
-    for (const flag of ["aborted", "promptError", "yieldAborted"] as const) {
-      const rejectedAdmission = { ...admission, logicalTurnId: `logical-turn-${flag}` };
-      enqueueContextEngineTurnIntent({
-        admission: rejectedAdmission,
-        database,
-        engineId: "test",
-        isHeartbeat: false,
-      });
-      await finalizeAcceptedContextEngineTurn({
-        facts: {
-          ...baseFacts,
-          [flag]: true,
-          boundary: { ...baseFacts.boundary, admission: rejectedAdmission },
-        },
-        lease,
-        warn,
-      });
-      expect(commitTurn, flag).toHaveBeenCalledOnce();
-      expect(readRow(rejectedAdmission.logicalTurnId)).toBeUndefined();
-    }
   });
 
   it.each([

@@ -12,7 +12,7 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildAcpDatabaseSessionKey, selectAcpSessionRow } from "./session-meta-keys.js";
 import {
-  readAcpSessionMeta,
+  readAcpSessionEntry,
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
@@ -114,7 +114,7 @@ it("persists bare global metadata under a configured fixed-store owner", async (
     const unsubscribe = sessionChanges.subscribe((change) => {
       if ("sessionKey" in change && change.sessionKey === "global" && change.agentId === "ops") {
         observed.push(
-          readAcpSessionMeta({ cfg, databasePath, sessionKey: "global" })?.runtimeSessionName,
+          readAcpSessionEntry({ cfg, databasePath, sessionKey: "global" })?.acp?.runtimeSessionName,
         );
       }
     });
@@ -128,11 +128,11 @@ it("persists bare global metadata under a configured fixed-store owner", async (
 
       expect(persisted?.acp?.runtimeSessionName).toBe("global");
       expect(
-        readAcpSessionMeta({
+        readAcpSessionEntry({
           cfg,
           databasePath,
           sessionKey: "global",
-        })?.runtimeSessionName,
+        })?.acp?.runtimeSessionName,
       ).toBe("global");
       const conflictingMutate = vi.fn(mutate);
       await expect(

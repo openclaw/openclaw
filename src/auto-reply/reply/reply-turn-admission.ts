@@ -4,7 +4,6 @@ import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-sess
 import {
   claimMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
-  type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
@@ -65,6 +64,7 @@ import {
   lifecycleAdmissionByOperation,
   resolveVisibleActiveWaitMs,
 } from "./reply-run-registry.state.js";
+import { REPLY_WORK_ADMISSION_OWNER } from "./reply-turn-admission-owner.js";
 import { waitForRestartRecoveryProgress } from "./reply-turn-recovery-wait.js";
 import { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
 
@@ -287,6 +287,7 @@ export async function admitReplyTurn(
         let recoveryClaimStarted = false;
         const admission = storePath
           ? await beginSessionWorkAdmission({
+              owner: REPLY_WORK_ADMISSION_OWNER,
               scope: storePath,
               resolveGatewayContext,
               identities: [params.sessionKey],
@@ -606,16 +607,10 @@ export async function admitReplyTurn(
           });
         }
         if (admission) {
-          // The lifecycle fence follows hooks, media work, agent execution, and
-          // final delivery. Reset/delete interrupts the operation and waits until
-          // its actual owner clears it before mutating the persisted session.
-          // Adoption rebinds the map to this target lease; the source-key lease
-          // stays registered via its own after-clear callback (release is
-          // idempotent), so both identities free on operation clear.
+          // Keep the lease through delivery and durable cleanup so reset/delete cannot race it.
+          // Adoption retains the source-key lease; both idempotent releases run on clear.
           retainReplyOperationUntilComplete(operation);
-          let recoveryOwnerRelease:
-            | Promise<MainSessionRecoveryPendingTarget | undefined>
-            | undefined;
+          let recoveryOwnerRelease: ReturnType<typeof releaseReplyRecoveryOwner> | undefined;
           const releaseRecoveryOwner = () =>
             (recoveryOwnerRelease ??= releaseReplyRecoveryOwner(recoveryOwnerLease));
           if (recoveryOwnerLease) {

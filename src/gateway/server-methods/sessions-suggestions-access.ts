@@ -2,7 +2,6 @@ import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
-  type SessionSuggestionEvent,
   type SessionSuggestionResolution,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -284,18 +283,4 @@ export async function createSessionSuggestionMutation(params: {
     }
   };
   return { run, readCurrent, release: facts.release };
-}
-
-export function publishSuggestion(
-  context: GatewayRequestContext,
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
-  requestedSessionKey: string,
-  event: SessionSuggestionEvent,
-): void {
-  context.broadcast("session.suggestion", event, {
-    sessionKeys: [
-      ...new Set([requestedSessionKey, target.canonicalKey, target.storeKey]),
-    ].toSorted(),
-    agentId: event.suggestion.agentId,
-  });
 }

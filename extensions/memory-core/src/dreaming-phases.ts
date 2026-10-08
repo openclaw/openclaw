@@ -8,7 +8,6 @@ import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-ho
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   formatMemoryDreamingDay,
-  resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -38,7 +37,6 @@ import {
   runDreamNarrative,
 } from "./dreaming-narrative.js";
 import { formatErrorMessage } from "./dreaming-shared.js";
-import { normalizeMemoryCoreWorkspaceKey } from "./dreaming-state.js";
 import { listMemorySessionTombstones } from "./memory-entry-origins.js";
 import {
   inspectWorkspaceFile,
@@ -51,9 +49,10 @@ import {
   appendSessionCorpusLines,
   mergeTrackedMessageHashes,
   resolveAdmissionPolicy,
+  resolveSessionAgentsForWorkspace,
   resolveSessionIngestionFileCap,
   scanSessionIngestionSource,
-  sessionExclusionReason,
+  sessionExclusionReasons,
   sessionIngestionSourceFromCorpus,
   sessionIngestionStateKeyFromCorpus,
   SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP,
@@ -478,22 +477,6 @@ function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
   return SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE.test(path.basename(absolutePath));
 }
 
-function resolveSessionAgentsForWorkspace(params: {
-  cfg: OpenClawConfig;
-  workspaceDir: string;
-}): string[] {
-  const { cfg, workspaceDir } = params;
-  const target = normalizeMemoryCoreWorkspaceKey(workspaceDir);
-  const workspaces = resolveMemoryDreamingWorkspaces(cfg);
-  const match = workspaces.find(
-    (entry) => normalizeMemoryCoreWorkspaceKey(entry.workspaceDir) === target,
-  );
-  if (!match) {
-    return [];
-  }
-  return uniqueStrings(match.agentIds.filter((agentId) => agentId.trim().length > 0)).toSorted();
-}
-
 async function collectSessionIngestionBatches(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
@@ -527,6 +510,7 @@ async function collectSessionIngestionBatches(params: {
     const forgottenSessionIds = new Set(
       (await listMemorySessionTombstones({ agentId })).map((tombstone) => tombstone.sessionId),
     );
+    const selectedSources: SessionIngestionSource[] = [];
     for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId, {
       includeRetainedSqlite: true,
     })) {
@@ -543,16 +527,20 @@ async function collectSessionIngestionBatches(params: {
       ) {
         continue;
       }
-      const excludedReason = sessionExclusionReason(
-        source,
-        params.admissionPolicy,
-        forgottenSessionIds,
-      );
+      selectedSources.push(source);
+    }
+    const excludedReasons = sessionExclusionReasons(
+      selectedSources,
+      params.admissionPolicy,
+      forgottenSessionIds,
+    );
+    for (const source of selectedSources) {
+      const excludedReason = excludedReasons.get(source);
       if (excludedReason) {
         // Record exclusion before reading transcript content; the empty
         // fingerprint makes removing the policy re-admit this session.
         nextFiles[source.stateKey] = {
-          mtimeMs: entry.updatedAtMs ?? 0,
+          mtimeMs: source.buildOptions.updatedAtMs ?? 0,
           size: 0,
           contentHash: "",
           lineCount: 0,

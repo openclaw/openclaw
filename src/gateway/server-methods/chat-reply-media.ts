@@ -291,17 +291,12 @@ export function getWebchatReplyMediaLocalRoots(
 }
 
 function shouldPreserveDisplayMediaUrl(payload: ReplyPayload, mediaUrl: string): boolean {
-  if (mediaUrl.trim().toLowerCase().startsWith("data:")) {
-    return true;
-  }
-  if (!isAudioFileName(mediaUrl)) {
-    return false;
-  }
-  if (isPassThroughRemoteMediaSource(mediaUrl)) {
-    return true;
-  }
   // Trusted audio keeps its playback path and size cap; the reader still enforces local roots.
-  return payload.trustedLocalMedia === true;
+  return (
+    mediaUrl.trim().toLowerCase().startsWith("data:") ||
+    (isAudioFileName(mediaUrl) &&
+      (isPassThroughRemoteMediaSource(mediaUrl) || payload.trustedLocalMedia === true))
+  );
 }
 
 /** Normalize reply media paths for webchat display without leaking sensitive media. */

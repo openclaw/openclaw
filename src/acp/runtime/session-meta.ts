@@ -27,24 +27,6 @@ export { resolveSessionStorePathForAcp } from "./session-meta-store.js";
 
 export type { AcpSessionStoreEntry } from "./session-meta-store.js";
 
-/** @deprecated Use readAcpSessionMetaAsync for runtime reads. Native maintenance retains this reader. */
-export function readAcpSessionMeta(params: {
-  sessionKey: string;
-  agentId?: string;
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-}): SessionAcpMeta | undefined {
-  if (params.sessionKey.trim() && captureIncognitoSessionBinding(params)) {
-    throw new IncognitoSessionSyncAccessError("readAcpSessionMeta", "readAcpSessionMetaAsync");
-  }
-  return readAcpSessionEntry({
-    ...params,
-    sessionKey: params.sessionKey.trim(),
-    clone: false,
-  })?.acp;
-}
-
 export function readAcpSessionMetaBatch(params: {
   entries: ReadonlyArray<{
     sessionKey: string;

@@ -209,13 +209,7 @@ export async function resolveAgentDeliveryPhase(params: {
   }
 
   if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
-    if (
-      !shouldDowngradeDeliveryToSessionOnly({
-        wantsDelivery,
-        bestEffortDeliver: params.bestEffortDeliver,
-        resolvedChannel,
-      })
-    ) {
+    if (!params.bestEffortDeliver) {
       respond(
         false,
         undefined,

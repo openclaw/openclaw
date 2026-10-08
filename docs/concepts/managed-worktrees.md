@@ -614,6 +614,11 @@ openclaw worktrees gc --job <id>
 
 `--json` prints the receipt, including the job state and current cleanup summary. Polling observes the job without starting another pass. Enqueue requests made while a job is queued or running return that same job; only the latest job is retained, and restarting the Gateway discards its receipt. To force reinspection of unchanged deferred checkouts, start a new job with `--retry-deferred` after any current job finishes.
 
+UI preferences and other unrelated configuration writes do not interrupt cleanup.
+Changes to cleanup inputs, such as the worktree root or capacity, agent workspaces,
+session storage or ownership, and sandbox mode, cancel the current job before its
+next mutation. Start a new job to use the updated settings.
+
 Without a running local Gateway, `openclaw worktrees gc` runs cleanup to completion under exclusive local state ownership and returns the completed summary. Offline mode cannot poll Gateway jobs with `--job`. The CLI includes partial results and recovery locations in its output and exits nonzero for partial cleanup.
 
 ## Gateway methods
