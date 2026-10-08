@@ -36,6 +36,7 @@ import {
   repairPersistedPluginModelCatalogs,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
+import { validateModelsConfig } from "./sessions/model-registry-schema.js";
 
 const tempDirs: string[] = [];
 
@@ -298,6 +299,69 @@ describe("SQLite-backed plugin model catalogs", () => {
       models: [{ id: "model-owned-api", api: "openai-completions" }],
     });
     expect(catalog.providers?.nvidia).not.toHaveProperty("api");
+  });
+
+  it("completes a partial model cost in a persisted generated catalog", async () => {
+    const agentDir = createAgentDir();
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("nvidia")]: catalogContents(
+          "nvidia",
+          "NVIDIA_API_KEY",
+        ),
+      },
+    });
+    // Pre-normalizer bytes: a supplied tariff that omits the cache rates fails
+    // the registry schema and would drop every model of the provider.
+    const partialCost = JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        nvidia: {
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+          api: "openai-completions",
+          apiKey: "NVIDIA_API_KEY",
+          models: [
+            { id: "nvidia/nemotron", cost: { input: 0.08, output: 0.45 } },
+            { id: "nvidia/priced", cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 } },
+          ],
+        },
+      },
+    });
+    expect(validateModelsConfig.Check(JSON.parse(partialCost))).toBe(false);
+
+    const database = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"));
+    try {
+      database
+        .prepare("UPDATE cache_entries SET value_json = ? WHERE scope = ? AND key = ?")
+        .run(partialCost, "plugin-model-catalog-v1", "nvidia");
+    } finally {
+      database.close();
+    }
+
+    expect(
+      repairPersistedPluginModelCatalogs({
+        agentDir,
+        catalogs: loadPersistedPluginModelCatalogsReadOnly(agentDir),
+      }),
+    ).toEqual([{ pluginId: "nvidia", removedModelCount: 0, completedCostModelCount: 1 }]);
+
+    const repaired = JSON.parse(readCatalogCacheRow(agentDir, "nvidia").value_json) as {
+      providers: { nvidia: { models: Array<{ id: string; cost: Record<string, number> }> } };
+    };
+    expect(validateModelsConfig.Check(repaired)).toBe(true);
+    expect(repaired.providers.nvidia.models[0]?.cost).toEqual({
+      input: 0.08,
+      output: 0.45,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+    expect(repaired.providers.nvidia.models[1]?.cost).toEqual({
+      input: 1,
+      output: 2,
+      cacheRead: 3,
+      cacheWrite: 4,
+    });
   });
 
   it("leaves malformed persisted catalogs and valid sibling timestamps unchanged", async () => {

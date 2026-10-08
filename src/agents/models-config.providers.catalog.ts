@@ -19,7 +19,8 @@ type ProviderModelConfig = NonNullable<
   NonNullable<ModelsConfig["providers"]>[string]["models"]
 >[number];
 
-function normalizeModelCostForCatalog(model: ProviderModelConfig): ProviderModelConfig {
+/** Completes a partial cost with zeroed rates; an absent cost stays absent. */
+export function normalizeModelCostForCatalog(model: ProviderModelConfig): ProviderModelConfig {
   const cost = model.cost;
   if (
     !cost ||
