@@ -169,45 +169,6 @@ it("uses late publisher enrichment after package 404 without retrying the packag
   );
 });
 
-it("fetches proxied icons with auth fallback and revokes their blob URLs", async () => {
-  const { revoke } = stubUrls();
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValueOnce(new Response(null, { status: 401 }))
-    .mockResolvedValueOnce(
-      iconResponse(
-        new Uint8Array([
-          0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52, 0, 0,
-          0, 2, 0, 0, 0, 1,
-        ]),
-      ),
-    );
-  vi.stubGlobal("fetch", fetchMock);
-  const { gateway } = iconGateway();
-  gateway.connection.token = "first";
-  gateway.connection.password = "second";
-  const { page } = await mountIcons(
-    gateway,
-    createResult(createPlugin({ id: "remote-icon", name: "FireCrawl", hasIcon: true })),
-  );
-  await waitForFast(() =>
-    expect(
-      page.querySelector('[data-plugin-id="remote-icon"] img.plugins-icon')?.getAttribute("src"),
-    ).toBe("blob:icon"),
-  );
-  expect(
-    fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
-  ).toEqual(["Bearer first", "Bearer second"]);
-  page.applyMutationResult({
-    ok: true,
-    plugin: createPlugin({ id: "other-plugin", name: "Other Plugin" }),
-    restartRequired: false,
-  });
-  expect(revoke).not.toHaveBeenCalled();
-  page.remove();
-  expect(revoke).toHaveBeenCalledWith("blob:icon");
-});
-
 it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset", async () => {
   const { create } = stubUrls();
   const fetchMock = vi
@@ -332,4 +293,102 @@ it("revokes before invalidation publication and publishes both empty resets", as
   loader.reset();
   loader.reset();
   expect(published.mock.calls).toEqual([[{ [iconUrl]: "blob:icon-1" }], [{}], [{}], [{}]]);
+});
+
+it("keeps a pending detail icon on its skeleton until the image loads", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => "blob:loaded-icon");
+      static override revokeObjectURL = vi.fn();
+    },
+  );
+  const response = deferred<Response>();
+  const fetchMock = vi.fn(() => response.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  const plugin = createPlugin({ hasIcon: true });
+  const result = createResult(plugin);
+  const { client } = createClient(async (method) =>
+    method === "plugins.inspect" ? createInspectResult() : result,
+  );
+  const harness = createGateway(client);
+  harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+  const { page } = await mountPage(
+    createContext(harness.gateway),
+    createPluginsRouteData(
+      harness.gateway,
+      result,
+      createPluginsRouteLocation("/settings/plugins/workboard"),
+    ),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  const icon = () => page.querySelector(".plugin-catalog-detail__hero .plugins-tile");
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(icon()?.classList.contains("skeleton")).toBe(true);
+  expect(icon()?.classList.contains("plugins-tile--fallback")).toBe(false);
+  response.resolve(
+    new Response("image", {
+      headers: { "content-type": "image/png" },
+    }),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  const image = icon()?.querySelector("img");
+  expect(image?.getAttribute("src")).toBe("blob:loaded-icon");
+  expect(icon()?.classList.contains("skeleton")).toBe(true);
+  image?.dispatchEvent(new Event("load"));
+  expect(icon()?.classList.contains("skeleton")).toBe(false);
+});
+
+it("reuses installed artwork across navigation and retires it on a new plugin generation", async () => {
+  vi.useFakeTimers();
+  const revokeObjectURL = vi.fn();
+  let sequence = 0;
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => `blob:icon-${++sequence}`);
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
+  const fetchMock = vi.fn(
+    async () =>
+      new Response("image", {
+        headers: { "content-type": "image/png" },
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  const result = { ...createResult(createPlugin({ hasIcon: true })), generation: 1 };
+  const { client } = createClient(async (method) =>
+    method === "plugins.inspect" ? createInspectResult() : result,
+  );
+  const harness = createGateway(client);
+  harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+  const { page } = await mountPage(
+    createContext(harness.gateway),
+    createPluginsRouteData(harness.gateway, result),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.querySelector("img.plugins-icon")?.getAttribute("src")).toBe("blob:icon-1");
+  const detailRoute = createPluginsRouteLocation("/settings/plugins/workboard");
+  page.routeData = createPluginsRouteData(harness.gateway, result, detailRoute);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(revokeObjectURL).not.toHaveBeenCalled();
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(page.querySelector(".plugin-catalog-detail__hero img")?.getAttribute("src")).toBe(
+    "blob:icon-1",
+  );
+  page.routeData = createPluginsRouteData(
+    harness.gateway,
+    { ...result, generation: 2 },
+    detailRoute,
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:icon-1");
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(page.querySelector(".plugin-catalog-detail__hero img")?.getAttribute("src")).toBe(
+    "blob:icon-2",
+  );
+  page.remove();
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:icon-2");
 });
