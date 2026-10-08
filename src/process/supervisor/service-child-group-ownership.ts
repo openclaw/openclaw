@@ -1,11 +1,149 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { closeSync, constants, openSync, readdirSync, readFileSync, readSync } from "node:fs";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 
-export type ProcessCommand =
+type LinuxCredentialIds = readonly [number, number, number, number];
+
+export type LinuxProcessGeneration = {
+  startTicks: string;
+  ppid: number;
+  uids: LinuxCredentialIds;
+  gids: LinuxCredentialIds;
+};
+
+export type ProcessCommand = (
   | { argv: string[]; serviceMarker?: string; uid?: number }
-  | { argvUnavailable: true; uid: number };
+  | { argvUnavailable: true; uid: number }
+) & { generation?: LinuxProcessGeneration };
+
+function readBoundedProcFile(file: string): string {
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const buffer = Buffer.alloc(16_385);
+    let length = 0;
+    while (length < buffer.length) {
+      const count = readSync(fd, buffer, length, buffer.length - length, null);
+      if (count === 0) {
+        return buffer.subarray(0, length).toString("utf8");
+      }
+      length += count;
+    }
+    throw new Error("Process identity exceeds its observation limit");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Birth and every credential UID/GID bind optional cross-privilege cwd observations. */
+export function readLinuxProcessGeneration(pid: number): LinuxProcessGeneration | undefined {
+  if (process.platform !== "linux" || !Number.isSafeInteger(pid) || pid < 1 || pid > 0x7fff_ffff) {
+    return undefined;
+  }
+  try {
+    const stat = readBoundedProcFile(`/proc/${pid}/stat`);
+    const status = readBoundedProcFile(`/proc/${pid}/status`);
+    const closing = stat.lastIndexOf(")");
+    if (!stat.startsWith(`${pid} (`) || closing < 0 || stat[closing + 1] !== " ") {
+      return undefined;
+    }
+    const fields = stat
+      .slice(closing + 2)
+      .trim()
+      .split(/\s+/u);
+    const ppid = fields[1];
+    const startTicks = fields[19];
+    const ids = (field: "Uid" | "Gid"): LinuxCredentialIds | undefined => {
+      const lines = status.split("\n").filter((line) => line.startsWith(`${field}:`));
+      const match =
+        lines.length === 1
+          ? new RegExp(
+              `^${field}:[ \\t]+(\\d+)[ \\t]+(\\d+)[ \\t]+(\\d+)[ \\t]+(\\d+)[ \\t]*$`,
+            ).exec(lines[0]!)
+          : null;
+      if (!match) {
+        return undefined;
+      }
+      const values = match.slice(1).map(Number);
+      if (values.some((value) => !Number.isSafeInteger(value) || value > 0xffff_ffff)) {
+        return undefined;
+      }
+      return [values[0]!, values[1]!, values[2]!, values[3]!];
+    };
+    const uids = ids("Uid");
+    const gids = ids("Gid");
+    if (
+      !ppid ||
+      !/^(0|[1-9]\d{0,9})$/u.test(ppid) ||
+      Number(ppid) > 0x7fff_ffff ||
+      !startTicks ||
+      !/^[1-9]\d{0,19}$/u.test(startTicks) ||
+      BigInt(startTicks) > 0xffff_ffff_ffff_ffffn ||
+      !uids ||
+      !gids
+    ) {
+      return undefined;
+    }
+    return { startTicks, ppid: Number(ppid), uids, gids };
+  } catch {
+    return undefined;
+  }
+}
+
+export function linuxProcessGenerationMatches(
+  left: LinuxProcessGeneration | undefined,
+  right: LinuxProcessGeneration | undefined,
+): boolean {
+  return Boolean(
+    left &&
+    right &&
+    left.startTicks === right.startTicks &&
+    left.ppid === right.ppid &&
+    left.uids.every((value, index) => value === right.uids[index]) &&
+    left.gids.every((value, index) => value === right.gids[index]),
+  );
+}
+
+/** A provider response must not join a pre-exec command to a post-exec cwd. */
+export function readLinuxProcessCommandMetadata(
+  pid: number,
+  expected: LinuxProcessGeneration,
+  inspectServiceMarker: boolean,
+  deadline: number,
+): ProcessCommand | undefined {
+  if (Date.now() >= deadline) {
+    return undefined;
+  }
+  try {
+    const before = readLinuxProcessGeneration(pid);
+    if (!linuxProcessGenerationMatches(expected, before)) {
+      return undefined;
+    }
+    const argv = readBoundedProcFile(`/proc/${pid}/cmdline`).split("\0").filter(Boolean);
+    const markerFields = inspectServiceMarker
+      ? readBoundedProcFile(`/proc/${pid}/environ`)
+          .split("\0")
+          .filter((entry) => entry.startsWith("OPENCLAW_SERVICE_MARKER="))
+      : [];
+    if (
+      markerFields.length > 1 ||
+      Date.now() >= deadline ||
+      !linuxProcessGenerationMatches(expected, readLinuxProcessGeneration(pid))
+    ) {
+      return undefined;
+    }
+    return {
+      argv,
+      uid: expected.uids.find((uid) => uid === process.getuid?.()) ?? expected.uids[0],
+      generation: expected,
+      ...(markerFields.length
+        ? { serviceMarker: markerFields[0]!.slice("OPENCLAW_SERVICE_MARKER=".length) }
+        : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 type GroupMember = {
   pid: number;
@@ -71,6 +209,7 @@ export function* readProcessGroupMembers(
   timeoutMs: number,
   commandInspection?: {
     readDarwinCommand: (pid: number, uid: number) => ProcessCommand | undefined;
+    includeLinuxGeneration?: boolean;
   },
 ): Generator<GroupMember> {
   const includeCommand = commandInspection !== undefined;
@@ -87,10 +226,14 @@ export function* readProcessGroupMembers(
       let stat: string;
       let argv: string[] | undefined;
       let uid: number | undefined;
+      let generation: LinuxProcessGeneration | undefined;
       let opaqueForeignOwner = false;
       try {
         stat = readFileSync(`/proc/${name}/stat`, "utf8");
         if (includeCommand) {
+          if (commandInspection?.includeLinuxGeneration) {
+            generation = readLinuxProcessGeneration(pid);
+          }
           uid = readLinuxProcessUid(pid);
           try {
             argv = readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0").filter(Boolean);
@@ -122,6 +265,9 @@ export function* readProcessGroupMembers(
       if (!match || Number(match[1]) !== pid || Date.now() >= deadline) {
         throw new Error("Process group census is unavailable");
       }
+      if (commandInspection?.includeLinuxGeneration && uid === process.getuid?.() && !generation) {
+        throw new Error(`Could not classify PID ${pid}: process generation is unavailable.`);
+      }
       if (argv?.length === 0) {
         // Empty cmdline is normal for kernel threads, but cannot identify a live
         // userspace process (including a zombie leader with surviving threads).
@@ -139,12 +285,35 @@ export function* readProcessGroupMembers(
           }
         }
       }
+      if (
+        generation &&
+        (generation.startTicks !==
+          stat
+            .slice(stat.lastIndexOf(")") + 2)
+            .trim()
+            .split(/\s+/u)[19] ||
+          generation.ppid !== Number(match[3]) ||
+          uid !==
+            (generation.uids.find((value) => value === process.getuid?.()) ?? generation.uids[0]) ||
+          !linuxProcessGenerationMatches(generation, readLinuxProcessGeneration(pid)))
+      ) {
+        throw new Error(
+          `Could not classify PID ${pid}: process generation changed during command inspection.`,
+        );
+      }
       yield {
         pid,
         pgid: Number(match[4]),
         state: match[2]!,
         ...(argv
-          ? { command: { ppid: Number(match[3]), argv, ...(uid === undefined ? {} : { uid }) } }
+          ? {
+              command: {
+                ppid: Number(match[3]),
+                argv,
+                ...(uid === undefined ? {} : { uid }),
+                ...(generation ? { generation } : {}),
+              },
+            }
           : opaqueForeignOwner && uid !== undefined
             ? { command: { ppid: Number(match[3]), argvUnavailable: true, uid } }
             : {}),

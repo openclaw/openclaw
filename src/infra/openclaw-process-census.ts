@@ -19,6 +19,7 @@ import {
   readProcessWorkingDirectories,
   referencesRetainedArtifact,
 } from "./gateway-process-argv.js";
+import { hasProcessCwdProvider } from "./process-cwd-provider.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { readWindowsProcessCensus } from "./windows-process-census.js";
 
@@ -139,6 +140,8 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
       );
     }
     const windows = process.platform === "win32";
+    const cwdProvider = hasProcessCwdProvider();
+    const inspectorUid = process.getuid?.();
     const deadline = Date.now() + (handoff ? 15_000 : 1_000);
     const native = windows && handoff ? [...readWindowsProcessCensus(15_000)] : undefined;
     const nativeByPid = new Map(native?.map((entry) => [entry.pid, entry]));
@@ -152,6 +155,7 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
     }) ?? [
       ...readProcessGroupMembers(handoff ? 15_000 : 1_000, {
         readDarwinCommand: readDarwinProcessCommand,
+        ...(cwdProvider ? { includeLinuxGeneration: true } : {}),
       }),
     ];
     const byPid = new Map(processes.map((entry) => [entry.pid, entry]));
@@ -167,7 +171,23 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
     }
     const directories = native
       ? new Map(native.map(({ pid, cwd }) => [pid, cwd]))
-      : readProcessWorkingDirectories(processes.map(({ pid }) => pid));
+      : readProcessWorkingDirectories(
+          processes.map(({ pid }) => pid),
+          cwdProvider
+            ? new Map(
+                processes.flatMap(({ pid, command }) =>
+                  inspectorUid !== undefined &&
+                  Number.isSafeInteger(inspectorUid) &&
+                  inspectorUid >= 0 &&
+                  command?.generation?.uids.length === 4 &&
+                  command.generation.uids.every((uid) => uid === inspectorUid)
+                    ? [[pid, command] as const]
+                    : [],
+                ),
+              )
+            : undefined,
+          deadline,
+        );
     const launchers = new Set<number>();
     const ancestors = new Set<number>([process.pid]);
     let child = current;

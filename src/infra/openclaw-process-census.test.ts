@@ -128,6 +128,11 @@ type CustodyCase = [
   holder: boolean,
 ];
 const custodyCases: CustodyCase[] = [
+  [
+    ["/usr/bin/ssh-agent"],
+    { uid: 0, cwd: "/tmp/openclaw-update-runtime-Ab1234/dist (deleted)" },
+    true,
+  ],
   [["node", "dist/index.js"], { cwd: "/unrelated-app" }, false],
   [["node", "/unrelated-app/dist/index.js"], { cwd: "/unrelated-app" }, false],
   [["node", "dist/index.js"], { cwd: "/app" }, true],

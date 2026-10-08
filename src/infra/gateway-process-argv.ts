@@ -11,8 +11,13 @@ import {
   resolveRuntimeScriptPosition,
 } from "../daemon/runtime-binary.js";
 import { isLegacyPluginSourceCaptureName } from "../plugins/plugin-source-capture-path.js";
+import {
+  readLinuxProcessCommandMetadata,
+  type ProcessCommand,
+} from "../process/supervisor/service-child-group-ownership.js";
 import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
 import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.types.js";
+import { readProviderProcessWorkingDirectory } from "./process-cwd-provider.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 
 function normalizeProcArg(arg: string): string {
@@ -96,18 +101,77 @@ type ClassificationOptions = {
   inspectPackage?: boolean;
 };
 
-export function readProcessWorkingDirectories(pids: readonly number[]): Map<number, string> {
+export function readProcessWorkingDirectories(
+  pids: readonly number[],
+  commands?: ReadonlyMap<number, ProcessCommand>,
+  deadline?: number,
+): Map<number, string> {
   const requested = new Set(pids.filter((pid) => Number.isSafeInteger(pid) && pid > 0));
   const directories = new Map<number, string>();
   if (requested.size === 0) {
     return directories;
   }
   if (process.platform === "linux") {
+    const inspectorUid = process.getuid?.();
     for (const pid of requested) {
       try {
+        // Even a deleted native path can positively identify a retained artifact.
         directories.set(pid, fs.readlinkSync(`/proc/${pid}/cwd`));
       } catch {
         // A disappearing or inaccessible PID does not erase another PID's evidence.
+      }
+      const command = commands?.get(pid);
+      const generation = command?.generation;
+      if (
+        !directories.has(pid) &&
+        command &&
+        "argv" in command &&
+        generation &&
+        deadline !== undefined &&
+        Date.now() < deadline &&
+        inspectorUid !== undefined &&
+        Number.isSafeInteger(inspectorUid) &&
+        inspectorUid >= 0 &&
+        generation.uids.length === 4 &&
+        generation.uids.every((uid) => uid === inspectorUid)
+      ) {
+        const executable = command.argv[0] ?? "";
+        const inspectMarker =
+          isNodeRuntime(executable) ||
+          isBunRuntime(executable) ||
+          /^(?:tsx|tsx\.exe)$/iu.test(path.basename(executable));
+        const matchesCommand = (observed: ProcessCommand | undefined) =>
+          observed &&
+          "argv" in observed &&
+          observed.uid === command.uid &&
+          observed.argv.length === command.argv.length &&
+          observed.argv.every((value, index) => value === command.argv[index]);
+        const before = readLinuxProcessCommandMetadata(pid, generation, inspectMarker, deadline);
+        if (!matchesCommand(before)) {
+          throw new Error(
+            `Could not classify PID ${pid}: process command is unavailable or changed.`,
+          );
+        }
+        const cwd = readProviderProcessWorkingDirectory(pid, generation, deadline);
+        const after =
+          cwd === undefined
+            ? undefined
+            : readLinuxProcessCommandMetadata(pid, generation, inspectMarker, deadline);
+        if (cwd !== undefined) {
+          if (
+            !matchesCommand(after) ||
+            !before ||
+            !("argv" in before) ||
+            !after ||
+            !("argv" in after) ||
+            before.serviceMarker !== after.serviceMarker
+          ) {
+            throw new Error(
+              `Could not classify PID ${pid}: process command is unavailable or changed.`,
+            );
+          }
+          directories.set(pid, cwd);
+        }
       }
     }
     return directories;
