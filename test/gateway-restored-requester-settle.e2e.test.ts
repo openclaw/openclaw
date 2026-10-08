@@ -8,6 +8,7 @@ import {
 } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { writeSubagentSessionEntry } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
+import { loadSessionEntry, replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../src/config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
@@ -228,6 +229,63 @@ describe("Gateway restored requester settlement", () => {
       await expect(probe).resolves.toMatchObject({ code: 0 });
     },
   );
+
+  it(
+    "dispatches a restored wake for a yielded requester that kept its continuation fence",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const modelServer = await startHeldModelServer();
+      modelServers.push(modelServer);
+      const cfg = createTestConfig(modelServer.url);
+      const instance = await createOpenClawTestInstance({
+        name: "gateway-yielded-requester-fence",
+        config: cfg,
+        env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+      });
+      instances.push(instance);
+
+      await seedRestoredRequesters(instance, 1, cfg, { yieldedFence: true });
+
+      await instance.startGateway();
+      // #166771: the retained yield fence must not reject the restored continuation.
+      await vi
+        .waitFor(() => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(1), {
+          interval: 20,
+          timeout: 30_000,
+        })
+        .catch((error: unknown) => {
+          throw gatewayDiagnosticError(instance, error);
+        });
+
+      const client = await connectGatewayClient({
+        url: instance.url,
+        token: instance.gatewayToken,
+      });
+      const sessionKey = "agent:main:gateway-restored-requester-0";
+      try {
+        modelServer.release(0);
+        await vi.waitFor(
+          async () => {
+            const history = await client.request<{
+              messages: Array<{ role: string; content?: Array<{ type: string; text?: string }> }>;
+            }>("chat.history", { sessionKey });
+            expect(
+              history.messages.filter(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.content?.some((part) => part.text === "restored requester response 0"),
+              ),
+            ).toHaveLength(1);
+          },
+          { timeout: 30_000, interval: 50 },
+        );
+      } finally {
+        await disconnectGatewayClient(client);
+        modelServer.releaseAll();
+        await instance.stopGateway();
+      }
+    },
+  );
 });
 
 function gatewayDiagnosticError(instance: OpenClawTestInstance, cause: unknown): Error {
@@ -257,6 +315,7 @@ async function seedRestoredRequesters(
   instance: OpenClawTestInstance,
   count: number,
   cfg: OpenClawConfig,
+  options: { yieldedFence?: boolean } = {},
 ) {
   instance.state.applyEnv();
   try {
@@ -325,6 +384,30 @@ async function seedRestoredRequesters(
         requesterStorePath: storePath,
         controllerStorePath: storePath,
       });
+      if (options.yieldedFence) {
+        // `sessions_yield` ends the execution segment and retains the yielded run's own fence,
+        // stamped by the previous process generation, as custody for the pending continuation.
+        // This write shares the seeding lease; a second pass would invalidate read admission.
+        const sessionKey = entry.requesterSessionKey;
+        const current = loadSessionEntry({ storePath, sessionKey });
+        await replaceSessionEntry(
+          { storePath, sessionKey },
+          {
+            sessionId: current?.sessionId ?? entry.requesterDisplayKey,
+            updatedAt: endedAt,
+            endedAt,
+            abortedLastRun: false,
+            activeWriterRunId: `yielded-${entry.runId}`,
+            lifecycleRunId: `yielded-${entry.runId}`,
+            restartRecoveryRuns: [
+              {
+                runId: `yielded-${entry.runId}`,
+                lifecycleGeneration: "generation-before-restart",
+              },
+            ],
+          },
+        );
+      }
     }
   } finally {
     // Keep this one state lease through the Gateway run and retained-result reads;
