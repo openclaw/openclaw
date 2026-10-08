@@ -149,19 +149,14 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     elevatedAllowed,
   } = params;
 
-  const runHasStoredSessionModelOverride = Boolean(
-    preparedSessionState.sessionEntry?.modelOverrideSource !== "default" &&
-    (normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
-      normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride)),
-  );
+  const runModelOverrideSource = preparedSessionState.sessionEntry?.modelOverrideSource;
   const runHasSessionModelOverride =
-    runHasStoredSessionModelOverride &&
+    runModelOverrideSource !== "default" &&
+    Boolean(
+      normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
+      normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
+    ) &&
     !hasLegacyAutoFallbackWithoutOrigin(preparedSessionState.sessionEntry);
-  const runModelOverrideSource = runHasSessionModelOverride
-    ? preparedSessionState.sessionEntry?.modelOverrideSource === "default"
-      ? undefined
-      : preparedSessionState.sessionEntry?.modelOverrideSource
-    : undefined;
   const runHasAutoFallbackProvenance =
     runHasSessionModelOverride &&
     hasSessionAutoModelFallbackProvenance(preparedSessionState.sessionEntry);
@@ -502,7 +497,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       requestedRouteResolution,
       modelSelectionLocked: preparedSessionState.sessionEntry?.modelSelectionLocked === true,
       hasSessionModelOverride: runHasSessionModelOverride,
-      modelOverrideSource: runModelOverrideSource,
+      modelOverrideSource: runHasSessionModelOverride ? runModelOverrideSource : undefined,
       hasAutoFallbackProvenance: runHasAutoFallbackProvenance || undefined,
       // Visible spawn children keep dashboard keys; declared spawn lineage routes
       // them to the subagent fallback ladder like hidden subagent sessions.

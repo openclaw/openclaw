@@ -451,9 +451,7 @@ async function beginPreparedReplyMessageInjectionTarget(
           assertCurrent?.();
         }
       : undefined;
-  try {
-    await toolAuthorityPreparation?.prepareCurrent();
-  } catch (error) {
+  const resolvePreAcceptanceFailure = (error: unknown): ReplyMessageInjectionOutcome => {
     const failure = resolveReplyMessageInjectionFailure(error, {
       assertCurrent: assertSourceCurrent,
       accepted: false,
@@ -461,6 +459,12 @@ async function beginPreparedReplyMessageInjectionTarget(
     if (!failure) {
       throw error;
     }
+    return failure;
+  };
+  try {
+    await toolAuthorityPreparation?.prepareCurrent();
+  } catch (error) {
+    const failure = resolvePreAcceptanceFailure(error);
     return {
       targetRunId: target.runId,
       acceptance: Promise.resolve(false),
@@ -535,23 +539,13 @@ async function beginPreparedReplyMessageInjectionTarget(
         : undefined;
     let outcome: Promise<ReplyMessageInjectionOutcome> = Promise.resolve(immediateRejection);
     if (cancelPendingImage) {
-      const onCancellationError = (error: unknown): ReplyMessageInjectionOutcome => {
-        const failure = resolveReplyMessageInjectionFailure(error, {
-          assertCurrent: assertSourceCurrent,
-          accepted: false,
-        });
-        if (!failure) {
-          throw error;
-        }
-        return failure;
-      };
       try {
         outcome = Promise.resolve(cancelPendingImage("image-reply")).then(
           () => immediateRejection,
-          onCancellationError,
+          resolvePreAcceptanceFailure,
         );
       } catch (error) {
-        outcome = Promise.resolve(onCancellationError(error));
+        outcome = Promise.resolve(resolvePreAcceptanceFailure(error));
       }
     }
     return {

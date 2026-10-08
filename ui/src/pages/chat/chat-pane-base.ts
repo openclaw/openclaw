@@ -420,6 +420,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       swarm: target && this.swarmEnabled ? { ...target, sessions: sessions ?? [] } : undefined,
       subagentSessions: sessions,
       subagentSessionsHydrated: Boolean(target && this.swarmHydrator?.hydrated),
+      subagentSessionsRead: Boolean(target && this.swarmHydrator?.childrenRead),
       // Carry the admitted owner forward; route aliases do not identify child ancestry.
       subagentParentKey: target
         ? scopedSessionArtifactKey(target.sessionKey, target.agentId)

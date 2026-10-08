@@ -39,13 +39,13 @@ export type MemoryIndexTaskResult =
 
 const retrieval = new WorkerTaskPool<MemorySearchWorkerInput, MemorySearchWorkerOutput>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),
-  maxWorkers: 1,
+  workerClass: "reader",
   sharedCompute: true,
 });
 // Background chunk preparation must not occupy the foreground retrieval worker.
 const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.index),
-  maxWorkers: 1,
+  workerClass: "compute",
   sharedCompute: true,
   maxPendingBytes: MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES,
 });

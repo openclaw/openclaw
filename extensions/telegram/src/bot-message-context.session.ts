@@ -96,7 +96,7 @@ function hasCompleteSessionRuntime(
   );
 }
 
-async function loadTelegramMessageContextSessionRuntime(
+export async function loadTelegramMessageContextSessionRuntime(
   runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
 ): Promise<TelegramMessageContextSessionRuntime> {
   if (hasCompleteSessionRuntime(runtime)) {
@@ -106,17 +106,6 @@ async function loadTelegramMessageContextSessionRuntime(
     ...(await import("./bot-message-context.session.runtime.js")),
     ...runtime,
   };
-}
-
-export async function resolveTelegramMessageContextStorePath(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
-}): Promise<string> {
-  const sessionRuntime = await loadTelegramMessageContextSessionRuntime(params.sessionRuntime);
-  return sessionRuntime.resolveStorePath(params.cfg.session?.store, {
-    agentId: params.agentId,
-  });
 }
 
 function replyTargetToChainEntry(

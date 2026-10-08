@@ -18,6 +18,7 @@ import type { ConfigSchemaAnalysis } from "../../components/config-form.ts";
 import type { Locale } from "../../i18n/index.ts";
 import type { RealtimeTalkInputDevice } from "../chat/talk/input.ts";
 import type { SessionObserverModelSelection } from "./session-observer-settings.ts";
+import type { TabIconViewProps } from "./view-tab-icon.ts";
 
 type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
@@ -74,7 +75,7 @@ type AppearancePreferences = Required<
 > &
   Pick<UiSettings, "chatMessageMaxWidth" | "chatFollowUpMode">;
 
-export type ConfigProps = AppearancePreferences & {
+export interface ConfigProps extends TabIconViewProps, AppearancePreferences {
   onAppearanceChange: (patch: Partial<AppearancePreferences>) => void;
   raw: string;
   originalRaw: string;
@@ -213,4 +214,4 @@ export type ConfigProps = AppearancePreferences & {
   onWebPushTest?: () => void;
   onWebPushSetUserPreferences?: (preferences: WebPushNotificationPreferences) => void;
   onWebPushSetDevicePreferences?: (preferences: WebPushDevicePreferences) => void;
-};
+}

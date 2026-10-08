@@ -26,7 +26,8 @@ vi.mock("./agent-runner-memory.js", () => ({
   runSessionCompactionIfNeeded: (...args: unknown[]) => state.preflight(...args),
 }));
 
-vi.mock("./agent-runner-utils.js", () => ({
+vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
   resolveQueuedReplyExecutionConfig: (...args: unknown[]) => state.resolveConfig(...args),
   resolveQueuedReplyRuntimeConfig: (config: unknown) => config,
 }));

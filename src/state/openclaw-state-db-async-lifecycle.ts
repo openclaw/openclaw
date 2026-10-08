@@ -477,12 +477,6 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     record.admissions.set(databasePath, admission);
     return admission;
   };
-  const captureResolved = (databasePath: string): OpenClawStateDatabaseReadAdmission => {
-    const record = resolve(databasePath);
-    assertOpen(record);
-    return captureRecord(record, databasePath);
-  };
-
   return {
     identity(pathname: string): DatabasePathIdentity | undefined {
       return known(pathname)?.identity ?? inspectDatabasePathIdentitySync(pathname);
@@ -552,7 +546,10 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         retained.assertCurrent();
         return retained;
       }
-      return captureResolved(resolveDatabasePath({ path: pathname }));
+      const databasePath = resolveDatabasePath({ path: pathname });
+      const record = resolve(databasePath);
+      assertOpen(record);
+      return captureRecord(record, databasePath);
     },
     holdExclusion(pathname: string): () => void {
       const record = resolve(resolveDatabasePath({ path: pathname }));

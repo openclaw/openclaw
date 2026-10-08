@@ -50,6 +50,16 @@ When you run several Gateways, set `gateway.controlUi.environment` to distinguis
 
 The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the sidebar and narrow topbar, a browser-title suffix, and a matching favicon. The label is trimmed and must contain 1–24 characters. Available colors are `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, and `gray`. The label and color are intentionally visible before sign-in; leave `environment` unset to keep the standard appearance unchanged.
 
+## Browser tab icon
+
+In **Settings → Appearance → Browser tab icon**, choose **Default**, **Agent avatar**, or **Lobsterdex**. Default keeps the theme and Gateway environment icon. Agent avatar follows the explicitly selected agent, fitting its image without cropping and falling back to Default when it is unavailable. Lobsterdex lets you choose a static canonical lobster from those already unlocked in this browser. Activity and attention dots remain visible in every mode.
+
+Lobsterdex unlocks stay browser-local; this setting does not sync your collection. On another browser where your chosen lobster is not unlocked, OpenClaw keeps the choice but shows Default until that lobster is unlocked or you select another source. There are no custom uploads, per-tab choices, or agent-specific overrides.
+
+This setting only changes your tab icon. To customize an agent's image, use **Agent settings → Overview → Identity**; editing that image changes the shared agent identity, not only your favicon.
+
+The choice is saved to your authenticated profile on the connected Gateway and has a browser-local mirror. Without a writable profile it stays local to the browser. This setting does not change other people's tab icons.
+
 ## Community invitation
 
 The sidebar shows a community invitation with Reddit, Discord, and X links by default. Its first appearance waits until sidebar interaction finishes, so it does not move session controls while you use them. Its close button dismisses it for the current browser origin. The redesigned invitation appears again for browsers that dismissed the older Discord-only card. Dismissing this version keeps it hidden across routine updates. To hide the invitation for everyone using a Control UI deployment, run this on the Gateway serving that UI:
