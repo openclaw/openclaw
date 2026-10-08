@@ -217,25 +217,28 @@ const hooksModelCheck: CoreHealthCheck = {
   description: "hooks.gmail.model resolves to an allowed catalog model.",
   async detect(ctx) {
     const { collectHooksModelIssues } = await import("../commands/doctor-hooks-model.js");
-    return (await collectHooksModelIssues(ctx.cfg)).map(({ kind, model }): HealthFinding => ({
-      checkId: "core/doctor/hooks-model",
-      severity: "warning",
-      path: "hooks.gmail.model",
-      message:
-        kind === "unresolved"
-          ? `hooks.gmail.model "${model}" could not be resolved.`
-          : kind === "not-allowed"
-            ? `hooks.gmail.model "${model}" is not allowed by agents.defaults.modelPolicy.allow.`
-            : `hooks.gmail.model "${model}" is not in the model catalog.`,
-      ...(kind === "unresolved"
-        ? {}
-        : {
-            fixHint:
-              kind === "not-allowed"
-                ? "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model."
-                : "Choose a model from the configured provider catalog.",
-          }),
-    }));
+    return (await collectHooksModelIssues(ctx.cfg)).map(({ kind, model }): HealthFinding => {
+      const finding: HealthFinding = {
+        checkId: "core/doctor/hooks-model",
+        severity: "warning",
+        path: "hooks.gmail.model",
+        message:
+          kind === "unresolved"
+            ? `hooks.gmail.model "${model}" could not be resolved.`
+            : kind === "not-allowed"
+              ? `hooks.gmail.model "${model}" is not allowed by agents.defaults.modelPolicy.allow.`
+              : `hooks.gmail.model "${model}" is not in the model catalog.`,
+      };
+      if (kind !== "unresolved") {
+        Object.assign(finding, {
+          fixHint:
+            kind === "not-allowed"
+              ? "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model."
+              : "Choose a model from the configured provider catalog.",
+        });
+      }
+      return finding;
+    });
   },
 };
 

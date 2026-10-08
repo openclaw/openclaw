@@ -155,14 +155,14 @@ export async function resolvePackageRuntimePreflight(params: {
       : nodeVersionSatisfiesEngine(runtime.version, target.nodeEngine);
     const targetVersion = target.version;
     const runtimeResult = (
-      activationRuntime: PackageActivationRuntime | undefined,
-      selected = nodeRunner,
+      capturedRuntime: PackageActivationRuntime | undefined,
+      selectedRunner = nodeRunner,
       replacedNodeRunner?: string,
     ): Result<PackageRuntimePreflight, string> =>
-      activationRuntime
+      capturedRuntime
         ? ok({
-            ...(selected ? { nodeRunner: selected } : {}),
-            activationRuntime,
+            ...(selectedRunner ? { nodeRunner: selectedRunner } : {}),
+            activationRuntime: capturedRuntime,
             ...(replacedNodeRunner ? { replacedNodeRunner } : {}),
             targetVersion,
           })

@@ -1799,7 +1799,6 @@ src/commands/doctor-state-integrity.ts	1
 src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
 src/commands/doctor-workspace.ts	4
-src/commands/doctor/cron/index.ts	3
 src/commands/doctor/cron/legacy-quarantine-migration.ts	1
 src/commands/doctor/cron/legacy-repair.ts	4
 src/commands/doctor/cron/store-migration.ts	2
@@ -1820,7 +1819,7 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.models.codex.ts	4
 src/commands/doctor/shared/legacy-config-migrations.runtime.models.refs.ts	1
 src/commands/doctor/shared/legacy-config-state-migration-input.ts	2
 src/commands/doctor/shared/legacy-talk-config-normalizer.ts	1
-src/commands/doctor/shared/open-policy-allowfrom.ts	2
+src/commands/doctor/shared/open-policy-allowfrom.ts	1
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1
 src/commands/doctor/shared/stale-agent-model-ref-repair.ts	2
 src/commands/doctor/shared/stale-auth-order-store.ts	2

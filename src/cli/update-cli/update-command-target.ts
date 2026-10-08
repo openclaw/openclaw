@@ -354,7 +354,7 @@ export async function resolveUpdateCommandTarget(
       let packageInstallSpec: string | null = null;
       let packageInstallEnv: NodeJS.ProcessEnv | undefined;
       let packageInstallTarget: ResolvedGlobalInstallTarget | undefined;
-      let installedPackageName = DEFAULT_PACKAGE_NAME;
+      let installedPackageName: string;
       let packageAlreadyCurrent = false;
       let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
       let packageRuntimeTarget: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
