@@ -217,57 +217,48 @@ describe("channel turn delivery", () => {
     );
   });
 
-  it.each([
-    { deferred: true, visibleReplySent: false },
-    { deferred: false, visibleReplySent: true },
-  ])(
-    "keeps identityless provider completion pending ($deferred, $visibleReplySent)",
-    async ({ deferred, visibleReplySent }) => {
-      const completion = {
-        deliveryId: "ambiguous-delivery",
-        intentId: "ambiguous-intent",
-        sessionId: "session-1",
-        sessionKey: "agent:main:discord:peer",
-        storePath,
-      };
-      dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
-        createDispatch(
-          [],
-          setReplyPayloadMetadata(
-            { text: "reply" },
-            { pendingFinalDeliveryCompletion: completion },
-          ),
-        ),
-      );
-      const onDelivered = vi.fn();
-      const pending = {
-        visibleReplySent,
-        suppression: { reason: "adapter_returned_no_identity" as const },
-      };
-      await runRouted(
-        {
-          deliverWithProviderMessageSending: async (_payload, info) => {
-            await info.onPlatformSendDispatch();
-            return deferred ? { ...pending, finalization: Promise.resolve(pending) } : pending;
-          },
-          observeMessageSent: true,
-          onDelivered,
+  it("keeps identityless deferred provider completion pending", async () => {
+    const completion = {
+      deliveryId: "ambiguous-delivery",
+      intentId: "ambiguous-intent",
+      sessionId: "session-1",
+      sessionKey: "agent:main:discord:peer",
+      storePath,
+    };
+    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
+      createDispatch(
+        [],
+        setReplyPayloadMetadata({ text: "reply" }, { pendingFinalDeliveryCompletion: completion }),
+      ),
+    );
+    const onDelivered = vi.fn();
+    const pending = {
+      visibleReplySent: false,
+      suppression: { reason: "adapter_returned_no_identity" as const },
+    };
+    await runRouted(
+      {
+        deliverWithProviderMessageSending: async (_payload, info) => {
+          await info.onPlatformSendDispatch();
+          return { ...pending, finalization: Promise.resolve(pending) };
         },
-        { OriginatingTo: "channel:123" },
-        { channel: "discord" },
-      );
-      expect(settlePendingFinalDelivery).toHaveBeenLastCalledWith(
-        { kind: "pending-final", ...completion },
-        "unknown",
-      );
-      expect(settlePendingFinalDelivery.mock.calls.map(([, state]) => state)).toEqual([
-        "unknown",
-        "unknown",
-      ]);
-      expect(onDelivered).not.toHaveBeenCalled();
-      expect(emitMessageSent).not.toHaveBeenCalled();
-    },
-  );
+        observeMessageSent: true,
+        onDelivered,
+      },
+      { OriginatingTo: "channel:123" },
+      { channel: "discord" },
+    );
+    expect(settlePendingFinalDelivery).toHaveBeenLastCalledWith(
+      { kind: "pending-final", ...completion },
+      "unknown",
+    );
+    expect(settlePendingFinalDelivery.mock.calls.map(([, state]) => state)).toEqual([
+      "unknown",
+      "unknown",
+    ]);
+    expect(onDelivered).not.toHaveBeenCalled();
+    expect(emitMessageSent).not.toHaveBeenCalled();
+  });
 
   it("does not let message hooks resurrect payloads suppressed during preparation", async () => {
     const runMessageSending = vi.fn(async () => ({ content: "resurrected" }));

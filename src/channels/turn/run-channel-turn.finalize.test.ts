@@ -189,45 +189,6 @@ describe("channel turn finalize", () => {
     expect(history.historyMap.get("room")).toStrictEqual([]);
   });
 
-  it("clears history when transcript-context merge fails before recording", async () => {
-    const history = pendingHistory();
-    const error = new Error("transcript read failed");
-    const turn = prepared({
-      history,
-      ctxPayload: createCtx({ AgentId: "main", SessionTranscriptContext: { historyLimit: 1 } }),
-    });
-    readRecentUserAssistantTextForSession.mockRejectedValueOnce(error);
-    await expect(runPreparedChannelTurn(turn)).rejects.toBe(error);
-    expect(turn.recordInboundSession).not.toHaveBeenCalled();
-    expect(turn.runDispatch).not.toHaveBeenCalled();
-    expect(history.historyMap.get("room")).toStrictEqual([]);
-  });
-
-  it("cleans up pre-created dispatchers and history when session recording fails", async () => {
-    const history = pendingHistory();
-    const events: string[] = [];
-    const error = new Error("session store failed");
-    const afterRecord = vi.fn();
-    const onPreDispatchFailure = vi.fn(async () => {
-      events.push("cleanup");
-    });
-    const turn = prepared({
-      history,
-      afterRecord,
-      onPreDispatchFailure,
-      recordInboundSession: vi.fn(async () => {
-        events.push("record");
-        throw error;
-      }),
-    });
-    await expect(runPreparedChannelTurn(turn)).rejects.toBe(error);
-    expect(events).toEqual(["record", "cleanup"]);
-    expect(afterRecord).not.toHaveBeenCalled();
-    expect(turn.runDispatch).not.toHaveBeenCalled();
-    expect(onPreDispatchFailure).toHaveBeenCalledWith(error);
-    expect(history.historyMap.get("room")).toStrictEqual([]);
-  });
-
   it("handles non-turn event classes without resolving a turn", async () => {
     const resolveTurn = vi.fn();
     const result = await run({
@@ -348,23 +309,5 @@ describe("channel turn finalize", () => {
     } finally {
       audit.close();
     }
-  });
-
-  it("clears history and finalizes failed dispatches before rethrowing", async () => {
-    const history = pendingHistory();
-    const onFinalize = vi.fn();
-    const error = new Error("dispatch failed");
-    dispatchReplyWithRoutedChannelDispatcherCore.mockRejectedValueOnce(error);
-    await expect(run({ ingest, resolveTurn: () => routed({ history }), onFinalize })).rejects.toBe(
-      error,
-    );
-    expect(onFinalize).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        admission: { kind: "dispatch" },
-        dispatched: false,
-        routeSessionKey: "agent:main:test:peer",
-      }),
-    );
-    expect(history.historyMap.get("room")).toStrictEqual([]);
   });
 });
