@@ -1,6 +1,10 @@
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import {
+  validateWorkerExecApprovalParams,
+  validateWorkerExecApprovalDecisionParams,
+} from "../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { WorkerInferenceStartParams } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +22,8 @@ type WorkerPermissionFixture = {
       | { args: Record<string, unknown>; toolCallId: string; toolName: string }
     >;
     execApprovals?: ExecApprovalsFile;
+    onApprovalWait?: () => void;
+    approvalDecision?: "allow-once" | "deny" | null | "hold";
   }) => Promise<{
     gateway: {
       inferenceRequests: WorkerInferenceStartParams[];
@@ -30,7 +36,126 @@ type WorkerPermissionFixture = {
   }>;
 };
 
+export function handleWorkerApprovalFixture(
+  request: Record<string, unknown>,
+  decision: "allow-once" | "deny" | null | "hold" | undefined,
+  methods: string[],
+  send: (frame: object) => void,
+  onApprovalWait?: () => void,
+): boolean {
+  if (
+    request.method === "worker.exec.approval.request" &&
+    validateWorkerExecApprovalParams(request.params)
+  ) {
+    methods.push(request.method);
+    send({
+      type: "res",
+      id: request.id,
+      ok: true,
+      payload: { id: request.params.id, expiresAtMs: Date.now() + 30 * 60_000 },
+    });
+    return true;
+  }
+  if (
+    request.method === "worker.exec.approval.waitDecision" &&
+    validateWorkerExecApprovalDecisionParams(request.params)
+  ) {
+    methods.push(request.method);
+    onApprovalWait?.();
+    if (decision !== "hold") {
+      send({
+        type: "res",
+        id: request.id,
+        ok: true,
+        payload: { decision: decision === undefined ? "deny" : decision },
+      });
+    }
+    return true;
+  }
+  return false;
+}
+
 export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture) {
+  const execProof = {
+    toolName: "exec",
+    toolCallId: "approved-local-exec",
+    args: {
+      command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+        "require('node:fs').writeFileSync('local-proof.txt', 'worker-local')",
+      )}`,
+    },
+  };
+  it.each([undefined, "workspace"] as const)(
+    "runs worker-local exec after approval with permission mode %s",
+    async (permissionMode) => {
+      const { gateway, workspaceDir, launch } = await setup({
+        inferencePlans: [execProof, "text"],
+        approvalDecision: "allow-once",
+      });
+      launch.assignment.toolAuthority.exec = {
+        host: "gateway",
+        security: "allowlist",
+        ask: "on-miss",
+      };
+      launch.assignment.permissionMode = permissionMode;
+      launch.assignment.workerContainmentRoot = workspaceDir;
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+      expect(
+        gateway.methods.filter((method) => method.includes("approval")),
+        JSON.stringify(gateway.inferenceRequests[1]?.context.messages),
+      ).toEqual(["worker.exec.approval.request", "worker.exec.approval.waitDecision"]);
+      await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
+        "worker-local",
+      );
+      expect(JSON.stringify(gateway.inferenceRequests)).not.toMatch(
+        /ECONNRESET|127\.0\.0\.1:18789/u,
+      );
+    },
+  );
+
+  it.each(["deny", null] as const)(
+    "does not spawn worker exec after approval decision %s",
+    async (approvalDecision) => {
+      const { gateway, workspaceDir, launch } = await setup({
+        inferencePlans: [execProof, "text"],
+        approvalDecision,
+      });
+      launch.assignment.toolAuthority.exec = {
+        host: "gateway",
+        security: "allowlist",
+        ask: "on-miss",
+      };
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+      await expect(stat(path.join(workspaceDir, "local-proof.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(gateway.methods).toContain("worker.exec.approval.waitDecision");
+    },
+  );
+
+  it("aborts an approval wait without starting the worker command", async () => {
+    const waitObserved = Promise.withResolvers<void>();
+    const { workspaceDir, launch } = await setup({
+      inferencePlans: [execProof, "text"],
+      approvalDecision: "hold",
+      onApprovalWait: waitObserved.resolve,
+    });
+    launch.assignment.toolAuthority.exec = {
+      host: "gateway",
+      security: "allowlist",
+      ask: "on-miss",
+    };
+    const controller = new AbortController();
+    const pending = runWorkerDescriptor(launch, { signal: controller.signal });
+    const stopped = expect(pending).rejects.toThrow("operator stopped approval wait");
+    await waitObserved.promise;
+    controller.abort(new Error("operator stopped approval wait"));
+    await stopped;
+    await expect(stat(path.join(workspaceDir, "local-proof.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("enforces Gateway filesystem and patch configuration through the worker entry point", async () => {
     const cases = [
       { workspaceOnly: true, toolName: "read", patch: { enabled: false }, patchAllowed: false },
@@ -129,19 +254,17 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
     {
       mode: "guarded" as const,
       omittedTools: [],
-      denial:
-        /approval_required.*worker guarded permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+      denial: /user-denied/iu,
     },
     {
       mode: "workspace" as const,
       omittedTools: [],
-      denial:
-        /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+      denial: /user-denied/iu,
     },
     { mode: "full" as const, omittedTools: [], denial: null },
   ])("applies the $mode worker permission clamp", async ({ mode, omittedTools, denial }) => {
     const { gateway, workspaceDir, launch } = await setup({
-      inferencePlans: ["tool", "text"],
+      inferencePlans: [execProof, "text"],
       ...(mode === "full"
         ? {
             execApprovals: {

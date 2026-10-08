@@ -263,6 +263,7 @@ export async function executeWorkerTurn(
     policy: toolPolicy,
     exec,
     execUnavailable,
+    execApprovalAllowed,
     presentation,
     installedSkills,
   } = await resolveWorkerToolAuthority({
@@ -454,6 +455,7 @@ export async function executeWorkerTurn(
     });
     bindWorkerTurnCapabilities(params.placements, params.turnClaim, {
       toolSurface: toolRuntime,
+      execApprovalAllowed,
       prepareReplyMedia,
     });
     const connectionIdentity = {

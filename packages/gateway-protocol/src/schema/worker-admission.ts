@@ -5,6 +5,10 @@ import { FailoverReasonSchema } from "./failover-reason.js";
 import { withSince } from "./since.js";
 import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "./worker-computer.js";
 import {
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+  WORKER_EXEC_APPROVAL_METHODS,
+} from "./worker-exec-approval.js";
+import {
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOL_METHODS,
   WorkerToolSurfaceSchema,
@@ -49,6 +53,8 @@ export const WORKER_PROTOCOL_METHODS = [
   "worker.transcript.commit",
   "worker.live-event",
   "worker.computer",
+  WORKER_EXEC_APPROVAL_METHODS.request,
+  WORKER_EXEC_APPROVAL_METHODS.waitDecision,
   WORKER_GATEWAY_TOOL_METHODS.invoke,
   WORKER_GATEWAY_TOOL_METHODS.cancel,
 ] as const;
@@ -75,6 +81,7 @@ export const WORKER_PROTOCOL_FEATURES = [
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
   NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;

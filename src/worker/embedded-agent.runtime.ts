@@ -8,6 +8,7 @@ import { copyAgentToolMetadata } from "../agents/agent-tool-metadata.js";
 import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.wrapper.js";
 import { projectMemoryFlushTools } from "../agents/agent-tools.memory-flush.js";
+import type { ExecApprovalTransport } from "../agents/bash-tools.exec-approval-request.js";
 import { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/defaults.js";
 import { buildRuntimeContextCustomMessage } from "../agents/embedded-agent-runner/run/runtime-context-prompt.js";
@@ -78,6 +79,7 @@ type RunWorkerEmbeddedTurnParams = Omit<
   execAuthority: WorkerLaunchPlan["assignment"]["toolAuthority"]["exec"];
   browserRuntime?: WorkerBrowserRuntime;
   computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
+  approvalTransport?: ExecApprovalTransport;
   signal?: AbortSignal;
 };
 

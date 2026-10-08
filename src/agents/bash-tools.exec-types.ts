@@ -19,6 +19,7 @@ import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
+import type { ExecApprovalTransport } from "./bash-tools.exec-approval-request.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
@@ -139,6 +140,7 @@ export type ExecToolDefaults = {
   approvalReviewerDeviceId?: string;
   /** Deny approval-requiring commands without creating operator approval events. */
   nonInteractiveApproval?: boolean;
+  approvalTransport?: ExecApprovalTransport;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;

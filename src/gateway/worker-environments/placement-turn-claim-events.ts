@@ -100,6 +100,7 @@ type BoundWorkerTurnOwner = {
   runtime: {
     assertActive: () => void;
     toolSurface?: WorkerGatewayToolRuntime;
+    execApprovalAllowed?: boolean;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
     delegatedAuthority: AgentRunDelegatedAuthority;
     approvalLifetime: AbortController;
@@ -411,6 +412,7 @@ export function bindWorkerTurnCapabilities(
   claim: WorkerSessionTurnClaim,
   capabilities: {
     toolSurface: WorkerGatewayToolRuntime;
+    execApprovalAllowed?: boolean;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
   },
 ): void {
@@ -425,7 +427,12 @@ export function bindWorkerTurnCapabilities(
     throw new Error("Worker turn has no admitted tool surface owner");
   }
   owner.runtime.toolSurface?.abort();
+  owner.runtime.execApprovalAllowed = capabilities.execApprovalAllowed === true;
   Object.assign(owner.runtime, capabilities);
+}
+
+export function isWorkerTurnExecApprovalAllowed(identity: WorkerConnectionIdentity): boolean {
+  return resolveWorkerTurnRuntime(identity)?.execApprovalAllowed === true;
 }
 
 export function captureWorkerReplyMedia(identity: WorkerConnectionIdentity) {

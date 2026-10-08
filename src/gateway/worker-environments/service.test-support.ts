@@ -239,6 +239,7 @@ export function createService(
       | "providerCallTimeoutMs"
       | "projectNamespace"
       | "resolveSshIdentity"
+      | "resolveGatewayContext"
       | "ensureNodeWorkerBundle"
       | "registerPreparedWorkspace"
       | "prepareNodeBootstrap"
@@ -452,6 +453,7 @@ export function admissionFor(environmentId: string) {
 export async function seedAttachedIdentity(
   environmentId: string,
   sessionId: string,
+  runId = "run-1",
 ): Promise<WorkerConnectionIdentity> {
   const ready = await seedReady(environmentId);
   const attached = await testState.store.transition({
@@ -469,11 +471,11 @@ export async function seedAttachedIdentity(
     credentialHash: credential.credentialHash,
     bundleHash: credential.bundleHash,
     sessionId,
-    runId: "run-1",
+    runId,
     turnClaim: {
       sessionId,
-      claimId: "claim-run-1",
-      runId: "run-1",
+      claimId: `claim-${runId}`,
+      runId,
       placementGeneration: 1,
       owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
     },
@@ -569,8 +571,9 @@ export async function placementHarness(
   sessionId: string,
   serviceOptions: Parameters<typeof createService>[1] = {},
   sessionTarget?: BoundAgentRunSessionTarget,
+  runId = "run-1",
 ) {
-  const identity = await seedAttachedIdentity(environmentId, sessionId);
+  const identity = await seedAttachedIdentity(environmentId, sessionId, runId);
   const claim = identity.turnClaim!;
   const credentialHash = hashWorkerCredential(
     [CREDENTIAL, environmentId, sessionId].join("-"),
@@ -713,7 +716,13 @@ export async function bindPlacementHarness(
     workerService,
     source,
     releaseSource,
-    bindToolSurface: (surface: Parameters<typeof bindWorkerTurnCapabilities>[2]["toolSurface"]) =>
-      bindWorkerTurnCapabilities(executionStore, claim, { toolSurface: surface }),
+    bindToolSurface: (
+      surface: Parameters<typeof bindWorkerTurnCapabilities>[2]["toolSurface"],
+      execApprovalAllowed = false,
+    ) =>
+      bindWorkerTurnCapabilities(executionStore, claim, {
+        toolSurface: surface,
+        execApprovalAllowed,
+      }),
   };
 }

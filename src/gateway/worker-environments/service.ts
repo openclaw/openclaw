@@ -656,6 +656,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     cancelGatewayTool: turnRpc.cancelGatewayTool,
     createGatewayTools: options.createGatewayTools,
     executeComputer: turnRpc.executeComputer,
+    requestExecApproval: turnRpc.requestExecApproval,
+    waitExecApprovalDecision: turnRpc.waitExecApprovalDecision,
     prepareComputer: options.prepareComputer,
     startInference: turnRpc.startInference,
     cancelInference: turnRpc.cancelInference,

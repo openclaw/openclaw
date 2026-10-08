@@ -21,6 +21,13 @@ import {
   WorkerComputerResponseFrameSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
 import {
+  type WorkerExecApprovalParams,
+  type WorkerExecApprovalDecisionParams,
+  WorkerExecApprovalResponseFrameSchema,
+  WorkerExecApprovalDecisionResponseFrameSchema,
+  WORKER_EXEC_APPROVAL_METHODS,
+} from "../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
+import {
   type WorkerGatewayToolInvokeParams,
   type WorkerGatewayToolCancelParams,
   type WorkerGatewayToolUpdateFrame,
@@ -50,6 +57,14 @@ import {
 import { WorkerConnectionInterruptedError } from "./worker-connection-contract.js";
 
 const WORKER_REQUEST_SPECS = {
+  "exec-approval": {
+    method: WORKER_EXEC_APPROVAL_METHODS.request,
+    validateResponse: lazyCompile(WorkerExecApprovalResponseFrameSchema),
+  },
+  "exec-approval-decision": {
+    method: WORKER_EXEC_APPROVAL_METHODS.waitDecision,
+    validateResponse: lazyCompile(WorkerExecApprovalDecisionResponseFrameSchema),
+  },
   "gateway-tool": {
     method: WORKER_GATEWAY_TOOL_METHODS.invoke,
     validateResponse: lazyCompile(WorkerGatewayToolResponseFrameSchema),
@@ -86,6 +101,8 @@ const WORKER_REQUEST_SPECS = {
 
 type WorkerRequestKind = keyof typeof WORKER_REQUEST_SPECS;
 type WorkerRequestParams = {
+  "exec-approval": WorkerExecApprovalParams;
+  "exec-approval-decision": WorkerExecApprovalDecisionParams;
   "gateway-tool": WorkerGatewayToolInvokeParams;
   "gateway-tool-cancel": WorkerGatewayToolCancelParams;
   heartbeat: WorkerHeartbeatParams;

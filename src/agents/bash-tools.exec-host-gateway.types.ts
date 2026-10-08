@@ -3,6 +3,7 @@ import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import type { SecretEgressSentinelBinding } from "../secrets/egress-proxy/proxy-server.js";
+import type { ExecApprovalTransport } from "./bash-tools.exec-approval-request.js";
 import type {
   ExecElevatedDefaults,
   ExecApprovalFollowupFactory,
@@ -46,6 +47,7 @@ export type ProcessGatewayAllowlistParams = {
   bashElevated?: ExecElevatedDefaults;
   approvalReviewerDeviceId?: string;
   nonInteractiveApproval?: boolean;
+  approvalTransport?: ExecApprovalTransport;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;

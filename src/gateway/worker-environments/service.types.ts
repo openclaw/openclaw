@@ -36,6 +36,7 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
       claim: import("./placement-store.js").WorkerSessionTurnClaim,
     ) => Promise<import("./computer-transport.js").PreparedWorkerComputer | undefined>;
     executeComputer?: import("./worker-turn-computer-rpc.js").WorkerComputerExecutor;
+    resolveGatewayContext?: import("../server-methods/types.js").GatewayContextResolver;
     closeComputers?: () => Promise<void>;
     tunnelManager?: WorkerTunnelManager;
     nodeTunnelManager?: WorkerEnvironmentNodeTunnel;

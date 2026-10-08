@@ -27,6 +27,7 @@ import { logWarn } from "../logger.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
 import {
   type ExecApprovalRegistration,
+  type ExecApprovalTransport,
   isExecApprovalRunAbortedError,
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
@@ -311,6 +312,7 @@ export async function resolveExecApprovalWaitOutcome<TTimeoutContext = undefined
   params: Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision"> & {
     approvalId: string;
     preResolvedDecision: string | null | undefined;
+    approvalTransport?: ExecApprovalTransport;
     signal?: AbortSignal;
   },
 ): Promise<
@@ -327,6 +329,7 @@ export async function resolveExecApprovalWaitOutcome<TTimeoutContext = undefined
     decision = await resolveRegisteredExecApprovalDecision({
       approvalId: params.approvalId,
       preResolvedDecision: params.preResolvedDecision,
+      approvalTransport: params.approvalTransport,
     });
   } catch (error) {
     return { kind: isExecApprovalRunAbortedError(error) ? "run-aborted" : "request-failed" };

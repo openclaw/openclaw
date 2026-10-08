@@ -45,6 +45,62 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("exec approval registration", () => {
+  it("uses the run-bound transport for registration and the decision without local Gateway RPC", async () => {
+    const approvalTransport = {
+      request: vi.fn(async () => ({ id: "worker-approval", expiresAtMs: 123_456 })),
+      waitDecision: vi.fn(async () => ({ decision: "allow-once" })),
+    };
+    const registration = await register({ host: "gateway", approvalTransport });
+    expect(registration).toEqual({ id: "worker-approval", expiresAtMs: 123_456 });
+    expect(approvalTransport.request).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "echo hi", cwd: "/tmp/project", twoPhase: true }),
+    );
+    await expect(
+      resolveRegisteredExecApprovalDecision({
+        approvalId: registration.id,
+        preResolvedDecision: registration.finalDecision,
+        approvalTransport,
+      }),
+    ).resolves.toBe("allow-once");
+    expect(approvalTransport.waitDecision).toHaveBeenCalledWith({ id: "worker-approval" });
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to localhost when the run-bound transport fails", async () => {
+    const approvalTransport = {
+      request: vi.fn(async (): Promise<never> => {
+        throw new Error("worker fenced");
+      }),
+      waitDecision: vi.fn(async (): Promise<never> => {
+        throw new Error("worker fenced");
+      }),
+    };
+    await expect(register({ host: "gateway", approvalTransport })).rejects.toThrow("worker fenced");
+    await expect(
+      resolveRegisteredExecApprovalDecision({
+        approvalId: "worker-approval",
+        preResolvedDecision: undefined,
+        approvalTransport,
+      }),
+    ).rejects.toThrow("worker fenced");
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("preserves run cancellation delivered by a remote approval transport", async () => {
+    const approvalTransport = {
+      request: vi.fn(async () => ({ id: "worker-approval", expiresAtMs: 123_456 })),
+      waitDecision: vi.fn(async () => ({ decision: null, terminalReason: "run-aborted" })),
+    };
+    await expect(
+      resolveRegisteredExecApprovalDecision({
+        approvalId: "worker-approval",
+        preResolvedDecision: undefined,
+        approvalTransport,
+      }),
+    ).rejects.toSatisfy(isExecApprovalRunAbortedError);
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("distinguishes run cancellation from timeout fallback", async () => {
     vi.mocked(callGatewayTool)
       .mockResolvedValueOnce({ decision: null, terminalReason: "timeout" })

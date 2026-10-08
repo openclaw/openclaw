@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
@@ -8,6 +9,7 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
+import * as gatewayRequests from "../../agents/tools/in-process-gateway.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -22,9 +24,15 @@ import { resolveApprovalSessionAudienceWithFallback } from "../approval-session-
 import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
 import { createChatRunState } from "../server-chat-state.js";
+import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "../worker-environments/placement-test-fixtures.js";
-import { bindWorkerTurnOwner } from "../worker-environments/placement-turn-claim-events.js";
+import {
+  bindWorkerTurnCapabilities,
+  bindWorkerTurnOwner,
+} from "../worker-environments/placement-turn-claim-events.js";
+import { createWorkerSessionPlacementGate } from "../worker-environments/placement-worker-gate.js";
+import { createWorkerExecApprovalRpc } from "../worker-environments/worker-exec-approval.js";
 import { waitForApprovalRequested } from "./approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -235,6 +243,124 @@ describe("exec approval signed agent runtime", () => {
           const snapshot = await fixture.manager.getSnapshot(record.id);
           expect(snapshot?.status).toBe(revoked ? "cancelled" : "allowed");
           expect(snapshot?.decision).toBe(revoked ? undefined : "allow-once");
+          if (!revoked) {
+            // Exercise the worker adapter against the canonical registration and wait owners.
+            const workerIdentity: WorkerConnectionIdentity = {
+              environmentId: "worker-approval-environment",
+              credentialHash: "worker-hash",
+              bundleHash: "a".repeat(64),
+              sessionId: claim.sessionId,
+              runId: claim.runId,
+              turnClaim: claim,
+              ownerEpoch: 3,
+              rpcSetVersion: 1,
+              protocolFeatures: [],
+              credentialExpiresAtMs: Number.MAX_SAFE_INTEGER,
+            };
+            const handlers = createExecApprovalHandlers(fixture.manager);
+            const attachIdentity = gatewayRequests.withAgentToolGatewayRuntimeIdentity;
+            let capturedIdentity: AgentRuntimeIdentity | undefined;
+            const identitySpy = vi
+              .spyOn(gatewayRequests, "withAgentToolGatewayRuntimeIdentity")
+              .mockImplementation((request, attachedIdentity) => {
+                capturedIdentity = attachedIdentity;
+                return attachIdentity(request, attachedIdentity);
+              });
+            const requestSpy = vi
+              .spyOn(gatewayRequests, "callAgentToolGatewayRequest")
+              .mockImplementation(
+                async <T>(
+                  request: Parameters<typeof gatewayRequests.callAgentToolGatewayRequest>[0],
+                ): Promise<T> => {
+                  if (!capturedIdentity) {
+                    throw new Error("Worker runtime identity was not attached");
+                  }
+                  if (!isRecord(request.params)) {
+                    throw new Error("Worker approval params must be an object");
+                  }
+                  const approvalIdentity = capturedIdentity;
+                  const opts = requestOptions(approvalIdentity, () => check(approvalIdentity));
+                  opts.params = request.params;
+                  opts.req = {
+                    type: "req",
+                    method: request.method,
+                    params: request.params,
+                    id: "worker-bridge-request",
+                  };
+                  const canonicalHandler = handlers[request.method];
+                  if (!canonicalHandler) {
+                    throw new Error("Missing canonical approval handler");
+                  }
+                  return await new Promise<T>((resolve, reject) => {
+                    opts.respond = (ok, payload, error) => {
+                      if (ok) {
+                        resolve(payload as T);
+                      } else {
+                        reject(new Error(error?.message ?? "Approval rejected"));
+                      }
+                    };
+                    void fixture.track(Promise.resolve(canonicalHandler(opts))).catch(reject);
+                  });
+                },
+              );
+            try {
+              await placements.authorizeWorkerTurnTools(claim, ["exec"]);
+              bindWorkerTurnCapabilities(placements, claim, {
+                execApprovalAllowed: true,
+                toolSurface: {
+                  applyPromptToolsAllow: vi.fn(),
+                  getSurface: vi.fn(),
+                  getPromptProjection: vi.fn(),
+                  invoke: vi.fn(),
+                  cancel: vi.fn(),
+                  abort: vi.fn(),
+                  close: vi.fn(),
+                },
+              });
+              const gate = createWorkerSessionPlacementGate(placements);
+              const bridge = createWorkerExecApprovalRpc({
+                resolveGatewayContext: () => options.context,
+                placementStore: gate,
+                admit: () =>
+                  gate.validateWorkerTurn(claim)
+                    ? { ok: true }
+                    : { ok: false, closeReason: "placement-mismatch" },
+                now: Date.now,
+              });
+              const registration = await bridge.requestExecApproval(workerIdentity, {
+                id: "worker-bridge-approval",
+                command: "hostname",
+                cwd: "/workspace/approval",
+              });
+              expect(registration.ok).toBe(true);
+              if (!registration.ok) {
+                throw new Error("Worker exec approval registration rejected");
+              }
+              const registered = registration.result;
+              expect(Object.keys(registered).toSorted()).toEqual(["expiresAtMs", "id"]);
+              expect(capturedIdentity).toMatchObject({
+                agentId: source.agentId,
+                sessionKey: source.sessionKey,
+                delegatedAuthority: { kind: "worker", turnClaim: claim },
+              });
+              const workerRecord = await fixture.manager.getSnapshot(registered.id);
+              expect(workerRecord?.request).toMatchObject({
+                agentId: source.agentId,
+                sessionKey: source.sessionKey,
+                runId: claim.runId,
+                unavailableDecisions: ["allow-always"],
+              });
+              const waiting = bridge.waitExecApprovalDecision(workerIdentity, {
+                id: registered.id,
+              });
+              await fixture.manager.resolve(registered.id, "allow-once");
+              expect(await waiting).toEqual({ ok: true, result: { decision: "allow-once" } });
+              bridge.clear();
+            } finally {
+              requestSpy.mockRestore();
+              identitySpy.mockRestore();
+            }
+          }
           expect(guardCalls.length).toBeGreaterThan(1);
           for (const calls of guardCalls) {
             expect(calls).toEqual([0, 0, 0, 0, 0, 0]);

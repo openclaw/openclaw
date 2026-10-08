@@ -84,9 +84,9 @@ export async function resolveWorkerToolAuthority(params: {
     base: { ...defaults, host: defaults.effectiveHost },
     scheduledExecTarget: turn.scheduledToolPolicy?.execTarget,
   });
-  // A captured target cannot create the worker's missing host/approval transport.
+  // Scheduled host targets retain their host-owned approval and execution route.
   const execUnavailable =
-    policy.ask === "always" ||
+    turn.scheduledToolPolicy?.execTarget?.ask === "always" ||
     (turn.scheduledToolPolicy?.execTarget !== undefined && defaults.effectiveHost !== "gateway");
   const { effectiveHost: host, security, node: configuredNode } = defaults;
   const node = configuredNode?.trim();
@@ -98,7 +98,7 @@ export async function resolveWorkerToolAuthority(params: {
   };
   if (execUnavailable) {
     logWarn(
-      "Worker exec/process withheld: captured exec policy requires local host or interactive approval. Run this turn locally.",
+      "Worker exec/process withheld: captured scheduled exec policy requires its host-owned execution or approval route. Run this turn locally.",
     );
   }
   const presentation = prepareAgentToolSurfacePresentation({
@@ -129,6 +129,14 @@ export async function resolveWorkerToolAuthority(params: {
     policy: corePolicy,
     exec,
     execUnavailable,
+    execApprovalAllowed:
+      !execUnavailable &&
+      exec.host === "gateway" &&
+      projectEffectiveExecPolicy({
+        base: exec,
+        overrides: exec,
+        permissionPolicy: turn.permissionMode ? { mode: turn.permissionMode } : undefined,
+      }).security !== "deny",
     presentation,
     installedSkills,
   };

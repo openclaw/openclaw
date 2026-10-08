@@ -80,6 +80,63 @@ function createGatewayToolConnectionFixture(
 }
 
 export function registerWorkerGatewayToolTransportTests(connectParams: WorkerConnectParams) {
+  describe("WorkerConnection exec approval transport", () => {
+    it("routes registration and a human-paced decision over the admitted connection", async () => {
+      vi.useFakeTimers();
+      const { connection, sent, respond } = createGatewayToolConnectionFixture(
+        connectParams,
+        3_600_000,
+      );
+      try {
+        await connection.start();
+        const params = { id: "approval-1", command: "hostname", toolCallId: "exec-1" };
+        const request = connection.requestExecApproval(params);
+        expect(sent[0]).toMatchObject({ method: "worker.exec.approval.request", params });
+        const registration = { id: params.id, expiresAtMs: Date.now() + 1_800_000 };
+        respond(sent[0]!.id, registration);
+        await expect(request).resolves.toMatchObject({ ok: true, payload: registration });
+        const decision = connection.requestExecApprovalDecision({ id: params.id });
+        expect(sent[1]).toMatchObject({
+          method: "worker.exec.approval.waitDecision",
+          params: { id: params.id },
+        });
+        let settled = false;
+        void decision.then(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(1_799_000);
+        expect(settled).toBe(false);
+        respond(sent[1]!.id, { decision: "allow-once" });
+        await expect(decision).resolves.toMatchObject({
+          ok: true,
+          payload: { decision: "allow-once" },
+        });
+      } finally {
+        await connection.stop();
+        vi.useRealTimers();
+      }
+    });
+
+    it("fails closed without replay when the approval connection is interrupted", async () => {
+      vi.useFakeTimers();
+      const { connection, sent, sockets } = createGatewayToolConnectionFixture(connectParams);
+      try {
+        await connection.start();
+        const decision = connection.requestExecApprovalDecision({ id: "approval-1" });
+        const rejected = expect(decision).rejects.toThrow("interrupted");
+        sockets[0]!.emit("close", 1006, Buffer.alloc(0));
+        await rejected;
+        await vi.advanceTimersByTimeAsync(10);
+        expect(
+          sent.filter((frame) => frame.method === "worker.exec.approval.waitDecision"),
+        ).toHaveLength(1);
+      } finally {
+        await connection.stop();
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("WorkerConnection Gateway tool transport", () => {
     it("queues excess calls in order while queued aborts and control traffic remain independent", async () => {
       vi.useFakeTimers();

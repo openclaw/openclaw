@@ -1,4 +1,5 @@
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import type { ExecApprovalTransport } from "../agents/bash-tools.exec-approval-request.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
 import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mode.js";
@@ -21,6 +22,7 @@ export function createWorkerPlacementTools(params: {
   runId: string;
   github?: PreparedGitHubToolEnvironment;
   skillsSnapshot?: SkillSnapshot;
+  approvalTransport?: ExecApprovalTransport;
 }) {
   // Workers have no node/sandbox execution transport; host approval grants are not portable.
   const execUnavailable =
@@ -48,11 +50,18 @@ export function createWorkerPlacementTools(params: {
       ...policy,
       safeBins: execAuthority.safeBins ?? [],
       node: execAuthority.host === "node" ? execAuthority.node : undefined,
-      // Worker LLM review and interactive approval transport remain a separate contract.
-      nonInteractiveApproval: Boolean(params.permissionMode && params.permissionMode !== "full"),
-      approvalFollowupText: params.permissionMode
-        ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
-        : undefined,
+      // Definition-only construction cannot perform local Gateway RPC.
+      nonInteractiveApproval: !params.approvalTransport,
+      approvalTransport: params.approvalTransport,
+      // Reviewer credentials and model configuration remain on the Gateway.
+      autoReviewer: async () => ({
+        decision: "ask",
+        risk: "unknown",
+        rationale: "Worker exec auto-review is unavailable; human approval is required.",
+      }),
+      approvalFollowupText: params.approvalTransport
+        ? undefined
+        : "Exec denied (approval_required): worker approval transport is unavailable. Reconnect this worker to an updated Gateway.",
       config: WORKER_TOOL_CONFIG,
       // The Gateway secret store is not delegated to the worker's scratch state.
       preparedStoreEnvironment: Object.freeze({}),

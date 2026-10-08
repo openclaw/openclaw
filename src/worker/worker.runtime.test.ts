@@ -90,13 +90,17 @@ import {
   registerWorkerBackgroundExecLifecycleTests,
   registerWorkerExecEnvironmentFinalizationTests,
 } from "./worker-runtime-background-exec.suite.js";
+import type { FakeGatewayOptions } from "./worker-runtime-fixture.test-support.js";
 import {
   registerWorkerGatewayToolAvailabilityTests,
   registerWorkerGatewayToolRpcTests,
 } from "./worker-runtime-gateway-tools.suite.js";
 import { registerWorkerGitHubFailureTests } from "./worker-runtime-github-failures.suite.js";
 import { registerWorkerNativeInferenceTests } from "./worker-runtime-native-inference.suite.js";
-import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
+import {
+  handleWorkerApprovalFixture,
+  registerWorkerPermissionTests,
+} from "./worker-runtime-permissions.suite.js";
 import { registerWorkerPromptTests } from "./worker-runtime-prompt.suite.js";
 import { registerWorkerReplayWindowTests } from "./worker-runtime-replay.suite.js";
 import { createWorkerToolSurfaceForTest } from "./worker-tool-surface.test-support.js";
@@ -140,51 +144,7 @@ const BUNDLE_HASH = Array.from({ length: 64 }, () => "a").join("");
 const CREDENTIAL = ["worker", "fixture", "admission"].join("-");
 const WORKER_INFERENCE_START_TIMEOUT_MS = 90_000;
 
-type InferencePlan =
-  | "text"
-  | "read-image"
-  | "tool"
-  | "safe-tool"
-  | "background-tool"
-  | "process-poll"
-  | "process-kill"
-  | "session-tool"
-  | "computer"
-  | "hold"
-  | "fence"
-  | "error"
-  | "cancelled"
-  | "length"
-  | "burst-text"
-  | "oversized-text"
-  | "oversized-error"
-  | "empty-terminal"
-  | { args: Record<string, unknown>; toolCallId: string; toolName: string };
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
-
-type FakeGatewayOptions = {
-  admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
-  backgroundCommand?: string;
-  execCommand?: string;
-  execApprovals?: Parameters<typeof saveExecApprovals>[0];
-  inferencePlans?: InferencePlan[];
-  outageOnInferenceCancel?: boolean;
-  ignoreFirstAdmission?: boolean;
-  ignoreHeartbeat?: boolean;
-  silenceFirstTranscript?: boolean;
-  silenceFirstLiveEvent?: boolean;
-  silenceFirstInference?: boolean;
-  dropSessionToolResponses?: number;
-  transcriptFailureAtRequest?: number;
-  liveResyncAckedSeq?: number;
-  liveResyncResponses?: number;
-  liveFailure?: "capacity-exceeded";
-  heartbeatFailure?: "credential-expired";
-  heartbeatIntervalMs?: number;
-  computerSnapshot?: string;
-  computerCleanupFailure?: boolean;
-  onComputerClose?: () => void;
-};
 
 function assistantMessage(
   content: WorkerDoneMessage["content"],
@@ -315,6 +275,17 @@ class FakeWorkerGateway {
       return;
     }
     if (isRecord(parsed) && parsed.type === "req" && typeof parsed.id === "string") {
+      if (
+        handleWorkerApprovalFixture(
+          parsed,
+          this.options.approvalDecision,
+          this.methods,
+          (frame) => this.send(socket, frame),
+          this.options.onApprovalWait,
+        )
+      ) {
+        return;
+      }
       if (parsed.method === "worker.gatewayTool.cancel") {
         this.methods.push(parsed.method);
         this.send(socket, { type: "res", id: parsed.id, ok: true, payload: { cancelled: false } });

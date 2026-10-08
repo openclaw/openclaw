@@ -15,6 +15,12 @@ import {
   validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+  WORKER_EXEC_APPROVAL_METHODS,
+  validateWorkerExecApprovalParams,
+  validateWorkerExecApprovalDecisionParams,
+} from "../../../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
+import {
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOL_METHODS,
   validateWorkerGatewayToolInvokeParams,
@@ -54,6 +60,8 @@ export type WorkerConnectionService = Pick<
     Pick<
       WorkerTurnRpc,
       | "executeComputer"
+      | "requestExecApproval"
+      | "waitExecApprovalDecision"
       | "getToolSurface"
       | "invokeGatewayTool"
       | "cancelGatewayTool"
@@ -199,6 +207,26 @@ export async function dispatchWorkerRequest(params: {
       (request) => service.pushLiveEvent(params.identity, request),
       workerLiveEventError({ reason: "invalid-event" }),
       (failure: WorkerServiceFailure<"pushLiveEvent">) => workerLiveEventError(failure.details),
+    );
+  }
+  if (params.request.method === WORKER_EXEC_APPROVAL_METHODS.request) {
+    const operation = service.requestExecApproval;
+    return execute(
+      WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+      validateWorkerExecApprovalParams,
+      operation && ((request) => operation.call(service, params.identity, request, params.signal)),
+      "invalid-frame",
+      () => undefined,
+    );
+  }
+  if (params.request.method === WORKER_EXEC_APPROVAL_METHODS.waitDecision) {
+    const operation = service.waitExecApprovalDecision;
+    return execute(
+      WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+      validateWorkerExecApprovalDecisionParams,
+      operation && ((request) => operation.call(service, params.identity, request, params.signal)),
+      "invalid-frame",
+      () => undefined,
     );
   }
   if (params.request.method === "worker.computer") {

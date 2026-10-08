@@ -11,6 +11,12 @@ import type {
   WorkerComputerResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
 import type {
+  WorkerExecApprovalParams,
+  WorkerExecApprovalDecisionParams,
+  WorkerExecApprovalResponseFrame,
+  WorkerExecApprovalDecisionResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
+import type {
   WorkerGatewayToolInvokeParams,
   WorkerGatewayToolCancelParams,
   WorkerGatewayToolResult,
@@ -20,6 +26,7 @@ import type {
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
+import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals-core.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
@@ -211,6 +218,22 @@ export class WorkerConnection {
   ): Promise<WorkerGatewayToolCancelResponseFrame> {
     return this.requestReplayableOperation(() =>
       this.frames.request("gateway-tool-cancel", params),
+    );
+  }
+
+  requestExecApproval(params: WorkerExecApprovalParams): Promise<WorkerExecApprovalResponseFrame> {
+    return this.frames.request("exec-approval", params);
+  }
+
+  requestExecApprovalDecision(
+    params: WorkerExecApprovalDecisionParams,
+  ): Promise<WorkerExecApprovalDecisionResponseFrame> {
+    // An interrupted approval fails closed; never replay an authorization request.
+    return this.frames.request(
+      "exec-approval-decision",
+      params,
+      undefined,
+      Math.max(this.requestTimeoutMs, DEFAULT_EXEC_APPROVAL_TIMEOUT_MS + 10_000),
     );
   }
 

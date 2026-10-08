@@ -399,7 +399,10 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       return GatewayRpcDiagnostics.runHandler(invoke, diagnostics);
     };
     const isLongToolOperation =
-      parsed.method === "worker.computer" || parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke;
+      parsed.method === "worker.exec.approval.request" ||
+      parsed.method === "worker.exec.approval.waitDecision" ||
+      parsed.method === "worker.computer" ||
+      parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke;
     if (isLongToolOperation) {
       if (toolOperations.has(parsed.id)) {
         failConnection(1008);

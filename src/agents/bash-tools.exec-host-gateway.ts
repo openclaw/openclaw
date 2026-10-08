@@ -62,6 +62,7 @@ import {
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecAutoReviewDeniedToolResult,
+  buildGatewayExecApprovalDeniedToolResult,
   formatExecApprovalContinuationSourceOutput,
 } from "./bash-tools.exec-approval-output.js";
 import {
@@ -289,29 +290,6 @@ function buildGatewayExecApprovalFollowupSummary(params: {
       : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
   }
   return appendExecTimeoutRetryGuidance(summary, params.outcome.exitReason);
-}
-
-function buildGatewayExecApprovalDeniedToolResult(params: {
-  approvalId?: string;
-  deniedReason: string;
-  command: string;
-  cwd: string;
-}): AgentToolResult<ExecToolDetails> {
-  const denialContext = params.approvalId
-    ? `gateway id=${params.approvalId}, ${params.deniedReason}`
-    : params.deniedReason;
-  const text = `Exec denied (${denialContext}): ${params.command}`;
-  return {
-    content: [{ type: "text", text }],
-    details: {
-      status: "failed",
-      exitCode: null,
-      durationMs: 0,
-      aggregated: text,
-      timedOut: params.deniedReason.includes("timeout"),
-      cwd: params.cwd,
-    },
-  };
 }
 
 async function resolveGatewayExecApprovalDrift(params: {
@@ -1056,6 +1034,7 @@ export async function processGatewayAllowlist(
     const registerGatewayApproval = async (approvalId: string) =>
       await registerExecApprovalRequestForHostOrThrow({
         approvalId,
+        approvalTransport: params.approvalTransport,
         command: params.command,
         env: params.requestedEnv,
         workdir: params.workdir,
@@ -1179,6 +1158,7 @@ export async function processGatewayAllowlist(
       const approvalOutcome = await resolveExecApprovalWaitOutcome({
         approvalId,
         preResolvedDecision,
+        approvalTransport: params.approvalTransport,
         signal: params.signal,
         askFallback,
         resolveTimedOut: applyTimedOutAllowlistFallback,
