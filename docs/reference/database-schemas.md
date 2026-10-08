@@ -82,9 +82,10 @@ query it. This changes no schema, stored bytes, or update behavior.
 
 The shared-state content-version marker uses the same admitted read revision.
 Unchanged reads reuse its successful result; foreign commits, local writes,
-rollback, schema changes, and connection disposal invalidate reuse. Transactions,
-pinned snapshots, and authorizer-controlled reads still query the marker. Version
-validation and upgrade or downgrade behavior are unchanged.
+rollback, schema changes, and connection disposal invalidate reuse. Transactions
+and pinned snapshots reuse the marker at their admitted revision;
+authorizer-controlled reads still query it. Version validation and upgrade or
+downgrade behavior are unchanged.
 
 Registry discovery reuses successful migration checks for the admitted schema
 generation. The minute retention sweep reads deletion history in a worker and
