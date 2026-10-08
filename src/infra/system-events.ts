@@ -15,6 +15,12 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import {
+  execRequestMatches,
+  readExecRequestOwners,
+  withExecRequestOwners,
+  type ExecRequestIdentity,
+} from "./exec-request-context.js";
 import { generateSecureUuid } from "./secure-random.js";
 import {
   getSystemEventStorePath,
@@ -101,11 +107,22 @@ function normalizeContextKey(key?: string | null): string | null {
 }
 
 function getSessionQueue(sessionKey: string): SessionQueue | undefined {
-  return queues.get(requireSessionKey(sessionKey));
+  const key = requireSessionKey(sessionKey);
+  const entry = queues.get(key);
+  if (entry) {
+    const live = entry.queue.filter(
+      (event) => !readExecRequestOwners(event)?.some((owner) => owner.signal.aborted),
+    );
+    if (live.length !== entry.queue.length) {
+      entry.queue = live;
+      resetQueueState(key, entry);
+    }
+  }
+  return queues.get(key);
 }
 
 function getOrCreateSessionQueue(key: string): SessionQueue {
-  const existing = queues.get(key);
+  const existing = getSessionQueue(key);
   if (existing) {
     return existing;
   }
@@ -147,6 +164,9 @@ function enqueueOwnedSystemEventEntry(
   receiptOptions?: ReceiptOptions & { throwOnFull?: boolean },
 ): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
+  if (readExecRequestOwners(options)?.some((owner) => owner.signal.aborted)) {
+    return null;
+  }
   const sessionStorePath =
     options.sessionStorePath === undefined
       ? getSystemEventStorePath(key)
@@ -196,15 +216,18 @@ function enqueueOwnedSystemEventEntry(
   if (normalizedContextKey !== null) {
     entry.lastContextKey = normalizedContextKey;
   }
-  const event: SystemEvent = {
-    id: generateSecureUuid(),
-    text: cleaned,
-    ts: Date.now(),
-    ...(sessionStorePath === undefined ? {} : { sessionStorePath }),
-    contextKey: normalizedContextKey,
-    deliveryContext: normalizedDeliveryContext,
-    ...(options.fromConversationTurn ? { fromConversationTurn: true as const } : {}),
-  };
+  const event: SystemEvent = withExecRequestOwners(
+    {
+      id: generateSecureUuid(),
+      text: cleaned,
+      ts: Date.now(),
+      ...(sessionStorePath === undefined ? {} : { sessionStorePath }),
+      contextKey: normalizedContextKey,
+      deliveryContext: normalizedDeliveryContext,
+      ...(options.fromConversationTurn ? { fromConversationTurn: true as const } : {}),
+    },
+    readExecRequestOwners(options),
+  );
   entry.queue.push(event);
   return event;
 }
@@ -236,7 +259,7 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
 
 function drainSystemEventsWith<T>(sessionKey: string, project: (event: SystemEvent) => T): T[] {
   const key = requireSessionKey(sessionKey);
-  const entry = queues.get(key);
+  const entry = getSessionQueue(key);
   if (!entry || entry.queue.length === 0) {
     return [];
   }
@@ -287,7 +310,7 @@ export function consumeSelectedSystemEventEntries(
   options?: { deferredEventIds?: readonly string[] },
 ): SystemEvent[] {
   const key = requireSessionKey(sessionKey);
-  const entry = queues.get(key);
+  const entry = getSessionQueue(key);
   if (!entry || entry.queue.length === 0 || consumedEntries.length === 0) {
     return [];
   }
@@ -318,6 +341,22 @@ export function drainSystemEvents(sessionKey: string): string[] {
 
 export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
   return getSessionQueue(sessionKey)?.queue.map(cloneSystemEvent) ?? [];
+}
+
+/** Routed completions retain request ownership after process output expires. Stop is a cold path. */
+export function peekExecRequestSystemEventEntries(
+  target: ExecRequestIdentity,
+): Array<{ sessionKey: string; events: SystemEvent[] }> {
+  const selected = [];
+  for (const sessionKey of queues.keys()) {
+    const events = peekSystemEventEntries(sessionKey).filter((event) =>
+      readExecRequestOwners(event)?.some((owner) => execRequestMatches(owner, target)),
+    );
+    if (events.length > 0) {
+      selected.push({ sessionKey, events });
+    }
+  }
+  return selected;
 }
 
 export function peekSystemEvents(sessionKey: string): string[] {

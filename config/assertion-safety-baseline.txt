@@ -833,11 +833,10 @@ extensions/slack/src/monitor/event-scope.ts	1
 extensions/slack/src/monitor/events/assistant.ts	1
 extensions/slack/src/monitor/events/channels.ts	1
 extensions/slack/src/monitor/events/home.ts	1
-extensions/slack/src/monitor/events/interactions.block-actions.ts	14
+extensions/slack/src/monitor/events/interactions.block-actions.ts	12
 extensions/slack/src/monitor/events/interactions.modal.ts	4
-extensions/slack/src/monitor/events/interactions.ts	7
-extensions/slack/src/monitor/events/message-subtype-handlers.ts	5
-extensions/slack/src/monitor/events/messages.ts	12
+extensions/slack/src/monitor/events/message-subtype-handlers.ts	2
+extensions/slack/src/monitor/events/messages.ts	11
 extensions/slack/src/monitor/events/pins.ts	1
 extensions/slack/src/monitor/events/reactions.ts	1
 extensions/slack/src/monitor/ingress.ts	8
@@ -974,7 +973,7 @@ extensions/whatsapp/src/agent-tools-login.ts	6
 extensions/whatsapp/src/approval-handler.runtime.ts	1
 extensions/whatsapp/src/auth-store.ts	2
 extensions/whatsapp/src/auto-reply/monitor.ts	2
-extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	3
+extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	2
 extensions/whatsapp/src/channel-outbound.ts	1
 extensions/whatsapp/src/connection-controller-runtime-context.ts	1
 extensions/whatsapp/src/connection-controller.ts	2
@@ -982,7 +981,7 @@ extensions/whatsapp/src/connection-owner.ts	1
 extensions/whatsapp/src/group-config-path.ts	3
 extensions/whatsapp/src/inbound/durable-payload.ts	2
 extensions/whatsapp/src/inbound/extract.ts	10
-extensions/whatsapp/src/inbound/group-metadata-cache.ts	4
+extensions/whatsapp/src/inbound/group-metadata-cache.ts	3
 extensions/whatsapp/src/inbound/ingress-lifecycle.ts	2
 extensions/whatsapp/src/inbound/media.ts	2
 extensions/whatsapp/src/inbound/message-enrichment.ts	3

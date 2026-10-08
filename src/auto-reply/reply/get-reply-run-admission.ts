@@ -163,6 +163,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         // dedicated reminders or arrivals that were not part of this turn.
         events: context.isHeartbeat ? (eventContext?.events ?? []) : undefined,
         deferredEventIds: context.isHeartbeat ? eventContext?.deferredEventIds : undefined,
+        onEventsAdmitted: context.isHeartbeat ? eventContext?.onEventsAdmitted : undefined,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
